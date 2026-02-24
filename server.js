@@ -182,16 +182,20 @@ app.post('/api/pine-webhook', async (req, res) => {
 
   try {
     // Step A: Fetch the transaction from DB to get the real Shopify draft order ID
-    const { data: txn, error: txnError } = await supabase
-      .from('transactions')
-      .select('*')
-      .eq('draft_order_name', draftOrderName)
-      .single();
+const { data: txn, error: txnError } = await supabase
+  .from('transactions')
+  .select('*')
+  .eq('draft_order_name', draftOrderName)
+  .eq('status', 'PENDING')
+  .order('created_at', { ascending: false })
+  .limit(1);
 
-    if (txnError || !txn) {
-      console.error('Could not find transaction for:', draftOrderName);
-      return;
-    }
+if (txnError || !txn || txn.length === 0) {
+  console.error('Could not find PENDING transaction for:', draftOrderName);
+  return;
+}
+
+const transaction = txn[0]; // take the most recent one
 
     // Step B: Mark as PAID in our DB
     await supabase
