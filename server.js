@@ -10,6 +10,18 @@ app.use(express.json()); // Allows server to read JSON bodies
 
 // 1. Initialize Supabase Database Connection
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
+app.get('/api/test-db', async (req, res) => {
+  const { data, error } = await supabase
+    .from('stores')
+    .select('*');
+  
+  return res.json({ 
+    data: data, 
+    error: error,
+    supabaseUrl: process.env.SUPABASE_URL ? 'SET' : 'MISSING',
+    serviceKey: process.env.SUPABASE_SERVICE_KEY ? 'SET' : 'MISSING'
+  });
+});
 // ==========================================
 // ENDPOINT 1: PUSH TO TERMINAL (Triggered by your App/Retool)
 // ==========================================
