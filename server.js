@@ -10,9 +10,6 @@ app.use(express.json()); // Allows server to read JSON bodies
 
 // 1. Initialize Supabase Database Connection
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
-console.log("Store query error:", storeError);
-console.log("Store query result:", store);
-
 // ==========================================
 // ENDPOINT 1: PUSH TO TERMINAL (Triggered by your App/Retool)
 // ==========================================
@@ -24,7 +21,7 @@ app.post('/api/push-to-terminal', async (req, res) => {
     const { data: store, error: storeError } = await supabase
       .from('stores')
       .select('*')
-      .eq('shopify_location_id', locationId)
+      .eq('shopify_location_id', parseInt(locationId))
       .single();
 
     if (storeError || !store) throw new Error('Store routing not found for this location');
