@@ -97,26 +97,25 @@ app.post('/api/push-to-terminal', async (req, res) => {
     };
 
     // Step E: Send to Pine Labs (UAT/sandbox for now)
-    let pineResponse;
-    try {
-      pineResponse = await axios.post(
-        `${process.env.PINE_LABS_API_URL}/UploadBilledTransaction`,
-        pinePayload,
-        { timeout: 10000 }
-      );
-    } catch (pineError) {
-      // Pine Labs unreachable — update DB and return clear error
-      await supabase
-        .from('transactions')
-        .update({ status: 'FAILED' })
-        .eq('id', txn.id);
+   res.status(200).json({
+  success: true,
+  message: 'Transaction logged. Sending to terminal...',
+  transactionId: txn.id
+});
 
-      return res.status(502).json({ 
-        success: false, 
-        error: 'Could not reach Pine Labs terminal',
-        detail: pineError.message 
-      });
-    }
+// Fire and forget - don't await this
+axios.post(
+  `${process.env.PINE_LABS_API_URL}/UploadBilledTransaction`,
+  pinePayload,
+  { timeout: 5000 }
+).then(async (pineResponse) => {
+  const responseCode = parseInt(pineResponse.data.ResponseCode);
+  const newStatus = responseCode === 0 ? 'PUSHED_TO_TERMINAL' : 'FAILED';
+  await supabase.from('transactions').update({ status: newStatus }).eq('id', txn.id);
+}).catch(async (err) => {
+  console.error('Pine Labs call failed:', err.message);
+  await supabase.from('transactions').update({ status: 'PINE_UNREACHABLE' }).eq('id', txn.id);
+});
 
     // Step F: Handle Pine Labs response
     const responseCode = parseInt(pineResponse.data.ResponseCode);
