@@ -9,7 +9,7 @@ app.use(cors());
 app.use(express.json()); // Allows server to read JSON bodies
 
 // 1. Initialize Supabase Database Connection
-const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
 
 // ==========================================
 // ENDPOINT 1: PUSH TO TERMINAL (Triggered by your App/Retool)
