@@ -96,60 +96,31 @@ app.post('/api/push-to-terminal', async (req, res) => {
       TotalInvoiceAmount: amountInPaisa
     };
 
-    // Step E: Send to Pine Labs (UAT/sandbox for now)
-   res.status(200).json({
-  success: true,
-  message: 'Transaction logged. Sending to terminal...',
-  transactionId: txn.id
-});
+    // Step E: Return success immediately, call Pine Labs in background
+    res.status(200).json({
+      success: true,
+      message: 'Transaction logged. Sending to terminal...',
+      transactionId: txn.id
+    });
 
-// Fire and forget - don't await this
-axios.post(
-  `${process.env.PINE_LABS_API_URL}/UploadBilledTransaction`,
-  pinePayload,
-  { timeout: 5000 }
-).then(async (pineResponse) => {
-  const responseCode = parseInt(pineResponse.data.ResponseCode);
-  const newStatus = responseCode === 0 ? 'PUSHED_TO_TERMINAL' : 'FAILED';
-  await supabase.from('transactions').update({ status: newStatus }).eq('id', txn.id);
-}).catch(async (err) => {
-  console.error('Pine Labs call failed:', err.message);
-  await supabase.from('transactions').update({ status: 'PINE_UNREACHABLE' }).eq('id', txn.id);
-});
-
-    // Step F: Handle Pine Labs response
-    const responseCode = parseInt(pineResponse.data.ResponseCode);
-
-    if (responseCode === 0) {
-      // Success — update DB with Pine reference ID
-      await supabase
-        .from('transactions')
-        .update({ 
-          pine_ref_id: pineResponse.data.PlutusTransactionReferenceID, 
-          status: 'PUSHED_TO_TERMINAL' 
-        })
-        .eq('id', txn.id);
-
-      return res.status(200).json({ 
-        success: true, 
-        message: 'Transaction sent to terminal successfully',
-        pineRef: pineResponse.data.PlutusTransactionReferenceID,
-        transactionId: txn.id
-      });
-
-    } else {
-      // Pine Labs rejected it
-      await supabase
-        .from('transactions')
-        .update({ status: 'FAILED' })
-        .eq('id', txn.id);
-
-      return res.status(400).json({ 
-        success: false, 
-        error: pineResponse.data.ResponseMessage || 'Terminal rejected the transaction',
-        responseCode 
-      });
-    }
+    // Fire and forget — don't block the response
+    axios.post(
+      `${process.env.PINE_LABS_API_URL}/UploadBilledTransaction`,
+      pinePayload,
+      { timeout: 5000 }
+    ).then(async (pineResponse) => {
+      const responseCode = parseInt(pineResponse.data.ResponseCode);
+      const newStatus = responseCode === 0 ? 'PUSHED_TO_TERMINAL' : 'FAILED';
+      await supabase.from('transactions').update({ 
+        status: newStatus,
+        pine_ref_id: pineResponse.data.PlutusTransactionReferenceID || null
+      }).eq('id', txn.id);
+    }).catch(async (err) => {
+      console.error('Pine Labs call failed:', err.message);
+      await supabase.from('transactions').update({ 
+        status: 'PINE_UNREACHABLE' 
+      }).eq('id', txn.id);
+    });
 
   } catch (error) {
     console.error('Push-to-terminal error:', error.message);
@@ -176,26 +147,27 @@ app.post('/api/pine-webhook', async (req, res) => {
     await supabase
       .from('transactions')
       .update({ status: 'FAILED' })
-      .eq('draft_order_name', draftOrderName);
+      .eq('draft_order_name', draftOrderName)
+      .eq('status', 'PENDING');
     return;
   }
 
   try {
-    // Step A: Fetch the transaction from DB to get the real Shopify draft order ID
-const { data: txn, error: txnError } = await supabase
-  .from('transactions')
-  .select('*')
-  .eq('draft_order_name', draftOrderName)
-  .eq('status', 'PENDING')
-  .order('created_at', { ascending: false })
-  .limit(1);
+    // Step A: Find the most recent PENDING transaction for this order
+    const { data: txnRows, error: txnError } = await supabase
+      .from('transactions')
+      .select('*')
+      .eq('draft_order_name', draftOrderName)
+      .eq('status', 'PENDING')
+      .order('created_at', { ascending: false })
+      .limit(1);
 
-if (txnError || !txn || txn.length === 0) {
-  console.error('Could not find PENDING transaction for:', draftOrderName);
-  return;
-}
+    if (txnError || !txnRows || txnRows.length === 0) {
+      console.error('Could not find PENDING transaction for:', draftOrderName);
+      return;
+    }
 
-const transaction = txn[0]; // take the most recent one
+    const transaction = txnRows[0];
 
     // Step B: Mark as PAID in our DB
     await supabase
@@ -204,11 +176,11 @@ const transaction = txn[0]; // take the most recent one
         status: 'PAID',
         pine_ref_id: pineData.PlutusTransactionReferenceID 
       })
-      .eq('id', txn.id);
+      .eq('id', transaction.id);
 
     // Step C: Complete the Draft Order in Shopify using the stored ID
     const shopifyResponse = await axios.put(
-      `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${txn.shopify_draft_id}/complete.json`,
+      `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${transaction.shopify_draft_id}/complete.json`,
       { payment_pending: false },
       {
         headers: {
@@ -226,7 +198,7 @@ const transaction = txn[0]; // take the most recent one
     await supabase
       .from('transactions')
       .update({ final_shopify_order_id: finalOrderId.toString() })
-      .eq('id', txn.id);
+      .eq('id', transaction.id);
 
   } catch (error) {
     console.error('Webhook processing error:', error.response?.data || error.message);
