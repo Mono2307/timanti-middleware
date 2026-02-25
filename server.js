@@ -277,25 +277,52 @@ app.post('/api/pine-webhook', async (req, res) => {
 
   res.status(200).send('OK');
 
-  const responseCode = parseInt(pineData.ResponseCode);
-  const draftOrderName = pineData.TransactionNumber;
-
-  if (responseCode !== 0) {
-    console.log(`Payment failed/cancelled for order: ${draftOrderName}`);
-    await supabase
-      .from('transactions')
-      .update({ status: 'FAILED' })
-      .eq('draft_order_name', draftOrderName)
-      .in('status', ['PENDING', 'PUSHED_TO_TERMINAL']);
-    return;
-  }
-
   try {
+    // OPTION A: transactionId passed directly (DB row ID) — simplest test path
+    if (pineData.transactionId) {
+      const { data: transaction, error } = await supabase
+        .from('transactions')
+        .select('*')
+        .eq('id', parseInt(pineData.transactionId))
+        .single();
+
+      if (error || !transaction) {
+        console.error('Webhook: Transaction not found for ID:', pineData.transactionId);
+        return;
+      }
+
+      await supabase.from('transactions').update({ 
+        status: 'PAID',
+        pine_ref_id: pineData.PlutusTransactionReferenceID?.toString() || transaction.pine_ref_id || 'TEST'
+      }).eq('id', transaction.id);
+
+      console.log(`✅ Test webhook: Transaction ${transaction.id} marked PAID`);
+
+      if (transaction.shopify_draft_id) {
+        await completeShopifyOrder(transaction.shopify_draft_id, transaction.id);
+      }
+      return;
+    }
+
+    // OPTION B: Full Pine Labs style JSON with ResponseCode + TransactionNumber
+    const responseCode = parseInt(pineData.ResponseCode);
+    const draftOrderName = pineData.TransactionNumber;
+
+    if (responseCode !== 0) {
+      console.log(`Payment failed/cancelled for order: ${draftOrderName}`);
+      await supabase
+        .from('transactions')
+        .update({ status: 'FAILED' })
+        .eq('draft_order_name', draftOrderName)
+        .in('status', ['PENDING', 'PUSHED_TO_TERMINAL', 'PINE_UNREACHABLE']);
+      return;
+    }
+
     const { data: txnRows } = await supabase
       .from('transactions')
       .select('*')
       .eq('draft_order_name', draftOrderName)
-      .in('status', ['PENDING', 'PUSHED_TO_TERMINAL'])
+      .in('status', ['PENDING', 'PUSHED_TO_TERMINAL', 'PINE_UNREACHABLE'])
       .order('created_at', { ascending: false })
       .limit(1);
 
@@ -310,6 +337,8 @@ app.post('/api/pine-webhook', async (req, res) => {
       status: 'PAID',
       pine_ref_id: pineData.PlutusTransactionReferenceID?.toString() || transaction.pine_ref_id
     }).eq('id', transaction.id);
+
+    console.log(`✅ Test webhook: Transaction ${transaction.id} (${draftOrderName}) marked PAID`);
 
     if (transaction.shopify_draft_id) {
       await completeShopifyOrder(transaction.shopify_draft_id, transaction.id);
