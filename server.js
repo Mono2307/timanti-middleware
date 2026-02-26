@@ -223,7 +223,7 @@ app.post('/api/check-status', async (req, res) => {
     };
     // FIX: Correct endpoint name per Pine Labs documentation
     const pineStatusResponse = await axios.post(
-      `${process.env.PINE_LABS_API_URL}/GetStatus`,
+      `${process.env.PINE_LABS_API_URL}/V1/GetCloudBasedTxnStatus`,
       statusPayload,
       { timeout: 8000 }
     );
@@ -283,7 +283,7 @@ app.post('/api/cancel-transaction', async (req, res) => {
         Amount: transaction.amount_paisa
       };
       // FIX: Correct endpoint name per Pine Labs documentation
-      axios.post(`${process.env.PINE_LABS_API_URL}/CancelTransactionForced`, cancelPayload, { timeout: 8000 })
+      axios.post(`${process.env.PINE_LABS_API_URL}/V1/CancelTxn`, cancelPayload, { timeout: 8000 })
         .then(pineResponse => {
           console.log(`✅ Pine Labs CancelTransactionForced for txn ${transactionId}:`, pineResponse.data);
         }).catch(err => {
