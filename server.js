@@ -223,7 +223,7 @@ app.post('/api/check-status', async (req, res) => {
     };
     // FIX: Correct endpoint name per Pine Labs documentation
     const pineStatusResponse = await axios.post(
-      `${process.env.PINE_LABS_API_URL}/GetStatus`,
+      `${process.env.PINE_LABS_API_URL}/GetTransactionStatus`,
       statusPayload,
       { timeout: 8000 }
     );
