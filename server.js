@@ -97,7 +97,7 @@ app.post('/api/push-to-terminal', async (req, res) => {
       AutoCancelDurationInMinutes: 10
     };
     res.status(200).json({ success: true, message: 'Transaction logged. Sending to terminal...', transactionId: txn.id });
-    axios.post(`${process.env.PINE_LABS_API_URL}/UploadBilledTransaction`, pinePayload, { timeout: 8000 })
+    axios.post(`${process.env.PINE_LABS_API_URL}/V1/UploadBilledTransaction`, pinePayload, { timeout: 8000 })
       .then(async (pineResponse) => {
         const responseCode = parseInt(pineResponse.data.ResponseCode);
         const ptrid = pineResponse.data.PlutusTransactionReferenceID || null;
