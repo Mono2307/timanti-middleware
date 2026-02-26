@@ -15,29 +15,46 @@ const supabase = createClient(
 );
 
 // ─────────────────────────────────────────
-// Pine Labs Response Code Map
+// Pine Labs GetStatus Response Handling
+//
+// Per official docs (section 6.2):
+//   ResponseCode 0  = Success ("TXN APPROVED")
+//   ResponseCode ≠0 = Failure — no exceptions
+//
+// HOWEVER: In practice, Pine Labs returns code=1001 with message
+// "TXN UPLOADED" when a transaction has been uploaded to the cloud
+// but the terminal hasn't picked it up yet. This is NOT in the docs
+// but is a real observed in-between state. We handle it by message.
+//
+// Rule: if code=0 → PAID
+//       if message contains a known "still in progress" phrase → no change (keep polling)
+//       everything else non-zero → FAILED
+//
+// This means code=1 "INVALID PLUTUS TXN REF ID" → FAILED (correct)
+// This means code=1001 "TXN UPLOADED" → pending (keep polling)
 // ─────────────────────────────────────────
-// 0    → APPROVED / PAID
-// 1    → TXN PENDING (terminal waiting for customer)
-// 1001 → TXN UPLOADED (uploaded, terminal hasn't picked it up yet)
-// 1002 → TXN IN PROGRESS (customer interacting with terminal)
-// any other non-zero → FAILED / DECLINED
 
-const PINE_PENDING_CODES = new Set([1, 1001, 1002]);
+const PINE_PENDING_MESSAGES = [
+  'TXN UPLOADED',      // code 1001 — uploaded, terminal hasn't picked up yet
+  'TXN PENDING',       // terminal waiting for customer action
+  'IN PROGRESS',       // customer interacting with terminal
+];
 
 function getPineStatusResult(responseCode, responseMessage) {
+  const msg = (responseMessage || '').toUpperCase().trim();
+
   if (responseCode === 0) {
     return { newStatus: 'PAID', cashierMessage: 'Payment confirmed!' };
   }
-  if (PINE_PENDING_CODES.has(responseCode)) {
-    const messages = {
-      1:    'Waiting for customer to pay on terminal.',
-      1001: 'Transaction uploaded — waiting for terminal to pick it up.',
-      1002: 'Customer is interacting with terminal.',
-    };
-    return { newStatus: null, cashierMessage: messages[responseCode] || 'Payment in progress.' };
+
+  // Check if message matches a known "still processing" state
+  const isPending = PINE_PENDING_MESSAGES.some(p => msg.includes(p));
+  if (isPending) {
+    return { newStatus: null, cashierMessage: `Terminal: ${responseMessage}` };
   }
-  return { newStatus: 'FAILED', cashierMessage: `Payment declined or failed: ${responseMessage}` };
+
+  // All other non-zero codes are failures per Pine Labs docs
+  return { newStatus: 'FAILED', cashierMessage: `Payment failed: ${responseMessage}` };
 }
 
 // ─────────────────────────────────────────
@@ -55,6 +72,13 @@ function parsePineCSV(rawBody) {
     }
   });
   return data;
+}
+
+// Pine Labs rejects duplicate TransactionNumbers across all attempts — even
+// after the original attempt fails or is cancelled. We make each attempt
+// unique by appending a timestamp. e.g. "#D7" → "#D7-1740123456789"
+function makePineTransactionNumber(draftOrderName) {
+  return `${draftOrderName}-${Date.now()}`;
 }
 
 async function completeShopifyOrder(shopifyDraftId, transactionDbId) {
@@ -85,8 +109,8 @@ async function completeShopifyOrder(shopifyDraftId, transactionDbId) {
 
 // ─────────────────────────────────────────
 // Background Poller
-// Runs every 30s — polls all active transactions
-// and updates the DB based on Pine Labs response
+// Runs every 30s — checks all active transactions
+// and updates DB based on Pine Labs GetStatus response
 // ─────────────────────────────────────────
 
 let isPolling = false;
@@ -117,12 +141,20 @@ async function pollActiveTxns() {
           continue;
         }
 
+        // Invalid or negative PTRID means Pine rejected the upload — mark failed immediately
+        const ptrid = parseInt(txn.pine_ref_id);
+        if (!ptrid || ptrid <= 0) {
+          console.log(`Poller: txn ${txn.id} has invalid PTRID=${txn.pine_ref_id} — marking FAILED`);
+          await supabase.from('transactions').update({ status: 'FAILED' }).eq('id', txn.id);
+          continue;
+        }
+
         const statusPayload = {
           MerchantID: parseInt(store.pine_merchant_id),
           SecurityToken: process.env.PINE_LABS_SECURITY_TOKEN,
           ClientID: parseInt(store.pine_client_id),
           StoreID: parseInt(store.pine_store_id),
-          PlutusTransactionReferenceID: parseInt(txn.pine_ref_id)
+          PlutusTransactionReferenceID: ptrid
         };
 
         const pineResponse = await axios.post(
@@ -135,7 +167,7 @@ async function pollActiveTxns() {
         const pineMessage = pineResponse.data.ResponseMessage || '';
         const { newStatus } = getPineStatusResult(pineResponseCode, pineMessage);
 
-        console.log(`Poller: txn ${txn.id} PTRID=${txn.pine_ref_id}: code=${pineResponseCode} msg=${pineMessage}${newStatus ? ` → ${newStatus}` : ''}`);
+        console.log(`Poller: txn ${txn.id} PTRID=${ptrid}: code=${pineResponseCode} msg=${pineMessage}${newStatus ? ` → ${newStatus}` : ' (no change)'}`);
 
         if (newStatus && newStatus !== txn.status) {
           await supabase
@@ -197,10 +229,11 @@ app.post('/api/push-to-terminal', async (req, res) => {
       return res.status(404).json({ success: false, error: `No terminal mapped for location ID: ${locationId}` });
     }
 
-    // Block duplicate active transactions for the same draft order
+    // Block duplicate active transactions — only PENDING or PUSHED_TO_TERMINAL count
+    // FAILED / CANCELLED / PAID transactions allow a fresh push
     const { data: existing } = await supabase
       .from('transactions')
-      .select('id')
+      .select('id, status')
       .eq('shopify_draft_id', draftOrderId.toString())
       .in('status', ['PENDING', 'PUSHED_TO_TERMINAL'])
       .maybeSingle();
@@ -215,11 +248,16 @@ app.post('/api/push-to-terminal', async (req, res) => {
 
     const amountInPaisa = Math.round(parseFloat(amountInRupees) * 100);
 
+    // Unique per-attempt name sent to Pine Labs
+    // Pine permanently rejects reused TransactionNumbers even if prior attempt failed
+    const pineTransactionNumber = makePineTransactionNumber(draftOrderName);
+
     const { data: txn, error: txnError } = await supabase
       .from('transactions')
       .insert([{
         shopify_draft_id: draftOrderId.toString(),
         draft_order_name: draftOrderName,
+        pine_transaction_number: pineTransactionNumber,
         location_id: store.id,
         amount_paisa: amountInPaisa,
         status: 'PENDING'
@@ -233,7 +271,7 @@ app.post('/api/push-to-terminal', async (req, res) => {
     }
 
     const pinePayload = {
-      TransactionNumber: draftOrderName,
+      TransactionNumber: pineTransactionNumber,
       SequenceNumber: 1,
       AllowedPaymentMode: '0',
       Amount: amountInPaisa,
@@ -256,8 +294,12 @@ app.post('/api/push-to-terminal', async (req, res) => {
       .then(async (pineResponse) => {
         const responseCode = parseInt(pineResponse.data.ResponseCode);
         const ptrid = pineResponse.data.PlutusTransactionReferenceID || null;
-        const newStatus = responseCode === 0 ? 'PUSHED_TO_TERMINAL' : 'FAILED';
-        console.log(`UploadBilledTransaction: code=${responseCode}, PTRID=${ptrid}`);
+        const ptridNum = ptrid ? parseInt(ptrid) : null;
+
+        // Pine returns negative PTRID (e.g. -5) when TransactionNumber is rejected
+        const newStatus = (responseCode === 0 && ptridNum && ptridNum > 0) ? 'PUSHED_TO_TERMINAL' : 'FAILED';
+
+        console.log(`UploadBilledTransaction txn ${txn.id}: code=${responseCode} PTRID=${ptrid} → ${newStatus}`);
         await supabase
           .from('transactions')
           .update({ status: newStatus, pine_ref_id: ptrid ? ptrid.toString() : null })
@@ -274,7 +316,7 @@ app.post('/api/push-to-terminal', async (req, res) => {
   }
 });
 
-// ── Check Status (manual) ────────────────
+// ── Check Status (manual) ─────────────────
 
 app.post('/api/check-status', async (req, res) => {
   const { transactionId } = req.body;
@@ -311,6 +353,18 @@ app.post('/api/check-status', async (req, res) => {
       });
     }
 
+    const ptridNum = parseInt(transaction.pine_ref_id);
+    if (!ptridNum || ptridNum <= 0) {
+      await supabase.from('transactions').update({ status: 'FAILED' }).eq('id', transactionId);
+      return res.json({
+        success: true,
+        status: 'FAILED',
+        message: 'Transaction was rejected by Pine Labs (invalid PTRID). Please push again.',
+        transactionId: transaction.id,
+        pineRefId: transaction.pine_ref_id
+      });
+    }
+
     const { data: store, error: storeError } = await supabase
       .from('stores')
       .select('*')
@@ -326,9 +380,10 @@ app.post('/api/check-status', async (req, res) => {
       SecurityToken: process.env.PINE_LABS_SECURITY_TOKEN,
       ClientID: parseInt(store.pine_client_id),
       StoreID: parseInt(store.pine_store_id),
-      PlutusTransactionReferenceID: parseInt(transaction.pine_ref_id)
+      PlutusTransactionReferenceID: ptridNum
     };
 
+    console.log(`CheckStatus txn ${transactionId}: calling Pine Labs for PTRID=${ptridNum}`);
     const pineStatusResponse = await axios.post(
       `${process.env.PINE_LABS_API_URL}/V1/GetCloudBasedTxnStatus`,
       statusPayload,
@@ -337,7 +392,7 @@ app.post('/api/check-status', async (req, res) => {
 
     const pineResponseCode = parseInt(pineStatusResponse.data.ResponseCode);
     const pineMessage = pineStatusResponse.data.ResponseMessage || '';
-    console.log(`CheckStatus txn ${transactionId}: code=${pineResponseCode}, msg=${pineMessage}`);
+    console.log(`CheckStatus txn ${transactionId}: code=${pineResponseCode} msg=${pineMessage}`);
 
     const { newStatus, cashierMessage } = getPineStatusResult(pineResponseCode, pineMessage);
 
@@ -410,13 +465,15 @@ app.post('/api/cancel-transaction', async (req, res) => {
       transactionId: transaction.id
     });
 
-    if (transaction.pine_ref_id) {
+    // Only call Pine cancel if we have a valid PTRID
+    const ptridNum = transaction.pine_ref_id ? parseInt(transaction.pine_ref_id) : 0;
+    if (ptridNum > 0) {
       const cancelPayload = {
         MerchantID: parseInt(store.pine_merchant_id),
         SecurityToken: process.env.PINE_LABS_SECURITY_TOKEN,
         StoreID: parseInt(store.pine_store_id),
         ClientID: parseInt(store.pine_client_id),
-        PlutusTransactionReferenceID: parseInt(transaction.pine_ref_id),
+        PlutusTransactionReferenceID: ptridNum,
         Amount: transaction.amount_paisa
       };
 
@@ -428,7 +485,7 @@ app.post('/api/cancel-transaction', async (req, res) => {
           console.error(`⚠️ Pine CancelTransaction failed txn ${transactionId}:`, err.message);
         });
     } else {
-      console.log(`Txn ${transactionId} cancelled locally (never reached Pine Labs)`);
+      console.log(`Txn ${transactionId} cancelled locally (no valid PTRID)`);
     }
 
   } catch (error) {
@@ -437,7 +494,7 @@ app.post('/api/cancel-transaction', async (req, res) => {
   }
 });
 
-// ── Pine PostBack (CSV — from Pine Labs server) ──
+// ── Pine PostBack (CSV — production) ────────
 
 app.post('/api/pine-postback', async (req, res) => {
   res.status(200).send('OK');
@@ -448,9 +505,9 @@ app.post('/api/pine-postback', async (req, res) => {
 
     const responseCode = parseInt(data['ResponseCode']);
     const ptrid = data['PlutusTransactionReferenceID'];
-    const draftOrderName = data['TransactionNumber'];
+    const pineTransactionNumber = data['TransactionNumber'];
 
-    if (!ptrid && !draftOrderName) {
+    if (!ptrid && !pineTransactionNumber) {
       console.error('PostBack missing both PTRID and TransactionNumber');
       return;
     }
@@ -470,7 +527,7 @@ app.post('/api/pine-postback', async (req, res) => {
       const result = await supabase
         .from('transactions')
         .select('*')
-        .eq('draft_order_name', draftOrderName)
+        .eq('pine_transaction_number', pineTransactionNumber)
         .in('status', ['PENDING', 'PUSHED_TO_TERMINAL'])
         .order('created_at', { ascending: false })
         .limit(1);
@@ -478,7 +535,7 @@ app.post('/api/pine-postback', async (req, res) => {
     }
 
     if (!txnRows || txnRows.length === 0) {
-      console.error('PostBack: No matching transaction for PTRID:', ptrid, 'order:', draftOrderName);
+      console.error('PostBack: No matching transaction for PTRID:', ptrid, 'pineNum:', pineTransactionNumber);
       return;
     }
 
@@ -495,7 +552,7 @@ app.post('/api/pine-postback', async (req, res) => {
       })
       .eq('id', transaction.id);
 
-    console.log(`✅ PostBack: txn ${transaction.id} (${draftOrderName}) → ${newStatus}`);
+    console.log(`✅ PostBack: txn ${transaction.id} → ${newStatus}`);
 
     if (newStatus === 'PAID' && transaction.shopify_draft_id) {
       await completeShopifyOrder(transaction.shopify_draft_id, transaction.id);
@@ -543,7 +600,6 @@ app.post('/api/pine-webhook', async (req, res) => {
     const draftOrderName = pineData.TransactionNumber;
 
     if (responseCode !== 0) {
-      console.log(`Webhook: payment failed for order: ${draftOrderName}`);
       await supabase
         .from('transactions')
         .update({ status: 'FAILED' })
@@ -561,7 +617,7 @@ app.post('/api/pine-webhook', async (req, res) => {
       .limit(1);
 
     if (!txnRows || txnRows.length === 0) {
-      console.error('Webhook: No active transaction found for:', draftOrderName);
+      console.error('Webhook: No active transaction for:', draftOrderName);
       return;
     }
 
