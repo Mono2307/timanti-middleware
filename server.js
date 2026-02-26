@@ -18,7 +18,7 @@ const supabase = createClient(
 // Pine Labs Response Handling
 //
 // Docs: ResponseCode 0 = success, non-zero = failure.
-// Observed undocumented: code=1001 msg="TXN UPLOADED" = still uploading
+// Observed undocumented: code=1001 msg contains "TXN UPLOADED" = still uploading, keep polling
 // All other non-zero = FAILED.
 // ─────────────────────────────────────────
 
@@ -50,6 +50,8 @@ function parsePineCSV(rawBody) {
   return data;
 }
 
+// Pine permanently rejects reused TransactionNumbers even across separate
+// attempts. Append timestamp so every push is unique to Pine.
 function makePineTransactionNumber(draftOrderName) {
   return `${draftOrderName}-${Date.now()}`;
 }
@@ -193,6 +195,7 @@ app.post('/api/push-to-terminal', async (req, res) => {
       return res.status(404).json({ success: false, error: `No terminal mapped for location ID: ${locationId}` });
     }
 
+    // Block if already in-progress. FAILED/CANCELLED/PINE_UNREACHABLE allow a fresh push.
     const { data: existing } = await supabase
       .from('transactions')
       .select('id, status')
@@ -236,6 +239,7 @@ app.post('/api/push-to-terminal', async (req, res) => {
       transactionId: txn.id
     });
 
+    // 30s timeout — Pine UAT is slow, we need the PTRID back
     axios.post(
       `${process.env.PINE_LABS_API_URL}/V1/UploadBilledTransaction`,
       {
@@ -267,6 +271,7 @@ app.post('/api/push-to-terminal', async (req, res) => {
     })
     .catch(async (err) => {
       console.error(`UploadBilledTransaction timed out for txn ${txn.id}: ${err.message}`);
+      console.log(`Txn ${txn.id} marked PINE_UNREACHABLE — if terminal shows nothing, cancel and push again`);
       await supabase
         .from('transactions')
         .update({ status: 'PINE_UNREACHABLE', pine_ref_id: null })
@@ -281,9 +286,9 @@ app.post('/api/push-to-terminal', async (req, res) => {
 
 // ── Check Status ──────────────────────────
 //
-// Always calls Pine if a PTRID exists.
-// DB is only ever updated on an explicit Pine response — so Pine is
-// always the source of truth, not the DB.
+// Always calls Pine if a PTRID exists — Pine is source of truth, not DB.
+// DB is only updated on an explicit Pine response.
+// Only skips Pine call if there is no PTRID to query with.
 
 app.post('/api/check-status', async (req, res) => {
   const { transactionId } = req.body;
@@ -333,7 +338,6 @@ app.post('/api/check-status', async (req, res) => {
       return res.status(500).json({ success: false, error: 'Store config not found' });
     }
 
-    // Always call Pine regardless of current DB status
     console.log(`CheckStatus txn ${transactionId}: calling Pine PTRID=${ptridNum} (current DB status: ${transaction.status})`);
 
     const pineStatusResponse = await axios.post(
@@ -384,9 +388,13 @@ app.post('/api/check-status', async (req, res) => {
 
 // ── Cancel Transaction ────────────────────
 //
-// Calls Pine synchronously and waits for response.
-// DB is only updated if Pine explicitly confirms cancellation (ResponseCode 0).
-// If Pine returns an error, we return that error to the client — no DB change.
+// Calls Pine synchronously. DB only updated if Pine returns ResponseCode 0.
+// If Pine call fails for any reason, DB is untouched and error returned to client.
+//
+// Payload per docs section 7.1:
+//   - Amount is MANDATORY
+//   - ClientId / StoreId use lowercase 'd' (same as UploadBilledTransaction)
+//   - MerchantID, SecurityToken, PlutusTransactionReferenceID also mandatory
 
 app.post('/api/cancel-transaction', async (req, res) => {
   const { transactionId } = req.body;
@@ -411,7 +419,7 @@ app.post('/api/cancel-transaction', async (req, res) => {
       });
     }
 
-    // No PTRID means Pine never received it — safe to cancel locally
+    // No PTRID — Pine never received it, safe to cancel in DB directly
     if (!transaction.pine_ref_id) {
       await supabase.from('transactions').update({ status: 'CANCELLED' }).eq('id', transactionId);
       return res.json({
@@ -440,19 +448,23 @@ app.post('/api/cancel-transaction', async (req, res) => {
       return res.status(500).json({ success: false, error: 'Store config not found' });
     }
 
-    console.log(`CancelTransaction txn ${transactionId} PTRID=${ptridNum}: calling Pine...`);
+    // Docs section 7.1: Amount mandatory, ClientId/StoreId use lowercase 'd'
+    const cancelPayload = {
+      MerchantID: parseInt(store.pine_merchant_id),
+      SecurityToken: process.env.PINE_LABS_SECURITY_TOKEN,
+      ClientId: parseInt(store.pine_client_id),
+      StoreId: parseInt(store.pine_store_id),
+      PlutusTransactionReferenceID: ptridNum,
+      Amount: transaction.amount_paisa
+    };
+
+    console.log(`CancelTransaction txn ${transactionId} PTRID=${ptridNum} Amount=${transaction.amount_paisa}: calling Pine...`);
 
     let pineResponseCode, pineMessage;
     try {
       const pineResponse = await axios.post(
         `${process.env.PINE_LABS_API_URL}/V1/CancelTransaction`,
-        {
-          MerchantID: parseInt(store.pine_merchant_id),
-          SecurityToken: process.env.PINE_LABS_SECURITY_TOKEN,
-          StoreID: parseInt(store.pine_store_id),
-          ClientID: parseInt(store.pine_client_id),
-          PlutusTransactionReferenceID: ptridNum
-        },
+        cancelPayload,
         { timeout: 15000 }
       );
       pineResponseCode = parseInt(pineResponse.data.ResponseCode);
@@ -482,7 +494,7 @@ app.post('/api/cancel-transaction', async (req, res) => {
         pineResponseMessage: pineMessage
       });
     } else {
-      // Pine rejected the cancel — do not update DB
+      // Pine rejected — DB untouched
       return res.status(400).json({
         success: false,
         error: `Pine rejected the cancel: ${pineMessage}`,
