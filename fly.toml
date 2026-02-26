@@ -1,23 +1,21 @@
-# fly.toml app configuration file generated for timanti-middleware on 2026-02-26T09:11:44Z
-#
-# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
-#
-
+# fly.toml app configuration file for timanti-middleware
 app = 'timanti-middleware'
 primary_region = 'bom'
 
 [build]
 
+[env]
+  PORT = "8080"
+
 [http_service]
   internal_port = 8080
   force_https = true
-  auto_stop_machines = 'false'
+  auto_stop_machines = false
   auto_start_machines = true
-  min_machines_running = 2
+  min_machines_running = 1
   processes = ['app']
 
 [[vm]]
-  memory = '1gb'
+  memory = '256mb'
   cpu_kind = 'shared'
   cpus = 1
-  memory_mb = 256
