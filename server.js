@@ -17,20 +17,11 @@ const supabase = createClient(
 // ─────────────────────────────────────────
 // CONFIG FLAGS
 //
-// All of these can be changed on Fly.io without touching code:
-//   fly secrets set AUTO_PUSH_TO_TERMINAL=true
-//   fly secrets set AUTO_PUSH_TO_TERMINAL=false
-//   fly secrets set PINE_PAYMENT_MODE=integer    ← sends AllowedPaymentMode: 0  (integer)
-//   fly secrets set PINE_PAYMENT_MODE=pipe       ← sends AllowedPaymentMode: "1|8|10|11|4|20|21" (string)
-//
-// AUTO_PUSH_TO_TERMINAL:
-//   true  → new Shopify draft orders auto-push to terminal immediately
-//   false → cashier must manually click Push to POS in Retool (default)
-//
-// PINE_PAYMENT_MODE:
-//   integer → AllowedPaymentMode sent as integer 0 (Pine docs say 0 = all modes)
-//   pipe    → AllowedPaymentMode sent as pipe-separated string of explicit modes
-//             Use this if integer 0 is restricting to card only
+// Flip these on Fly.io without redeploying:
+//   fly secrets set AUTO_PUSH_TO_TERMINAL=true  -a timanti-middleware
+//   fly secrets set AUTO_PUSH_TO_TERMINAL=false -a timanti-middleware
+//   fly secrets set PINE_PAYMENT_MODE=integer   -a timanti-middleware
+//   fly secrets set PINE_PAYMENT_MODE=pipe      -a timanti-middleware
 // ─────────────────────────────────────────
 
 const AUTO_PUSH_TO_TERMINAL = process.env.AUTO_PUSH_TO_TERMINAL === 'true';
@@ -38,37 +29,138 @@ const AUTO_PUSH_TO_TERMINAL = process.env.AUTO_PUSH_TO_TERMINAL === 'true';
 function getPinePaymentMode() {
   const mode = (process.env.PINE_PAYMENT_MODE || 'integer').toLowerCase();
   if (mode === 'pipe') {
-    // Explicit modes: Card|PhonePe|UPI Sale|UPI BharatQR|Wallets|Bank EMI|Amazon Pay
-    return '1|8|10|11|4|20|21';
+    return '1|8|10|11|4|20|21'; // Card|PhonePe|UPI|BharatQR|Wallets|BankEMI|AmazonPay
   }
-  // Default: integer 0 = all modes enabled on terminal per Pine docs
-  return 0;
+  return 0; // integer 0 = all modes enabled on terminal per Pine docs
 }
 
-console.log(`\n⚙️  Config: AUTO_PUSH_TO_TERMINAL=${AUTO_PUSH_TO_TERMINAL}, PINE_PAYMENT_MODE=${process.env.PINE_PAYMENT_MODE || 'integer'}`);
+// ─────────────────────────────────────────
+// SHOPIFY TOKEN MANAGER
+//
+// Shopify OAuth tokens expire every 24 hours. This module:
+//   1. Refreshes the token automatically every 23h using client_id + client_secret
+//   2. Saves the new token to Supabase (survives server restarts)
+//   3. Every Shopify API call in this file uses getShopifyToken() — never hardcoded
+//
+// One-time setup — add these two secrets to Fly.io:
+//   fly secrets set SHOPIFY_CLIENT_ID=your_api_key        -a timanti-middleware
+//   fly secrets set SHOPIFY_CLIENT_SECRET=your_secret_key -a timanti-middleware
+//
+// Where to find them:
+//   Shopify Admin → Apps → App and sales channel settings
+//   → Your custom app → API credentials
+//   → "API key" = CLIENT_ID, "API secret key" = CLIENT_SECRET
+//
+// Retool fix (one change):
+//   Old: getdraftorders calls https://auracarat.myshopify.com/admin/api/...
+//   New: call https://timanti-middleware.fly.dev/api/draft-orders instead
+//   This proxy handles the token automatically — remove the header from Retool
+//
+// Supabase: needs a config table. Run this SQL once in Supabase SQL editor:
+//   CREATE TABLE IF NOT EXISTS config (
+//     key TEXT PRIMARY KEY,
+//     value TEXT NOT NULL,
+//     updated_at TIMESTAMPTZ DEFAULT NOW()
+//   );
+// ─────────────────────────────────────────
+
+let cachedToken = null;
+let tokenFetchedAt = null;
+
+async function getShopifyToken() {
+  const now = Date.now();
+
+  // Use in-memory cache if < 23h old
+  if (cachedToken && tokenFetchedAt && (now - tokenFetchedAt) < 23 * 60 * 60 * 1000) {
+    return cachedToken;
+  }
+
+  // Refresh using client credentials (Shopify OAuth)
+  if (process.env.SHOPIFY_CLIENT_ID && process.env.SHOPIFY_CLIENT_SECRET) {
+    try {
+      const response = await axios.post(
+        `${process.env.SHOPIFY_STORE_URL}/admin/oauth/access_token`,
+        {
+          client_id: process.env.SHOPIFY_CLIENT_ID,
+          client_secret: process.env.SHOPIFY_CLIENT_SECRET,
+          grant_type: 'client_credentials'
+        },
+        { timeout: 10000 }
+      );
+      const newToken = response.data.access_token;
+      if (newToken) {
+        cachedToken = newToken;
+        tokenFetchedAt = now;
+        // Persist to Supabase so restarts don't lose it
+        await supabase
+          .from('config')
+          .upsert({ key: 'shopify_access_token', value: newToken, updated_at: new Date().toISOString() });
+        console.log('✅ Shopify token refreshed and saved to Supabase');
+        return newToken;
+      }
+    } catch (err) {
+      console.error('⚠️  Shopify token refresh failed:', err.response?.data || err.message);
+    }
+  } else {
+    console.warn('⚠️  SHOPIFY_CLIENT_ID / SHOPIFY_CLIENT_SECRET not set — cannot auto-refresh');
+  }
+
+  // Fallback: last known good token from Supabase
+  try {
+    const { data } = await supabase
+      .from('config')
+      .select('value')
+      .eq('key', 'shopify_access_token')
+      .single();
+    if (data?.value) {
+      cachedToken = data.value;
+      tokenFetchedAt = now;
+      console.log('✅ Shopify token loaded from Supabase (may be up to 24h old)');
+      return data.value;
+    }
+  } catch (err) {
+    console.warn('Supabase token load failed:', err.message);
+  }
+
+  // Last resort: env var (old manual token — may be expired)
+  if (process.env.SHOPIFY_ACCESS_TOKEN) {
+    console.warn('⚠️  Using SHOPIFY_ACCESS_TOKEN env var — this may be expired');
+    return process.env.SHOPIFY_ACCESS_TOKEN;
+  }
+
+  throw new Error('No Shopify token available. Set SHOPIFY_CLIENT_ID and SHOPIFY_CLIENT_SECRET on Fly.io');
+}
+
+async function initShopifyToken() {
+  console.log('🔑 Initialising Shopify token...');
+  try {
+    await getShopifyToken();
+    // Schedule refresh every 23 hours
+    setInterval(async () => {
+      cachedToken = null;
+      tokenFetchedAt = null;
+      await getShopifyToken();
+    }, 23 * 60 * 60 * 1000);
+  } catch (err) {
+    console.error('❌ Shopify token init failed:', err.message);
+  }
+}
 
 // ─────────────────────────────────────────
 // Pine Labs Response Handling
-//
-// Docs: ResponseCode 0 = success, non-zero = failure.
-// Observed undocumented: code=1001 msg "TXN UPLOADED" = still uploading, keep polling.
-// All other non-zero = FAILED.
 // ─────────────────────────────────────────
 
 const PINE_PENDING_MESSAGES = ['TXN UPLOADED', 'TXN PENDING', 'IN PROGRESS'];
 
 function getPineStatusResult(responseCode, responseMessage) {
   const msg = (responseMessage || '').toUpperCase().trim();
-
   if (responseCode === 0) {
     return { newStatus: 'PAID', cashierMessage: 'Payment confirmed!' };
   }
-
   const isPending = PINE_PENDING_MESSAGES.some(p => msg.includes(p));
   if (isPending) {
     return { newStatus: null, cashierMessage: `Terminal: ${responseMessage}` };
   }
-
   return { newStatus: 'FAILED', cashierMessage: `Payment failed: ${responseMessage}` };
 }
 
@@ -83,53 +175,10 @@ function parsePineCSV(rawBody) {
   return data;
 }
 
-// Pine permanently rejects reused TransactionNumbers even across separate
-// attempts. Append timestamp so every push is unique to Pine.
+// Pine permanently rejects reused TransactionNumbers.
+// Timestamp suffix makes every push unique.
 function makePineTransactionNumber(draftOrderName) {
   return `${draftOrderName}-${Date.now()}`;
-}
-
-// ─────────────────────────────────────────
-// Shopify Token Health Check (every 23h)
-//
-// Shopify private app tokens do NOT expire — but custom OAuth "online" tokens
-// expire after 24h. This check catches that early and logs a clear warning.
-//
-// If you see "⚠️ SHOPIFY TOKEN INVALID" in Fly logs, you need to regenerate
-// the access token in your Shopify custom app and update the Fly secret:
-//   fly secrets set SHOPIFY_ACCESS_TOKEN=new_token_here
-//
-// Long-term fix: switch your Shopify app to "offline" token type so it
-// never expires. Ask your Shopify partner to change the access mode.
-// ─────────────────────────────────────────
-
-async function validateShopifyToken() {
-  try {
-    const response = await axios.get(
-      `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/shop.json`,
-      {
-        headers: { 'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN },
-        timeout: 10000
-      }
-    );
-    console.log(`✅ Shopify token valid — shop: ${response.data.shop?.name}`);
-    return true;
-  } catch (err) {
-    const status = err.response?.status;
-    if (status === 401) {
-      console.error('⚠️  SHOPIFY TOKEN INVALID (401) — update SHOPIFY_ACCESS_TOKEN on Fly.io!');
-      console.error('   Run: fly secrets set SHOPIFY_ACCESS_TOKEN=your_new_token -a timanti-middleware');
-    } else {
-      console.warn(`Shopify token check failed (HTTP ${status || 'N/A'}): ${err.message}`);
-    }
-    return false;
-  }
-}
-
-function startTokenHealthCheck() {
-  // Check immediately on startup, then every 23 hours
-  validateShopifyToken();
-  setInterval(validateShopifyToken, 23 * 60 * 60 * 1000);
 }
 
 // ─────────────────────────────────────────
@@ -138,14 +187,12 @@ function startTokenHealthCheck() {
 
 async function completeShopifyOrder(shopifyDraftId, transactionDbId) {
   try {
+    const token = await getShopifyToken();
     const shopifyResponse = await axios.put(
       `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${shopifyDraftId}/complete.json`,
       { payment_pending: false },
       {
-        headers: {
-          'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN,
-          'Content-Type': 'application/json'
-        },
+        headers: { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' },
         timeout: 15000
       }
     );
@@ -164,9 +211,6 @@ async function completeShopifyOrder(shopifyDraftId, transactionDbId) {
 
 // ─────────────────────────────────────────
 // Core Push Logic (shared by manual + auto-push)
-//
-// Extracted so both the manual /api/push-to-terminal endpoint
-// and the auto-push Shopify webhook can reuse the same code.
 // ─────────────────────────────────────────
 
 async function pushDraftOrderToTerminal({ draftOrderId, draftOrderName, amountInRupees, locationId }) {
@@ -180,7 +224,6 @@ async function pushDraftOrderToTerminal({ draftOrderId, draftOrderName, amountIn
     return { success: false, httpStatus: 404, error: `No terminal mapped for location ID: ${locationId}` };
   }
 
-  // Block if already in-progress. FAILED/CANCELLED/PINE_UNREACHABLE allow a fresh push.
   const { data: existing } = await supabase
     .from('transactions')
     .select('id, status')
@@ -190,8 +233,7 @@ async function pushDraftOrderToTerminal({ draftOrderId, draftOrderName, amountIn
 
   if (existing) {
     return {
-      success: false,
-      httpStatus: 409,
+      success: false, httpStatus: 409,
       error: 'This draft order already has an active payment in progress. Cancel it first.',
       existingTransactionId: existing.id
     };
@@ -218,7 +260,6 @@ async function pushDraftOrderToTerminal({ draftOrderId, draftOrderName, amountIn
     return { success: false, httpStatus: 500, error: 'DB error', detail: txnError.message };
   }
 
-  // Fire Pine upload in background — don't block the HTTP response
   const paymentMode = getPinePaymentMode();
   const pinePayload = {
     TransactionNumber: pineTransactionNumber,
@@ -236,7 +277,6 @@ async function pushDraftOrderToTerminal({ draftOrderId, draftOrderName, amountIn
 
   console.log(`UploadBilledTransaction txn ${txn.id} REQUEST (AllowedPaymentMode=${JSON.stringify(paymentMode)}):`, JSON.stringify(pinePayload));
 
-  // 30s timeout — Pine UAT can be slow getting the PTRID back
   axios.post(
     `${process.env.PINE_LABS_API_URL}/V1/UploadBilledTransaction`,
     pinePayload,
@@ -248,7 +288,6 @@ async function pushDraftOrderToTerminal({ draftOrderId, draftOrderName, amountIn
     const ptrid = pineResponse.data.PlutusTransactionReferenceID || null;
     const ptridNum = ptrid ? parseInt(ptrid) : null;
     const newStatus = (responseCode === 0 && ptridNum && ptridNum > 0) ? 'PUSHED_TO_TERMINAL' : 'FAILED';
-
     console.log(`UploadBilledTransaction txn ${txn.id}: code=${responseCode} PTRID=${ptrid} → ${newStatus}`);
     await supabase
       .from('transactions')
@@ -257,18 +296,13 @@ async function pushDraftOrderToTerminal({ draftOrderId, draftOrderName, amountIn
   })
   .catch(async (err) => {
     console.error(`UploadBilledTransaction timed out for txn ${txn.id}: ${err.message}`);
-    console.log(`Txn ${txn.id} marked PINE_UNREACHABLE — if terminal shows nothing, cancel and push again`);
     await supabase
       .from('transactions')
       .update({ status: 'PINE_UNREACHABLE', pine_ref_id: null })
       .eq('id', txn.id);
   });
 
-  return {
-    success: true,
-    message: 'Transaction logged. Sending to terminal...',
-    transactionId: txn.id
-  };
+  return { success: true, message: 'Transaction logged. Sending to terminal...', transactionId: txn.id };
 }
 
 // ─────────────────────────────────────────
@@ -294,17 +328,14 @@ async function pollActiveTxns() {
     for (const txn of activeTxns) {
       try {
         if (!txn.pine_ref_id) {
-          console.log(`Poller: txn ${txn.id} (${txn.draft_order_name}) — no PTRID, upload may have timed out. Cancel and repush if terminal shows nothing.`);
+          console.log(`Poller: txn ${txn.id} — no PTRID, upload may have timed out.`);
           continue;
         }
-
         const ptrid = parseInt(txn.pine_ref_id);
         if (ptrid <= 0) {
-          console.log(`Poller: txn ${txn.id} invalid PTRID=${txn.pine_ref_id} → FAILED`);
           await supabase.from('transactions').update({ status: 'FAILED' }).eq('id', txn.id);
           continue;
         }
-
         const store = txn.stores;
         if (!store) { console.error(`Poller: no store config for txn ${txn.id}`); continue; }
 
@@ -323,7 +354,6 @@ async function pollActiveTxns() {
         const responseCode = parseInt(pineResponse.data.ResponseCode);
         const responseMessage = pineResponse.data.ResponseMessage || '';
         const { newStatus } = getPineStatusResult(responseCode, responseMessage);
-
         console.log(`Poller: txn ${txn.id} PTRID=${ptrid}: code=${responseCode} msg="${responseMessage}"${newStatus ? ` → ${newStatus}` : ' (no change)'}`);
 
         if (newStatus && newStatus !== txn.status) {
@@ -341,11 +371,6 @@ async function pollActiveTxns() {
   }
 }
 
-function startPoller() {
-  console.log('🔄 Background poller started (30s interval)');
-  setInterval(pollActiveTxns, 30000);
-}
-
 // ─────────────────────────────────────────
 // Routes
 // ─────────────────────────────────────────
@@ -357,16 +382,47 @@ app.get('/api/test-db', async (req, res) => {
     config: {
       autoPushToTerminal: AUTO_PUSH_TO_TERMINAL,
       pinePaymentMode: process.env.PINE_PAYMENT_MODE || 'integer',
-      pinePaymentModeValue: getPinePaymentMode()
+      pinePaymentModeValue: getPinePaymentMode(),
+      shopifyTokenCached: !!cachedToken,
+      shopifyTokenAgeMinutes: tokenFetchedAt ? Math.round((Date.now() - tokenFetchedAt) / 60000) : null
     },
     env: {
       supabaseUrl: process.env.SUPABASE_URL ? 'SET' : 'MISSING',
       serviceKey: process.env.SUPABASE_SERVICE_KEY ? 'SET' : 'MISSING',
       pineUrl: process.env.PINE_LABS_API_URL ? 'SET' : 'MISSING',
       shopifyUrl: process.env.SHOPIFY_STORE_URL ? 'SET' : 'MISSING',
-      shopifyToken: process.env.SHOPIFY_ACCESS_TOKEN ? 'SET' : 'MISSING'
+      shopifyClientId: process.env.SHOPIFY_CLIENT_ID ? 'SET' : 'MISSING ⚠️',
+      shopifyClientSecret: process.env.SHOPIFY_CLIENT_SECRET ? 'SET' : 'MISSING ⚠️'
     }
   });
+});
+
+// ── Draft Orders Proxy ──
+//
+// Retool change — update getdraftorders query:
+//   Resource:  REST API (keep the same resource, just change URL)
+//   Method:    GET
+//   URL:       https://timanti-middleware.fly.dev/api/draft-orders
+//   Headers:   DELETE the X-Shopify-Access-Token header entirely
+//   Params:    keep ?status=open as-is
+//
+// This proxy uses the auto-refreshed token. Retool never touches the token again.
+
+app.get('/api/draft-orders', async (req, res) => {
+  try {
+    const token = await getShopifyToken();
+    const queryString = new URLSearchParams(req.query).toString();
+    const shopifyUrl = `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders.json${queryString ? `?${queryString}` : ''}`;
+    const response = await axios.get(shopifyUrl, {
+      headers: { 'X-Shopify-Access-Token': token },
+      timeout: 15000
+    });
+    return res.json(response.data);
+  } catch (err) {
+    const status = err.response?.status || 500;
+    console.error('Draft orders proxy error:', err.response?.data || err.message);
+    return res.status(status).json({ success: false, error: err.response?.data || err.message });
+  }
 });
 
 // ── Push to Terminal (manual — Retool button) ──
@@ -374,10 +430,7 @@ app.get('/api/test-db', async (req, res) => {
 app.post('/api/push-to-terminal', async (req, res) => {
   const { draftOrderId, draftOrderName, amountInRupees, locationId } = req.body;
   if (!draftOrderId || !draftOrderName || !amountInRupees || !locationId) {
-    return res.status(400).json({
-      success: false,
-      error: 'Missing required fields: draftOrderId, draftOrderName, amountInRupees, locationId'
-    });
+    return res.status(400).json({ success: false, error: 'Missing: draftOrderId, draftOrderName, amountInRupees, locationId' });
   }
   try {
     const result = await pushDraftOrderToTerminal({ draftOrderId, draftOrderName, amountInRupees, locationId });
@@ -390,118 +443,66 @@ app.post('/api/push-to-terminal', async (req, res) => {
 
 // ── Shopify Draft Order Webhook (auto-push) ──
 //
-// Register this URL in Shopify:
-//   Shopify Admin → Settings → Notifications → Webhooks
-//   Event: Draft order creation
-//   URL: https://timanti-middleware.fly.dev/api/shopify-draft-created
+// Register once in Shopify Admin → Settings → Notifications → Webhooks:
+//   Event:  Draft order creation
+//   URL:    https://timanti-middleware.fly.dev/api/shopify-draft-created
 //   Format: JSON
-//
-// When AUTO_PUSH_TO_TERMINAL=true, every new draft order auto-pushes to the terminal.
-// When AUTO_PUSH_TO_TERMINAL=false, webhook is received and logged but NOT pushed —
-// cashier must click Push to POS manually in Retool.
-//
-// To flip the flag without redeploying:
-//   fly secrets set AUTO_PUSH_TO_TERMINAL=true  -a timanti-middleware
-//   fly secrets set AUTO_PUSH_TO_TERMINAL=false -a timanti-middleware
 
 app.post('/api/shopify-draft-created', async (req, res) => {
-  // Acknowledge immediately — Shopify times out if no fast response
   res.status(200).send('OK');
-
   try {
     const draft = req.body;
-    if (!draft || !draft.id) {
-      console.error('Shopify webhook: empty or invalid payload');
-      return;
-    }
+    if (!draft || !draft.id) { console.error('Shopify webhook: empty payload'); return; }
 
     const draftOrderId   = draft.id.toString();
     const draftOrderName = draft.name || `#${draftOrderId}`;
     const amountInRupees = draft.total_price;
     const locationId     = draft.location_id?.toString() || null;
 
-    console.log(`Shopify draft created: ${draftOrderName} (ID: ${draftOrderId}) amount: ₹${amountInRupees} location: ${locationId}`);
+    console.log(`Shopify draft created: ${draftOrderName} ₹${amountInRupees} location: ${locationId}`);
 
     if (!AUTO_PUSH_TO_TERMINAL) {
-      console.log(`Auto-push is OFF — ${draftOrderName} received but not pushed. Cashier must push manually.`);
+      console.log(`Auto-push OFF — ${draftOrderName} received, cashier must push manually.`);
       return;
     }
+    if (!locationId) { console.error(`Auto-push: ${draftOrderName} has no location_id — skipping.`); return; }
+    if (!amountInRupees || parseFloat(amountInRupees) <= 0) { console.error(`Auto-push: ${draftOrderName} zero amount — skipping.`); return; }
 
-    if (!locationId) {
-      console.error(`Auto-push: ${draftOrderName} has no location_id — cannot find terminal. Skipping.`);
-      return;
-    }
-
-    if (!amountInRupees || parseFloat(amountInRupees) <= 0) {
-      console.error(`Auto-push: ${draftOrderName} has no amount — skipping.`);
-      return;
-    }
-
-    console.log(`Auto-push ON — pushing ${draftOrderName} to terminal...`);
     const result = await pushDraftOrderToTerminal({ draftOrderId, draftOrderName, amountInRupees, locationId });
     console.log(`Auto-push result for ${draftOrderName}:`, JSON.stringify(result));
-
   } catch (err) {
     console.error('Shopify draft webhook error:', err.message);
   }
 });
 
 // ── Check Status ──────────────────────────
-//
-// Always calls Pine if a PTRID exists — Pine is source of truth, not DB.
-// DB is only updated on an explicit Pine response.
-// Only skips Pine call if there is no PTRID to query with.
 
 app.post('/api/check-status', async (req, res) => {
   const { transactionId } = req.body;
-  if (!transactionId) {
-    return res.status(400).json({ success: false, error: 'transactionId required' });
-  }
+  if (!transactionId) return res.status(400).json({ success: false, error: 'transactionId required' });
   try {
     const { data: transaction, error: txnError } = await supabase
-      .from('transactions')
-      .select('*')
-      .eq('id', transactionId)
-      .single();
+      .from('transactions').select('*').eq('id', transactionId).single();
+    if (txnError || !transaction) return res.status(404).json({ success: false, error: 'Transaction not found' });
 
-    if (txnError || !transaction) {
-      return res.status(404).json({ success: false, error: 'Transaction not found' });
-    }
-
-    // No PTRID — nothing to ask Pine about
     if (!transaction.pine_ref_id) {
       return res.json({
-        success: true,
-        status: transaction.status,
+        success: true, status: transaction.status, calledPine: false, transactionId: transaction.id,
         message: transaction.status === 'PINE_UNREACHABLE'
-          ? 'Upload timed out — Pine may or may not have received it. If terminal shows nothing, cancel and push again.'
-          : 'Transaction not yet sent to terminal.',
-        calledPine: false,
-        transactionId: transaction.id
+          ? 'Upload timed out — cancel and push again.' : 'Transaction not yet sent to terminal.'
       });
     }
 
     const ptridNum = parseInt(transaction.pine_ref_id);
     if (ptridNum <= 0) {
       await supabase.from('transactions').update({ status: 'FAILED' }).eq('id', transactionId);
-      return res.json({
-        success: true,
-        status: 'FAILED',
-        message: 'Pine rejected this transaction (invalid PTRID). Push again.',
-        calledPine: false,
-        transactionId: transaction.id
-      });
+      return res.json({ success: true, status: 'FAILED', message: 'Pine rejected this transaction. Push again.', calledPine: false, transactionId: transaction.id });
     }
 
-    const { data: store, error: storeError } = await supabase
-      .from('stores').select('*').eq('id', transaction.location_id).single();
+    const { data: store, error: storeError } = await supabase.from('stores').select('*').eq('id', transaction.location_id).single();
+    if (storeError || !store) return res.status(500).json({ success: false, error: 'Store config not found' });
 
-    if (storeError || !store) {
-      return res.status(500).json({ success: false, error: 'Store config not found' });
-    }
-
-    console.log(`CheckStatus txn ${transactionId}: calling Pine PTRID=${ptridNum} (current DB status: ${transaction.status})`);
-
+    console.log(`CheckStatus txn ${transactionId}: calling Pine PTRID=${ptridNum} (DB: ${transaction.status})`);
     const pineStatusResponse = await axios.post(
       `${process.env.PINE_LABS_API_URL}/V1/GetCloudBasedTxnStatus`,
       {
@@ -517,7 +518,6 @@ app.post('/api/check-status', async (req, res) => {
     const pineResponseCode = parseInt(pineStatusResponse.data.ResponseCode);
     const pineMessage = pineStatusResponse.data.ResponseMessage || '';
     console.log(`CheckStatus txn ${transactionId}: Pine code=${pineResponseCode} msg="${pineMessage}"`);
-
     const { newStatus, cashierMessage } = getPineStatusResult(pineResponseCode, pineMessage);
 
     if (newStatus && newStatus !== transaction.status) {
@@ -528,89 +528,43 @@ app.post('/api/check-status', async (req, res) => {
     }
 
     return res.json({
-      success: true,
-      status: newStatus || transaction.status,
-      message: cashierMessage,
-      calledPine: true,
-      pineResponseCode,
-      pineResponseMessage: pineMessage,
-      transactionId: transaction.id,
-      pineRefId: transaction.pine_ref_id
+      success: true, status: newStatus || transaction.status, message: cashierMessage,
+      calledPine: true, pineResponseCode, pineResponseMessage: pineMessage,
+      transactionId: transaction.id, pineRefId: transaction.pine_ref_id
     });
-
   } catch (error) {
     console.error('Check-status error:', error.response?.data || error.message);
-    return res.status(500).json({
-      success: false,
-      error: 'Could not reach Pine Labs.',
-      detail: error.message
-    });
+    return res.status(500).json({ success: false, error: 'Could not reach Pine Labs.', detail: error.message });
   }
 });
 
 // ── Cancel Transaction ────────────────────
-//
-// Calls Pine synchronously. DB only updated if Pine returns ResponseCode 0.
-// If Pine call fails for any reason, DB is untouched and error returned to client.
-//
-// Payload per docs section 7.1:
-//   - Amount is MANDATORY
-//   - ClientId / StoreId use lowercase 'd' (same as UploadBilledTransaction)
-//   - MerchantID, SecurityToken, PlutusTransactionReferenceID also mandatory
 
 app.post('/api/cancel-transaction', async (req, res) => {
   const { transactionId } = req.body;
-  if (!transactionId) {
-    return res.status(400).json({ success: false, error: 'transactionId required' });
-  }
+  if (!transactionId) return res.status(400).json({ success: false, error: 'transactionId required' });
   try {
     const { data: transaction, error: txnError } = await supabase
-      .from('transactions')
-      .select('*')
-      .eq('id', transactionId)
-      .single();
-
-    if (txnError || !transaction) {
-      return res.status(404).json({ success: false, error: 'Transaction not found' });
-    }
+      .from('transactions').select('*').eq('id', transactionId).single();
+    if (txnError || !transaction) return res.status(404).json({ success: false, error: 'Transaction not found' });
 
     if (['PAID', 'CANCELLED'].includes(transaction.status)) {
-      return res.status(400).json({
-        success: false,
-        error: `Cannot cancel — transaction is already ${transaction.status}.`
-      });
+      return res.status(400).json({ success: false, error: `Cannot cancel — already ${transaction.status}.` });
     }
-
-    // No PTRID — Pine never received it, safe to cancel in DB directly
     if (!transaction.pine_ref_id) {
       await supabase.from('transactions').update({ status: 'CANCELLED' }).eq('id', transactionId);
-      return res.json({
-        success: true,
-        message: 'Transaction cancelled (Pine had not received it).',
-        transactionId: transaction.id,
-        calledPine: false
-      });
+      return res.json({ success: true, message: 'Cancelled (Pine had not received it).', transactionId: transaction.id, calledPine: false });
     }
 
     const ptridNum = parseInt(transaction.pine_ref_id);
     if (ptridNum <= 0) {
       await supabase.from('transactions').update({ status: 'CANCELLED' }).eq('id', transactionId);
-      return res.json({
-        success: true,
-        message: 'Transaction cancelled (Pine had already rejected it).',
-        transactionId: transaction.id,
-        calledPine: false
-      });
+      return res.json({ success: true, message: 'Cancelled (Pine had rejected it).', transactionId: transaction.id, calledPine: false });
     }
 
-    const { data: store, error: storeError } = await supabase
-      .from('stores').select('*').eq('id', transaction.location_id).single();
+    const { data: store, error: storeError } = await supabase.from('stores').select('*').eq('id', transaction.location_id).single();
+    if (storeError || !store) return res.status(500).json({ success: false, error: 'Store config not found' });
 
-    if (storeError || !store) {
-      return res.status(500).json({ success: false, error: 'Store config not found' });
-    }
-
-    // Docs section 7.1: Amount mandatory, ClientId/StoreId use lowercase 'd'
     const cancelPayload = {
       MerchantID: parseInt(store.pine_merchant_id),
       SecurityToken: process.env.PINE_LABS_SECURITY_TOKEN,
@@ -636,33 +590,15 @@ app.post('/api/cancel-transaction', async (req, res) => {
       const httpStatus = pineError.response?.status;
       const detail = JSON.stringify(pineError.response?.data) || pineError.message;
       console.error(`CancelTransaction txn ${transactionId}: Pine HTTP ${httpStatus} — ${detail}`);
-      return res.status(502).json({
-        success: false,
-        error: `Pine Labs cancel call failed (HTTP ${httpStatus || 'N/A'}). Transaction NOT cancelled in DB.`,
-        detail,
-        transactionId: transaction.id
-      });
+      return res.status(502).json({ success: false, error: `Pine cancel failed (HTTP ${httpStatus || 'N/A'}). NOT cancelled in DB.`, detail, transactionId: transaction.id });
     }
 
     if (pineResponseCode === 0) {
       await supabase.from('transactions').update({ status: 'CANCELLED' }).eq('id', transactionId);
-      return res.json({
-        success: true,
-        message: 'Transaction cancelled successfully.',
-        transactionId: transaction.id,
-        pineResponseCode,
-        pineResponseMessage: pineMessage
-      });
+      return res.json({ success: true, message: 'Transaction cancelled.', transactionId: transaction.id, pineResponseCode, pineResponseMessage: pineMessage });
     } else {
-      return res.status(400).json({
-        success: false,
-        error: `Pine rejected the cancel: ${pineMessage}`,
-        pineResponseCode,
-        pineResponseMessage: pineMessage,
-        transactionId: transaction.id
-      });
+      return res.status(400).json({ success: false, error: `Pine rejected: ${pineMessage}`, pineResponseCode, pineResponseMessage: pineMessage, transactionId: transaction.id });
     }
-
   } catch (error) {
     console.error('Cancel-transaction error:', error.message);
     return res.status(500).json({ success: false, error: error.message });
@@ -682,42 +618,24 @@ app.post('/api/pine-postback', async (req, res) => {
     const ptrid = data['PlutusTransactionReferenceID'];
     const pineTransactionNumber = data['TransactionNumber'];
 
-    if (!ptrid && !pineTransactionNumber) {
-      console.error('PostBack: missing PTRID and TransactionNumber');
-      return;
-    }
+    if (!ptrid && !pineTransactionNumber) { console.error('PostBack: missing PTRID and TransactionNumber'); return; }
 
     let txnRows;
     if (ptrid) {
-      const result = await supabase
-        .from('transactions').select('*')
-        .eq('pine_ref_id', ptrid.toString())
-        .order('created_at', { ascending: false }).limit(1);
+      const result = await supabase.from('transactions').select('*').eq('pine_ref_id', ptrid.toString()).order('created_at', { ascending: false }).limit(1);
       txnRows = result.data;
     }
     if (!txnRows || txnRows.length === 0) {
-      const result = await supabase
-        .from('transactions').select('*')
-        .eq('pine_transaction_number', pineTransactionNumber)
-        .in('status', ['PENDING', 'PUSHED_TO_TERMINAL'])
-        .order('created_at', { ascending: false }).limit(1);
+      const result = await supabase.from('transactions').select('*').eq('pine_transaction_number', pineTransactionNumber).in('status', ['PENDING', 'PUSHED_TO_TERMINAL']).order('created_at', { ascending: false }).limit(1);
       txnRows = result.data;
     }
-    if (!txnRows || txnRows.length === 0) {
-      console.error('PostBack: no matching transaction for PTRID:', ptrid, 'pineNum:', pineTransactionNumber);
-      return;
-    }
+    if (!txnRows || txnRows.length === 0) { console.error('PostBack: no matching transaction for PTRID:', ptrid, 'pineNum:', pineTransactionNumber); return; }
 
     const transaction = txnRows[0];
     const newStatus = responseCode === 0 ? 'PAID' : 'FAILED';
     const paymentMode = data['PaymenMode'] || data['PaymentMode'] || null;
 
-    await supabase.from('transactions').update({
-      status: newStatus,
-      pine_ref_id: ptrid ? ptrid.toString() : transaction.pine_ref_id,
-      payment_mode: paymentMode
-    }).eq('id', transaction.id);
-
+    await supabase.from('transactions').update({ status: newStatus, pine_ref_id: ptrid ? ptrid.toString() : transaction.pine_ref_id, payment_mode: paymentMode }).eq('id', transaction.id);
     console.log(`✅ PostBack: txn ${transaction.id} → ${newStatus}`);
     if (newStatus === 'PAID' && transaction.shopify_draft_id) {
       await completeShopifyOrder(transaction.shopify_draft_id, transaction.id);
@@ -735,58 +653,28 @@ app.post('/api/pine-webhook', async (req, res) => {
   res.status(200).send('OK');
   try {
     if (pineData.transactionId) {
-      const { data: transaction, error } = await supabase
-        .from('transactions').select('*')
-        .eq('id', parseInt(pineData.transactionId)).single();
-
-      if (error || !transaction) {
-        console.error('Webhook: transaction not found:', pineData.transactionId);
-        return;
-      }
-
-      await supabase.from('transactions').update({
-        status: 'PAID',
-        pine_ref_id: pineData.PlutusTransactionReferenceID?.toString() || transaction.pine_ref_id || 'TEST'
-      }).eq('id', transaction.id);
-
+      const { data: transaction, error } = await supabase.from('transactions').select('*').eq('id', parseInt(pineData.transactionId)).single();
+      if (error || !transaction) { console.error('Webhook: transaction not found:', pineData.transactionId); return; }
+      await supabase.from('transactions').update({ status: 'PAID', pine_ref_id: pineData.PlutusTransactionReferenceID?.toString() || transaction.pine_ref_id || 'TEST' }).eq('id', transaction.id);
       console.log(`✅ Test webhook: txn ${transaction.id} → PAID`);
-      if (transaction.shopify_draft_id) {
-        await completeShopifyOrder(transaction.shopify_draft_id, transaction.id);
-      }
+      if (transaction.shopify_draft_id) await completeShopifyOrder(transaction.shopify_draft_id, transaction.id);
       return;
     }
 
     const responseCode = parseInt(pineData.ResponseCode);
     const draftOrderName = pineData.TransactionNumber;
-
     if (responseCode !== 0) {
-      await supabase.from('transactions').update({ status: 'FAILED' })
-        .eq('draft_order_name', draftOrderName)
-        .in('status', ['PENDING', 'PUSHED_TO_TERMINAL', 'PINE_UNREACHABLE']);
+      await supabase.from('transactions').update({ status: 'FAILED' }).eq('draft_order_name', draftOrderName).in('status', ['PENDING', 'PUSHED_TO_TERMINAL', 'PINE_UNREACHABLE']);
       return;
     }
 
-    const { data: txnRows } = await supabase
-      .from('transactions').select('*')
-      .eq('draft_order_name', draftOrderName)
-      .in('status', ['PENDING', 'PUSHED_TO_TERMINAL', 'PINE_UNREACHABLE'])
-      .order('created_at', { ascending: false }).limit(1);
-
-    if (!txnRows || txnRows.length === 0) {
-      console.error('Webhook: no active transaction for:', draftOrderName);
-      return;
-    }
+    const { data: txnRows } = await supabase.from('transactions').select('*').eq('draft_order_name', draftOrderName).in('status', ['PENDING', 'PUSHED_TO_TERMINAL', 'PINE_UNREACHABLE']).order('created_at', { ascending: false }).limit(1);
+    if (!txnRows || txnRows.length === 0) { console.error('Webhook: no active transaction for:', draftOrderName); return; }
 
     const transaction = txnRows[0];
-    await supabase.from('transactions').update({
-      status: 'PAID',
-      pine_ref_id: pineData.PlutusTransactionReferenceID?.toString() || transaction.pine_ref_id
-    }).eq('id', transaction.id);
-
+    await supabase.from('transactions').update({ status: 'PAID', pine_ref_id: pineData.PlutusTransactionReferenceID?.toString() || transaction.pine_ref_id }).eq('id', transaction.id);
     console.log(`✅ Webhook: txn ${transaction.id} → PAID`);
-    if (transaction.shopify_draft_id) {
-      await completeShopifyOrder(transaction.shopify_draft_id, transaction.id);
-    }
+    if (transaction.shopify_draft_id) await completeShopifyOrder(transaction.shopify_draft_id, transaction.id);
   } catch (error) {
     console.error('Webhook error:', error.response?.data || error.message);
   }
@@ -797,16 +685,19 @@ app.post('/api/pine-webhook', async (req, res) => {
 // ─────────────────────────────────────────
 
 const PORT = process.env.PORT || 8080;
-app.listen(PORT, () => {
-  console.log(`\n🚀 Timanti Middleware running on port ${PORT}`);
+app.listen(PORT, async () => {
+  console.log(`\n🚀 Timanti Middleware on port ${PORT}`);
+  console.log(`⚙️  AUTO_PUSH=${AUTO_PUSH_TO_TERMINAL} | PINE_MODE=${process.env.PINE_PAYMENT_MODE || 'integer'}`);
   console.log('  GET  /api/test-db');
+  console.log('  GET  /api/draft-orders          ← Retool uses this now');
   console.log('  POST /api/push-to-terminal');
-  console.log('  POST /api/shopify-draft-created   ← Shopify webhook (auto-push)');
+  console.log('  POST /api/shopify-draft-created ← Shopify webhook');
   console.log('  POST /api/check-status');
   console.log('  POST /api/cancel-transaction');
   console.log('  POST /api/pine-postback');
   console.log('  POST /api/pine-webhook');
   console.log('');
-  startPoller();
-  startTokenHealthCheck();
+  await initShopifyToken();
+  console.log('🔄 Background poller started (30s)');
+  setInterval(pollActiveTxns, 30000);
 });
