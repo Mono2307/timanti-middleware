@@ -17,11 +17,11 @@ const supabase = createClient(
 // ─────────────────────────────────────────
 // CONFIG FLAGS
 //
-// Flip these on Fly.io without redeploying:
-//   fly secrets set AUTO_PUSH_TO_TERMINAL=true  -a timanti-middleware
-//   fly secrets set AUTO_PUSH_TO_TERMINAL=false -a timanti-middleware
-//   fly secrets set PINE_PAYMENT_MODE=integer   -a timanti-middleware
-//   fly secrets set PINE_PAYMENT_MODE=pipe      -a timanti-middleware
+// Flip on Fly.io without redeploying:
+//   fly secrets set AUTO_PUSH_TO_TERMINAL=true   -a timanti-middleware
+//   fly secrets set AUTO_PUSH_TO_TERMINAL=false  -a timanti-middleware
+//   fly secrets set PINE_PAYMENT_MODE=integer    -a timanti-middleware
+//   fly secrets set PINE_PAYMENT_MODE=pipe       -a timanti-middleware
 // ─────────────────────────────────────────
 
 const AUTO_PUSH_TO_TERMINAL = process.env.AUTO_PUSH_TO_TERMINAL === 'true';
@@ -31,32 +31,117 @@ function getPinePaymentMode() {
   if (mode === 'pipe') {
     return '1|8|10|11|4|20|21'; // Card|PhonePe|UPI|BharatQR|Wallets|BankEMI|AmazonPay
   }
-  return 0; // integer 0 = all modes enabled on terminal per Pine docs
+  return 0; // integer 0 = all modes enabled on terminal (Pine docs)
+}
+
+// ─────────────────────────────────────────
+// TERMINAL TAG PARSER
+//
+// Cashier adds a tag to the Shopify draft order to route it to the right terminal.
+// Tag format: terminal:LOCATION_REF  (must match location_ref in stores table)
+//
+// Examples:
+//   terminal:HSR-BLR-STORE  → routes to HSR Bangalore terminal
+//   terminal:SHOP-LOCATION  → routes to Shop terminal
+//
+// If no tag is present → falls back to Shopify location ID → then first store.
+// ─────────────────────────────────────────
+
+function parseTerminalTag(tags) {
+  if (!tags) return null;
+  const tagList = typeof tags === 'string' ? tags.split(',') : tags;
+  for (const tag of tagList) {
+    const trimmed = tag.trim().toLowerCase();
+    if (trimmed.startsWith('terminal:')) {
+      return trimmed.replace('terminal:', '').toUpperCase().trim();
+    }
+  }
+  return null;
+}
+
+// ─────────────────────────────────────────
+// LOCATION → STORE RESOLVER
+//
+// Priority order:
+//   1. Tag  (terminal:LOCATION_REF)  — most explicit, cashier sets this
+//   2. Shopify location_id           — only set if Shopify API creates the order
+//   3. First store fallback          — safe for single-terminal setups
+//
+// To add a new location+terminal in future:
+//   1. Add row to locations table with Shopify location ID
+//   2. Add row to stores table with Pine credentials + location_ref matching step 1
+//   No code changes needed.
+// ─────────────────────────────────────────
+
+async function resolveStoreForLocation(shopifyLocationId, terminalTag) {
+
+  // PRIORITY 1: Tag wins — most explicit
+  if (terminalTag) {
+    const { data: store } = await supabase
+      .from('stores')
+      .select('*')
+      .eq('location_ref', terminalTag)
+      .single();
+    if (store) {
+      console.log(`Tag resolved: terminal:${terminalTag} → store "${store.store_name}"`);
+      return store;
+    }
+    console.warn(`Tag "terminal:${terminalTag}" found but no matching store in DB — falling through`);
+  }
+
+  // PRIORITY 2: Shopify location ID
+  if (shopifyLocationId) {
+    const { data: location } = await supabase
+      .from('locations')
+      .select('location_id')
+      .eq('shopify_location_id', shopifyLocationId.toString())
+      .eq('is_active', true)
+      .single();
+    if (location?.location_id) {
+      const { data: store } = await supabase
+        .from('stores')
+        .select('*')
+        .eq('location_ref', location.location_id)
+        .single();
+      if (store) {
+        console.log(`Location resolved: Shopify ${shopifyLocationId} → "${store.store_name}"`);
+        return store;
+      }
+      console.warn(`Location ${location.location_id} found but no store linked to it`);
+    }
+  }
+
+  // PRIORITY 3: Fallback — first store (single terminal)
+  const { data: store } = await supabase
+    .from('stores')
+    .select('*')
+    .order('id', { ascending: true })
+    .limit(1)
+    .single();
+
+  if (store) {
+    console.log(`Fallback: using first store "${store.store_name}" (no tag, no location match)`);
+    return store;
+  }
+
+  console.error('No stores configured in DB at all');
+  return null;
 }
 
 // ─────────────────────────────────────────
 // SHOPIFY TOKEN MANAGER
 //
-// Shopify OAuth tokens expire every 24 hours. This module:
-//   1. Refreshes the token automatically every 23h using client_id + client_secret
-//   2. Saves the new token to Supabase (survives server restarts)
-//   3. Every Shopify API call in this file uses getShopifyToken() — never hardcoded
+// Tokens expire every 24h. Auto-refreshes using client credentials,
+// persists to Supabase config table, serves fresh tokens to all API calls.
 //
-// One-time setup — add these two secrets to Fly.io:
+// One-time Fly.io setup:
 //   fly secrets set SHOPIFY_CLIENT_ID=your_api_key        -a timanti-middleware
 //   fly secrets set SHOPIFY_CLIENT_SECRET=your_secret_key -a timanti-middleware
 //
-// Where to find them:
-//   Shopify Admin → Apps → App and sales channel settings
-//   → Your custom app → API credentials
-//   → "API key" = CLIENT_ID, "API secret key" = CLIENT_SECRET
+// Find in: Shopify Admin → Apps → App and sales channel settings
+//   → your custom app → API credentials tab
 //
-// Retool fix (one change):
-//   Old: getdraftorders calls https://auracarat.myshopify.com/admin/api/...
-//   New: call https://timanti-middleware.fly.dev/api/draft-orders instead
-//   This proxy handles the token automatically — remove the header from Retool
-//
-// Supabase: needs a config table. Run this SQL once in Supabase SQL editor:
+// Supabase config table (run once in SQL editor if not done):
 //   CREATE TABLE IF NOT EXISTS config (
 //     key TEXT PRIMARY KEY,
 //     value TEXT NOT NULL,
@@ -75,7 +160,7 @@ async function getShopifyToken() {
     return cachedToken;
   }
 
-  // Refresh using client credentials (Shopify OAuth)
+  // Refresh using OAuth client credentials
   if (process.env.SHOPIFY_CLIENT_ID && process.env.SHOPIFY_CLIENT_SECRET) {
     try {
       const response = await axios.post(
@@ -91,7 +176,6 @@ async function getShopifyToken() {
       if (newToken) {
         cachedToken = newToken;
         tokenFetchedAt = now;
-        // Persist to Supabase so restarts don't lose it
         await supabase
           .from('config')
           .upsert({ key: 'shopify_access_token', value: newToken, updated_at: new Date().toISOString() });
@@ -115,27 +199,26 @@ async function getShopifyToken() {
     if (data?.value) {
       cachedToken = data.value;
       tokenFetchedAt = now;
-      console.log('✅ Shopify token loaded from Supabase (may be up to 24h old)');
+      console.log('✅ Shopify token loaded from Supabase');
       return data.value;
     }
   } catch (err) {
     console.warn('Supabase token load failed:', err.message);
   }
 
-  // Last resort: env var (old manual token — may be expired)
+  // Last resort: env var
   if (process.env.SHOPIFY_ACCESS_TOKEN) {
-    console.warn('⚠️  Using SHOPIFY_ACCESS_TOKEN env var — this may be expired');
+    console.warn('⚠️  Using SHOPIFY_ACCESS_TOKEN env var — may be expired');
     return process.env.SHOPIFY_ACCESS_TOKEN;
   }
 
-  throw new Error('No Shopify token available. Set SHOPIFY_CLIENT_ID and SHOPIFY_CLIENT_SECRET on Fly.io');
+  throw new Error('No Shopify token available. Set SHOPIFY_CLIENT_ID + SHOPIFY_CLIENT_SECRET on Fly.io');
 }
 
 async function initShopifyToken() {
   console.log('🔑 Initialising Shopify token...');
   try {
     await getShopifyToken();
-    // Schedule refresh every 23 hours
     setInterval(async () => {
       cachedToken = null;
       tokenFetchedAt = null;
@@ -147,7 +230,7 @@ async function initShopifyToken() {
 }
 
 // ─────────────────────────────────────────
-// Pine Labs Response Handling
+// Pine Labs Helpers
 // ─────────────────────────────────────────
 
 const PINE_PENDING_MESSAGES = ['TXN UPLOADED', 'TXN PENDING', 'IN PROGRESS'];
@@ -175,7 +258,7 @@ function parsePineCSV(rawBody) {
   return data;
 }
 
-// Pine permanently rejects reused TransactionNumbers.
+// Pine permanently blacklists reused TransactionNumbers.
 // Timestamp suffix makes every push unique.
 function makePineTransactionNumber(draftOrderName) {
   return `${draftOrderName}-${Date.now()}`;
@@ -210,20 +293,17 @@ async function completeShopifyOrder(shopifyDraftId, transactionDbId) {
 }
 
 // ─────────────────────────────────────────
-// Core Push Logic (shared by manual + auto-push)
+// Core Push Logic
+// (shared by manual Retool button + auto-push webhook)
 // ─────────────────────────────────────────
 
-async function pushDraftOrderToTerminal({ draftOrderId, draftOrderName, amountInRupees, locationId }) {
-  const { data: store, error: storeError } = await supabase
-    .from('stores')
-    .select('*')
-    .eq('shopify_location_id', parseInt(locationId))
-    .single();
-
-  if (storeError || !store) {
-    return { success: false, httpStatus: 404, error: `No terminal mapped for location ID: ${locationId}` };
+async function pushDraftOrderToTerminal({ draftOrderId, draftOrderName, amountInRupees, shopifyLocationId, terminalTag }) {
+  const store = await resolveStoreForLocation(shopifyLocationId, terminalTag);
+  if (!store) {
+    return { success: false, httpStatus: 404, error: 'No Pine terminal configured. Add a row to the stores table.' };
   }
 
+  // Block duplicate pushes
   const { data: existing } = await supabase
     .from('transactions')
     .select('id, status')
@@ -275,7 +355,7 @@ async function pushDraftOrderToTerminal({ draftOrderId, draftOrderName, amountIn
     AutoCancelDurationInMinutes: 10
   };
 
-  console.log(`UploadBilledTransaction txn ${txn.id} REQUEST (AllowedPaymentMode=${JSON.stringify(paymentMode)}):`, JSON.stringify(pinePayload));
+  console.log(`UploadBilledTransaction txn ${txn.id} → store "${store.store_name}" REQUEST (AllowedPaymentMode=${JSON.stringify(paymentMode)}):`, JSON.stringify(pinePayload));
 
   axios.post(
     `${process.env.PINE_LABS_API_URL}/V1/UploadBilledTransaction`,
@@ -328,7 +408,7 @@ async function pollActiveTxns() {
     for (const txn of activeTxns) {
       try {
         if (!txn.pine_ref_id) {
-          console.log(`Poller: txn ${txn.id} — no PTRID, upload may have timed out.`);
+          console.log(`Poller: txn ${txn.id} — no PTRID yet.`);
           continue;
         }
         const ptrid = parseInt(txn.pine_ref_id);
@@ -375,10 +455,14 @@ async function pollActiveTxns() {
 // Routes
 // ─────────────────────────────────────────
 
+// ── Health / Debug ──
+
 app.get('/api/test-db', async (req, res) => {
-  const { data, error } = await supabase.from('stores').select('*');
+  const { data: stores } = await supabase.from('stores').select('*');
+  const { data: locations } = await supabase.from('locations').select('*');
   return res.json({
-    data, error,
+    stores,
+    locations,
     config: {
       autoPushToTerminal: AUTO_PUSH_TO_TERMINAL,
       pinePaymentMode: process.env.PINE_PAYMENT_MODE || 'integer',
@@ -399,14 +483,13 @@ app.get('/api/test-db', async (req, res) => {
 
 // ── Draft Orders Proxy ──
 //
-// Retool change — update getdraftorders query:
-//   Resource:  REST API (keep the same resource, just change URL)
-//   Method:    GET
-//   URL:       https://timanti-middleware.fly.dev/api/draft-orders
-//   Headers:   DELETE the X-Shopify-Access-Token header entirely
-//   Params:    keep ?status=open as-is
+// Retool: update getdraftorders query to:
+//   URL:     https://timanti-middleware.fly.dev/api/draft-orders
+//   Method:  GET
+//   Params:  keep ?status=open
+//   Headers: DELETE X-Shopify-Access-Token entirely
 //
-// This proxy uses the auto-refreshed token. Retool never touches the token again.
+// Token handled automatically here — Retool never needs it again.
 
 app.get('/api/draft-orders', async (req, res) => {
   try {
@@ -426,14 +509,23 @@ app.get('/api/draft-orders', async (req, res) => {
 });
 
 // ── Push to Terminal (manual — Retool button) ──
+//
+// locationId is optional — resolver handles fallback.
+// When you have multiple stores, pass the locationId from the selected row.
 
 app.post('/api/push-to-terminal', async (req, res) => {
   const { draftOrderId, draftOrderName, amountInRupees, locationId } = req.body;
-  if (!draftOrderId || !draftOrderName || !amountInRupees || !locationId) {
-    return res.status(400).json({ success: false, error: 'Missing: draftOrderId, draftOrderName, amountInRupees, locationId' });
+  if (!draftOrderId || !draftOrderName || !amountInRupees) {
+    return res.status(400).json({ success: false, error: 'Missing: draftOrderId, draftOrderName, amountInRupees' });
   }
   try {
-    const result = await pushDraftOrderToTerminal({ draftOrderId, draftOrderName, amountInRupees, locationId });
+    const result = await pushDraftOrderToTerminal({
+      draftOrderId,
+      draftOrderName,
+      amountInRupees,
+      shopifyLocationId: locationId || null,
+      terminalTag: null  // manual push doesn't use tags — uses location or fallback
+    });
     return res.status(result.httpStatus || 200).json(result);
   } catch (error) {
     console.error('Push-to-terminal error:', error.message);
@@ -443,33 +535,52 @@ app.post('/api/push-to-terminal', async (req, res) => {
 
 // ── Shopify Draft Order Webhook (auto-push) ──
 //
-// Register once in Shopify Admin → Settings → Notifications → Webhooks:
+// Registered in Shopify Admin → Settings → Notifications → Webhooks:
 //   Event:  Draft order creation
 //   URL:    https://timanti-middleware.fly.dev/api/shopify-draft-created
 //   Format: JSON
+//
+// Routing priority:
+//   1. Tag on draft order: terminal:HSR-BLR-STORE or terminal:SHOP-LOCATION
+//   2. Shopify location_id (if set via API)
+//   3. First store fallback (single terminal)
+//
+// When AUTO_PUSH_TO_TERMINAL=false → logs only, no push. Cashier uses Retool.
+// When AUTO_PUSH_TO_TERMINAL=true  → pushes immediately on draft creation.
 
 app.post('/api/shopify-draft-created', async (req, res) => {
-  res.status(200).send('OK');
+  res.status(200).send('OK'); // respond fast — Shopify times out at 5s
+
   try {
     const draft = req.body;
     if (!draft || !draft.id) { console.error('Shopify webhook: empty payload'); return; }
 
-    const draftOrderId   = draft.id.toString();
-    const draftOrderName = draft.name || `#${draftOrderId}`;
-    const amountInRupees = draft.total_price;
-    const locationId     = draft.location_id?.toString() || null;
+    const draftOrderId      = draft.id.toString();
+    const draftOrderName    = draft.name || `#${draftOrderId}`;
+    const amountInRupees    = draft.total_price;
+    const shopifyLocationId = draft.location_id?.toString() || null;
+    const terminalTag       = parseTerminalTag(draft.tags);
 
-    console.log(`Shopify draft created: ${draftOrderName} ₹${amountInRupees} location: ${locationId}`);
+    console.log(`Shopify draft created: ${draftOrderName} ₹${amountInRupees} | shopifyLocation: ${shopifyLocationId || 'none'} | tag: ${terminalTag || 'none'}`);
 
     if (!AUTO_PUSH_TO_TERMINAL) {
-      console.log(`Auto-push OFF — ${draftOrderName} received, cashier must push manually.`);
+      console.log(`Auto-push OFF — ${draftOrderName} received. Cashier pushes manually in Retool.`);
       return;
     }
-    if (!locationId) { console.error(`Auto-push: ${draftOrderName} has no location_id — skipping.`); return; }
-    if (!amountInRupees || parseFloat(amountInRupees) <= 0) { console.error(`Auto-push: ${draftOrderName} zero amount — skipping.`); return; }
+    if (!amountInRupees || parseFloat(amountInRupees) <= 0) {
+      console.error(`Auto-push: ${draftOrderName} zero amount — skipping.`);
+      return;
+    }
 
-    const result = await pushDraftOrderToTerminal({ draftOrderId, draftOrderName, amountInRupees, locationId });
+    const result = await pushDraftOrderToTerminal({
+      draftOrderId,
+      draftOrderName,
+      amountInRupees,
+      shopifyLocationId,
+      terminalTag
+    });
     console.log(`Auto-push result for ${draftOrderName}:`, JSON.stringify(result));
+
   } catch (err) {
     console.error('Shopify draft webhook error:', err.message);
   }
@@ -489,7 +600,8 @@ app.post('/api/check-status', async (req, res) => {
       return res.json({
         success: true, status: transaction.status, calledPine: false, transactionId: transaction.id,
         message: transaction.status === 'PINE_UNREACHABLE'
-          ? 'Upload timed out — cancel and push again.' : 'Transaction not yet sent to terminal.'
+          ? 'Upload timed out — cancel and push again.'
+          : 'Transaction not yet sent to terminal.'
       });
     }
 
@@ -499,7 +611,8 @@ app.post('/api/check-status', async (req, res) => {
       return res.json({ success: true, status: 'FAILED', message: 'Pine rejected this transaction. Push again.', calledPine: false, transactionId: transaction.id });
     }
 
-    const { data: store, error: storeError } = await supabase.from('stores').select('*').eq('id', transaction.location_id).single();
+    const { data: store, error: storeError } = await supabase
+      .from('stores').select('*').eq('id', transaction.location_id).single();
     if (storeError || !store) return res.status(500).json({ success: false, error: 'Store config not found' });
 
     console.log(`CheckStatus txn ${transactionId}: calling Pine PTRID=${ptridNum} (DB: ${transaction.status})`);
@@ -562,7 +675,8 @@ app.post('/api/cancel-transaction', async (req, res) => {
       return res.json({ success: true, message: 'Cancelled (Pine had rejected it).', transactionId: transaction.id, calledPine: false });
     }
 
-    const { data: store, error: storeError } = await supabase.from('stores').select('*').eq('id', transaction.location_id).single();
+    const { data: store, error: storeError } = await supabase
+      .from('stores').select('*').eq('id', transaction.location_id).single();
     if (storeError || !store) return res.status(500).json({ success: false, error: 'Store config not found' });
 
     const cancelPayload = {
@@ -590,7 +704,11 @@ app.post('/api/cancel-transaction', async (req, res) => {
       const httpStatus = pineError.response?.status;
       const detail = JSON.stringify(pineError.response?.data) || pineError.message;
       console.error(`CancelTransaction txn ${transactionId}: Pine HTTP ${httpStatus} — ${detail}`);
-      return res.status(502).json({ success: false, error: `Pine cancel failed (HTTP ${httpStatus || 'N/A'}). NOT cancelled in DB.`, detail, transactionId: transaction.id });
+      return res.status(502).json({
+        success: false,
+        error: `Pine cancel failed (HTTP ${httpStatus || 'N/A'}). NOT cancelled in DB.`,
+        detail, transactionId: transaction.id
+      });
     }
 
     if (pineResponseCode === 0) {
@@ -622,20 +740,33 @@ app.post('/api/pine-postback', async (req, res) => {
 
     let txnRows;
     if (ptrid) {
-      const result = await supabase.from('transactions').select('*').eq('pine_ref_id', ptrid.toString()).order('created_at', { ascending: false }).limit(1);
+      const result = await supabase.from('transactions').select('*')
+        .eq('pine_ref_id', ptrid.toString())
+        .order('created_at', { ascending: false }).limit(1);
       txnRows = result.data;
     }
     if (!txnRows || txnRows.length === 0) {
-      const result = await supabase.from('transactions').select('*').eq('pine_transaction_number', pineTransactionNumber).in('status', ['PENDING', 'PUSHED_TO_TERMINAL']).order('created_at', { ascending: false }).limit(1);
+      const result = await supabase.from('transactions').select('*')
+        .eq('pine_transaction_number', pineTransactionNumber)
+        .in('status', ['PENDING', 'PUSHED_TO_TERMINAL'])
+        .order('created_at', { ascending: false }).limit(1);
       txnRows = result.data;
     }
-    if (!txnRows || txnRows.length === 0) { console.error('PostBack: no matching transaction for PTRID:', ptrid, 'pineNum:', pineTransactionNumber); return; }
+    if (!txnRows || txnRows.length === 0) {
+      console.error('PostBack: no matching transaction for PTRID:', ptrid, 'pineNum:', pineTransactionNumber);
+      return;
+    }
 
     const transaction = txnRows[0];
     const newStatus = responseCode === 0 ? 'PAID' : 'FAILED';
     const paymentMode = data['PaymenMode'] || data['PaymentMode'] || null;
 
-    await supabase.from('transactions').update({ status: newStatus, pine_ref_id: ptrid ? ptrid.toString() : transaction.pine_ref_id, payment_mode: paymentMode }).eq('id', transaction.id);
+    await supabase.from('transactions').update({
+      status: newStatus,
+      pine_ref_id: ptrid ? ptrid.toString() : transaction.pine_ref_id,
+      payment_mode: paymentMode
+    }).eq('id', transaction.id);
+
     console.log(`✅ PostBack: txn ${transaction.id} → ${newStatus}`);
     if (newStatus === 'PAID' && transaction.shopify_draft_id) {
       await completeShopifyOrder(transaction.shopify_draft_id, transaction.id);
@@ -653,9 +784,13 @@ app.post('/api/pine-webhook', async (req, res) => {
   res.status(200).send('OK');
   try {
     if (pineData.transactionId) {
-      const { data: transaction, error } = await supabase.from('transactions').select('*').eq('id', parseInt(pineData.transactionId)).single();
+      const { data: transaction, error } = await supabase.from('transactions').select('*')
+        .eq('id', parseInt(pineData.transactionId)).single();
       if (error || !transaction) { console.error('Webhook: transaction not found:', pineData.transactionId); return; }
-      await supabase.from('transactions').update({ status: 'PAID', pine_ref_id: pineData.PlutusTransactionReferenceID?.toString() || transaction.pine_ref_id || 'TEST' }).eq('id', transaction.id);
+      await supabase.from('transactions').update({
+        status: 'PAID',
+        pine_ref_id: pineData.PlutusTransactionReferenceID?.toString() || transaction.pine_ref_id || 'TEST'
+      }).eq('id', transaction.id);
       console.log(`✅ Test webhook: txn ${transaction.id} → PAID`);
       if (transaction.shopify_draft_id) await completeShopifyOrder(transaction.shopify_draft_id, transaction.id);
       return;
@@ -664,15 +799,23 @@ app.post('/api/pine-webhook', async (req, res) => {
     const responseCode = parseInt(pineData.ResponseCode);
     const draftOrderName = pineData.TransactionNumber;
     if (responseCode !== 0) {
-      await supabase.from('transactions').update({ status: 'FAILED' }).eq('draft_order_name', draftOrderName).in('status', ['PENDING', 'PUSHED_TO_TERMINAL', 'PINE_UNREACHABLE']);
+      await supabase.from('transactions').update({ status: 'FAILED' })
+        .eq('draft_order_name', draftOrderName)
+        .in('status', ['PENDING', 'PUSHED_TO_TERMINAL', 'PINE_UNREACHABLE']);
       return;
     }
 
-    const { data: txnRows } = await supabase.from('transactions').select('*').eq('draft_order_name', draftOrderName).in('status', ['PENDING', 'PUSHED_TO_TERMINAL', 'PINE_UNREACHABLE']).order('created_at', { ascending: false }).limit(1);
+    const { data: txnRows } = await supabase.from('transactions').select('*')
+      .eq('draft_order_name', draftOrderName)
+      .in('status', ['PENDING', 'PUSHED_TO_TERMINAL', 'PINE_UNREACHABLE'])
+      .order('created_at', { ascending: false }).limit(1);
     if (!txnRows || txnRows.length === 0) { console.error('Webhook: no active transaction for:', draftOrderName); return; }
 
     const transaction = txnRows[0];
-    await supabase.from('transactions').update({ status: 'PAID', pine_ref_id: pineData.PlutusTransactionReferenceID?.toString() || transaction.pine_ref_id }).eq('id', transaction.id);
+    await supabase.from('transactions').update({
+      status: 'PAID',
+      pine_ref_id: pineData.PlutusTransactionReferenceID?.toString() || transaction.pine_ref_id
+    }).eq('id', transaction.id);
     console.log(`✅ Webhook: txn ${transaction.id} → PAID`);
     if (transaction.shopify_draft_id) await completeShopifyOrder(transaction.shopify_draft_id, transaction.id);
   } catch (error) {
