@@ -268,6 +268,20 @@ async function handlePaymentCompletion(transaction) {
     await completeShopifyOrder(transaction.shopify_draft_id, transaction.id);
   }
 }
+// Log individual payment to store_deposit_payments
+await supabase
+  .from('store_deposit_payments')
+  .insert({
+    deposit_id:     deposit.id,
+    draft_order_id: transaction.shopify_draft_id,
+    amount:         amountPaidRupees,
+    payment_mode:   transaction.payment_mode || 'card',
+    notes:          `Pine txn ${transaction.id}`,
+    recorded_by:    'pos_terminal',
+    created_at:     new Date().toISOString()
+  });
+
+console.log(`store_deposit_payments logged: ₹${amountPaidRupees} for deposit ${deposit.id}`);
 
 // ─────────────────────────────────────────
 // Core Push Logic
