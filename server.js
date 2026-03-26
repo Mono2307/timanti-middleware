@@ -122,7 +122,7 @@ function makePineTransactionNumber(draftOrderName) {
 }
 
 // ─────────────────────────────────────────
-// Shopify Complete Order
+// Shopify Helpers
 // ─────────────────────────────────────────
 
 async function completeShopifyOrder(shopifyDraftId, transactionDbId) {
@@ -142,41 +142,29 @@ async function completeShopifyOrder(shopifyDraftId, transactionDbId) {
     return null;
   }
 }
+
 async function tagShopifyDraftOrder(shopifyDraftId, amountPaid, amountPending, status) {
   try {
     const token = await getShopifyToken();
-
-    // Fetch existing tags first so we don't wipe them
     const getResponse = await axios.get(
       `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${shopifyDraftId}.json`,
       { headers: { 'X-Shopify-Access-Token': token }, timeout: 10000 }
     );
     const existingTags = getResponse.data.draft_order.tags || '';
-
-    // Strip any old payment tags we previously set
     const cleanedTags = existingTags
       .split(',')
       .map(t => t.trim())
-      .filter(t =>
-        !t.startsWith('paid:') &&
-        !t.startsWith('pending:') &&
-        !t.startsWith('deposit:')
-      )
+      .filter(t => t && !t.startsWith('paid:') && !t.startsWith('pending:') && !t.startsWith('deposit:'))
       .join(', ');
-
-    // Build new payment tags
     const newTag = status === 'paid'
-      ? `deposit:fully-paid, paid:₹${amountPaid.toFixed(0)}`
-      : `deposit:partial, paid:₹${amountPaid.toFixed(0)}, pending:₹${amountPending.toFixed(0)}`;
-
+      ? `deposit:fully-paid, paid:Rs${amountPaid.toFixed(0)}`
+      : `deposit:partial, paid:Rs${amountPaid.toFixed(0)}, pending:Rs${amountPending.toFixed(0)}`;
     const finalTags = cleanedTags ? `${cleanedTags}, ${newTag}` : newTag;
-
     await axios.put(
       `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${shopifyDraftId}.json`,
       { draft_order: { id: shopifyDraftId, tags: finalTags } },
       { headers: { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' }, timeout: 10000 }
     );
-
     console.log(`✅ Shopify draft ${shopifyDraftId} tagged: ${newTag}`);
   } catch (err) {
     console.error('❌ Shopify tag update failed:', err.response?.data || err.message);
@@ -184,12 +172,11 @@ async function tagShopifyDraftOrder(shopifyDraftId, amountPaid, amountPending, s
 }
 
 // ─────────────────────────────────────────
-// NEW: Payment Completion Handler
-//
+// Payment Completion Handler
 // Called whenever Pine confirms PAID.
-// If partial: updates store_deposits running total.
-//   → Only completes Shopify when amount_pending reaches 0.
-// If full: completes Shopify immediately (existing behaviour).
+// Partial: updates store_deposits + logs to store_deposit_payments.
+//   Only completes Shopify when fully paid.
+// Full: completes Shopify immediately.
 // ─────────────────────────────────────────
 
 async function handlePaymentCompletion(transaction) {
@@ -208,18 +195,17 @@ async function handlePaymentCompletion(transaction) {
       .maybeSingle();
 
     if (!deposit) {
-      // First payment — create deposit record now using totals stored in transaction
       const totalRupees = transaction.total_amount_paisa ? transaction.total_amount_paisa / 100 : amountPaidRupees;
       const { data: newDeposit } = await supabase
         .from('store_deposits')
         .insert({
-          draft_order_id: transaction.shopify_draft_id,
+          draft_order_id:   transaction.shopify_draft_id,
           draft_order_name: transaction.draft_order_name,
-          customer_name: transaction.customer_name || '',
-          total_amount: totalRupees,
-          amount_paid: 0,
-          amount_pending: totalRupees,
-          payment_status: 'unpaid'
+          customer_name:    transaction.customer_name || '',
+          total_amount:     totalRupees,
+          amount_paid:      0,
+          amount_pending:   totalRupees,
+          payment_status:   'unpaid'
         })
         .select()
         .single();
@@ -233,7 +219,7 @@ async function handlePaymentCompletion(transaction) {
 
     const newAmountPaid    = parseFloat(deposit.amount_paid) + amountPaidRupees;
     const newAmountPending = parseFloat(deposit.total_amount) - newAmountPaid;
-    const newStatus        = newAmountPending <= 0.01 ? 'paid' : 'partial'; // 0.01 tolerance for float rounding
+    const newStatus        = newAmountPending <= 0.01 ? 'paid' : 'partial';
 
     await supabase
       .from('store_deposits')
@@ -245,9 +231,24 @@ async function handlePaymentCompletion(transaction) {
       })
       .eq('id', deposit.id);
 
-        console.log(`store_deposits updated: paid=${newAmountPaid} pending=${newAmountPending} status=${newStatus}`);
+    console.log(`store_deposits updated: paid=${newAmountPaid} pending=${newAmountPending} status=${newStatus}`);
 
-    // Always tag the Shopify draft order with payment progress
+    // Log to store_deposit_payments
+    await supabase
+      .from('store_deposit_payments')
+      .insert({
+        deposit_id:     deposit.id,
+        draft_order_id: transaction.shopify_draft_id,
+        amount:         amountPaidRupees,
+        payment_mode:   transaction.payment_mode || 'card',
+        notes:          `Pine txn ${transaction.id}`,
+        recorded_by:    'pos_terminal',
+        created_at:     new Date().toISOString()
+      });
+
+    console.log(`store_deposit_payments logged: Rs${amountPaidRupees} for deposit ${deposit.id}`);
+
+    // Tag Shopify draft order with payment progress
     await tagShopifyDraftOrder(
       transaction.shopify_draft_id,
       newAmountPaid,
@@ -260,7 +261,7 @@ async function handlePaymentCompletion(transaction) {
       console.log(`✅ Fully paid — completing Shopify order for draft ${transaction.shopify_draft_id}`);
       await completeShopifyOrder(transaction.shopify_draft_id, transaction.id);
     } else {
-      console.log(`⏳ Partial payment recorded — Shopify order NOT completed yet (₹${newAmountPending.toFixed(2)} still pending)`);
+      console.log(`⏳ Partial recorded — Shopify NOT completed yet (Rs${newAmountPending.toFixed(2)} pending)`);
     }
 
   } else {
@@ -268,20 +269,6 @@ async function handlePaymentCompletion(transaction) {
     await completeShopifyOrder(transaction.shopify_draft_id, transaction.id);
   }
 }
-// Log individual payment to store_deposit_payments
-await supabase
-  .from('store_deposit_payments')
-  .insert({
-    deposit_id:     deposit.id,
-    draft_order_id: transaction.shopify_draft_id,
-    amount:         amountPaidRupees,
-    payment_mode:   transaction.payment_mode || 'card',
-    notes:          `Pine txn ${transaction.id}`,
-    recorded_by:    'pos_terminal',
-    created_at:     new Date().toISOString()
-  });
-
-console.log(`store_deposit_payments logged: ₹${amountPaidRupees} for deposit ${deposit.id}`);
 
 // ─────────────────────────────────────────
 // Core Push Logic
@@ -297,7 +284,6 @@ async function pushDraftOrderToTerminal({
   const store = await resolveStoreForLocation(shopifyLocationId, terminalTag);
   if (!store) return { success: false, httpStatus: 404, error: 'No Pine terminal configured.' };
 
-  // Block duplicate pushes
   const { data: existing } = await supabase
     .from('transactions')
     .select('id, status')
@@ -313,22 +299,22 @@ async function pushDraftOrderToTerminal({
     };
   }
 
-  const amountInPaisa      = Math.round(parseFloat(amountInRupees) * 100);
-  const totalInPaisa       = totalAmountInRupees ? Math.round(parseFloat(totalAmountInRupees) * 100) : amountInPaisa;
+  const amountInPaisa         = Math.round(parseFloat(amountInRupees) * 100);
+  const totalInPaisa          = totalAmountInRupees ? Math.round(parseFloat(totalAmountInRupees) * 100) : amountInPaisa;
   const pineTransactionNumber = makePineTransactionNumber(draftOrderName);
 
   const { data: txn, error: txnError } = await supabase
     .from('transactions')
     .insert([{
-      shopify_draft_id:      draftOrderId.toString(),
-      draft_order_name:      draftOrderName,
+      shopify_draft_id:        draftOrderId.toString(),
+      draft_order_name:        draftOrderName,
       pine_transaction_number: pineTransactionNumber,
-      location_id:           store.id,
-      amount_paisa:          amountInPaisa,
-      total_amount_paisa:    totalInPaisa,   // full order total — used by handlePaymentCompletion
-      customer_name:         customerName,
-      is_partial:            isPartial,
-      status:                'PENDING'
+      location_id:             store.id,
+      amount_paisa:            amountInPaisa,
+      total_amount_paisa:      totalInPaisa,
+      customer_name:           customerName,
+      is_partial:              isPartial,
+      status:                  'PENDING'
     }])
     .select()
     .single();
@@ -340,20 +326,20 @@ async function pushDraftOrderToTerminal({
 
   const paymentMode = getPinePaymentMode();
   const pinePayload = {
-    TransactionNumber:         pineTransactionNumber,
-    SequenceNumber:            1,
-    AllowedPaymentMode:        paymentMode,
-    Amount:                    amountInPaisa,
-    UserID:                    'System',
-    MerchantID:                parseInt(store.pine_merchant_id),
-    SecurityToken:             process.env.PINE_LABS_SECURITY_TOKEN,
-    ClientId:                  parseInt(store.pine_client_id),
-    StoreId:                   parseInt(store.pine_store_id),
-    TotalInvoiceAmount:        amountInPaisa,
+    TransactionNumber:           pineTransactionNumber,
+    SequenceNumber:              1,
+    AllowedPaymentMode:          paymentMode,
+    Amount:                      amountInPaisa,
+    UserID:                      'System',
+    MerchantID:                  parseInt(store.pine_merchant_id),
+    SecurityToken:               process.env.PINE_LABS_SECURITY_TOKEN,
+    ClientId:                    parseInt(store.pine_client_id),
+    StoreId:                     parseInt(store.pine_store_id),
+    TotalInvoiceAmount:          amountInPaisa,
     AutoCancelDurationInMinutes: 10
   };
 
-  console.log(`UploadBilledTransaction txn ${txn.id} → "${store.store_name}" isPartial=${isPartial}:`, JSON.stringify(pinePayload));
+  console.log(`UploadBilledTransaction txn ${txn.id} → "${store.store_name}" isPartial=${isPartial}`);
 
   axios.post(`${process.env.PINE_LABS_API_URL}/V1/UploadBilledTransaction`, pinePayload, { timeout: 30000 })
     .then(async (pineResponse) => {
@@ -407,14 +393,14 @@ async function pollActiveTxns() {
           { timeout: 15000 }
         );
 
-        const responseCode   = parseInt(pineResponse.data.ResponseCode);
+        const responseCode    = parseInt(pineResponse.data.ResponseCode);
         const responseMessage = pineResponse.data.ResponseMessage || '';
-        const { newStatus }  = getPineStatusResult(responseCode, responseMessage);
+        const { newStatus }   = getPineStatusResult(responseCode, responseMessage);
         console.log(`Poller: txn ${txn.id} PTRID=${ptrid}: code=${responseCode} msg="${responseMessage}"${newStatus ? ` → ${newStatus}` : ' (no change)'}`);
 
         if (newStatus && newStatus !== txn.status) {
           await supabase.from('transactions').update({ status: newStatus }).eq('id', txn.id);
-          if (newStatus === 'PAID') await handlePaymentCompletion(txn); // ← uses new handler
+          if (newStatus === 'PAID') await handlePaymentCompletion(txn);
         }
       } catch (err) { console.error(`Poller: error on txn ${txn.id}:`, err.message); }
     }
@@ -431,19 +417,19 @@ app.get('/api/test-db', async (req, res) => {
   return res.json({
     stores, locations,
     config: {
-      autoPushToTerminal: AUTO_PUSH_TO_TERMINAL,
-      pinePaymentMode:    process.env.PINE_PAYMENT_MODE || 'integer',
-      pinePaymentModeValue: getPinePaymentMode(),
-      shopifyTokenCached: !!cachedToken,
+      autoPushToTerminal:     AUTO_PUSH_TO_TERMINAL,
+      pinePaymentMode:        process.env.PINE_PAYMENT_MODE || 'integer',
+      pinePaymentModeValue:   getPinePaymentMode(),
+      shopifyTokenCached:     !!cachedToken,
       shopifyTokenAgeMinutes: tokenFetchedAt ? Math.round((Date.now() - tokenFetchedAt) / 60000) : null
     },
     env: {
-      supabaseUrl:         process.env.SUPABASE_URL          ? 'SET' : 'MISSING',
-      serviceKey:          process.env.SUPABASE_SERVICE_KEY  ? 'SET' : 'MISSING',
-      pineUrl:             process.env.PINE_LABS_API_URL      ? 'SET' : 'MISSING',
-      shopifyUrl:          process.env.SHOPIFY_STORE_URL      ? 'SET' : 'MISSING',
-      shopifyClientId:     process.env.SHOPIFY_CLIENT_ID      ? 'SET' : 'MISSING ⚠️',
-      shopifyClientSecret: process.env.SHOPIFY_CLIENT_SECRET  ? 'SET' : 'MISSING ⚠️'
+      supabaseUrl:         process.env.SUPABASE_URL         ? 'SET' : 'MISSING',
+      serviceKey:          process.env.SUPABASE_SERVICE_KEY ? 'SET' : 'MISSING',
+      pineUrl:             process.env.PINE_LABS_API_URL    ? 'SET' : 'MISSING',
+      shopifyUrl:          process.env.SHOPIFY_STORE_URL    ? 'SET' : 'MISSING',
+      shopifyClientId:     process.env.SHOPIFY_CLIENT_ID    ? 'SET' : 'MISSING ⚠️',
+      shopifyClientSecret: process.env.SHOPIFY_CLIENT_SECRET ? 'SET' : 'MISSING ⚠️'
     }
   });
 });
@@ -459,11 +445,6 @@ app.get('/api/draft-orders', async (req, res) => {
     return res.status(err.response?.status || 500).json({ success: false, error: err.response?.data || err.message });
   }
 });
-
-// ── Push to Terminal ──
-// Now accepts isPartial, totalAmountInRupees, customerName
-// isPartial=true  → charges terminal for partial amount, does NOT complete Shopify until fully paid
-// isPartial=false → existing behaviour, completes Shopify on PAID
 
 app.post('/api/push-to-terminal', async (req, res) => {
   const {
@@ -502,7 +483,7 @@ app.post('/api/shopify-draft-created', async (req, res) => {
     const amountInRupees    = draft.total_price;
     const shopifyLocationId = draft.location_id?.toString() || null;
     const terminalTag       = parseTerminalTag(draft.tags);
-    console.log(`Shopify draft created: ${draftOrderName} ₹${amountInRupees}`);
+    console.log(`Shopify draft created: ${draftOrderName} Rs${amountInRupees}`);
     if (!AUTO_PUSH_TO_TERMINAL) { console.log(`Auto-push OFF — cashier pushes manually`); return; }
     if (!amountInRupees || parseFloat(amountInRupees) <= 0) { console.error(`Auto-push: zero amount — skipping`); return; }
     const result = await pushDraftOrderToTerminal({ draftOrderId, draftOrderName, amountInRupees, shopifyLocationId, terminalTag });
@@ -517,7 +498,8 @@ app.post('/api/check-status', async (req, res) => {
     const { data: transaction, error: txnError } = await supabase.from('transactions').select('*').eq('id', transactionId).single();
     if (txnError || !transaction) return res.status(404).json({ success: false, error: 'Transaction not found' });
     if (!transaction.pine_ref_id) {
-      return res.json({ success: true, status: transaction.status, calledPine: false, transactionId: transaction.id, message: transaction.status === 'PINE_UNREACHABLE' ? 'Upload timed out — cancel and push again.' : 'Not yet sent to terminal.' });
+      return res.json({ success: true, status: transaction.status, calledPine: false, transactionId: transaction.id,
+        message: transaction.status === 'PINE_UNREACHABLE' ? 'Upload timed out — cancel and push again.' : 'Not yet sent to terminal.' });
     }
     const ptridNum = parseInt(transaction.pine_ref_id);
     if (ptridNum <= 0) {
@@ -529,17 +511,21 @@ app.post('/api/check-status', async (req, res) => {
 
     const pineStatusResponse = await axios.post(
       `${process.env.PINE_LABS_API_URL}/V1/GetCloudBasedTxnStatus`,
-      { MerchantID: parseInt(store.pine_merchant_id), SecurityToken: process.env.PINE_LABS_SECURITY_TOKEN, ClientID: parseInt(store.pine_client_id), StoreID: parseInt(store.pine_store_id), PlutusTransactionReferenceID: ptridNum },
+      { MerchantID: parseInt(store.pine_merchant_id), SecurityToken: process.env.PINE_LABS_SECURITY_TOKEN,
+        ClientID: parseInt(store.pine_client_id), StoreID: parseInt(store.pine_store_id),
+        PlutusTransactionReferenceID: ptridNum },
       { timeout: 15000 }
     );
-    const pineResponseCode = parseInt(pineStatusResponse.data.ResponseCode);
-    const pineMessage      = pineStatusResponse.data.ResponseMessage || '';
+    const pineResponseCode              = parseInt(pineStatusResponse.data.ResponseCode);
+    const pineMessage                   = pineStatusResponse.data.ResponseMessage || '';
     const { newStatus, cashierMessage } = getPineStatusResult(pineResponseCode, pineMessage);
     if (newStatus && newStatus !== transaction.status) {
       await supabase.from('transactions').update({ status: newStatus }).eq('id', transactionId);
-      if (newStatus === 'PAID') await handlePaymentCompletion(transaction); // ← new handler
+      if (newStatus === 'PAID') await handlePaymentCompletion(transaction);
     }
-    return res.json({ success: true, status: newStatus || transaction.status, message: cashierMessage, calledPine: true, pineResponseCode, pineResponseMessage: pineMessage, transactionId: transaction.id, pineRefId: transaction.pine_ref_id });
+    return res.json({ success: true, status: newStatus || transaction.status, message: cashierMessage,
+      calledPine: true, pineResponseCode, pineResponseMessage: pineMessage,
+      transactionId: transaction.id, pineRefId: transaction.pine_ref_id });
   } catch (error) {
     return res.status(500).json({ success: false, error: 'Could not reach Pine Labs.', detail: error.message });
   }
@@ -568,13 +554,17 @@ app.post('/api/cancel-transaction', async (req, res) => {
     try {
       const pineResponse = await axios.post(
         `${process.env.PINE_LABS_API_URL}/V1/CancelTransaction`,
-        { MerchantID: parseInt(store.pine_merchant_id), SecurityToken: process.env.PINE_LABS_SECURITY_TOKEN, ClientId: parseInt(store.pine_client_id), StoreId: parseInt(store.pine_store_id), PlutusTransactionReferenceID: ptridNum, Amount: transaction.amount_paisa },
+        { MerchantID: parseInt(store.pine_merchant_id), SecurityToken: process.env.PINE_LABS_SECURITY_TOKEN,
+          ClientId: parseInt(store.pine_client_id), StoreId: parseInt(store.pine_store_id),
+          PlutusTransactionReferenceID: ptridNum, Amount: transaction.amount_paisa },
         { timeout: 15000 }
       );
       pineResponseCode = parseInt(pineResponse.data.ResponseCode);
       pineMessage      = pineResponse.data.ResponseMessage || '';
     } catch (pineError) {
-      return res.status(502).json({ success: false, error: `Pine cancel failed (HTTP ${pineError.response?.status || 'N/A'}). NOT cancelled in DB.`, detail: JSON.stringify(pineError.response?.data) || pineError.message, transactionId: transaction.id });
+      return res.status(502).json({ success: false,
+        error: `Pine cancel failed (HTTP ${pineError.response?.status || 'N/A'}). NOT cancelled in DB.`,
+        detail: JSON.stringify(pineError.response?.data) || pineError.message, transactionId: transaction.id });
     }
     if (pineResponseCode === 0) {
       await supabase.from('transactions').update({ status: 'CANCELLED' }).eq('id', transactionId);
@@ -593,8 +583,8 @@ app.post('/api/pine-postback', async (req, res) => {
     const rawBody = typeof req.body === 'string' ? req.body : JSON.stringify(req.body);
     const data    = parsePineCSV(rawBody);
     console.log('Pine PostBack received:', data);
-    const responseCode         = parseInt(data['ResponseCode']);
-    const ptrid                = data['PlutusTransactionReferenceID'];
+    const responseCode          = parseInt(data['ResponseCode']);
+    const ptrid                 = data['PlutusTransactionReferenceID'];
     const pineTransactionNumber = data['TransactionNumber'];
     if (!ptrid && !pineTransactionNumber) { console.error('PostBack: missing PTRID and TransactionNumber'); return; }
 
@@ -604,17 +594,20 @@ app.post('/api/pine-postback', async (req, res) => {
       txnRows = result.data;
     }
     if (!txnRows || txnRows.length === 0) {
-      const result = await supabase.from('transactions').select('*').eq('pine_transaction_number', pineTransactionNumber).in('status', ['PENDING', 'PUSHED_TO_TERMINAL']).order('created_at', { ascending: false }).limit(1);
+      const result = await supabase.from('transactions').select('*').eq('pine_transaction_number', pineTransactionNumber)
+        .in('status', ['PENDING', 'PUSHED_TO_TERMINAL']).order('created_at', { ascending: false }).limit(1);
       txnRows = result.data;
     }
     if (!txnRows || txnRows.length === 0) { console.error('PostBack: no matching transaction for PTRID:', ptrid); return; }
 
-    const transaction  = txnRows[0];
-    const newStatus    = responseCode === 0 ? 'PAID' : 'FAILED';
-    const paymentMode  = data['PaymenMode'] || data['PaymentMode'] || null;
-    await supabase.from('transactions').update({ status: newStatus, pine_ref_id: ptrid?.toString() || transaction.pine_ref_id, payment_mode: paymentMode }).eq('id', transaction.id);
+    const transaction = txnRows[0];
+    const newStatus   = responseCode === 0 ? 'PAID' : 'FAILED';
+    const paymentMode = data['PaymenMode'] || data['PaymentMode'] || null;
+    await supabase.from('transactions').update({
+      status: newStatus, pine_ref_id: ptrid?.toString() || transaction.pine_ref_id, payment_mode: paymentMode
+    }).eq('id', transaction.id);
     console.log(`✅ PostBack: txn ${transaction.id} → ${newStatus}`);
-    if (newStatus === 'PAID') await handlePaymentCompletion(transaction); // ← new handler
+    if (newStatus === 'PAID') await handlePaymentCompletion(transaction);
   } catch (error) { console.error('PostBack error:', error.message); }
 });
 
@@ -626,23 +619,30 @@ app.post('/api/pine-webhook', async (req, res) => {
     if (pineData.transactionId) {
       const { data: transaction, error } = await supabase.from('transactions').select('*').eq('id', parseInt(pineData.transactionId)).single();
       if (error || !transaction) { console.error('Webhook: transaction not found:', pineData.transactionId); return; }
-      await supabase.from('transactions').update({ status: 'PAID', pine_ref_id: pineData.PlutusTransactionReferenceID?.toString() || transaction.pine_ref_id || 'TEST' }).eq('id', transaction.id);
+      await supabase.from('transactions').update({
+        status: 'PAID', pine_ref_id: pineData.PlutusTransactionReferenceID?.toString() || transaction.pine_ref_id || 'TEST'
+      }).eq('id', transaction.id);
       console.log(`✅ Test webhook: txn ${transaction.id} → PAID`);
-      await handlePaymentCompletion(transaction); // ← new handler
+      await handlePaymentCompletion(transaction);
       return;
     }
     const responseCode   = parseInt(pineData.ResponseCode);
     const draftOrderName = pineData.TransactionNumber;
     if (responseCode !== 0) {
-      await supabase.from('transactions').update({ status: 'FAILED' }).eq('draft_order_name', draftOrderName).in('status', ['PENDING', 'PUSHED_TO_TERMINAL', 'PINE_UNREACHABLE']);
+      await supabase.from('transactions').update({ status: 'FAILED' })
+        .eq('draft_order_name', draftOrderName).in('status', ['PENDING', 'PUSHED_TO_TERMINAL', 'PINE_UNREACHABLE']);
       return;
     }
-    const { data: txnRows } = await supabase.from('transactions').select('*').eq('draft_order_name', draftOrderName).in('status', ['PENDING', 'PUSHED_TO_TERMINAL', 'PINE_UNREACHABLE']).order('created_at', { ascending: false }).limit(1);
+    const { data: txnRows } = await supabase.from('transactions').select('*')
+      .eq('draft_order_name', draftOrderName).in('status', ['PENDING', 'PUSHED_TO_TERMINAL', 'PINE_UNREACHABLE'])
+      .order('created_at', { ascending: false }).limit(1);
     if (!txnRows || txnRows.length === 0) { console.error('Webhook: no active transaction for:', draftOrderName); return; }
     const transaction = txnRows[0];
-    await supabase.from('transactions').update({ status: 'PAID', pine_ref_id: pineData.PlutusTransactionReferenceID?.toString() || transaction.pine_ref_id }).eq('id', transaction.id);
+    await supabase.from('transactions').update({
+      status: 'PAID', pine_ref_id: pineData.PlutusTransactionReferenceID?.toString() || transaction.pine_ref_id
+    }).eq('id', transaction.id);
     console.log(`✅ Webhook: txn ${transaction.id} → PAID`);
-    await handlePaymentCompletion(transaction); // ← new handler
+    await handlePaymentCompletion(transaction);
   } catch (error) { console.error('Webhook error:', error.message); }
 });
 
@@ -654,6 +654,14 @@ const PORT = process.env.PORT || 8080;
 app.listen(PORT, async () => {
   console.log(`\n🚀 Timanti Middleware on port ${PORT}`);
   console.log(`⚙️  AUTO_PUSH=${AUTO_PUSH_TO_TERMINAL} | PINE_MODE=${process.env.PINE_PAYMENT_MODE || 'integer'}`);
+  console.log('  GET  /api/test-db');
+  console.log('  GET  /api/draft-orders');
+  console.log('  POST /api/push-to-terminal');
+  console.log('  POST /api/shopify-draft-created');
+  console.log('  POST /api/check-status');
+  console.log('  POST /api/cancel-transaction');
+  console.log('  POST /api/pine-postback');
+  console.log('  POST /api/pine-webhook');
   await initShopifyToken();
   console.log('🔄 Background poller started (30s)');
   setInterval(pollActiveTxns, 30000);
