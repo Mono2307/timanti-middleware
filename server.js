@@ -245,7 +245,15 @@ async function handlePaymentCompletion(transaction) {
       })
       .eq('id', deposit.id);
 
-    console.log(`store_deposits updated: paid=${newAmountPaid} pending=${newAmountPending} status=${newStatus}`);
+        console.log(`store_deposits updated: paid=${newAmountPaid} pending=${newAmountPending} status=${newStatus}`);
+
+    // Always tag the Shopify draft order with payment progress
+    await tagShopifyDraftOrder(
+      transaction.shopify_draft_id,
+      newAmountPaid,
+      Math.max(0, newAmountPending),
+      newStatus
+    );
 
     // Only complete Shopify when fully paid
     if (newStatus === 'paid') {
