@@ -142,6 +142,46 @@ async function completeShopifyOrder(shopifyDraftId, transactionDbId) {
     return null;
   }
 }
+async function tagShopifyDraftOrder(shopifyDraftId, amountPaid, amountPending, status) {
+  try {
+    const token = await getShopifyToken();
+
+    // Fetch existing tags first so we don't wipe them
+    const getResponse = await axios.get(
+      `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${shopifyDraftId}.json`,
+      { headers: { 'X-Shopify-Access-Token': token }, timeout: 10000 }
+    );
+    const existingTags = getResponse.data.draft_order.tags || '';
+
+    // Strip any old payment tags we previously set
+    const cleanedTags = existingTags
+      .split(',')
+      .map(t => t.trim())
+      .filter(t =>
+        !t.startsWith('paid:') &&
+        !t.startsWith('pending:') &&
+        !t.startsWith('deposit:')
+      )
+      .join(', ');
+
+    // Build new payment tags
+    const newTag = status === 'paid'
+      ? `deposit:fully-paid, paid:₹${amountPaid.toFixed(0)}`
+      : `deposit:partial, paid:₹${amountPaid.toFixed(0)}, pending:₹${amountPending.toFixed(0)}`;
+
+    const finalTags = cleanedTags ? `${cleanedTags}, ${newTag}` : newTag;
+
+    await axios.put(
+      `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${shopifyDraftId}.json`,
+      { draft_order: { id: shopifyDraftId, tags: finalTags } },
+      { headers: { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' }, timeout: 10000 }
+    );
+
+    console.log(`✅ Shopify draft ${shopifyDraftId} tagged: ${newTag}`);
+  } catch (err) {
+    console.error('❌ Shopify tag update failed:', err.response?.data || err.message);
+  }
+}
 
 // ─────────────────────────────────────────
 // NEW: Payment Completion Handler
