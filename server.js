@@ -234,17 +234,18 @@ async function handlePaymentCompletion(transaction) {
     console.log(`store_deposits updated: paid=${newAmountPaid} pending=${newAmountPending} status=${newStatus}`);
 
     // Log to store_deposit_payments
-    await supabase
-      .from('store_deposit_payments')
-      .insert({
-        deposit_id:     deposit.id,
-        draft_order_id: transaction.shopify_draft_id,
-        amount:         amountPaidRupees,
-        payment_mode:   transaction.payment_mode || 'card',
-        notes:          `Pine txn ${transaction.id}`,
-        recorded_by:    'pos_terminal',
-        created_at:     new Date().toISOString()
-      });
+   await supabase
+  .from('store_deposit_payments')
+  .insert({
+    deposit_id:     deposit.id,
+    draft_order_id: transaction.shopify_draft_id,
+    amount:         amountPaidRupees,
+    payment_mode:   transaction.payment_mode || 'card',
+    notes:          `Pine txn ${transaction.id}`,
+    pine_ptrid:     transaction.pine_ref_id || null,   // ← ADD THIS
+    recorded_by:    'pos_terminal',
+    created_at:     new Date().toISOString()
+  });
 
     console.log(`store_deposit_payments logged: Rs${amountPaidRupees} for deposit ${deposit.id}`);
 
