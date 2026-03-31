@@ -143,28 +143,6 @@ async function completeShopifyOrder(shopifyDraftId, transactionDbId) {
   }
 }
 
-// ─────────────────────────────────────────
-// Shopify Helpers
-// ─────────────────────────────────────────
-
-async function completeShopifyOrder(shopifyDraftId, transactionDbId) {
-  try {
-    const token = await getShopifyToken();
-    const shopifyResponse = await axios.put(
-      `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${shopifyDraftId}/complete.json`,
-      { payment_pending: false },
-      { headers: { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' }, timeout: 15000 }
-    );
-    const finalOrderId = shopifyResponse.data.draft_order.order_id;
-    console.log(`✅ Shopify order completed: ${finalOrderId}`);
-    await supabase.from('transactions').update({ final_shopify_order_id: finalOrderId.toString() }).eq('id', transactionDbId);
-    return finalOrderId;
-  } catch (error) {
-    console.error('❌ Shopify complete error:', error.response?.data || error.message);
-    return null;
-  }
-}
-
 async function tagShopifyDraftOrder(shopifyDraftId, amountPaid, amountPending, status) {
   try {
     const token = await getShopifyToken();
@@ -193,31 +171,42 @@ async function tagShopifyDraftOrder(shopifyDraftId, amountPaid, amountPending, s
   }
 }
 
-// ✅ NEW FUNCTION ADDED
-async function sendDraftOrderInvoice(shopifyDraftId) {
+// ─────────────────────────────────────────
+// Send draft order invoice email via Shopify
+// Fires on EVERY deposit — partial or full.
+// Triggers the "Draft order invoice" notification
+// which uses the custom template in Shopify admin.
+// Subject line is dynamic based on payment status.
+// ─────────────────────────────────────────
+async function sendDraftOrderInvoice(shopifyDraftId, paymentStatus, amountPaid, amountPending) {
   try {
     const token = await getShopifyToken();
+
+    const subject = paymentStatus === 'paid'
+      ? `Your Timanti order is confirmed — payment received in full`
+      : `Timanti order confirmation — deposit of ₹${amountPaid} received, ₹${amountPending} pending`;
+
+    const customMessage = paymentStatus === 'paid'
+      ? `Your full payment of ₹${amountPaid} has been received. We're preparing your jewellery and will notify you when it's dispatched.`
+      : `Your deposit of ₹${amountPaid} has been received. The remaining balance of ₹${amountPending} is due before dispatch. Your proforma invoice is attached.`;
 
     await axios.post(
       `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${shopifyDraftId}/send_invoice.json`,
       {
         draft_order_invoice: {
-          to: null,
-          from: 'hello@timanti.in',
-          subject: `Your Timanti order confirmation and payment receipt`,
-          custom_message: 'Thank you for your payment. Please find your proforma invoice attached.'
+          to:             null,
+          from:           'hello@timanti.in',
+          subject,
+          custom_message: customMessage
         }
       },
       {
-        headers: {
-          'X-Shopify-Access-Token': token,
-          'Content-Type': 'application/json'
-        },
+        headers: { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' },
         timeout: 10000
       }
     );
 
-    console.log(`📧 Draft order invoice sent for draft ${shopifyDraftId}`);
+    console.log(`📧 Draft order invoice sent for draft ${shopifyDraftId} (${paymentStatus})`);
   } catch (err) {
     console.error('❌ send_invoice failed:', err.response?.data || err.message);
   }
@@ -226,11 +215,10 @@ async function sendDraftOrderInvoice(shopifyDraftId) {
 // ─────────────────────────────────────────
 // Payment Completion Handler
 // Called whenever Pine confirms PAID.
-// Partial: updates store_deposits + logs to store_deposit_payments.
-//   Only completes Shopify when fully paid.
-// Full: completes Shopify immediately.
+// Partial: updates store_deposits, tags draft order,
+//   sends invoice email. Does NOT complete Shopify.
+// Full: tags, sends invoice, then completes Shopify.
 // ─────────────────────────────────────────
-
 async function handlePaymentCompletion(transaction) {
   if (!transaction.shopify_draft_id) return;
 
@@ -239,7 +227,6 @@ async function handlePaymentCompletion(transaction) {
 
     const amountPaidRupees = transaction.amount_paisa / 100;
 
-    // Get or create deposit record
     let { data: deposit } = await supabase
       .from('store_deposits')
       .select('*')
@@ -285,32 +272,49 @@ async function handlePaymentCompletion(transaction) {
 
     console.log(`store_deposits updated: paid=${newAmountPaid} pending=${newAmountPending} status=${newStatus}`);
 
-    // Log to store_deposit_payments
-   await supabase
-  .from('store_deposit_payments')
-  .insert({
-    deposit_id:     deposit.id,
-    draft_order_id: transaction.shopify_draft_id,
-    amount:         amountPaidRupees,
-    payment_mode:   transaction.payment_mode || 'card',
-    notes:          `Pine txn ${transaction.id}`,
-    pine_ptrid:     transaction.pine_ref_id || null,   // ← ADD THIS
-    recorded_by:    'pos_terminal',
-    created_at:     new Date().toISOString()
-  });
+    await supabase
+      .from('store_deposit_payments')
+      .insert({
+        deposit_id:     deposit.id,
+        draft_order_id: transaction.shopify_draft_id,
+        amount:         amountPaidRupees,
+        payment_mode:   transaction.payment_mode || 'card',
+        notes:          `Pine txn ${transaction.id}`,
+        pine_ptrid:     transaction.pine_ref_id || null,
+        recorded_by:    'pos_terminal',
+        created_at:     new Date().toISOString()
+      });
 
     console.log(`store_deposit_payments logged: Rs${amountPaidRupees} for deposit ${deposit.id}`);
 
-    // Tag Shopify draft order with payment progress
-    // Send invoice + complete Shopify ONLY when fully paid
-if (newStatus === 'paid') {
-  console.log(`📧 Sending invoice for draft ${transaction.shopify_draft_id}`);
-  await sendDraftOrderInvoice(transaction.shopify_draft_id);
+    // Tag the draft order with payment amounts
+    await tagShopifyDraftOrder(
+      transaction.shopify_draft_id,
+      newAmountPaid,
+      Math.max(0, newAmountPending),
+      newStatus
+    );
 
-  console.log(`✅ Fully paid — completing Shopify order for draft ${transaction.shopify_draft_id}`);
-  await completeShopifyOrder(transaction.shopify_draft_id, transaction.id);
-} else {
-  console.log(`⏳ Partial recorded — Shopify NOT completed yet (Rs${newAmountPending.toFixed(2)} pending)`);
+    // Send invoice email on EVERY deposit (partial and full)
+    // Template reads the deposit tags we just wrote to show correct amounts
+    await sendDraftOrderInvoice(
+      transaction.shopify_draft_id,
+      newStatus,
+      Math.round(newAmountPaid),
+      Math.round(Math.max(0, newAmountPending))
+    );
+
+    if (newStatus === 'paid') {
+      console.log(`✅ Fully paid — completing Shopify order for draft ${transaction.shopify_draft_id}`);
+      await completeShopifyOrder(transaction.shopify_draft_id, transaction.id);
+    } else {
+      console.log(`⏳ Partial recorded — Shopify NOT completed yet (Rs${newAmountPending.toFixed(2)} pending)`);
+    }
+
+  } else {
+    // Standard full payment — complete Shopify immediately
+    await completeShopifyOrder(transaction.shopify_draft_id, transaction.id);
+  }
 }
 
 // ─────────────────────────────────────────
