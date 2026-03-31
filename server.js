@@ -143,6 +143,28 @@ async function completeShopifyOrder(shopifyDraftId, transactionDbId) {
   }
 }
 
+// ─────────────────────────────────────────
+// Shopify Helpers
+// ─────────────────────────────────────────
+
+async function completeShopifyOrder(shopifyDraftId, transactionDbId) {
+  try {
+    const token = await getShopifyToken();
+    const shopifyResponse = await axios.put(
+      `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${shopifyDraftId}/complete.json`,
+      { payment_pending: false },
+      { headers: { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' }, timeout: 15000 }
+    );
+    const finalOrderId = shopifyResponse.data.draft_order.order_id;
+    console.log(`✅ Shopify order completed: ${finalOrderId}`);
+    await supabase.from('transactions').update({ final_shopify_order_id: finalOrderId.toString() }).eq('id', transactionDbId);
+    return finalOrderId;
+  } catch (error) {
+    console.error('❌ Shopify complete error:', error.response?.data || error.message);
+    return null;
+  }
+}
+
 async function tagShopifyDraftOrder(shopifyDraftId, amountPaid, amountPending, status) {
   try {
     const token = await getShopifyToken();
@@ -168,6 +190,36 @@ async function tagShopifyDraftOrder(shopifyDraftId, amountPaid, amountPending, s
     console.log(`✅ Shopify draft ${shopifyDraftId} tagged: ${newTag}`);
   } catch (err) {
     console.error('❌ Shopify tag update failed:', err.response?.data || err.message);
+  }
+}
+
+// ✅ NEW FUNCTION ADDED
+async function sendDraftOrderInvoice(shopifyDraftId) {
+  try {
+    const token = await getShopifyToken();
+
+    await axios.post(
+      `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${shopifyDraftId}/send_invoice.json`,
+      {
+        draft_order_invoice: {
+          to: null,
+          from: 'hello@timanti.in',
+          subject: `Your Timanti order confirmation and payment receipt`,
+          custom_message: 'Thank you for your payment. Please find your proforma invoice attached.'
+        }
+      },
+      {
+        headers: {
+          'X-Shopify-Access-Token': token,
+          'Content-Type': 'application/json'
+        },
+        timeout: 10000
+      }
+    );
+
+    console.log(`📧 Draft order invoice sent for draft ${shopifyDraftId}`);
+  } catch (err) {
+    console.error('❌ send_invoice failed:', err.response?.data || err.message);
   }
 }
 
@@ -250,25 +302,15 @@ async function handlePaymentCompletion(transaction) {
     console.log(`store_deposit_payments logged: Rs${amountPaidRupees} for deposit ${deposit.id}`);
 
     // Tag Shopify draft order with payment progress
-    await tagShopifyDraftOrder(
-      transaction.shopify_draft_id,
-      newAmountPaid,
-      Math.max(0, newAmountPending),
-      newStatus
-    );
+    // Send invoice + complete Shopify ONLY when fully paid
+if (newStatus === 'paid') {
+  console.log(`📧 Sending invoice for draft ${transaction.shopify_draft_id}`);
+  await sendDraftOrderInvoice(transaction.shopify_draft_id);
 
-    // Only complete Shopify when fully paid
-    if (newStatus === 'paid') {
-      console.log(`✅ Fully paid — completing Shopify order for draft ${transaction.shopify_draft_id}`);
-      await completeShopifyOrder(transaction.shopify_draft_id, transaction.id);
-    } else {
-      console.log(`⏳ Partial recorded — Shopify NOT completed yet (Rs${newAmountPending.toFixed(2)} pending)`);
-    }
-
-  } else {
-    // Standard full payment — complete Shopify immediately
-    await completeShopifyOrder(transaction.shopify_draft_id, transaction.id);
-  }
+  console.log(`✅ Fully paid — completing Shopify order for draft ${transaction.shopify_draft_id}`);
+  await completeShopifyOrder(transaction.shopify_draft_id, transaction.id);
+} else {
+  console.log(`⏳ Partial recorded — Shopify NOT completed yet (Rs${newAmountPending.toFixed(2)} pending)`);
 }
 
 // ─────────────────────────────────────────
