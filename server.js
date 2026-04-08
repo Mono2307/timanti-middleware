@@ -171,41 +171,20 @@ async function tagShopifyDraftOrder(shopifyDraftId, amountPaid, amountPending, s
   }
 }
 
-// ─────────────────────────────────────────
-// Send draft order invoice email via Shopify
-// Fires on EVERY deposit — partial or full.
-// Triggers the "Draft order invoice" notification
-// which uses the custom template in Shopify admin.
-// Subject line is dynamic based on payment status.
-// ─────────────────────────────────────────
 async function sendDraftOrderInvoice(shopifyDraftId, paymentStatus, amountPaid, amountPending) {
   try {
     const token = await getShopifyToken();
-
     const subject = paymentStatus === 'paid'
       ? `Your Timanti order is confirmed — payment received in full`
       : `Timanti order confirmation — deposit of ₹${amountPaid} received, ₹${amountPending} pending`;
-
     const customMessage = paymentStatus === 'paid'
       ? `Your full payment of ₹${amountPaid} has been received. We're preparing your jewellery and will notify you when it's dispatched.`
       : `Your deposit of ₹${amountPaid} has been received. The remaining balance of ₹${amountPending} is due before dispatch. Your proforma invoice is attached.`;
-
     await axios.post(
       `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${shopifyDraftId}/send_invoice.json`,
-      {
-        draft_order_invoice: {
-          to:             null,
-          from:           'hello@timanti.in',
-          subject,
-          custom_message: customMessage
-        }
-      },
-      {
-        headers: { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' },
-        timeout: 10000
-      }
+      { draft_order_invoice: { to: null, from: 'hello@timanti.in', subject, custom_message: customMessage } },
+      { headers: { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' }, timeout: 10000 }
     );
-
     console.log(`📧 Draft order invoice sent for draft ${shopifyDraftId} (${paymentStatus})`);
   } catch (err) {
     console.error('❌ send_invoice failed:', err.response?.data || err.message);
@@ -214,95 +193,59 @@ async function sendDraftOrderInvoice(shopifyDraftId, paymentStatus, amountPaid, 
 
 // ─────────────────────────────────────────
 // Payment Completion Handler
-// Called whenever Pine confirms PAID.
-// Partial: updates store_deposits, tags draft order,
-//   sends invoice email. Does NOT complete Shopify.
-// Full: tags, sends invoice, then completes Shopify.
 // ─────────────────────────────────────────
+
 async function handlePaymentCompletion(transaction) {
   if (!transaction.shopify_draft_id) return;
 
   if (transaction.is_partial) {
     console.log(`Partial payment confirmed for txn ${transaction.id} — updating store_deposits`);
-
     const amountPaidRupees = transaction.amount_paisa / 100;
 
     let { data: deposit } = await supabase
-      .from('store_deposits')
-      .select('*')
-      .eq('draft_order_id', transaction.shopify_draft_id)
-      .maybeSingle();
+      .from('store_deposits').select('*')
+      .eq('draft_order_id', transaction.shopify_draft_id).maybeSingle();
 
     if (!deposit) {
       const totalRupees = transaction.total_amount_paisa ? transaction.total_amount_paisa / 100 : amountPaidRupees;
-      const { data: newDeposit } = await supabase
-        .from('store_deposits')
-        .insert({
-          draft_order_id:   transaction.shopify_draft_id,
-          draft_order_name: transaction.draft_order_name,
-          customer_name:    transaction.customer_name || '',
-          total_amount:     totalRupees,
-          amount_paid:      0,
-          amount_pending:   totalRupees,
-          payment_status:   'unpaid'
-        })
-        .select()
-        .single();
+      const { data: newDeposit } = await supabase.from('store_deposits').insert({
+        draft_order_id: transaction.shopify_draft_id,
+        draft_order_name: transaction.draft_order_name,
+        customer_name: transaction.customer_name || '',
+        total_amount: totalRupees,
+        amount_paid: 0,
+        amount_pending: totalRupees,
+        payment_status: 'unpaid'
+      }).select().single();
       deposit = newDeposit;
     }
 
-    if (!deposit) {
-      console.error(`Could not find or create store_deposits for draft ${transaction.shopify_draft_id}`);
-      return;
-    }
+    if (!deposit) { console.error(`Could not find or create store_deposits for draft ${transaction.shopify_draft_id}`); return; }
 
     const newAmountPaid    = parseFloat(deposit.amount_paid) + amountPaidRupees;
     const newAmountPending = parseFloat(deposit.total_amount) - newAmountPaid;
     const newStatus        = newAmountPending <= 0.01 ? 'paid' : 'partial';
 
-    await supabase
-      .from('store_deposits')
-      .update({
-        amount_paid:    newAmountPaid,
-        amount_pending: Math.max(0, newAmountPending),
-        payment_status: newStatus,
-        updated_at:     new Date().toISOString()
-      })
-      .eq('id', deposit.id);
+    await supabase.from('store_deposits').update({
+      amount_paid: newAmountPaid,
+      amount_pending: Math.max(0, newAmountPending),
+      payment_status: newStatus,
+      updated_at: new Date().toISOString()
+    }).eq('id', deposit.id);
 
-    console.log(`store_deposits updated: paid=${newAmountPaid} pending=${newAmountPending} status=${newStatus}`);
+    await supabase.from('store_deposit_payments').insert({
+      deposit_id: deposit.id,
+      draft_order_id: transaction.shopify_draft_id,
+      amount: amountPaidRupees,
+      payment_mode: transaction.payment_mode || 'card',
+      notes: `Pine txn ${transaction.id}`,
+      pine_ptrid: transaction.pine_ref_id || null,
+      recorded_by: 'pos_terminal',
+      created_at: new Date().toISOString()
+    });
 
-    await supabase
-      .from('store_deposit_payments')
-      .insert({
-        deposit_id:     deposit.id,
-        draft_order_id: transaction.shopify_draft_id,
-        amount:         amountPaidRupees,
-        payment_mode:   transaction.payment_mode || 'card',
-        notes:          `Pine txn ${transaction.id}`,
-        pine_ptrid:     transaction.pine_ref_id || null,
-        recorded_by:    'pos_terminal',
-        created_at:     new Date().toISOString()
-      });
-
-    console.log(`store_deposit_payments logged: Rs${amountPaidRupees} for deposit ${deposit.id}`);
-
-    // Tag the draft order with payment amounts
-    await tagShopifyDraftOrder(
-      transaction.shopify_draft_id,
-      newAmountPaid,
-      Math.max(0, newAmountPending),
-      newStatus
-    );
-
-    // Send invoice email on EVERY deposit (partial and full)
-    // Template reads the deposit tags we just wrote to show correct amounts
-    await sendDraftOrderInvoice(
-      transaction.shopify_draft_id,
-      newStatus,
-      Math.round(newAmountPaid),
-      Math.round(Math.max(0, newAmountPending))
-    );
+    await tagShopifyDraftOrder(transaction.shopify_draft_id, newAmountPaid, Math.max(0, newAmountPending), newStatus);
+    await sendDraftOrderInvoice(transaction.shopify_draft_id, newStatus, Math.round(newAmountPaid), Math.round(Math.max(0, newAmountPending)));
 
     if (newStatus === 'paid') {
       console.log(`✅ Fully paid — completing Shopify order for draft ${transaction.shopify_draft_id}`);
@@ -312,7 +255,6 @@ async function handlePaymentCompletion(transaction) {
     }
 
   } else {
-    // Standard full payment — complete Shopify immediately
     await completeShopifyOrder(transaction.shopify_draft_id, transaction.id);
   }
 }
@@ -331,12 +273,9 @@ async function pushDraftOrderToTerminal({
   const store = await resolveStoreForLocation(shopifyLocationId, terminalTag);
   if (!store) return { success: false, httpStatus: 404, error: 'No Pine terminal configured.' };
 
-  const { data: existing } = await supabase
-    .from('transactions')
-    .select('id, status')
+  const { data: existing } = await supabase.from('transactions').select('id, status')
     .eq('shopify_draft_id', draftOrderId.toString())
-    .in('status', ['PENDING', 'PUSHED_TO_TERMINAL'])
-    .maybeSingle();
+    .in('status', ['PENDING', 'PUSHED_TO_TERMINAL']).maybeSingle();
 
   if (existing) {
     return {
@@ -346,25 +285,30 @@ async function pushDraftOrderToTerminal({
     };
   }
 
-  const amountInPaisa         = Math.round(parseFloat(amountInRupees) * 100);
+  const amountInPaisa = Math.round(parseFloat(amountInRupees) * 100);
+
+  // GUARDRAIL: Block transactions less than ₹1
+  if (amountInPaisa < 100) {
+    return {
+      success: false, httpStatus: 400,
+      error: 'Transaction amount must be at least ₹1. Please check the draft order amount.'
+    };
+  }
+
   const totalInPaisa          = totalAmountInRupees ? Math.round(parseFloat(totalAmountInRupees) * 100) : amountInPaisa;
   const pineTransactionNumber = makePineTransactionNumber(draftOrderName);
 
-  const { data: txn, error: txnError } = await supabase
-    .from('transactions')
-    .insert([{
-      shopify_draft_id:        draftOrderId.toString(),
-      draft_order_name:        draftOrderName,
-      pine_transaction_number: pineTransactionNumber,
-      location_id:             store.id,
-      amount_paisa:            amountInPaisa,
-      total_amount_paisa:      totalInPaisa,
-      customer_name:           customerName,
-      is_partial:              isPartial,
-      status:                  'PENDING'
-    }])
-    .select()
-    .single();
+  const { data: txn, error: txnError } = await supabase.from('transactions').insert([{
+    shopify_draft_id:        draftOrderId.toString(),
+    draft_order_name:        draftOrderName,
+    pine_transaction_number: pineTransactionNumber,
+    location_id:             store.id,
+    amount_paisa:            amountInPaisa,
+    total_amount_paisa:      totalInPaisa,
+    customer_name:           customerName,
+    is_partial:              isPartial,
+    status:                  'PENDING'
+  }]).select().single();
 
   if (txnError) {
     console.error('DB insert error:', txnError);
@@ -383,7 +327,7 @@ async function pushDraftOrderToTerminal({
     ClientId:                    parseInt(store.pine_client_id),
     StoreId:                     parseInt(store.pine_store_id),
     TotalInvoiceAmount:          amountInPaisa,
-    AutoCancelDurationInMinutes: 10
+    AutoCancelDurationInMinutes: 5   // FIX: reduced from 10 to 5 minutes
   };
 
   console.log(`UploadBilledTransaction txn ${txn.id} → "${store.store_name}" isPartial=${isPartial}`);
@@ -471,11 +415,11 @@ app.get('/api/test-db', async (req, res) => {
       shopifyTokenAgeMinutes: tokenFetchedAt ? Math.round((Date.now() - tokenFetchedAt) / 60000) : null
     },
     env: {
-      supabaseUrl:         process.env.SUPABASE_URL         ? 'SET' : 'MISSING',
-      serviceKey:          process.env.SUPABASE_SERVICE_KEY ? 'SET' : 'MISSING',
-      pineUrl:             process.env.PINE_LABS_API_URL    ? 'SET' : 'MISSING',
-      shopifyUrl:          process.env.SHOPIFY_STORE_URL    ? 'SET' : 'MISSING',
-      shopifyClientId:     process.env.SHOPIFY_CLIENT_ID    ? 'SET' : 'MISSING ⚠️',
+      supabaseUrl:         process.env.SUPABASE_URL          ? 'SET' : 'MISSING',
+      serviceKey:          process.env.SUPABASE_SERVICE_KEY  ? 'SET' : 'MISSING',
+      pineUrl:             process.env.PINE_LABS_API_URL     ? 'SET' : 'MISSING',
+      shopifyUrl:          process.env.SHOPIFY_STORE_URL     ? 'SET' : 'MISSING',
+      shopifyClientId:     process.env.SHOPIFY_CLIENT_ID     ? 'SET' : 'MISSING ⚠️',
       shopifyClientSecret: process.env.SHOPIFY_CLIENT_SECRET ? 'SET' : 'MISSING ⚠️'
     }
   });
@@ -508,10 +452,8 @@ app.post('/api/push-to-terminal', async (req, res) => {
     const result = await pushDraftOrderToTerminal({
       draftOrderId, draftOrderName, amountInRupees,
       shopifyLocationId: locationId || null,
-      terminalTag:       null,
-      isPartial,
-      totalAmountInRupees,
-      customerName
+      terminalTag: null,
+      isPartial, totalAmountInRupees, customerName
     });
     return res.status(result.httpStatus || 200).json(result);
   } catch (error) {
