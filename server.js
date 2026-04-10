@@ -634,6 +634,337 @@ app.post('/api/pine-webhook', async (req, res) => {
     await handlePaymentCompletion(transaction);
   } catch (error) { console.error('Webhook error:', error.message); }
 });
+app.post('/api/send-invoice-email', async (req, res) => {
+  const { order_id, order_name, customer_email, customer_name } = req.body
+
+  const pdfUrl = `https://timanti.in/apps/download-pdf/orders/91013a1d4c9b2beea028/${order_id * 5255}/${order_name.replace('#','').toLowerCase()}.pdf`
+
+  await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${process.env.RESEND_API_KEY}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      from: 'Timanti <hello@timanti.in>',
+      to: customer_email,
+      subject: `Your Timanti order ${order_name} with invoice is shipped`,
+      html: `<!DOCTYPE html>
+<html lang="en">
+  <head>
+  <title>Your Timanti order {{ order.name }} is on its way</title>
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+  <meta name="viewport" content="width=device-width">
+  <link rel="stylesheet" type="text/css" href="/assets/notifications/styles.css">
+  <style>
+    body, p, td, span, .order-list__item-title, .order-list__item-variant,
+    .customer-info__item, .subtotal-line__title, .subtotal-line__value,
+    .disclaimer__subtext, .footer__cell {
+      font-family: 'Muli', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      font-weight: 300;
+    }
+    h1, h2, h3, h4, h5, h6, .shop-name__text {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      font-weight: 500;
+      letter-spacing: 0.3px;
+    }
+    .button__cell { background: #000000; border-radius: 4px; }
+    .button__text { color: #ffffff !important; text-decoration: none; font-weight: 500; }
+    a, a:hover, a:active, a:visited { color: #fc7d27; text-decoration: none; }
+    .shop-name__cell { text-align: center; }
+    .actions__cell { text-align: center; }
+    .footer-contact-link { color: #000000 !important; }
+    .timanti-info-box {
+      background: #F6F6F6;
+      border-left: 4px solid #fc7d27;
+      padding: 20px;
+      margin: 20px auto;
+      text-align: center;
+      max-width: 600px;
+    }
+    .timanti-info-box h4 { margin: 0 0 12px 0; font-weight: 600; color: #000000; }
+    .timanti-info-box p { color: #000000; margin: 5px 0; }
+    .timanti-info-box strong { color: #000000; font-weight: 600; }
+    .timanti-promises {
+      background: #F6F6F6;
+      padding: 20px;
+      border-radius: 8px;
+      margin: 20px 0;
+      text-align: center;
+    }
+    .timanti-promise-item { display: inline-block; margin: 10px 15px; text-align: center; vertical-align: top; }
+    .timanti-promise-item img { width: 50px; height: 50px; display: block; margin: 0 auto 8px; }
+    .timanti-promise-item span { display: block; font-size: 13px; color: #000000; font-weight: 500; }
+    .timanti-support-section {
+      background: #ffffff;
+      border: 1px solid #e6d8cc;
+      border-radius: 8px;
+      padding: 20px;
+      margin: 20px 0;
+      text-align: center;
+    }
+    .timanti-support-item { display: inline-block; margin: 10px 20px; }
+    .timanti-support-item a { color: #000000 !important; }
+    .timanti-consent-section {
+      background: #F6F6F6;
+      border: 1px solid #e6d8cc;
+      border-radius: 8px;
+      padding: 20px;
+      margin: 20px 0;
+      text-align: center;
+    }
+    .timanti-consent-section h4 { color: #000000; font-weight: 600; }
+    .timanti-consent-link {
+      display: inline-block;
+      margin-top: 10px;
+      padding: 10px 20px;
+      background: #000000;
+      color: #ffffff !important;
+      border-radius: 4px;
+      font-weight: 500;
+    }
+  </style>
+</head>
+<body>
+  <table class="body">
+    <tr>
+      <td>
+
+        <table class="header row">
+          <tr>
+            <td class="header__cell">
+              <center>
+                <table class="container">
+                  <tr>
+                    <td>
+                      <table class="row">
+                        <tr>
+                          <td class="shop-name__cell" colspan="2" style="text-align: center;">
+                            <img src="https://cdn.shopify.com/s/files/1/0775/8322/0993/files/Timanti_Logo_Black.jpg?v=1766506323" alt="Timanti" width="160" style="margin: 0 auto;">
+                          </td>
+                        </tr>
+                      </table>
+                    </td>
+                  </tr>
+                </table>
+              </center>
+            </td>
+          </tr>
+        </table>
+
+        <table class="row content">
+          <tr>
+            <td class="content__cell">
+              <center>
+                <table class="container">
+                  <tr>
+                    <td style="text-align: center;">
+
+                      <p style="font-size: 14px; color: #999; margin-bottom: 5px;">Order {{ order.name }}</p>
+                      <h2>Your order is on its way 🎉</h2>
+                      <p>Hi <strong>{{ order.customer.firstName }}</strong>, your jewellery has been dispatched. Your tax invoice with actual jewellery specifications is ready to download.</p>
+
+                      <table class="row actions" style="width: 100%;">
+                        <tr><td class="empty-line">&nbsp;</td></tr>
+                        <tr>
+                          <td class="actions__cell" style="text-align: center; padding-bottom: 15px;">
+                            <center>
+                              <table class="button main-action-cell" align="center" style="margin: 0 auto; float: none !important;">
+                                <tr>
+                                  <td class="button__cell">
+                                    <a target="_blank" href="https://timanti.in/apps/download-pdf/orders/91013a1d4c9b2beea028/{{ order.id | times: 5255 }}/{{ order.name | remove: "#" | downcase }}.pdf" class="button__text">
+                                      Download Tax Invoice
+                                    </a>
+                                  </td>
+                                </tr>
+                              </table>
+                            </center>
+                          </td>
+                        </tr>
+                        <tr>
+                          <td class="actions__cell" style="text-align: center;">
+                            <center>
+                              <table class="link secondary-action-cell" align="center" style="margin: 0 auto; float: none !important;">
+                                <tr>
+                                  <td class="link__cell">or <a href="https://timanti.in">Visit our store</a></td>
+                                </tr>
+                              </table>
+                            </center>
+                          </td>
+                        </tr>
+                      </table>
+
+                      <div class="timanti-info-box">
+                        <h4>📄 Your tax invoice includes</h4>
+                        <p>Jewellery code · Actual gross &amp; net weight · Diamond weight &amp; pieces</p>
+                        <p>Metal details · Full GST breakdown · Hallmark certificate reference</p>
+                      </div>
+
+                    </td>
+                  </tr>
+                </table>
+              </center>
+            </td>
+          </tr>
+        </table>
+
+        <table class="row section">
+          <tr>
+            <td class="section__cell">
+              <center>
+                <table class="container">
+                  <tr><td><h3>Items in this shipment</h3></td></tr>
+                </table>
+                <table class="container">
+                  <tr>
+                    <td>
+                      {% for line in order.lineItems %}
+                      <table class="row">
+                        <tr class="order-list__item">
+                          <td class="order-list__item__cell">
+                            <table style="width: 100%;">
+                              <tr>
+                                <td class="order-list__product-description-cell" style="vertical-align: top;">
+                                  <span class="order-list__item-title"><strong>{{ line.title }}</strong></span><br/>
+                                  <span class="order-list__item-title">Qty: {{ line.quantity }}</span><br/>
+                                  {% if line.variant.title != 'Default Title' %}
+                                    <span class="order-list__item-variant" style="color: #777;">{{ line.variant.title }}</span>
+                                  {% endif %}
+                                </td>
+                                <td class="order-list__price-cell" style="vertical-align: top; text-align: right; white-space: nowrap;">
+                                  <p class="order-list__item-price">{{ line.discountedTotalSet.shopMoney.amount }}</p>
+                                </td>
+                              </tr>
+                            </table>
+                          </td>
+                        </tr>
+                      </table>
+                      {% endfor %}
+
+                      <table class="row subtotal-lines">
+                        <tr>
+                          <td class="subtotal-spacer"></td>
+                          <td>
+                            <table class="row subtotal-table subtotal-table--total">
+                              <tr class="subtotal-line">
+                                <td class="subtotal-line__title"><p><span>Total</span></p></td>
+                                <td class="subtotal-line__value"><strong>{{ order.totalPriceSet.shopMoney.amount }}</strong></td>
+                              </tr>
+                            </table>
+                          </td>
+                        </tr>
+                      </table>
+
+                      <div class="timanti-promises">
+                        <div class="timanti-promise-item">
+                          <img src="https://cdn.shopify.com/s/files/1/0775/8322/0993/files/icon1_10925c66-b900-4920-a93c-49753bce74cf.png?v=1770206196" alt="BIS Hallmarked">
+                          <span>BIS Hallmarked<br>Gold</span>
+                        </div>
+                        <div class="timanti-promise-item">
+                          <img src="https://cdn.shopify.com/s/files/1/0775/8322/0993/files/icon6.png" alt="IGI Certified">
+                          <span>IGI Certified<br>Diamonds</span>
+                        </div>
+                        <div class="timanti-promise-item">
+                          <img src="https://cdn.shopify.com/s/files/1/0775/8322/0993/files/icon2_1d5faa97-53c3-44c7-9b2a-04ca57696e11.png?v=1770206090" alt="Lifetime Exchange">
+                          <span>Lifetime<br>Exchange</span>
+                        </div>
+                      </div>
+                    </td>
+                  </tr>
+                </table>
+              </center>
+            </td>
+          </tr>
+        </table>
+
+        <table class="row section">
+          <tr>
+            <td class="section__cell">
+              <center>
+                <table class="container">
+                  <tr>
+                    <td>
+                      <div class="timanti-support-section">
+                        <h3>Need Help?</h3>
+                        <p style="color: #666; margin-bottom: 15px;">Our team is here to assist you</p>
+                        <div class="timanti-support-item">
+                          <strong>📞💬 Phone/WhatsApp</strong><br>
+                          <a href="tel:+917738868305" class="footer-contact-link">+91-7738868305</a>
+                        </div>
+                        <div class="timanti-support-item">
+                          <strong>✉️ Email</strong><br>
+                          <a href="mailto:info@timanti.in" class="footer-contact-link">info@timanti.in</a>
+                        </div>
+                      </div>
+                    </td>
+                  </tr>
+                </table>
+              </center>
+            </td>
+          </tr>
+        </table>
+
+        <table class="row section">
+          <tr>
+            <td class="section__cell">
+              <center>
+                <table class="container">
+                  <tr>
+                    <td>
+                      <div class="timanti-consent-section">
+                        <h4>Stay Connected with Timanti</h4>
+                        <p>Get exclusive updates on new collections, special offers, and jewelry care tips.</p>
+                        <p>
+                          <a href="https://wa.me/917738868305?text=Yes%2C%20I%20want%20to%20receive%20WhatsApp%20updates%20from%20Timanti" class="timanti-consent-link">
+                            Join WhatsApp Updates
+                          </a>
+                        </p>
+                        <p style="font-size: 12px; color: #999; margin-top: 15px;">By clicking above, you consent to receive marketing messages from Timanti. You can unsubscribe anytime.</p>
+                      </div>
+                    </td>
+                  </tr>
+                </table>
+              </center>
+            </td>
+          </tr>
+        </table>
+
+        <table class="row footer">
+          <tr>
+            <td class="footer__cell">
+              <center>
+                <table class="container">
+                  <tr>
+                    <td style="text-align: center;">
+                      <p class="disclaimer__subtext">
+                        Questions? Reply to this email or contact us at
+                        <a href="mailto:info@timanti.in" class="footer-contact-link">info@timanti.in</a> or
+                        <a href="tel:+917738868305" class="footer-contact-link">+91-7738868305</a>
+                      </p>
+                      <p class="disclaimer__subtext" style="margin-top: 15px;">
+                        <a href="https://timanti.in/pages/return-refund-policy">Returns &amp; Refunds</a> |
+                        <a href="https://timanti.in/pages/exchange-and-buyback">Exchange &amp; Buyback</a> |
+                        <a href="https://timanti.in/pages/shipping">Shipping Policy</a> |
+                        <a href="https://timanti.in/pages/track-your-order">Track Order</a>
+                      </p>
+                    </td>
+                  </tr>
+                </table>
+              </center>
+            </td>
+          </tr>
+        </table>
+
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`
+    })
+  })
+
+  res.json({ success: true })
+})
 
 // ─────────────────────────────────────────
 // Start
