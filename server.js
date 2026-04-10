@@ -637,19 +637,24 @@ app.post('/api/pine-webhook', async (req, res) => {
 app.post('/api/send-invoice-email', async (req, res) => {
   const { order_id, order_name, customer_email, customer_name } = req.body
 
-  const pdfUrl = `https://timanti.in/apps/download-pdf/orders/91013a1d4c9b2beea028/${order_id * 5255}/${order_name.replace('#','').toLowerCase()}.pdf`
+  if (!order_id || !order_name || !customer_email) {
+    return res.status(400).json({ success: false, error: 'Missing required fields' })
+  }
 
-  await fetch('https://api.resend.com/emails', {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${process.env.RESEND_API_KEY}`,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-      from: 'Timanti <hello@timanti.in>',
-      to: customer_email,
-      subject: `Your Timanti order ${order_name} with invoice is shipped`,
-      html: `<!DOCTYPE html>
+  const pdfUrl = `https://timanti.in/apps/download-pdf/orders/91013a1d4c9b2beea028/${order_id * 5255}/${String(order_name).replace('#','').toLowerCase()}.pdf`
+
+  try {
+    const resendResponse = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${process.env.RESEND_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        from: 'Timanti <onboarding@resend.dev>',
+        to: customer_email,
+        subject: `Your Timanti order ${order_name} with invoice is shipped`,
+        html: `<!DOCTYPE html>
 <html lang="en">
   <head>
   <title>Your Timanti order {{ order.name }} is on its way</title>
@@ -960,10 +965,22 @@ app.post('/api/send-invoice-email', async (req, res) => {
   </table>
 </body>
 </html>`
+      })
     })
-  })
 
-  res.json({ success: true })
+    const resendData = await resendResponse.json()
+    console.log('Resend response:', JSON.stringify(resendData))
+
+    if (!resendResponse.ok) {
+      console.error('Resend error:', resendData)
+      return res.status(500).json({ success: false, error: resendData })
+    }
+
+    res.json({ success: true, emailId: resendData.id })
+  } catch (err) {
+    console.error('Email send failed:', err.message)
+    res.status(500).json({ success: false, error: err.message })
+  }
 })
 
 // ─────────────────────────────────────────
