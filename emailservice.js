@@ -113,14 +113,14 @@ function buildDepositEmailHtml({ draft_order_name, customer_name, total_price, a
       </table>
 
       <table width="100%" cellpadding="0" cellspacing="0" style="padding:10px 30px 10px 30px;">
-        <tr><td style="text-align:center;">
-          <table cellpadding="0" cellspacing="0" style="margin:0 auto;">
-            <tr><td style="background:#000000; border-radius:4px; text-align:center;">
-              <a href="${pdf_url}" target="_blank" style="color:#ffffff; text-decoration:none; font-weight:500; display:block; padding:14px 28px; font-size:14px;">Download Proforma Invoice</a>
-            </td></tr>
-          </table>
-        </td></tr>
-      </table>
+  <tr><td style="text-align:center;">
+    <table cellpadding="0" cellspacing="0" style="margin:0 auto;">
+      <tr><td style="background:#000000; border-radius:4px; text-align:center;">
+        <a href="https://timanti.in/apps/download-pdf/drafts/545867e5309dda498f8f/${draftOrder.id * 8461}/${draftOrderName.replace('#', '').toLowerCase()}.pdf" target="_blank" style="color:#ffffff; text-decoration:none; font-weight:500; display:block; padding:14px 28px; font-size:14px;">Download Deposit Receipt</a>
+      </td></tr>
+    </table>
+  </td></tr>
+</table>
 
       <table width="100%" cellpadding="0" cellspacing="0" style="padding:10px 30px 20px 30px;">
         <tr><td style="background:#F6F6F6; border-left:4px solid #fc7d27; padding:16px 20px; text-align:center;">
