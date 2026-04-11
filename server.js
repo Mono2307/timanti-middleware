@@ -1,8 +1,9 @@
 require('dotenv').config();
 const express = require('express');
-const cors = require('cors');
-const axios = require('axios');
+const cors    = require('cors');
+const axios   = require('axios');
 const { createClient } = require('@supabase/supabase-js');
+const { sendDepositEmail } = require('./emailService');
 
 const app = express();
 app.use(cors());
@@ -122,268 +123,6 @@ function makePineTransactionNumber(draftOrderName) {
 }
 
 // ─────────────────────────────────────────
-// Email Builder
-// ─────────────────────────────────────────
-
-function buildDepositEmailHtml({ draft_order_name, customer_name, total_price, amount_paid, amount_pending, deposit_status, pdf_url }) {
-  const isPartial = deposit_status === 'partial';
-  const bannerBg  = isPartial ? '#fff3cd' : '#d4edda';
-  const bannerText = isPartial
-    ? `PARTIAL PAYMENT RECEIVED — Rs.${amount_paid} paid | Rs.${amount_pending} pending before dispatch`
-    : `FULLY PAID — Rs.${amount_paid} received in full`;
-
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
-  <meta name="viewport" content="width=device-width">
-  <style>
-    body, p, td, span { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-weight: 300; margin: 0; padding: 0; }
-    h2, h3, h4 { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-weight: 500; margin: 0 0 10px 0; }
-    a { color: #fc7d27; text-decoration: none; }
-    .footer-link { color: #000000 !important; }
-  </style>
-</head>
-<body style="background:#f4f4f4; padding: 20px 0;">
-  <table width="100%" cellpadding="0" cellspacing="0" style="max-width:600px; margin:0 auto; background:#ffffff; border-radius:8px; overflow:hidden;">
-    <tr>
-      <td>
-
-        <!-- Logo -->
-        <table width="100%" cellpadding="0" cellspacing="0" style="border-bottom:1px solid #eeeeee;">
-          <tr>
-            <td style="text-align:center; padding:24px 20px;">
-              <img src="https://cdn.shopify.com/s/files/1/0775/8322/0993/files/Timanti_Logo_Black.jpg?v=1766506323" alt="Timanti" width="150">
-            </td>
-          </tr>
-        </table>
-
-        <!-- Payment banner -->
-        <table width="100%" cellpadding="0" cellspacing="0">
-          <tr>
-            <td style="background:${bannerBg}; padding:12px 20px; text-align:center; font-weight:bold; font-size:13px; border-bottom:1px solid #dddddd;">
-              ${bannerText}
-            </td>
-          </tr>
-        </table>
-
-        <!-- Greeting -->
-        <table width="100%" cellpadding="0" cellspacing="0">
-          <tr>
-            <td style="padding:28px 30px 10px 30px; text-align:center;">
-              <p style="font-size:13px; color:#999999; margin-bottom:8px;">Order ${draft_order_name}</p>
-              <h2 style="font-size:22px; color:#000000; margin-bottom:16px;">${isPartial ? 'Deposit received — thank you!' : 'Full payment received — thank you!'}</h2>
-              <p style="font-size:14px; color:#444444; line-height:1.6;">
-                Hi <strong>${customer_name}</strong>,
-                ${isPartial
-                  ? `your deposit of <strong>Rs.${amount_paid}</strong> has been received. Your jewellery is being held for you. The remaining balance of <strong>Rs.${amount_pending}</strong> is due before dispatch.`
-                  : `your full payment of <strong>Rs.${amount_paid}</strong> has been received. Your jewellery is being prepared and you will be notified when it is dispatched.`
-                }
-              </p>
-            </td>
-          </tr>
-        </table>
-
-        <!-- Payment summary -->
-        <table width="100%" cellpadding="0" cellspacing="0" style="padding:0 30px;">
-          <tr>
-            <td>
-              <table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e0e0e0; border-radius:8px; background:#f9f9f9; margin:20px 0;">
-                <tr>
-                  <td style="padding:20px;">
-                    <table width="100%" cellpadding="0" cellspacing="0">
-                      <tr>
-                        <td style="font-size:13px; color:#666666; padding:5px 0;">Order Total</td>
-                        <td style="font-size:13px; color:#666666; text-align:right; padding:5px 0;">Rs.${total_price}</td>
-                      </tr>
-                      <tr>
-                        <td style="font-size:14px; color:#006630; font-weight:bold; padding:5px 0;">Amount Received</td>
-                        <td style="font-size:14px; color:#006630; font-weight:bold; text-align:right; padding:5px 0;">Rs.${amount_paid}</td>
-                      </tr>
-                      ${isPartial ? `
-                      <tr><td colspan="2" style="border-top:1px solid #dddddd; padding-top:5px;"></td></tr>
-                      <tr>
-                        <td style="font-size:14px; color:#cc4400; font-weight:bold; padding:5px 0;">Balance Pending</td>
-                        <td style="font-size:14px; color:#cc4400; font-weight:bold; text-align:right; padding:5px 0;">Rs.${amount_pending}</td>
-                      </tr>` : ''}
-                    </table>
-                  </td>
-                </tr>
-              </table>
-            </td>
-          </tr>
-        </table>
-
-        <!-- Download button -->
-        <table width="100%" cellpadding="0" cellspacing="0" style="padding:0 30px 10px 30px;">
-          <tr>
-            <td style="text-align:center;">
-              <table cellpadding="0" cellspacing="0" style="margin:0 auto;">
-                <tr>
-                  <td style="background:#000000; border-radius:4px; text-align:center;">
-                    <a href="${pdf_url}" target="_blank" style="color:#ffffff; text-decoration:none; font-weight:500; display:block; padding:14px 28px; font-size:14px;">
-                      Download Proforma Invoice
-                    </a>
-                  </td>
-                </tr>
-              </table>
-            </td>
-          </tr>
-        </table>
-
-        <!-- Info box -->
-        <table width="100%" cellpadding="0" cellspacing="0" style="padding:10px 30px 20px 30px;">
-          <tr>
-            <td style="background:#F6F6F6; border-left:4px solid #fc7d27; padding:16px 20px; text-align:center;">
-              <h4 style="color:#000000; margin-bottom:8px;">${isPartial ? 'Next steps' : 'What happens next'}</h4>
-              ${isPartial
-                ? `<p style="font-size:13px; color:#444444; margin:4px 0;">Your piece is being held. Please complete the balance of <strong>Rs.${amount_pending}</strong> to proceed to dispatch.</p>
-                   <p style="font-size:13px; color:#444444; margin:4px 0;">Call or WhatsApp us at <strong>+91-7738868305</strong> or visit the store.</p>`
-                : `<p style="font-size:13px; color:#444444; margin:4px 0;">Your jewellery is being prepared and quality checked.</p>
-                   <p style="font-size:13px; color:#444444; margin:4px 0;">You will receive a shipping confirmation with your tax invoice once dispatched.</p>`
-              }
-            </td>
-          </tr>
-        </table>
-
-        <!-- Support -->
-        <table width="100%" cellpadding="0" cellspacing="0" style="padding:0 30px 20px 30px;">
-          <tr>
-            <td style="border:1px solid #e6d8cc; border-radius:8px; padding:20px; text-align:center;">
-              <h3 style="color:#000000; margin-bottom:12px;">Need Help?</h3>
-              <p style="color:#666666; font-size:13px; margin-bottom:12px;">Our team is here to assist you</p>
-              <table cellpadding="0" cellspacing="0" style="margin:0 auto;">
-                <tr>
-                  <td style="padding:0 20px; font-size:13px;">
-                    <strong>Phone/WhatsApp</strong><br>
-                    <a href="tel:+917738868305" class="footer-link">+91-7738868305</a>
-                  </td>
-                  <td style="padding:0 20px; font-size:13px;">
-                    <strong>Email</strong><br>
-                    <a href="mailto:info@timanti.in" class="footer-link">info@timanti.in</a>
-                  </td>
-                </tr>
-              </table>
-            </td>
-          </tr>
-        </table>
-
-        <!-- WhatsApp consent -->
-        <table width="100%" cellpadding="0" cellspacing="0" style="padding:0 30px 20px 30px;">
-          <tr>
-            <td style="background:#F6F6F6; border:1px solid #e6d8cc; border-radius:8px; padding:20px; text-align:center;">
-              <h4 style="color:#000000; margin-bottom:8px;">Stay Connected with Timanti</h4>
-              <p style="font-size:13px; color:#444444; margin-bottom:12px;">Get exclusive updates on new collections, special offers, and jewelry care tips.</p>
-              <table cellpadding="0" cellspacing="0" style="margin:0 auto;">
-                <tr>
-                  <td style="background:#000000; border-radius:4px;">
-                    <a href="https://wa.me/917738868305?text=Yes%2C%20I%20want%20to%20receive%20WhatsApp%20updates%20from%20Timanti" style="color:#ffffff; text-decoration:none; font-weight:500; display:block; padding:10px 20px; font-size:13px;">
-                      Join WhatsApp Updates
-                    </a>
-                  </td>
-                </tr>
-              </table>
-              <p style="font-size:11px; color:#999999; margin-top:12px;">By clicking above, you consent to receive marketing messages from Timanti. You can unsubscribe anytime.</p>
-            </td>
-          </tr>
-        </table>
-
-        <!-- Footer -->
-        <table width="100%" cellpadding="0" cellspacing="0" style="border-top:1px solid #eeeeee; padding:20px 30px;">
-          <tr>
-            <td style="text-align:center; font-size:12px; color:#666666;">
-              <p>Questions? <a href="mailto:info@timanti.in" style="color:#fc7d27;">info@timanti.in</a> | <a href="tel:+917738868305" style="color:#fc7d27;">+91-7738868305</a></p>
-              <p style="margin-top:8px;">
-                <a href="https://timanti.in/pages/return-refund-policy" style="color:#fc7d27;">Returns &amp; Refunds</a> &nbsp;|&nbsp;
-                <a href="https://timanti.in/pages/exchange-and-buyback" style="color:#fc7d27;">Exchange &amp; Buyback</a> &nbsp;|&nbsp;
-                <a href="https://timanti.in/pages/shipping" style="color:#fc7d27;">Shipping Policy</a>
-              </p>
-            </td>
-          </tr>
-        </table>
-
-      </td>
-    </tr>
-  </table>
-</body>
-</html>`;
-}
-
-// ─────────────────────────────────────────
-// Deposit Email Sender (called internally)
-// ─────────────────────────────────────────
-
-async function sendDepositEmail(shopifyDraftId, draftOrderName, newAmountPaid, newAmountPending, newStatus, deposit) {
-  try {
-    const token = await getShopifyToken();
-    const draftRes = await fetch(
-      `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${shopifyDraftId}.json`,
-      { headers: { 'X-Shopify-Access-Token': token } }
-    );
-    const draftData = await draftRes.json();
-    const draftOrder = draftData.draft_order;
-
-    if (!draftOrder?.email) {
-      console.log(`sendDepositEmail: no email on draft order ${shopifyDraftId}, skipping`);
-      return;
-    }
-
-    // Dedup check
-    if (deposit) {
-      if (newStatus === 'partial' && deposit.email_sent_partial) {
-        console.log(`Deposit email already sent (partial) for ${draftOrderName}`);
-        return;
-      }
-      if (newStatus === 'paid' && deposit.email_sent_paid) {
-        console.log(`Deposit email already sent (paid) for ${draftOrderName}`);
-        return;
-      }
-    }
-
-    const pdfUrl = `https://timanti.in/apps/download-pdf/orders/91013a1d4c9b2beea028/${draftOrder.id * 5255}/${draftOrderName.replace('#', '').toLowerCase()}.pdf`;
-
-    const subject = newStatus === 'paid'
-      ? `Your Timanti order ${draftOrderName} — payment received in full`
-      : `Your Timanti order ${draftOrderName} — deposit of Rs.${Math.round(newAmountPaid)} confirmed`;
-
-    const html = buildDepositEmailHtml({
-      draft_order_name: draftOrderName,
-      customer_name:    draftOrder.billing_address?.first_name || 'there',
-      total_price:      draftOrder.total_price,
-      amount_paid:      Math.round(newAmountPaid).toString(),
-      amount_pending:   Math.round(Math.max(0, newAmountPending)).toString(),
-      deposit_status:   newStatus,
-      pdf_url:          pdfUrl
-    });
-
-    const resendRes = await fetch('https://api.resend.com/emails', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${process.env.RESEND_API_KEY}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        from:    'Timanti <onboarding@resend.dev>',
-        to:      draftOrder.email,
-        subject,
-        html
-      })
-    });
-
-    const resendData = await resendRes.json();
-    console.log(`📧 Deposit email sent to ${draftOrder.email} (${newStatus}):`, resendData.id || resendData);
-
-    // Mark sent in store_deposits
-    if (deposit?.id) {
-      const flag = newStatus === 'paid' ? { email_sent_paid: true } : { email_sent_partial: true };
-      await supabase.from('store_deposits').update(flag).eq('id', deposit.id);
-    }
-  } catch (err) {
-    console.error('❌ sendDepositEmail failed:', err.message);
-  }
-}
-
-// ─────────────────────────────────────────
 // Shopify Helpers
 // ─────────────────────────────────────────
 
@@ -414,8 +153,7 @@ async function tagShopifyDraftOrder(shopifyDraftId, amountPaid, amountPending, s
     );
     const existingTags = getResponse.data.draft_order.tags || '';
     const cleanedTags = existingTags
-      .split(',')
-      .map(t => t.trim())
+      .split(',').map(t => t.trim())
       .filter(t => t && !t.startsWith('paid:') && !t.startsWith('pending:') && !t.startsWith('deposit:'))
       .join(', ');
     const newTag = status === 'paid'
@@ -430,26 +168,6 @@ async function tagShopifyDraftOrder(shopifyDraftId, amountPaid, amountPending, s
     console.log(`✅ Shopify draft ${shopifyDraftId} tagged: ${newTag}`);
   } catch (err) {
     console.error('❌ Shopify tag update failed:', err.response?.data || err.message);
-  }
-}
-
-async function sendDraftOrderInvoice(shopifyDraftId, paymentStatus, amountPaid, amountPending) {
-  try {
-    const token = await getShopifyToken();
-    const subject = paymentStatus === 'paid'
-      ? `Your Timanti order is confirmed — payment received in full`
-      : `Timanti order confirmation — deposit of Rs.${amountPaid} received, Rs.${amountPending} pending`;
-    const customMessage = paymentStatus === 'paid'
-      ? `Your full payment of Rs.${amountPaid} has been received. We're preparing your jewellery and will notify you when it's dispatched.`
-      : `Your deposit of Rs.${amountPaid} has been received. The remaining balance of Rs.${amountPending} is due before dispatch. Your proforma invoice is attached.`;
-    await axios.post(
-      `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${shopifyDraftId}/send_invoice.json`,
-      { draft_order_invoice: { to: null, from: 'hello@timanti.in', subject, custom_message: customMessage } },
-      { headers: { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' }, timeout: 10000 }
-    );
-    console.log(`📧 Draft order invoice sent for draft ${shopifyDraftId} (${paymentStatus})`);
-  } catch (err) {
-    console.error('❌ send_invoice failed:', err.response?.data || err.message);
   }
 }
 
@@ -496,7 +214,7 @@ async function handlePaymentCompletion(transaction) {
     }).eq('id', deposit.id);
 
     await supabase.from('store_deposit_payments').insert({
-      deposit_id:    deposit.id,
+      deposit_id:     deposit.id,
       draft_order_id: transaction.shopify_draft_id,
       amount:         amountPaidRupees,
       payment_mode:   transaction.payment_mode || 'card',
@@ -513,18 +231,19 @@ async function handlePaymentCompletion(transaction) {
       newStatus
     );
 
-    // Re-fetch deposit with updated email_sent flags before sending email
+    // Re-fetch deposit to get updated email_sent flags
     const { data: updatedDeposit } = await supabase
-      .from('store_deposits').select('*')
-      .eq('id', deposit.id).single();
+      .from('store_deposits').select('*').eq('id', deposit.id).single();
 
+    // Send deposit confirmation email via emailService
     await sendDepositEmail(
       transaction.shopify_draft_id,
       transaction.draft_order_name,
       newAmountPaid,
       Math.max(0, newAmountPending),
       newStatus,
-      updatedDeposit
+      updatedDeposit,
+      getShopifyToken  // pass token getter so emailService can fetch draft order
     );
 
     if (newStatus === 'paid') {
@@ -546,9 +265,7 @@ async function handlePaymentCompletion(transaction) {
 async function pushDraftOrderToTerminal({
   draftOrderId, draftOrderName, amountInRupees,
   shopifyLocationId, terminalTag,
-  isPartial = false,
-  totalAmountInRupees = null,
-  customerName = ''
+  isPartial = false, totalAmountInRupees = null, customerName = ''
 }) {
   const store = await resolveStoreForLocation(shopifyLocationId, terminalTag);
   if (!store) return { success: false, httpStatus: 404, error: 'No Pine terminal configured.' };
@@ -558,20 +275,14 @@ async function pushDraftOrderToTerminal({
     .in('status', ['PENDING', 'PUSHED_TO_TERMINAL']).maybeSingle();
 
   if (existing) {
-    return {
-      success: false, httpStatus: 409,
+    return { success: false, httpStatus: 409,
       error: 'This draft order already has an active payment in progress. Cancel it first.',
-      existingTransactionId: existing.id
-    };
+      existingTransactionId: existing.id };
   }
 
   const amountInPaisa = Math.round(parseFloat(amountInRupees) * 100);
-
   if (amountInPaisa < 100) {
-    return {
-      success: false, httpStatus: 400,
-      error: 'Transaction amount must be at least Rs.1. Please check the draft order amount.'
-    };
+    return { success: false, httpStatus: 400, error: 'Transaction amount must be at least Rs.1.' };
   }
 
   const totalInPaisa          = totalAmountInRupees ? Math.round(parseFloat(totalAmountInRupees) * 100) : amountInPaisa;
@@ -594,11 +305,10 @@ async function pushDraftOrderToTerminal({
     return { success: false, httpStatus: 500, error: 'DB error', detail: txnError.message };
   }
 
-  const paymentMode = getPinePaymentMode();
   const pinePayload = {
     TransactionNumber:           pineTransactionNumber,
     SequenceNumber:              1,
-    AllowedPaymentMode:          paymentMode,
+    AllowedPaymentMode:          getPinePaymentMode(),
     Amount:                      amountInPaisa,
     UserID:                      'System',
     MerchantID:                  parseInt(store.pine_merchant_id),
@@ -613,7 +323,6 @@ async function pushDraftOrderToTerminal({
 
   axios.post(`${process.env.PINE_LABS_API_URL}/V1/UploadBilledTransaction`, pinePayload, { timeout: 30000 })
     .then(async (pineResponse) => {
-      console.log(`UploadBilledTransaction txn ${txn.id} RESPONSE:`, JSON.stringify(pineResponse.data));
       const responseCode = parseInt(pineResponse.data.ResponseCode);
       const ptrid        = pineResponse.data.PlutusTransactionReferenceID || null;
       const ptridNum     = ptrid ? parseInt(ptrid) : null;
@@ -655,13 +364,9 @@ async function pollActiveTxns() {
 
         const pineResponse = await axios.post(
           `${process.env.PINE_LABS_API_URL}/V1/GetCloudBasedTxnStatus`,
-          {
-            MerchantID:                   parseInt(store.pine_merchant_id),
-            SecurityToken:                process.env.PINE_LABS_SECURITY_TOKEN,
-            ClientID:                     parseInt(store.pine_client_id),
-            StoreID:                      parseInt(store.pine_store_id),
-            PlutusTransactionReferenceID: ptrid
-          },
+          { MerchantID: parseInt(store.pine_merchant_id), SecurityToken: process.env.PINE_LABS_SECURITY_TOKEN,
+            ClientID: parseInt(store.pine_client_id), StoreID: parseInt(store.pine_store_id),
+            PlutusTransactionReferenceID: ptrid },
           { timeout: 15000 }
         );
 
@@ -720,21 +425,15 @@ app.get('/api/draft-orders', async (req, res) => {
 });
 
 app.post('/api/push-to-terminal', async (req, res) => {
-  const {
-    draftOrderId, draftOrderName, amountInRupees, locationId,
-    isPartial = false,
-    totalAmountInRupees = null,
-    customerName = ''
-  } = req.body;
-
+  const { draftOrderId, draftOrderName, amountInRupees, locationId,
+    isPartial = false, totalAmountInRupees = null, customerName = '' } = req.body;
   if (!draftOrderId || !draftOrderName || !amountInRupees) {
     return res.status(400).json({ success: false, error: 'Missing: draftOrderId, draftOrderName, amountInRupees' });
   }
   try {
     const result = await pushDraftOrderToTerminal({
       draftOrderId, draftOrderName, amountInRupees,
-      shopifyLocationId: locationId || null,
-      terminalTag: null,
+      shopifyLocationId: locationId || null, terminalTag: null,
       isPartial, totalAmountInRupees, customerName
     });
     return res.status(result.httpStatus || 200).json(result);
@@ -917,121 +616,6 @@ app.post('/api/pine-webhook', async (req, res) => {
   } catch (error) { console.error('Webhook error:', error.message); }
 });
 
-app.post('/api/send-invoice-email', async (req, res) => {
-  const { order_id, order_name, customer_email, customer_name } = req.body;
-
-  if (!order_id || !order_name || !customer_email) {
-    return res.status(400).json({ success: false, error: 'Missing required fields' });
-  }
-
-  const pdfUrl = `https://timanti.in/apps/download-pdf/orders/91013a1d4c9b2beea028/${order_id * 5255}/${String(order_name).replace('#', '').toLowerCase()}.pdf`;
-
-  const html = `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
-  <meta name="viewport" content="width=device-width">
-  <style>
-    body, p, td, span { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-weight: 300; margin: 0; padding: 0; }
-    h2, h3, h4 { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-weight: 500; margin: 0 0 10px 0; }
-    a { color: #fc7d27; text-decoration: none; }
-    .footer-link { color: #000000 !important; }
-  </style>
-</head>
-<body style="background:#f4f4f4; padding:20px 0;">
-  <table width="100%" cellpadding="0" cellspacing="0" style="max-width:600px; margin:0 auto; background:#ffffff; border-radius:8px; overflow:hidden;">
-    <tr><td>
-      <table width="100%" cellpadding="0" cellspacing="0" style="border-bottom:1px solid #eeeeee;">
-        <tr><td style="text-align:center; padding:24px 20px;">
-          <img src="https://cdn.shopify.com/s/files/1/0775/8322/0993/files/Timanti_Logo_Black.jpg?v=1766506323" alt="Timanti" width="150">
-        </td></tr>
-      </table>
-      <table width="100%" cellpadding="0" cellspacing="0">
-        <tr><td style="padding:28px 30px 10px 30px; text-align:center;">
-          <p style="font-size:13px; color:#999999; margin-bottom:8px;">Order ${order_name}</p>
-          <h2 style="font-size:22px; color:#000000; margin-bottom:16px;">Your order is on its way!</h2>
-          <p style="font-size:14px; color:#444444; line-height:1.6;">Hi <strong>${customer_name || 'there'}</strong>, your jewellery has been dispatched. Your tax invoice with actual jewellery specifications is ready to download.</p>
-        </td></tr>
-      </table>
-      <table width="100%" cellpadding="0" cellspacing="0" style="padding:20px 30px;">
-        <tr><td style="text-align:center;">
-          <table cellpadding="0" cellspacing="0" style="margin:0 auto;">
-            <tr><td style="background:#000000; border-radius:4px; text-align:center;">
-              <a href="${pdfUrl}" target="_blank" style="color:#ffffff; text-decoration:none; font-weight:500; display:block; padding:14px 28px; font-size:14px;">Download Tax Invoice</a>
-            </td></tr>
-          </table>
-        </td></tr>
-      </table>
-      <table width="100%" cellpadding="0" cellspacing="0" style="padding:0 30px 20px 30px;">
-        <tr><td style="background:#F6F6F6; border-left:4px solid #fc7d27; padding:16px 20px; text-align:center;">
-          <h4 style="color:#000000; margin-bottom:8px;">Your tax invoice includes</h4>
-          <p style="font-size:13px; color:#444444; margin:4px 0;">Jewellery code &middot; Actual gross &amp; net weight &middot; Diamond weight &amp; pieces</p>
-          <p style="font-size:13px; color:#444444; margin:4px 0;">Metal details &middot; Full GST breakdown &middot; Hallmark certificate reference</p>
-        </td></tr>
-      </table>
-      <table width="100%" cellpadding="0" cellspacing="0" style="padding:0 30px 20px 30px;">
-        <tr><td style="border:1px solid #e6d8cc; border-radius:8px; padding:20px; text-align:center;">
-          <h3 style="color:#000000; margin-bottom:12px;">Need Help?</h3>
-          <table cellpadding="0" cellspacing="0" style="margin:0 auto;">
-            <tr>
-              <td style="padding:0 20px; font-size:13px;"><strong>Phone/WhatsApp</strong><br><a href="tel:+917738868305" style="color:#000000;">+91-7738868305</a></td>
-              <td style="padding:0 20px; font-size:13px;"><strong>Email</strong><br><a href="mailto:info@timanti.in" style="color:#000000;">info@timanti.in</a></td>
-            </tr>
-          </table>
-        </td></tr>
-      </table>
-      <table width="100%" cellpadding="0" cellspacing="0" style="padding:0 30px 20px 30px;">
-        <tr><td style="background:#F6F6F6; border:1px solid #e6d8cc; border-radius:8px; padding:20px; text-align:center;">
-          <h4 style="color:#000000; margin-bottom:8px;">Stay Connected with Timanti</h4>
-          <p style="font-size:13px; color:#444444; margin-bottom:12px;">Get exclusive updates on new collections, special offers, and jewelry care tips.</p>
-          <table cellpadding="0" cellspacing="0" style="margin:0 auto;">
-            <tr><td style="background:#000000; border-radius:4px;">
-              <a href="https://wa.me/917738868305?text=Yes%2C%20I%20want%20to%20receive%20WhatsApp%20updates%20from%20Timanti" style="color:#ffffff; text-decoration:none; font-weight:500; display:block; padding:10px 20px; font-size:13px;">Join WhatsApp Updates</a>
-            </td></tr>
-          </table>
-          <p style="font-size:11px; color:#999999; margin-top:12px;">By clicking above, you consent to receive marketing messages from Timanti. You can unsubscribe anytime.</p>
-        </td></tr>
-      </table>
-      <table width="100%" cellpadding="0" cellspacing="0" style="border-top:1px solid #eeeeee; padding:20px 30px;">
-        <tr><td style="text-align:center; font-size:12px; color:#666666;">
-          <p>Questions? <a href="mailto:info@timanti.in" style="color:#fc7d27;">info@timanti.in</a> | <a href="tel:+917738868305" style="color:#fc7d27;">+91-7738868305</a></p>
-          <p style="margin-top:8px;">
-            <a href="https://timanti.in/pages/return-refund-policy" style="color:#fc7d27;">Returns &amp; Refunds</a> &nbsp;|&nbsp;
-            <a href="https://timanti.in/pages/exchange-and-buyback" style="color:#fc7d27;">Exchange &amp; Buyback</a> &nbsp;|&nbsp;
-            <a href="https://timanti.in/pages/shipping" style="color:#fc7d27;">Shipping Policy</a> &nbsp;|&nbsp;
-            <a href="https://timanti.in/pages/track-your-order" style="color:#fc7d27;">Track Order</a>
-          </p>
-        </td></tr>
-      </table>
-    </td></tr>
-  </table>
-</body>
-</html>`;
-
-  try {
-    const resendResponse = await fetch('https://api.resend.com/emails', {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${process.env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        from:    'Timanti <onboarding@resend.dev>',
-        to:      customer_email,
-        subject: `Your Timanti order ${order_name} with invoice is shipped`,
-        html
-      })
-    });
-    const resendData = await resendResponse.json();
-    console.log('Resend response:', JSON.stringify(resendData));
-    if (!resendResponse.ok) {
-      console.error('Resend error:', resendData);
-      return res.status(500).json({ success: false, error: resendData });
-    }
-    res.json({ success: true, emailId: resendData.id });
-  } catch (err) {
-    console.error('Email send failed:', err.message);
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
 // ─────────────────────────────────────────
 // Start
 // ─────────────────────────────────────────
@@ -1048,7 +632,6 @@ app.listen(PORT, async () => {
   console.log('  POST /api/cancel-transaction');
   console.log('  POST /api/pine-postback');
   console.log('  POST /api/pine-webhook');
-  console.log('  POST /api/send-invoice-email');
   await initShopifyToken();
   console.log('🔄 Background poller started (30s)');
   setInterval(pollActiveTxns, 30000);
