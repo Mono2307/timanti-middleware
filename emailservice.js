@@ -209,7 +209,7 @@ async function sendDepositEmail(shopifyDraftId, draftOrderName, newAmountPaid, n
       }
     }
 
-    const pdfUrl = 'https://timanti.in/apps/download-pdf/drafts/545867e5309dda498f8f/{{ order.id | times: 8461 }}/{{ order.name | handleize }}.pdf'>Download Deposit Receipt</a></p>`;
+    const pdfUrl = `https://timanti.in/apps/download-pdf/drafts/545867e5309dda498f8f/${draftOrder.id * 8461}/${draftOrderName.replace('#', '').toLowerCase()}.pdf`;
 
     const subject = newStatus === 'paid'
       ? `Your Timanti order ${draftOrderName} — payment received in full`
