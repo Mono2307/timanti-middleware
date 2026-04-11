@@ -982,6 +982,284 @@ app.post('/api/send-invoice-email', async (req, res) => {
     res.status(500).json({ success: false, error: err.message })
   }
 })
+// ─────────────────────────────────────────
+// Deposit partial payment email
+// Called by Shopify Flow when draft order tagged deposit:partial
+// Deduplicates using Supabase — only sends once per deposit status change
+// ─────────────────────────────────────────
+
+app.post('/api/send-deposit-email', async (req, res) => {
+  const { draft_order_id, draft_order_name, customer_email, customer_name, total_price, tags } = req.body
+
+  if (!draft_order_id || !customer_email) {
+    return res.status(400).json({ success: false, error: 'Missing required fields' })
+  }
+
+  // Parse tags to extract amounts
+  const tagList = (tags || '').split(',').map(t => t.trim().toLowerCase())
+  const paidTag = tagList.find(t => t.startsWith('paid:rs'))
+  const pendingTag = tagList.find(t => t.startsWith('pending:rs'))
+  const isPartial = tagList.includes('deposit:partial')
+  const isFullyPaid = tagList.includes('deposit:fully-paid')
+
+  if (!isPartial && !isFullyPaid) {
+    console.log(`send-deposit-email: no deposit tag found for ${draft_order_name}, skipping`)
+    return res.json({ success: true, skipped: true })
+  }
+
+  const amountPaid = paidTag ? paidTag.replace('paid:rs', '') : ''
+  const amountPending = pendingTag ? pendingTag.replace('pending:rs', '') : ''
+  const depositStatus = isFullyPaid ? 'paid' : 'partial'
+
+  // Deduplicate — check if we already sent email for this draft order at this status
+  const dedupKey = `email_sent_${depositStatus}`
+  const { data: existingDeposit } = await supabase
+    .from('store_deposits')
+    .select('id, email_sent_partial, email_sent_paid')
+    .eq('draft_order_id', draft_order_id.toString())
+    .maybeSingle()
+
+  if (existingDeposit) {
+    if (depositStatus === 'partial' && existingDeposit.email_sent_partial) {
+      console.log(`Deposit email already sent for ${draft_order_name} (partial), skipping`)
+      return res.json({ success: true, skipped: true, reason: 'already_sent' })
+    }
+    if (depositStatus === 'paid' && existingDeposit.email_sent_paid) {
+      console.log(`Deposit email already sent for ${draft_order_name} (paid), skipping`)
+      return res.json({ success: true, skipped: true, reason: 'already_sent' })
+    }
+  }
+
+  // Build PDF URL for proforma invoice
+  const pdfUrl = `https://timanti.in/apps/download-pdf/orders/91013a1d4c9b2beea028/draft/${draft_order_name.replace('#', '').toLowerCase()}.pdf`
+
+  const subject = depositStatus === 'paid'
+    ? `Your Timanti order ${draft_order_name} — payment received in full`
+    : `Your Timanti order ${draft_order_name} — deposit of ₹${amountPaid} confirmed`
+
+  const html = buildDepositEmailHtml({
+    draft_order_name,
+    customer_name: customer_name || 'there',
+    total_price,
+    amount_paid: amountPaid,
+    amount_pending: amountPending,
+    deposit_status: depositStatus,
+    pdf_url: pdfUrl
+  })
+
+  try {
+    const resendResponse = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${process.env.RESEND_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        from: 'Timanti <onboarding@resend.dev>',
+        to: customer_email,
+        subject,
+        html
+      })
+    })
+
+    const resendData = await resendResponse.json()
+    console.log(`Deposit email response for ${draft_order_name}:`, JSON.stringify(resendData))
+
+    if (!resendResponse.ok) {
+      console.error('Resend error:', resendData)
+      return res.status(500).json({ success: false, error: resendData })
+    }
+
+    // Mark email as sent in store_deposits
+    if (existingDeposit) {
+      const updateField = depositStatus === 'partial' ? { email_sent_partial: true } : { email_sent_paid: true }
+      await supabase.from('store_deposits').update(updateField).eq('id', existingDeposit.id)
+    }
+
+    res.json({ success: true, emailId: resendData.id })
+  } catch (err) {
+    console.error('Deposit email send failed:', err.message)
+    res.status(500).json({ success: false, error: err.message })
+  }
+})
+
+function buildDepositEmailHtml({ draft_order_name, customer_name, total_price, amount_paid, amount_pending, deposit_status, pdf_url }) {
+  const isPartial = deposit_status === 'partial'
+  const bannerColor = isPartial ? '#fff3cd' : '#d4edda'
+  const bannerText = isPartial
+    ? `⏳ PARTIAL PAYMENT RECEIVED — ₹${amount_paid} paid &nbsp;|&nbsp; ₹${amount_pending} pending before dispatch`
+    : `✅ FULLY PAID — ₹${amount_paid} received`
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+  <meta name="viewport" content="width=device-width">
+  <style>
+    body, p, td, span { font-family: 'Muli', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-weight: 300; }
+    h1, h2, h3, h4 { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-weight: 500; }
+    .button__cell { background: #000000; border-radius: 4px; }
+    .button__text { color: #ffffff !important; text-decoration: none; font-weight: 500; display: block; padding: 15px 25px; }
+    a, a:hover, a:visited { color: #fc7d27; text-decoration: none; }
+    .footer-contact-link { color: #000000 !important; }
+    .info-box { background: #F6F6F6; border-left: 4px solid #fc7d27; padding: 20px; margin: 20px auto; text-align: center; max-width: 600px; }
+    .info-box h4 { margin: 0 0 12px 0; font-weight: 600; color: #000000; }
+    .info-box p { color: #000000; margin: 5px 0; }
+    .info-box strong { color: #000000; font-weight: 600; }
+    .support-section { background: #ffffff; border: 1px solid #e6d8cc; border-radius: 8px; padding: 20px; margin: 20px 0; text-align: center; }
+    .support-item { display: inline-block; margin: 10px 20px; }
+    .support-item a { color: #000000 !important; }
+    .consent-section { background: #F6F6F6; border: 1px solid #e6d8cc; border-radius: 8px; padding: 20px; margin: 20px 0; text-align: center; }
+    .consent-link { display: inline-block; margin-top: 10px; padding: 10px 20px; background: #000000; color: #ffffff !important; border-radius: 4px; font-weight: 500; }
+    .payment-banner { padding: 12px 20px; text-align: center; font-weight: bold; font-size: 14px; margin-bottom: 0; }
+    .payment-summary { background: #f9f9f9; border: 1px solid #e0e0e0; border-radius: 8px; padding: 20px; margin: 20px auto; max-width: 400px; }
+    .payment-row { display: flex; justify-content: space-between; padding: 6px 0; font-size: 14px; }
+    .payment-row.total { border-top: 1px solid #ccc; margin-top: 8px; padding-top: 12px; font-weight: bold; }
+    .payment-row.paid { color: #006630; font-weight: 600; }
+    .payment-row.pending { color: #cc4400; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <table width="100%" cellpadding="0" cellspacing="0">
+    <tr>
+      <td>
+
+        <!-- Header -->
+        <table width="100%" cellpadding="0" cellspacing="0" style="background: #ffffff; padding: 20px 0; text-align: center; border-bottom: 1px solid #eee;">
+          <tr>
+            <td style="text-align: center;">
+              <img src="https://cdn.shopify.com/s/files/1/0775/8322/0993/files/Timanti_Logo_Black.jpg?v=1766506323" alt="Timanti" width="160" style="margin: 0 auto;">
+            </td>
+          </tr>
+        </table>
+
+        <!-- Payment banner -->
+        <div class="payment-banner" style="background-color: ${bannerColor};">
+          ${bannerText}
+        </div>
+
+        <!-- Main content -->
+        <table width="100%" cellpadding="0" cellspacing="0" style="padding: 30px 20px;">
+          <tr>
+            <td style="text-align: center; max-width: 600px; margin: 0 auto;">
+
+              <p style="font-size: 14px; color: #999; margin-bottom: 5px;">Order ${draft_order_name}</p>
+              <h2 style="margin: 0 0 15px 0;">${isPartial ? 'Deposit received — thank you!' : 'Full payment received — thank you!'}</h2>
+              <p>Hi <strong>${customer_name}</strong>, ${isPartial
+                ? `your deposit of ₹${amount_paid} has been received. Your jewellery is being prepared. The remaining balance of ₹${amount_pending} is due before dispatch.`
+                : `your full payment of ₹${amount_paid} has been received. Your jewellery is being prepared and you will be notified when it is dispatched.`
+              }</p>
+
+              <!-- Payment summary box -->
+              <table width="100%" cellpadding="0" cellspacing="0" style="margin: 25px auto; max-width: 380px; border: 1px solid #e0e0e0; border-radius: 8px; background: #f9f9f9;">
+                <tr>
+                  <td style="padding: 20px;">
+                    <table width="100%" cellpadding="0" cellspacing="0">
+                      <tr>
+                        <td style="font-size: 13px; color: #666; padding: 4px 0;">Order Total</td>
+                        <td style="font-size: 13px; text-align: right; padding: 4px 0;">₹${total_price}</td>
+                      </tr>
+                      <tr>
+                        <td style="font-size: 14px; color: #006630; font-weight: 600; padding: 4px 0;">Amount Received</td>
+                        <td style="font-size: 14px; color: #006630; font-weight: 600; text-align: right; padding: 4px 0;">₹${amount_paid}</td>
+                      </tr>
+                      ${isPartial ? `
+                      <tr>
+                        <td colspan="2" style="border-top: 1px solid #ddd; padding-top: 8px; margin-top: 4px;"></td>
+                      </tr>
+                      <tr>
+                        <td style="font-size: 14px; color: #cc4400; font-weight: 600; padding: 4px 0;">Balance Pending</td>
+                        <td style="font-size: 14px; color: #cc4400; font-weight: 600; text-align: right; padding: 4px 0;">₹${amount_pending}</td>
+                      </tr>
+                      ` : ''}
+                    </table>
+                  </td>
+                </tr>
+              </table>
+
+              <!-- Download proforma button -->
+              <table cellpadding="0" cellspacing="0" style="margin: 20px auto;">
+                <tr>
+                  <td class="button__cell" style="background: #000000; border-radius: 4px; text-align: center;">
+                    <a href="${pdf_url}" target="_blank" class="button__text" style="color: #ffffff; text-decoration: none; font-weight: 500; display: block; padding: 15px 25px;">
+                      Download Proforma Invoice
+                    </a>
+                  </td>
+                </tr>
+              </table>
+
+              <div class="info-box">
+                <h4>${isPartial ? '⏳ Next steps' : '✅ What happens next'}</h4>
+                ${isPartial
+                  ? `<p>Your piece is being held for you. Please complete the remaining payment of <strong>₹${amount_pending}</strong> to proceed to dispatch.</p>
+                     <p>Contact us at <strong>+91-7738868305</strong> or visit the store to pay the balance.</p>`
+                  : `<p>Your jewellery is being prepared and quality checked.</p>
+                     <p>You will receive a shipping confirmation with your tax invoice once dispatched.</p>`
+                }
+              </div>
+
+            </td>
+          </tr>
+        </table>
+
+        <!-- Support -->
+        <table width="100%" cellpadding="0" cellspacing="0" style="padding: 0 20px;">
+          <tr>
+            <td>
+              <div class="support-section">
+                <h3 style="margin: 0 0 15px 0;">Need Help?</h3>
+                <p style="color: #666; margin-bottom: 15px;">Our team is here to assist you</p>
+                <div class="support-item">
+                  <strong>📞💬 Phone/WhatsApp</strong><br>
+                  <a href="tel:+917738868305" class="footer-contact-link">+91-7738868305</a>
+                </div>
+                <div class="support-item">
+                  <strong>✉️ Email</strong><br>
+                  <a href="mailto:info@timanti.in" class="footer-contact-link">info@timanti.in</a>
+                </div>
+              </div>
+            </td>
+          </tr>
+        </table>
+
+        <!-- WhatsApp consent -->
+        <table width="100%" cellpadding="0" cellspacing="0" style="padding: 0 20px;">
+          <tr>
+            <td>
+              <div class="consent-section">
+                <h4 style="margin: 0 0 10px 0; color: #000;">Stay Connected with Timanti</h4>
+                <p style="color: #000;">Get exclusive updates on new collections, special offers, and jewelry care tips.</p>
+                <p>
+                  <a href="https://wa.me/917738868305?text=Yes%2C%20I%20want%20to%20receive%20WhatsApp%20updates%20from%20Timanti" class="consent-link">
+                    Join WhatsApp Updates
+                  </a>
+                </p>
+                <p style="font-size: 12px; color: #999; margin-top: 15px;">By clicking above, you consent to receive marketing messages from Timanti. You can unsubscribe anytime.</p>
+              </div>
+            </td>
+          </tr>
+        </table>
+
+        <!-- Footer -->
+        <table width="100%" cellpadding="0" cellspacing="0" style="padding: 20px; text-align: center; border-top: 1px solid #eee;">
+          <tr>
+            <td style="text-align: center; font-size: 12px; color: #666;">
+              <p>Questions? Contact us at <a href="mailto:info@timanti.in" class="footer-contact-link">info@timanti.in</a> or <a href="tel:+917738868305" class="footer-contact-link">+91-7738868305</a></p>
+              <p style="margin-top: 10px;">
+                <a href="https://timanti.in/pages/return-refund-policy" style="color: #fc7d27;">Returns &amp; Refunds</a> |
+                <a href="https://timanti.in/pages/exchange-and-buyback" style="color: #fc7d27;">Exchange &amp; Buyback</a> |
+                <a href="https://timanti.in/pages/shipping" style="color: #fc7d27;">Shipping Policy</a>
+              </p>
+            </td>
+          </tr>
+        </table>
+
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`
+}
 
 // ─────────────────────────────────────────
 // Start
