@@ -183,6 +183,7 @@ function buildDepositEmailHtml({ draft_order_name, customer_name, total_price, a
 // ─────────────────────────────────────────
 
 async function sendDepositEmail(shopifyDraftId, draftOrderName, newAmountPaid, newAmountPending, newStatus, deposit, getShopifyToken) {
+  let draftOrder = null;
   try {
     const token = await getShopifyToken();
     const draftRes = await fetch(
@@ -190,23 +191,21 @@ async function sendDepositEmail(shopifyDraftId, draftOrderName, newAmountPaid, n
       { headers: { 'X-Shopify-Access-Token': token } }
     );
     const draftData = await draftRes.json();
-    const draftOrder = draftData.draft_order;
+    draftOrder = draftData.draft_order;
 
-    if (!draftOrder?.email) {
-      console.log(`sendDepositEmail: no email on draft order ${shopifyDraftId}, skipping`);
+    if (!draftOrder) {
+      console.error(`sendDepositEmail: no draft_order in Shopify response:`, JSON.stringify(draftData));
+      return;
+    }
+    if (!draftOrder.email) {
+      console.log(`sendDepositEmail: draft order ${shopifyDraftId} has no email, skipping`);
       return;
     }
 
-    // Dedup check
+    // dedup check
     if (deposit) {
-      if (newStatus === 'partial' && deposit.email_sent_partial) {
-        console.log(`Deposit email already sent (partial) for ${draftOrderName}, skipping`);
-        return;
-      }
-      if (newStatus === 'paid' && deposit.email_sent_paid) {
-        console.log(`Deposit email already sent (paid) for ${draftOrderName}, skipping`);
-        return;
-      }
+      if (newStatus === 'partial' && deposit.email_sent_partial) { console.log(`already sent partial email for ${draftOrderName}`); return; }
+      if (newStatus === 'paid' && deposit.email_sent_paid) { console.log(`already sent paid email for ${draftOrderName}`); return; }
     }
 
     const pdfUrl = `https://timanti.in/apps/download-pdf/drafts/545867e5309dda498f8f/${draftOrder.id * 8461}/${draftOrderName.replace('#', '').toLowerCase()}.pdf`;
@@ -227,14 +226,13 @@ async function sendDepositEmail(shopifyDraftId, draftOrderName, newAmountPaid, n
 
     await sendEmail({ to: draftOrder.email, subject, html });
 
-    // Mark sent in store_deposits
     if (deposit?.id) {
       const flag = newStatus === 'paid' ? { email_sent_paid: true } : { email_sent_partial: true };
       await supabase.from('store_deposits').update(flag).eq('id', deposit.id);
     }
+
   } catch (err) {
     console.error('❌ sendDepositEmail failed:', err.message);
+    console.error('draftOrder at time of error:', JSON.stringify(draftOrder));
   }
 }
-
-module.exports = { sendEmail, sendDepositEmail, buildDepositEmailHtml };
