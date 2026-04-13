@@ -236,3 +236,4 @@ async function sendDepositEmail(shopifyDraftId, draftOrderName, newAmountPaid, n
     console.error('draftOrder at time of error:', JSON.stringify(draftOrder));
   }
 }
+module.exports = { sendEmail, sendDepositEmail, buildDepositEmailHtml };
