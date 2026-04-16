@@ -513,10 +513,12 @@ app.post('/api/check-status', async (req, res) => {
 });
 
 app.post('/api/cancel-transaction', async (req, res) => {
+  console.log('Cancel request received. Body:', JSON.stringify(req.body));
   const { transactionId } = req.body;
   if (!transactionId) return res.status(400).json({ success: false, error: 'transactionId required' });
   try {
     const { data: transaction, error: txnError } = await supabase.from('transactions').select('*').eq('id', transactionId).single();
+    console.log(`Cancel txn ${transactionId}: status=${transaction?.status} pine_ref_id=${transaction?.pine_ref_id}`);
     if (txnError || !transaction) return res.status(404).json({ success: false, error: 'Transaction not found' });
     if (['PAID', 'CANCELLED'].includes(transaction.status)) return res.status(400).json({ success: false, error: `Cannot cancel — already ${transaction.status}.` });
     if (!transaction.pine_ref_id) {
