@@ -332,10 +332,12 @@ async function pushDraftOrderToTerminal({
 
   axios.post(`${getPineApiUrl(store)}/V1/UploadBilledTransaction`, pinePayload, { timeout: 30000 })
     .then(async (pineResponse) => {
+      console.log(`UploadBilledTransaction txn ${txn.id} FULL RESPONSE:`, JSON.stringify(pineResponse.data));
       const responseCode = parseInt(pineResponse.data.ResponseCode);
       const ptrid        = pineResponse.data.PlutusTransactionReferenceID || null;
       const ptridNum     = ptrid ? parseInt(ptrid) : null;
       const newStatus    = (responseCode === 0 && ptridNum && ptridNum > 0) ? 'PUSHED_TO_TERMINAL' : 'FAILED';
+      console.log(`UploadBilledTransaction txn ${txn.id}: code=${responseCode} PTRID=${ptrid} → ${newStatus}`);
       await supabase.from('transactions').update({ status: newStatus, pine_ref_id: ptrid?.toString() || null }).eq('id', txn.id);
     })
     .catch(async (err) => {
