@@ -22,6 +22,7 @@ function getPinePaymentMode() {
   if (mode === 'pipe') return '1|8|10|11|4|20|21';
   return 0;
 }
+
 function getPineApiUrl(store) {
   return store.is_uat
     ? process.env.PINE_LABS_UAT_API_URL
@@ -326,7 +327,7 @@ async function pushDraftOrderToTerminal({
 
   console.log(`UploadBilledTransaction txn ${txn.id} → "${store.store_name}" isPartial=${isPartial}`);
 
-  axios.post(`${process.env.PINE_LABS_API_URL}/V1/UploadBilledTransaction`, pinePayload, { timeout: 30000 })
+  axios.post(`${getPineApiUrl(store)}/V1/UploadBilledTransaction`, pinePayload, { timeout: 30000 })
     .then(async (pineResponse) => {
       const responseCode = parseInt(pineResponse.data.ResponseCode);
       const ptrid        = pineResponse.data.PlutusTransactionReferenceID || null;
@@ -368,7 +369,7 @@ async function pollActiveTxns() {
         if (!store) { console.error(`Poller: no store config for txn ${txn.id}`); continue; }
 
         const pineResponse = await axios.post(
-          `${process.env.PINE_LABS_API_URL}/V1/GetCloudBasedTxnStatus`,
+          `${getPineApiUrl(store)}/V1/GetCloudBasedTxnStatus`,
           { MerchantID: parseInt(store.pine_merchant_id), SecurityToken: store.security_token || process.env.PINE_LABS_SECURITY_TOKEN,
             ClientID: parseInt(store.pine_client_id), StoreID: parseInt(store.pine_store_id),
             PlutusTransactionReferenceID: ptrid },
@@ -485,7 +486,7 @@ app.post('/api/check-status', async (req, res) => {
     if (storeError || !store) return res.status(500).json({ success: false, error: 'Store config not found' });
 
     const pineStatusResponse = await axios.post(
-      `${process.env.PINE_LABS_API_URL}/V1/GetCloudBasedTxnStatus`,
+      `${getPineApiUrl(store)}/V1/GetCloudBasedTxnStatus`,
       { MerchantID: parseInt(store.pine_merchant_id), SecurityToken: store.security_token || process.env.PINE_LABS_SECURITY_TOKEN,
         ClientID: parseInt(store.pine_client_id), StoreID: parseInt(store.pine_store_id),
         PlutusTransactionReferenceID: ptridNum },
@@ -528,7 +529,7 @@ app.post('/api/cancel-transaction', async (req, res) => {
     let pineResponseCode, pineMessage;
     try {
       const pineResponse = await axios.post(
-        `${process.env.PINE_LABS_API_URL}/V1/CancelTransaction`,
+        `${getPineApiUrl(store)}/V1/CancelTransaction`,
         { MerchantID: parseInt(store.pine_merchant_id), SecurityToken: store.security_token || process.env.PINE_LABS_SECURITY_TOKEN,
           ClientId: parseInt(store.pine_client_id), StoreId: parseInt(store.pine_store_id),
           PlutusTransactionReferenceID: ptridNum, Amount: transaction.amount_paisa },
