@@ -22,6 +22,11 @@ function getPinePaymentMode() {
   if (mode === 'pipe') return '1|8|10|11|4|20|21';
   return 0;
 }
+function getPineApiUrl(store) {
+  return store.is_uat
+    ? process.env.PINE_LABS_UAT_API_URL
+    : process.env.PINE_LABS_API_URL;
+}
 
 function parseTerminalTag(tags) {
   if (!tags) return null;
