@@ -312,7 +312,7 @@ async function pushDraftOrderToTerminal({
     Amount:                      amountInPaisa,
     UserID:                      'System',
     MerchantID:                  parseInt(store.pine_merchant_id),
-    SecurityToken:               process.env.PINE_LABS_SECURITY_TOKEN,
+    SecurityToken:               store.security_token || process.env.PINE_LABS_SECURITY_TOKEN,
     ClientId:                    parseInt(store.pine_client_id),
     StoreId:                     parseInt(store.pine_store_id),
     TotalInvoiceAmount:          amountInPaisa,
@@ -364,7 +364,7 @@ async function pollActiveTxns() {
 
         const pineResponse = await axios.post(
           `${process.env.PINE_LABS_API_URL}/V1/GetCloudBasedTxnStatus`,
-          { MerchantID: parseInt(store.pine_merchant_id), SecurityToken: process.env.PINE_LABS_SECURITY_TOKEN,
+          { MerchantID: parseInt(store.pine_merchant_id), SecurityToken: store.security_token || process.env.PINE_LABS_SECURITY_TOKEN,
             ClientID: parseInt(store.pine_client_id), StoreID: parseInt(store.pine_store_id),
             PlutusTransactionReferenceID: ptrid },
           { timeout: 15000 }
@@ -425,7 +425,7 @@ app.get('/api/draft-orders', async (req, res) => {
 });
 
 app.post('/api/push-to-terminal', async (req, res) => {
-  const { draftOrderId, draftOrderName, amountInRupees, locationId,
+  const { draftOrderId, draftOrderName, amountInRupees, locationId, terminalTag,
     isPartial = false, totalAmountInRupees = null, customerName = '' } = req.body;
   if (!draftOrderId || !draftOrderName || !amountInRupees) {
     return res.status(400).json({ success: false, error: 'Missing: draftOrderId, draftOrderName, amountInRupees' });
@@ -433,7 +433,7 @@ app.post('/api/push-to-terminal', async (req, res) => {
   try {
     const result = await pushDraftOrderToTerminal({
       draftOrderId, draftOrderName, amountInRupees,
-      shopifyLocationId: locationId || null, terminalTag: null,
+      shopifyLocationId: locationId || null, terminalTag: terminalTag || null,
       isPartial, totalAmountInRupees, customerName
     });
     return res.status(result.httpStatus || 200).json(result);
@@ -481,7 +481,7 @@ app.post('/api/check-status', async (req, res) => {
 
     const pineStatusResponse = await axios.post(
       `${process.env.PINE_LABS_API_URL}/V1/GetCloudBasedTxnStatus`,
-      { MerchantID: parseInt(store.pine_merchant_id), SecurityToken: process.env.PINE_LABS_SECURITY_TOKEN,
+      { MerchantID: parseInt(store.pine_merchant_id), SecurityToken: store.security_token || process.env.PINE_LABS_SECURITY_TOKEN,
         ClientID: parseInt(store.pine_client_id), StoreID: parseInt(store.pine_store_id),
         PlutusTransactionReferenceID: ptridNum },
       { timeout: 15000 }
@@ -524,7 +524,7 @@ app.post('/api/cancel-transaction', async (req, res) => {
     try {
       const pineResponse = await axios.post(
         `${process.env.PINE_LABS_API_URL}/V1/CancelTransaction`,
-        { MerchantID: parseInt(store.pine_merchant_id), SecurityToken: process.env.PINE_LABS_SECURITY_TOKEN,
+        { MerchantID: parseInt(store.pine_merchant_id), SecurityToken: store.security_token || process.env.PINE_LABS_SECURITY_TOKEN,
           ClientId: parseInt(store.pine_client_id), StoreId: parseInt(store.pine_store_id),
           PlutusTransactionReferenceID: ptridNum, Amount: transaction.amount_paisa },
         { timeout: 15000 }
