@@ -1,0 +1,441 @@
+<style>
+  @page { size: A4; margin: 0.5cm; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  @media print {
+    body { padding: 5px !important; margin: 0; }
+    .container { page-break-inside: avoid !important; page-break-after: avoid !important; page-break-before: avoid !important; }
+    a { display: none !important; visibility: hidden !important; }
+  }
+  body { font-family: Arial, sans-serif; font-size: 9.5px; line-height: 1.35; padding: 10px; }
+  .container { max-width: 800px; margin: 0 auto; border: 2px solid #000; padding: 0; }
+  .header-text { text-align: right; padding: 4px 10px; font-size: 8px; font-style: italic; border-bottom: 1px solid #000; }
+  .title-header { text-align: center; padding: 10px 14px; border-bottom: 2px solid #000; min-height: 75px; display: flex; flex-direction: column; justify-content: center; align-items: center; }
+  .logo { max-width: 140px; height: auto; margin-bottom: 4px; }
+  .title-center h1 { font-size: 17px; font-weight: bold; margin: 0; }
+  .company-invoice-grid { display: grid; grid-template-columns: 1.5fr 1fr; border-bottom: 2px solid #000; }
+  .company-section { padding: 8px 10px; border-right: 2px solid #000; font-size: 8px; line-height: 1.45; }
+  .company-section strong { font-size: 9px; }
+  .invoice-details-grid { display: grid; grid-template-rows: repeat(3, 1fr); }
+  .invoice-detail-row { display: grid; grid-template-columns: 1fr 1fr 1fr; border-bottom: 1px solid #000; }
+  .invoice-detail-row:last-child { border-bottom: none; }
+  .invoice-detail-cell { padding: 6px 8px; font-size: 8px; border-right: 1px solid #000; }
+  .invoice-detail-cell:last-child { border-right: none; }
+  .invoice-detail-cell strong { display: block; font-size: 8px; font-weight: bold; margin-bottom: 2px; }
+  .addresses-section { display: grid; grid-template-columns: 1fr 1fr; border-bottom: 2px solid #000; }
+  .address-block { padding: 8px 10px; font-size: 8px; line-height: 1.45; }
+  .address-block:first-child { border-right: 2px solid #000; }
+  .address-block strong { display: block; margin-bottom: 2px; font-size: 8px; }
+  .address-field { margin-bottom: 4px; }
+  table { width: 100%; border-collapse: collapse; }
+  .items-table { font-size: 8px; }
+  .items-table th { background-color: #f0f0f0; padding: 6px 4px; text-align: left; font-weight: bold; border: 1px solid #000; font-size: 8px; }
+  .items-table td { padding: 6px 4px; border: 1px solid #000; vertical-align: top; }
+  .items-table .text-right { text-align: right; }
+  .items-table .text-center { text-align: center; }
+  .totals-row td { font-weight: normal; padding: 5px 6px; font-size: 8px; }
+  .total-row td { font-weight: bold; font-size: 9px; }
+  .amount-words { padding: 6px 10px; text-align: right; font-size: 8px; font-weight: bold; border-top: 2px solid #000; display: flex; justify-content: space-between; }
+  .footer-section { display: grid; grid-template-columns: 1fr 1fr; border-top: 2px solid #000; font-size: 7.5px; line-height: 1.4; }
+  .footer-left { padding: 10px 12px; border-right: 2px solid #000; }
+  .footer-right { padding: 10px 12px; }
+  .footer-left h3, .footer-right h3 { font-size: 8px; margin-bottom: 4px; font-weight: bold; }
+  .footer-left p, .footer-right p { margin-bottom: 3px; }
+  .signature-section { display: grid; grid-template-columns: 1fr 1fr; border-top: 2px solid #000; min-height: 90px; }
+  .signature-block { padding: 10px 12px; font-size: 8px; }
+  .signature-block:first-child { border-right: 2px solid #000; }
+  .signature-block strong { display: block; margin-bottom: 12px; }
+  .signature-block p { font-size: 7.5px; line-height: 1.35; }
+  .watermark { position: relative; }
+  .watermark-image { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); opacity: 0.1; width: 200px; height: auto; z-index: 0; pointer-events: none; }
+  .breakdown { font-size: 7px; color: #555; margin-top: 3px; line-height: 1.5; }
+</style>
+
+{% comment %}
+  SIAS dispatch metafield — written at dispatch time by Retool.
+  Contains: jewelcode, gross_wt_grams, net_wt_grams, diamond_wt_carats, diamond_pcs, metal, category
+  Primary source for all weight/jewellery fields on tax invoice.
+  Falls back to variant/product metafields if not yet written.
+{% endcomment %}
+{% assign jc_meta = nil %}
+{% if order.metafields.timanti.jewelcode %}
+  {% assign jc_meta = order.metafields.timanti.jewelcode.value | parse_json %}
+{% endif %}
+
+{% comment %}Credit note detection{% endcomment %}
+{% assign cn_applied = false %}
+{% assign cn_code = "" %}
+{% assign cn_amount = 0 %}
+{% for discount in order.cart_level_discount_applications %}
+  {% if discount.code contains "CNTM" %}
+    {% assign cn_applied = true %}
+    {% assign cn_code = discount.code %}
+    {% assign cn_amount = discount.total_allocated_amount %}
+  {% endif %}
+{% endfor %}
+{% unless cn_applied %}
+  {% for discount in order.discount_applications %}
+    {% if discount.code contains "CNTM" %}
+      {% assign cn_applied = true %}
+      {% assign cn_code = discount.code %}
+      {% assign cn_amount = discount.total_allocated_amount %}
+    {% endif %}
+  {% endfor %}
+{% endunless %}
+
+<div class="container">
+  <div class="header-text">Original Copy</div>
+
+  <div class="title-header">
+    <img src="https://cdn.shopify.com/s/files/1/0775/8322/0993/files/Timanti_Logo_Black.jpg?v=1766506323" alt="Timanti Logo" class="logo">
+    <div class="title-center"><h1>Tax Invoice</h1></div>
+  </div>
+
+  <div class="company-invoice-grid">
+    <div class="company-section">
+      <strong>AURACARAT PRIVATE LIMITED</strong><br>
+      <strong>Office:</strong> C207 Crystal Plaza, New Link Road, Andheri (W), Mumbai – 400053<br>
+      <strong>Store:</strong> 17th Cross, 19th Main Rd, HSR Layout Sec 2, Opp. Gnan Srishti School, Bengaluru – 560102<br>
+      <strong>Tel:</strong> +91-7710938305 &nbsp;|&nbsp; <strong>Email:</strong> hello@timanti.in<br>
+      <strong>GSTIN</strong> – 29ABBCA3309B1Z7 &nbsp;|&nbsp; <strong>PAN</strong> – ABBCA3309B<br>
+      <strong>Udyam Regn:</strong> UDYAM-MH-19-0360984 &nbsp;|&nbsp; <strong>Website:</strong> www.timanti.in
+    </div>
+
+    <div class="invoice-details-grid">
+      <div class="invoice-detail-row">
+        <div class="invoice-detail-cell">
+          <strong>Invoice Number</strong>{{ order.order_number }}
+        </div>
+        <div class="invoice-detail-cell">
+          <strong>Order Number</strong>{{ order.name }}
+        </div>
+        <div class="invoice-detail-cell">
+          <strong>Invoice Date</strong>{{ order.created_at | date: "%d-%m-%Y" }}
+        </div>
+      </div>
+
+      <div class="invoice-detail-row">
+        {% assign shipping_state = order.shipping_address.province_code %}
+        {% if shipping_state == "JK" %}{% assign state_code = "01" %}
+        {% elsif shipping_state == "HP" %}{% assign state_code = "02" %}
+        {% elsif shipping_state == "PB" %}{% assign state_code = "03" %}
+        {% elsif shipping_state == "CH" %}{% assign state_code = "04" %}
+        {% elsif shipping_state == "UK" %}{% assign state_code = "05" %}
+        {% elsif shipping_state == "HR" %}{% assign state_code = "06" %}
+        {% elsif shipping_state == "DL" %}{% assign state_code = "07" %}
+        {% elsif shipping_state == "RJ" %}{% assign state_code = "08" %}
+        {% elsif shipping_state == "UP" %}{% assign state_code = "09" %}
+        {% elsif shipping_state == "BR" %}{% assign state_code = "10" %}
+        {% elsif shipping_state == "SK" %}{% assign state_code = "11" %}
+        {% elsif shipping_state == "AR" %}{% assign state_code = "12" %}
+        {% elsif shipping_state == "NL" %}{% assign state_code = "13" %}
+        {% elsif shipping_state == "MN" %}{% assign state_code = "14" %}
+        {% elsif shipping_state == "MZ" %}{% assign state_code = "15" %}
+        {% elsif shipping_state == "TR" %}{% assign state_code = "16" %}
+        {% elsif shipping_state == "ML" %}{% assign state_code = "17" %}
+        {% elsif shipping_state == "AS" %}{% assign state_code = "18" %}
+        {% elsif shipping_state == "WB" %}{% assign state_code = "19" %}
+        {% elsif shipping_state == "JH" %}{% assign state_code = "20" %}
+        {% elsif shipping_state == "OR" %}{% assign state_code = "21" %}
+        {% elsif shipping_state == "CT" %}{% assign state_code = "22" %}
+        {% elsif shipping_state == "MP" %}{% assign state_code = "23" %}
+        {% elsif shipping_state == "GJ" %}{% assign state_code = "24" %}
+        {% elsif shipping_state == "DN" or shipping_state == "DD" %}{% assign state_code = "26" %}
+        {% elsif shipping_state == "MH" %}{% assign state_code = "27" %}
+        {% elsif shipping_state == "KA" %}{% assign state_code = "29" %}
+        {% elsif shipping_state == "GA" %}{% assign state_code = "30" %}
+        {% elsif shipping_state == "LD" %}{% assign state_code = "31" %}
+        {% elsif shipping_state == "KL" %}{% assign state_code = "32" %}
+        {% elsif shipping_state == "TN" %}{% assign state_code = "33" %}
+        {% elsif shipping_state == "PY" %}{% assign state_code = "34" %}
+        {% elsif shipping_state == "AN" %}{% assign state_code = "35" %}
+        {% elsif shipping_state == "TG" %}{% assign state_code = "36" %}
+        {% elsif shipping_state == "AP" %}{% assign state_code = "37" %}
+        {% elsif shipping_state == "LA" %}{% assign state_code = "38" %}
+        {% else %}{% assign state_code = "99" %}{% endif %}
+        <div class="invoice-detail-cell">
+          <strong>Place of Supply</strong>{{ state_code }} – {{ order.shipping_address.province }}
+        </div>
+        <div class="invoice-detail-cell">
+          <strong>Supply Type</strong>B2C
+        </div>
+        <div class="invoice-detail-cell">
+          <strong>Due date</strong>{{ order.created_at | date: "%d-%m-%Y" }}
+        </div>
+      </div>
+
+      <div class="invoice-detail-row">
+        <div class="invoice-detail-cell">
+          <strong>Reverse Charge</strong>No
+        </div>
+        <div class="invoice-detail-cell">
+          <strong>Item SKU</strong>{% if order.line_items.first.sku %}{{ order.line_items.first.sku }}{% endif %}
+        </div>
+        <div class="invoice-detail-cell">
+          <strong>Jewellery Code</strong>{% if jc_meta.jewelcode %}{{ jc_meta.jewelcode }}{% else %}–{% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="addresses-section">
+    <div class="address-block">
+      <strong>Billing Details:</strong>
+      {% if order.billing_address %}
+        <div class="address-field"><strong>Customer Name:</strong> {{ order.billing_address.name | upcase }}</div>
+        <div class="address-field"><strong>Address:</strong>
+          {{ order.billing_address.address1 }}{% if order.billing_address.address2 %}, {{ order.billing_address.address2 }}{% endif %},
+          {{ order.billing_address.city }}, {{ order.billing_address.province }}, {{ order.billing_address.country }}.
+        </div>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 5px;">
+          <div><strong>Mobile:</strong> {{ order.billing_address.phone | default: "+91" }}</div>
+          <div><strong>Email:</strong> {{ order.email }}</div>
+        </div>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 5px; margin-top: 5px;">
+          <div><strong>GSTIN:</strong></div>
+          <div><strong>State Code:</strong> {{ state_code }}</div>
+        </div>
+      {% endif %}
+    </div>
+    <div class="address-block">
+      <strong>Shipping Details:</strong>
+      {% if order.shipping_address %}
+        <div class="address-field"><strong>Customer Name:</strong> {{ order.shipping_address.name | upcase }}</div>
+        <div class="address-field"><strong>Address:</strong>
+          {{ order.shipping_address.address1 }}{% if order.shipping_address.address2 %}, {{ order.shipping_address.address2 }}{% endif %},
+          {{ order.shipping_address.city }}, {{ order.shipping_address.province }}, {{ order.shipping_address.country }}.
+        </div>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 5px;">
+          <div><strong>Mobile:</strong> {{ order.shipping_address.phone | default: "+91" }}</div>
+          <div><strong>Email:</strong> {{ order.email }}</div>
+        </div>
+      {% endif %}
+    </div>
+  </div>
+
+  <table class="items-table">
+    <thead>
+      <tr>
+        <th class="text-center" style="width: 6.5%;">S. No.</th>
+        <th style="width: 22%;">Item Description</th>
+        <th class="text-center" style="width: 7%;">HSN Code</th>
+        <th class="text-center" style="width: 5.5%;">Qty</th>
+        <th class="text-center" style="width: 8%;">Gross Wt (g)</th>
+        <th class="text-center" style="width: 8%;">Net Wt (g)</th>
+        <th class="text-center" style="width: 8%;">Dia Wt (cts)</th>
+        <th class="text-center" style="width: 6%;">Dia Pcs</th>
+        <th class="text-center" style="width: 7%;">Metal</th>
+        <th class="text-right" style="width: 7%;">Gross Value</th>
+        <th class="text-right" style="width: 6%;">Discount</th>
+        <th class="text-right" style="width: 13%;">Net Value</th>
+      </tr>
+    </thead>
+    <tbody class="watermark">
+      <img src="https://cdn.shopify.com/s/files/1/0775/8322/0993/files/Timanti_Logo_Black.jpg?v=1766506323" alt="Watermark" class="watermark-image">
+
+      {% for line_item in order.line_items %}
+
+      {% comment %}Extract pricing engine properties{% endcomment %}
+      {% assign prop_gold = "–" %}
+      {% assign prop_diamond = "–" %}
+      {% assign prop_making = "–" %}
+      {% assign prop_discount_str = "0" %}
+      {% assign prop_gross_str = "" %}
+      {% for p in line_item.properties %}
+        {% if p.first == "Gold" %}{% assign prop_gold = p.last %}{% endif %}
+        {% if p.first == "Diamond" %}{% assign prop_diamond = p.last %}{% endif %}
+        {% if p.first == "Making" %}{% assign prop_making = p.last %}{% endif %}
+        {% if p.first == "Discount Applied" %}{% assign prop_discount_str = p.last | remove: "Rs" %}{% endif %}
+        {% if p.first == "Gross Value" %}{% assign prop_gross_str = p.last | remove: "Rs" %}{% endif %}
+      {% endfor %}
+      {% assign disc_paise = prop_discount_str | times: 100 | round %}
+      {% if prop_gross_str != "" %}
+        {% assign gross_paise = prop_gross_str | times: 100 | round %}
+      {% else %}
+        {% assign gross_paise = line_item.final_line_price | plus: disc_paise %}
+      {% endif %}
+
+      <tr>
+        <td class="text-center">{{ forloop.index }}.</td>
+        <td>
+          {{ line_item.title }}
+          <div class="breakdown">
+            Gold: {{ prop_gold }} &nbsp;|&nbsp; Diamond: {{ prop_diamond }} &nbsp;|&nbsp; Making: {{ prop_making }}
+          </div>
+        </td>
+        <td class="text-center">
+          {% if line_item.product.metafields.custom.hsn_code %}{{ line_item.product.metafields.custom.hsn_code }}{% else %}71131914{% endif %}
+        </td>
+        <td class="text-center">{{ line_item.quantity }}</td>
+
+        <td class="text-center">
+          {% if jc_meta.gross_wt_grams %}
+            {{ jc_meta.gross_wt_grams }}
+          {% elsif line_item.variant.metafields.custom.total_metal_weight_g %}
+            {{ line_item.variant.metafields.custom.total_metal_weight_g | round: 3 }}
+          {% elsif line_item.variant.metafields.custom.gross_weight_g %}
+            {{ line_item.variant.metafields.custom.gross_weight_g | round: 3 }}
+          {% else %}–{% endif %}
+        </td>
+
+        <td class="text-center">
+          {% if jc_meta.net_wt_grams %}
+            {{ jc_meta.net_wt_grams }}
+          {% elsif line_item.variant.metafields.custom.net_metal_weight_g %}
+            {{ line_item.variant.metafields.custom.net_metal_weight_g | round: 3 }}
+          {% else %}–{% endif %}
+        </td>
+
+        <td class="text-center">
+          {% if jc_meta.diamond_wt_carats %}
+            {{ jc_meta.diamond_wt_carats }}
+          {% elsif line_item.product.metafields.custom.totaldiamondweight %}
+            {{ line_item.product.metafields.custom.totaldiamondweight }}
+          {% else %}–{% endif %}
+        </td>
+
+        <td class="text-center">
+          {% if jc_meta.diamond_pcs %}
+            {{ jc_meta.diamond_pcs }}
+          {% elsif line_item.product.metafields.custom.totaldiamondcount %}
+            {{ line_item.product.metafields.custom.totaldiamondcount }}
+          {% else %}–{% endif %}
+        </td>
+
+        <td class="text-center">
+          {% if jc_meta.metal %}
+            {{ jc_meta.metal }}
+          {% elsif line_item.variant.option1 or line_item.variant.option2 %}
+            {{ line_item.variant.option1 }}{% if line_item.variant.option2 %} {{ line_item.variant.option2 }}{% endif %}
+          {% else %}–{% endif %}
+        </td>
+
+        <td class="text-right">{{ gross_paise | money_without_currency | remove: ',' }}</td>
+        <td class="text-right">{{ disc_paise | money_without_currency | remove: ',' }}</td>
+        <td class="text-right">{{ line_item.final_line_price | money_without_currency | remove: ',' }}</td>
+      </tr>
+      {% endfor %}
+
+      {% assign total_price_with_tax = 0 %}
+      {% assign total_gross_paise = 0 %}
+      {% for line_item in order.line_items %}
+        {% assign total_price_with_tax = total_price_with_tax | plus: line_item.final_line_price %}
+        {% for p in line_item.properties %}
+          {% if p.first == "Gross Value" %}
+            {% assign gv_paise = p.last | remove: "Rs" | times: 100 | round %}
+            {% assign total_gross_paise = total_gross_paise | plus: gv_paise %}
+          {% endif %}
+        {% endfor %}
+      {% endfor %}
+      {% if shipping_state == "KA" %}{% assign is_same_state = true %}{% else %}{% assign is_same_state = false %}{% endif %}
+
+      {% if cn_applied %}
+      <tr class="totals-row">
+        <td colspan="11" class="text-right" style="color:#006630; font-style:italic;">Credit Note Applied &nbsp;({{ cn_code }})</td>
+        <td class="text-right" style="color:#006630; font-weight:bold;">− ₹{{ cn_amount | money_without_currency | remove: ',' }}</td>
+      </tr>
+      {% endif %}
+
+      {% if cn_applied %}
+        {% assign taxable_base = total_price_with_tax | minus: cn_amount %}
+      {% else %}
+        {% assign taxable_base = total_price_with_tax %}
+      {% endif %}
+      {% assign taxable_value = taxable_base | divided_by: 1.03 %}
+      {% assign total_tax = taxable_value | times: 0.03 %}
+
+      {% if total_gross_paise > 0 %}
+        {% assign taxable_before_discount = total_gross_paise | divided_by: 1.03 %}
+        {% assign discount_on_taxable = taxable_before_discount | minus: taxable_value %}
+      {% else %}
+        {% assign taxable_before_discount = taxable_value %}
+        {% assign discount_on_taxable = 0 %}
+      {% endif %}
+
+      <tr class="totals-row">
+        <td colspan="11" class="text-right">Taxable Value (Before Discount)</td>
+        <td class="text-right">₹{{ taxable_before_discount | money_without_currency | remove: ',' }}</td>
+      </tr>
+      {% if discount_on_taxable > 0 %}
+      <tr class="totals-row">
+        <td colspan="11" class="text-right">Discount on Taxable Value</td>
+        <td class="text-right">− ₹{{ discount_on_taxable | money_without_currency | remove: ',' }}</td>
+      </tr>
+      {% endif %}
+      <tr class="totals-row">
+        <td colspan="11" class="text-right"><strong>Taxable Value (After Discount)</strong></td>
+        <td class="text-right"><strong>₹{{ taxable_value | money_without_currency | remove: ',' }}</strong></td>
+      </tr>
+      {% if is_same_state %}
+        {% assign cgst_amount = taxable_value | times: 0.015 %}
+        {% assign sgst_amount = taxable_value | times: 0.015 %}
+        <tr class="totals-row"><td colspan="11" class="text-right">IGST @ 3%</td><td class="text-right">₹0.00</td></tr>
+        <tr class="totals-row"><td colspan="11" class="text-right">CGST @ 1.5%</td><td class="text-right">₹{{ cgst_amount | money_without_currency | remove: ',' }}</td></tr>
+        <tr class="totals-row"><td colspan="11" class="text-right">SGST @ 1.5%</td><td class="text-right">₹{{ sgst_amount | money_without_currency | remove: ',' }}</td></tr>
+      {% else %}
+        {% assign igst_amount = taxable_value | times: 0.03 %}
+        <tr class="totals-row"><td colspan="11" class="text-right">IGST @ 3%</td><td class="text-right">₹{{ igst_amount | money_without_currency | remove: ',' }}</td></tr>
+        <tr class="totals-row"><td colspan="11" class="text-right">CGST @ 1.5%</td><td class="text-right">₹0.00</td></tr>
+        <tr class="totals-row"><td colspan="11" class="text-right">SGST @ 1.5%</td><td class="text-right">₹0.00</td></tr>
+      {% endif %}
+      <tr class="totals-row">
+        <td colspan="11" class="text-right">Round Off +/(-)</td>
+        <td class="text-right">
+          {% assign calculated_total = taxable_value | plus: total_tax %}
+          {% assign rounded_total = taxable_base | round %}
+          {% assign round_off = rounded_total | minus: calculated_total %}
+          ₹{{ round_off | money_without_currency | remove: ',' }}
+        </td>
+      </tr>
+      <tr class="total-row">
+        <td colspan="11" class="text-right"><strong>Total Invoice Price</strong></td>
+        <td class="text-right"><strong>₹{{ taxable_base | money_without_currency | remove: ',' }}</strong></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="amount-words">
+    <span>
+      {% assign total_rounded = taxable_base | divided_by: 100 | floor %}
+      {% assign ones = "Zero,One,Two,Three,Four,Five,Six,Seven,Eight,Nine,Ten,Eleven,Twelve,Thirteen,Fourteen,Fifteen,Sixteen,Seventeen,Eighteen,Nineteen" | split: "," %}
+      {% assign tens = "Zero,Ten,Twenty,Thirty,Forty,Fifty,Sixty,Seventy,Eighty,Ninety" | split: "," %}
+      {% assign total_int = total_rounded | floor %}{% assign words = "" %}
+      {% assign crores = total_int | divided_by: 10000000 %}
+      {% if crores > 0 %}{% assign temp = crores | modulo: 100 %}{% if temp < 20 %}{% assign words = words | append: ones[temp] | append: " " %}{% else %}{% assign tens_digit = temp | divided_by: 10 %}{% assign ones_digit = temp | modulo: 10 %}{% assign words = words | append: tens[tens_digit] %}{% if ones_digit > 0 %}{% assign words = words | append: "-" | append: ones[ones_digit] %}{% endif %}{% assign words = words | append: " " %}{% endif %}{% assign words = words | append: "Crore " %}{% assign total_int = total_int | modulo: 10000000 %}{% endif %}
+      {% assign lakhs = total_int | divided_by: 100000 %}
+      {% if lakhs > 0 %}{% assign temp = lakhs | modulo: 100 %}{% if temp < 20 %}{% assign words = words | append: ones[temp] | append: " " %}{% else %}{% assign tens_digit = temp | divided_by: 10 %}{% assign ones_digit = temp | modulo: 10 %}{% assign words = words | append: tens[tens_digit] %}{% if ones_digit > 0 %}{% assign words = words | append: "-" | append: ones[ones_digit] %}{% endif %}{% assign words = words | append: " " %}{% endif %}{% assign words = words | append: "Lakh " %}{% assign total_int = total_int | modulo: 100000 %}{% endif %}
+      {% assign thousands = total_int | divided_by: 1000 %}
+      {% if thousands > 0 %}{% assign temp = thousands | modulo: 100 %}{% if temp < 20 %}{% assign words = words | append: ones[temp] | append: " " %}{% else %}{% assign tens_digit = temp | divided_by: 10 %}{% assign ones_digit = temp | modulo: 10 %}{% assign words = words | append: tens[tens_digit] %}{% if ones_digit > 0 %}{% assign words = words | append: "-" | append: ones[ones_digit] %}{% endif %}{% assign words = words | append: " " %}{% endif %}{% assign words = words | append: "Thousand " %}{% assign total_int = total_int | modulo: 1000 %}{% endif %}
+      {% assign hundreds = total_int | divided_by: 100 %}{% if hundreds > 0 %}{% assign words = words | append: ones[hundreds] | append: " Hundred " %}{% assign total_int = total_int | modulo: 100 %}{% endif %}
+      {% if total_int > 0 %}{% if total_int < 20 %}{% assign words = words | append: ones[total_int] %}{% else %}{% assign tens_digit = total_int | divided_by: 10 %}{% assign ones_digit = total_int | modulo: 10 %}{% assign words = words | append: tens[tens_digit] %}{% if ones_digit > 0 %}{% assign words = words | append: "-" | append: ones[ones_digit] %}{% endif %}{% endif %}{% endif %}
+      Amount in Words - Rs. {{ words }} – Only
+    </span>
+    <span>E. &amp; O. E.</span>
+  </div>
+
+  <div class="footer-section">
+    <div class="footer-left">
+      <h3>Terms and Conditions</h3>
+      <p>
+        <strong>1.</strong> We hereby certify that our registration certificate under the Goods and Service Tax Act, 2017 is in force on the date on which the sale of the goods specified in this tax invoice is made by us<br>
+        <strong>2.</strong> We declare that this invoice shows the actual price of the goods described and that all particulars are true and correct.<br>
+        <strong>3.</strong> Refer company's website for other terms and conditions.<br>
+        <strong>4.</strong> The consumer can get the purity of hallmarked jewelry/artefacts verified from any of the BIS recognized A&amp;H centers. The list of centers is available on www.bis.gov.in
+      </p>
+    </div>
+    <div class="footer-right">
+      <h3>Bank Details –</h3>
+      <p>
+        <strong>1. ACCOUNT NAME:</strong> AURACARAT PVT LTD<br>
+        <strong>2. BANK ACC NO:</strong> 924020062754092<br>
+        <strong>3. IFSC:</strong> UTIB0000186<br>
+        <strong>4. BANK:</strong> AXIS BANK, MATRU SMRITI, LINKING ROAD, KHAR WEST, MUMBAI 400052
+      </p>
+      <br>
+      <p style="text-align: right;"><strong>For – Auracarat Private Limited</strong></p>
+    </div>
+  </div>
+
+  <div style="border-top: 2px solid #000; padding: 10px 14px; font-size: 7.5px; color: #444; text-align: center; line-height: 1.5;">
+    <strong>COMPUTER GENERATED INVOICE</strong> — This invoice has been electronically generated and is legally valid without a physical signature or stamp, in accordance with the Information Technology Act, 2000 and applicable GST rules. No E-way Bill is required as the goods are exempted under serial no. 4/5 to the annexure to Rule 138(14) of the CGST Rules, 2017.
+  </div>
+</div>

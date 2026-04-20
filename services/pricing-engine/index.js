@@ -91,19 +91,23 @@ async function recalculate({ draftOrderId, shopifyToken, shopifyStoreUrl }) {
     const itemLineTotal  = parseFloat(item.price) * qty;
     const proportion     = grossTotal > 0 ? itemLineTotal / grossTotal : 1 / productItems.length;
 
-    const itemDiscount  = roundToTwo(discountAmount * proportion);
-    const itemTaxable   = roundToTwo(taxableAfterDiscount * proportion);
-    const itemGst       = roundToTwo(gst * proportion);
-    const itemFinal     = roundToTwo(itemTaxable + itemGst);
-    const unitPrice     = roundToTwo(itemFinal / qty);
+    const itemCorrectDiscount = roundToTwo(correctDiscount * proportion);
+    const itemDiscountDisplay = roundToTwo(discountAmount * proportion);
+    const itemTaxable         = roundToTwo(taxableAfterDiscount * proportion);
+    const itemGst             = roundToTwo(gst * proportion);
+    const itemFinal           = roundToTwo(itemTaxable + itemGst);
+    const unitPrice           = roundToTwo(itemFinal / qty);
+    const adjustedDiamond     = roundToTwo(diamond * qty - itemCorrectDiscount);
+    const grossValue          = roundToTwo(itemFinal + itemDiscountDisplay);
 
     const properties = [
       { name: 'Gold',             value: `Rs${roundToTwo(gold * qty)}` },
-      { name: 'Diamond',          value: `Rs${roundToTwo(diamond * qty)}` },
+      { name: 'Diamond',          value: `Rs${adjustedDiamond}` },
       { name: 'Making',           value: `Rs${roundToTwo(making * qty)}` },
-      { name: 'Discount Applied', value: `Rs${itemDiscount}` },
+      { name: 'Discount Applied', value: `Rs${itemDiscountDisplay}` },
       { name: 'Taxable Value',    value: `Rs${itemTaxable}` },
       { name: 'GST',              value: `Rs${itemGst}` },
+      { name: 'Gross Value',      value: `Rs${grossValue}` },
     ];
 
     const updatedItem = {
