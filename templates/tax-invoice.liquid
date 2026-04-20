@@ -95,9 +95,8 @@
       <strong>AURACARAT PRIVATE LIMITED</strong><br>
       <strong>Office:</strong> C207 Crystal Plaza, New Link Road, Andheri (W), Mumbai – 400053<br>
       <strong>Store:</strong> 17th Cross, 19th Main Rd, HSR Layout Sec 2, Opp. Gnan Srishti School, Bengaluru – 560102<br>
-      <strong>Tel:</strong> +91-7710938305 &nbsp;|&nbsp; <strong>Email:</strong> hello@timanti.in<br>
-      <strong>GSTIN</strong> – 29ABBCA3309B1Z7 &nbsp;|&nbsp; <strong>PAN</strong> – ABBCA3309B<br>
-      <strong>Udyam Regn:</strong> UDYAM-MH-19-0360984 &nbsp;|&nbsp; <strong>Website:</strong> www.timanti.in
+      <strong>Tel:</strong> +91-7710938305 &nbsp;|&nbsp; <strong>Email:</strong> hello@timanti.in &nbsp;|&nbsp; <strong>Website:</strong> www.timanti.in<br>
+      <strong>GSTIN</strong> – 29ABBCA3309B1Z7 &nbsp;|&nbsp; <strong>PAN</strong> – ABBCA3309B
     </div>
 
     <div class="invoice-details-grid">
@@ -224,9 +223,9 @@
         <th class="text-center" style="width: 8%;">Dia Wt (cts)</th>
         <th class="text-center" style="width: 6%;">Dia Pcs</th>
         <th class="text-center" style="width: 7%;">Metal</th>
-        <th class="text-right" style="width: 7%;">Gross Value</th>
-        <th class="text-right" style="width: 6%;">Discount</th>
-        <th class="text-right" style="width: 13%;">Net Value</th>
+        <th class="text-right" style="width: 9%;">Taxable Val.<br>(Before Disc.)</th>
+        <th class="text-right" style="width: 8%;">Disc. on<br>Taxable</th>
+        <th class="text-right" style="width: 9%;">Taxable Val.<br>(After Disc.)</th>
       </tr>
     </thead>
     <tbody class="watermark">
@@ -256,12 +255,7 @@
 
       <tr>
         <td class="text-center">{{ forloop.index }}.</td>
-        <td>
-          {{ line_item.title }}
-          <div class="breakdown">
-            Gold: {{ prop_gold }} &nbsp;|&nbsp; Diamond: {{ prop_diamond }} &nbsp;|&nbsp; Making: {{ prop_making }}
-          </div>
-        </td>
+        <td>{{ line_item.title }}</td>
         <td class="text-center">
           {% if line_item.product.metafields.custom.hsn_code %}{{ line_item.product.metafields.custom.hsn_code }}{% else %}71131914{% endif %}
         </td>
@@ -309,9 +303,9 @@
           {% else %}–{% endif %}
         </td>
 
-        <td class="text-right">{{ gross_paise | money_without_currency | remove: ',' }}</td>
-        <td class="text-right">{{ disc_paise | money_without_currency | remove: ',' }}</td>
-        <td class="text-right">{{ gross_paise | minus: disc_paise | money_without_currency | remove: ',' }}</td>
+        <td class="text-right">{{ gross_paise | divided_by: 1.03 | money_without_currency | remove: ',' }}</td>
+        <td class="text-right">{{ disc_paise | divided_by: 1.03 | money_without_currency | remove: ',' }}</td>
+        <td class="text-right">{{ gross_paise | minus: disc_paise | divided_by: 1.03 | money_without_currency | remove: ',' }}</td>
       </tr>
       {% endfor %}
 
@@ -349,28 +343,6 @@
       {% assign taxable_value = taxable_base | divided_by: 1.03 %}
       {% assign total_tax = taxable_value | times: 0.03 %}
 
-      {% if total_gross_paise > 0 %}
-        {% assign taxable_before_discount = total_gross_paise | divided_by: 1.03 %}
-        {% assign discount_on_taxable = taxable_before_discount | minus: taxable_value %}
-      {% else %}
-        {% assign taxable_before_discount = taxable_value %}
-        {% assign discount_on_taxable = 0 %}
-      {% endif %}
-
-      <tr class="totals-row">
-        <td colspan="11" class="text-right">Taxable Value (Before Discount)</td>
-        <td class="text-right">₹{{ taxable_before_discount | money_without_currency | remove: ',' }}</td>
-      </tr>
-      {% if discount_on_taxable > 0 %}
-      <tr class="totals-row">
-        <td colspan="11" class="text-right">Discount on Taxable Value</td>
-        <td class="text-right">− ₹{{ discount_on_taxable | money_without_currency | remove: ',' }}</td>
-      </tr>
-      {% endif %}
-      <tr class="totals-row">
-        <td colspan="11" class="text-right"><strong>Taxable Value (After Discount)</strong></td>
-        <td class="text-right"><strong>₹{{ taxable_value | money_without_currency | remove: ',' }}</strong></td>
-      </tr>
       {% if is_same_state %}
         {% assign cgst_amount = taxable_value | times: 0.015 %}
         {% assign sgst_amount = taxable_value | times: 0.015 %}
