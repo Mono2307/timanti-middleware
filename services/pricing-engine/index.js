@@ -48,10 +48,11 @@ async function recalculate({ draftOrderId, shopifyToken, shopifyStoreUrl }) {
     (sum, item) => sum + parseFloat(item.price) * parseInt(item.quantity, 10), 0
   );
 
-  const fromTotalDiscounts = Number(draftOrder.total_discounts || 0);
-  const discountAmount     = fromTotalDiscounts > 0
-    ? fromTotalDiscounts
-    : lineItems.reduce((sum, item) => sum + Number(item.applied_discount?.amount || 0), 0);
+  const discountObj = draftOrder.applied_discount;
+  let discountAmount = 0;
+  if (discountObj) {
+    discountAmount = Number(discountObj.amount || discountObj.value || 0);
+  }
 
   const taxableBeforeDiscount = roundToTwo(grossTotal / 1.03);
 
