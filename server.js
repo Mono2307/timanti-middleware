@@ -658,6 +658,33 @@ app.post('/api/pine-webhook', async (req, res) => {
 // Pricing Engine
 // ─────────────────────────────────────────
 
+app.post('/api/shopify-draft-updated', async (req, res) => {
+  res.status(200).send('OK');
+  try {
+    const draft = req.body;
+    if (!draft?.id) return;
+
+    const discountObj = draft.applied_discount;
+    const discountAmount = discountObj ? Number(discountObj.amount || discountObj.value || 0) : 0;
+
+    if (!discountAmount || discountAmount <= 0) {
+      console.log(`Draft updated webhook: #${draft.name} — no discount, skipping recalculation`);
+      return;
+    }
+
+    console.log(`Draft updated webhook: #${draft.name} — discount Rs${discountAmount}, triggering recalculation`);
+    const token = await getShopifyToken();
+    const pricing = await recalculatePricing({
+      draftOrderId:    draft.id,
+      shopifyToken:    token,
+      shopifyStoreUrl: process.env.SHOPIFY_STORE_URL
+    });
+    console.log(`Draft updated webhook: #${draft.name} recalculated — finalTotal Rs${pricing.finalTotal}`);
+  } catch (err) {
+    console.error('Draft updated webhook error:', err.message);
+  }
+});
+
 app.post('/pricing/recalculate', async (req, res) => {
   const { draftOrderId } = req.body;
   if (!draftOrderId) {
