@@ -1,0 +1,121 @@
+<style>
+  @page { size: A4; margin: 1cm; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  @media print {
+    body { padding: 0 !important; }
+    a { display: none !important; }
+  }
+  body { font-family: Arial, sans-serif; font-size: 10px; line-height: 1.4; padding: 10px; }
+  .container { max-width: 740px; margin: 0 auto; }
+  .header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #000; padding-bottom: 10px; margin-bottom: 12px; }
+  .logo { max-width: 120px; height: auto; }
+  .order-info { text-align: right; }
+  .order-info .order-num { font-size: 15px; font-weight: bold; margin-bottom: 3px; }
+  .order-info .slip-label { font-size: 9px; text-transform: uppercase; letter-spacing: 1px; color: #555; margin-bottom: 2px; }
+  .order-info .order-date { font-size: 9px; color: #444; }
+  .addresses { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px; }
+  .address-box { border: 1px solid #000; padding: 8px 10px; }
+  .address-box h3 { font-size: 8px; font-weight: bold; text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 6px; padding-bottom: 4px; border-bottom: 1px solid #ccc; }
+  .address-box p { font-size: 9px; line-height: 1.55; }
+  .lbl { font-weight: bold; }
+  .items-section { border: 1px solid #000; }
+  .items-header { display: flex; justify-content: space-between; background: #f0f0f0; padding: 5px 8px; font-weight: bold; font-size: 8px; text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 1px solid #000; }
+  .item-row { display: flex; justify-content: space-between; align-items: flex-start; padding: 6px 8px; border-bottom: 1px solid #eee; }
+  .item-row:last-child { border-bottom: none; }
+  .item-title { font-size: 9px; font-weight: bold; }
+  .item-variant { font-size: 8px; color: #444; margin-top: 1px; }
+  .item-sku { font-size: 8px; color: #777; margin-top: 1px; }
+  .item-qty { font-size: 12px; font-weight: bold; min-width: 30px; text-align: right; }
+</style>
+
+<div class="container">
+
+  <div class="header">
+    <img src="https://cdn.shopify.com/s/files/1/0775/8322/0993/files/Timanti_Logo_Black.jpg?v=1766506323" alt="Timanti" class="logo">
+    <div class="order-info">
+      <div class="slip-label">Packing Slip</div>
+      <div class="order-num">{{ name }}</div>
+      <div class="order-date">{{ created_at | date: "%d %b %Y, %I:%M %p" }}</div>
+    </div>
+  </div>
+
+  <div class="addresses">
+    <div class="address-box">
+      <h3>Pickup From</h3>
+      <p>
+        <span class="lbl">Timanti by Auracarat</span><br>
+        17th Cross, 19th Main Rd,<br>
+        HSR Layout Sec 2,<br>
+        Opp. Gnan Srishti School,<br>
+        Bengaluru – 560102, Karnataka<br>
+        <span class="lbl">Tel:</span> +91-7710938305
+      </p>
+    </div>
+
+    <div class="address-box">
+      <h3>Deliver To</h3>
+      <p>
+        {% if shipping_address != blank %}
+          <span class="lbl">{{ shipping_address.name }}</span><br>
+          {{ shipping_address.address1 }}{% if shipping_address.address2 %}, {{ shipping_address.address2 }}{% endif %}<br>
+          {{ shipping_address.city }}, {{ shipping_address.province }} {{ shipping_address.zip }}<br>
+          {{ shipping_address.country }}<br>
+          {% if shipping_address.phone != blank %}<span class="lbl">Tel:</span> {{ shipping_address.phone }}{% endif %}
+        {% endif %}
+      </p>
+    </div>
+
+    <div class="address-box">
+      <h3>Customer Contact</h3>
+      <p>
+        {% assign billing_address = billing_address | default: customer.default_address %}
+        {% if billing_address != blank %}
+          <span class="lbl">{{ billing_address.name }}</span><br>
+          {% if billing_address.phone != blank %}<span class="lbl">Mobile:</span> {{ billing_address.phone }}<br>{% endif %}
+          {% if customer.email != blank %}<span class="lbl">Email:</span> {{ customer.email }}{% endif %}
+        {% elsif customer != blank %}
+          <span class="lbl">{{ customer.name }}</span><br>
+          {% if customer.phone != blank %}<span class="lbl">Mobile:</span> {{ customer.phone }}<br>{% endif %}
+          {% if customer.email != blank %}<span class="lbl">Email:</span> {{ customer.email }}{% endif %}
+        {% endif %}
+      </p>
+    </div>
+
+    <div class="address-box">
+      <h3>Shipping Details</h3>
+      <p>
+        {% if shipping_method != blank %}
+          <span class="lbl">Method:</span> {{ shipping_method.title }}<br>
+        {% endif %}
+        {% if fulfillment.tracking_company != blank and fulfillment.tracking_company != "Other" %}
+          <span class="lbl">Carrier:</span> {{ fulfillment.tracking_company }}<br>
+        {% endif %}
+        {% if fulfillment.tracking_number != blank %}
+          <span class="lbl">Tracking:</span> {{ fulfillment.tracking_number }}<br>
+        {% endif %}
+        {% if note != blank %}
+          <span class="lbl">Note:</span> {{ note }}
+        {% endif %}
+      </p>
+    </div>
+  </div>
+
+  <div class="items-section">
+    <div class="items-header">
+      <span>Items</span>
+      <span>Qty</span>
+    </div>
+    {% for line_item in line_items %}
+      {% if line_item.fulfillment_quantity < 1 %}{% continue %}{% endif %}
+      <div class="item-row">
+        <div>
+          <div class="item-title">{{ line_item.product_title }}</div>
+          {% if line_item.variant_title != blank %}<div class="item-variant">{{ line_item.variant_title }}</div>{% endif %}
+          {% if line_item.sku != blank %}<div class="item-sku">SKU: {{ line_item.sku }}</div>{% endif %}
+        </div>
+        <div class="item-qty">{{ line_item.fulfillment_quantity }}</div>
+      </div>
+    {% endfor %}
+  </div>
+
+</div>
