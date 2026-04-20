@@ -10,14 +10,14 @@ function isDiscountLineItem(item) {
 async function fetchVariantBreakdown(variantId) {
   const response   = await shopifyClient.get(`/variants/${variantId}/metafields.json`);
   const metafields = response.data.metafields || [];
-  const find = (key) => {
-    const mf = metafields.find(m => m.key === key);
+  const find = (namespace, key) => {
+    const mf = metafields.find(m => m.namespace === namespace && m.key === key);
     return mf ? parseFloat(mf.value) || 0 : 0;
   };
   return {
-    gold:    find('gold_price'),
-    diamond: find('diamond_price'),
-    making:  find('making_price'),
+    gold:    find('custom', 'price_breakup_gold'),
+    diamond: find('custom', 'price_breakup_diamond'),
+    making:  find('custom', 'price_breakup_making'),
   };
 }
 
@@ -43,15 +43,19 @@ class RecalculationService {
 
     const taxableBeforeDiscount = roundToTwo(grossTotal / 1.03);
 
-    if (discountAmount > taxableBeforeDiscount) {
+    // Treat applied_discount as a tax-inclusive reduction to derive the intended final price
+    const intendedFinal = roundToTwo(grossTotal - discountAmount);
+    if (intendedFinal < 0) {
       throw new Error(
-        `Discount (Rs${roundToTwo(discountAmount)}) exceeds taxable value (Rs${taxableBeforeDiscount})`
+        `Discount (Rs${roundToTwo(discountAmount)}) exceeds gross total (Rs${roundToTwo(grossTotal)})`
       );
     }
 
-    const taxableAfterDiscount = roundToTwo(taxableBeforeDiscount - discountAmount);
+    // Back-calculate correct taxable value and GST from intendedFinal
+    const taxableAfterDiscount = roundToTwo(intendedFinal / 1.03);
     const gst                  = roundToTwo(taxableAfterDiscount * 0.03);
     const finalTotal           = roundToTwo(taxableAfterDiscount + gst);
+    const correctDiscount      = roundToTwo(taxableBeforeDiscount - taxableAfterDiscount);
 
     // 3. Fetch variant metafields for breakdown (gold/diamond/making) per line item
     const itemBreakdowns = await Promise.all(
@@ -105,9 +109,9 @@ class RecalculationService {
       return updatedItem;
     });
 
-    // 5. Update draft order in Shopify (discount line items excluded — absorbed into price)
+    // 5. Update draft order — clear applied_discount (absorbed into overridden line item price)
     await shopifyClient.put(`/draft_orders/${draftOrderId}.json`, {
-      draft_order: { line_items: updatedLineItems },
+      draft_order: { line_items: updatedLineItems, applied_discount: null },
     });
 
     return {
@@ -119,6 +123,7 @@ class RecalculationService {
       taxableAfterDiscount,
       gst,
       finalTotal,
+      correctDiscount,
       updated:                true,
     };
   }
