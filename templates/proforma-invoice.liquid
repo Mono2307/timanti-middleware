@@ -240,6 +240,9 @@
     <tbody class="watermark">
       <img src="https://cdn.shopify.com/s/files/1/0775/8322/0993/files/Timanti_Logo_Black.jpg?v=1766506323" alt="Watermark" class="watermark-image">
 
+      {% assign total_gross_paise = 0 %}
+      {% assign total_disc_paise = 0 %}
+
       {% for line_item in order.line_items %}
 
       {% comment %}Extract pricing engine properties{% endcomment %}
@@ -255,6 +258,8 @@
       {% else %}
         {% assign gross_paise = line_item.final_line_price | plus: disc_paise %}
       {% endif %}
+      {% assign total_gross_paise = total_gross_paise | plus: gross_paise %}
+      {% assign total_disc_paise = total_disc_paise | plus: disc_paise %}
 
       <tr>
         <td class="text-center">{{ forloop.index }}.</td>
@@ -284,22 +289,6 @@
       </tr>
       {% endfor %}
 
-      {% assign total_price_with_tax = 0 %}
-      {% assign total_gross_paise = 0 %}
-      {% assign total_disc_paise = 0 %}
-      {% for line_item in order.line_items %}
-        {% assign total_price_with_tax = total_price_with_tax | plus: line_item.final_line_price %}
-        {% for p in line_item.properties %}
-          {% if p.first == "Gross Value" %}
-            {% assign gv_paise = p.last | remove: "Rs" | times: 100 | round %}
-            {% assign total_gross_paise = total_gross_paise | plus: gv_paise %}
-          {% endif %}
-          {% if p.first == "Discount Applied" %}
-            {% assign da_paise = p.last | remove: "Rs" | times: 100 | round %}
-            {% assign total_disc_paise = total_disc_paise | plus: da_paise %}
-          {% endif %}
-        {% endfor %}
-      {% endfor %}
       {% if shipping_state == "KA" %}{% assign is_same_state = true %}{% else %}{% assign is_same_state = false %}{% endif %}
 
       {% comment %}Credit note detection{% endcomment %}
@@ -331,15 +320,10 @@
       {% endif %}
 
       {% assign total_net_paise = total_gross_paise | minus: total_disc_paise %}
-      {% if total_gross_paise > 0 %}
-        {% assign effective_total = total_net_paise %}
-      {% else %}
-        {% assign effective_total = total_price_with_tax %}
-      {% endif %}
       {% if cn_applied %}
-        {% assign taxable_base = effective_total | minus: cn_amount %}
+        {% assign taxable_base = total_net_paise | minus: cn_amount %}
       {% else %}
-        {% assign taxable_base = effective_total %}
+        {% assign taxable_base = total_net_paise %}
       {% endif %}
       {% assign taxable_value = taxable_base | divided_by: 1.03 %}
       {% assign total_tax = taxable_value | times: 0.03 %}
