@@ -41,17 +41,17 @@ async function recalculate({ draftOrderId, shopifyToken, shopifyStoreUrl }) {
   const draftOrder = fetchResponse.data.draft_order;
   const lineItems  = draftOrder.line_items || [];
 
-  const productItems  = lineItems.filter(item => !isDiscountLineItem(item));
-  const discountItems = lineItems.filter(item => isDiscountLineItem(item));
+  const productItems = lineItems.filter(item => !isDiscountLineItem(item));
 
   // 2. Compute order-level totals
   const grossTotal = productItems.reduce(
     (sum, item) => sum + parseFloat(item.price) * parseInt(item.quantity, 10), 0
   );
 
-  const discountAmount = discountItems.reduce(
-    (sum, item) => sum + Math.abs(parseFloat(item.price)) * parseInt(item.quantity, 10), 0
-  );
+  const fromTotalDiscounts = Number(draftOrder.total_discounts || 0);
+  const discountAmount     = fromTotalDiscounts > 0
+    ? fromTotalDiscounts
+    : lineItems.reduce((sum, item) => sum + Number(item.applied_discount?.amount || 0), 0);
 
   const taxableBeforeDiscount = roundToTwo(grossTotal / 1.03);
 
