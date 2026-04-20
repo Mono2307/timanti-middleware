@@ -325,7 +325,7 @@ async function pushDraftOrderToTerminal({
     ClientId:                    parseInt(store.pine_client_id),
     StoreId:                     parseInt(store.pine_store_id),
     TotalInvoiceAmount:          amountInPaisa,
-    AutoCancelDurationInMinutes: 5
+    AutoCancelDurationInMinutes: 1
   };
 
   console.log(`UploadBilledTransaction txn ${txn.id} → "${store.store_name}" isPartial=${isPartial}`);
@@ -425,11 +425,35 @@ app.get('/api/test-db', async (req, res) => {
 
 app.get('/api/draft-orders', async (req, res) => {
   try {
-    const token       = await getShopifyToken();
-    const queryString = new URLSearchParams(req.query).toString();
-    const shopifyUrl  = `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders.json${queryString ? `?${queryString}` : ''}`;
-    const response    = await axios.get(shopifyUrl, { headers: { 'X-Shopify-Access-Token': token }, timeout: 15000 });
-    return res.json(response.data);
+    const token = await getShopifyToken();
+    const statusFilter = req.query.status || 'open';
+    const allOrders = [];
+    let pageInfo = null;
+    let hasMore = true;
+
+    while (hasMore) {
+      const params = new URLSearchParams({
+        limit: 250,
+        status: statusFilter,
+        order: 'created_at desc'
+      });
+      if (pageInfo) params.set('page_info', pageInfo);
+
+      const url = `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders.json?${params}`;
+      const response = await axios.get(url, { headers: { 'X-Shopify-Access-Token': token }, timeout: 30000 });
+
+      allOrders.push(...response.data.draft_orders);
+
+      const linkHeader = response.headers['link'] || '';
+      const nextMatch = linkHeader.match(/<[^>]*page_info=([^>&"]+)[^>]*>;\s*rel="next"/);
+      if (nextMatch) {
+        pageInfo = nextMatch[1];
+      } else {
+        hasMore = false;
+      }
+    }
+
+    return res.json({ draft_orders: allOrders });
   } catch (err) {
     return res.status(err.response?.status || 500).json({ success: false, error: err.response?.data || err.message });
   }
