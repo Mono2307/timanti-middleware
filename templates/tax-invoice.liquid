@@ -335,10 +335,15 @@
       {% endif %}
 
       {% assign total_net_paise = total_gross_paise | minus: total_disc_paise %}
-      {% if cn_applied %}
-        {% assign taxable_base = total_net_paise | minus: cn_amount %}
+      {% if total_gross_paise > 0 %}
+        {% assign effective_total = total_net_paise %}
       {% else %}
-        {% assign taxable_base = total_net_paise %}
+        {% assign effective_total = total_price_with_tax %}
+      {% endif %}
+      {% if cn_applied %}
+        {% assign taxable_base = effective_total | minus: cn_amount %}
+      {% else %}
+        {% assign taxable_base = effective_total %}
       {% endif %}
       {% assign taxable_value = taxable_base | divided_by: 1.03 %}
       {% assign total_tax = taxable_value | times: 0.03 %}

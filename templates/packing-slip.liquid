@@ -60,8 +60,12 @@
           {{ shipping_address.address1 }}{% if shipping_address.address2 %}, {{ shipping_address.address2 }}{% endif %}<br>
           {{ shipping_address.city }}, {{ shipping_address.province }} {{ shipping_address.zip }}<br>
           {{ shipping_address.country }}<br>
-          {% if shipping_address.phone != blank %}<span class="lbl">Tel:</span> {{ shipping_address.phone }}{% endif %}
+          {% if shipping_address.phone != blank %}<span class="lbl">Tel:</span> {{ shipping_address.phone }}<br>{% endif %}
         {% endif %}
+        {% if shipping_method != blank %}<span class="lbl">Method:</span> {{ shipping_method.title }}<br>{% endif %}
+        {% if fulfillment.tracking_company != blank and fulfillment.tracking_company != "Other" %}<span class="lbl">Carrier:</span> {{ fulfillment.tracking_company }}<br>{% endif %}
+        {% if fulfillment.tracking_number != blank %}<span class="lbl">Tracking:</span> {{ fulfillment.tracking_number }}<br>{% endif %}
+        {% if note != blank %}<span class="lbl">Note:</span> {{ note }}{% endif %}
       </p>
     </div>
 
@@ -77,24 +81,6 @@
           <span class="lbl">{{ customer.name }}</span><br>
           {% if customer.phone != blank %}<span class="lbl">Mobile:</span> {{ customer.phone }}<br>{% endif %}
           {% if customer.email != blank %}<span class="lbl">Email:</span> {{ customer.email }}{% endif %}
-        {% endif %}
-      </p>
-    </div>
-
-    <div class="address-box">
-      <h3>Shipping Details</h3>
-      <p>
-        {% if shipping_method != blank %}
-          <span class="lbl">Method:</span> {{ shipping_method.title }}<br>
-        {% endif %}
-        {% if fulfillment.tracking_company != blank and fulfillment.tracking_company != "Other" %}
-          <span class="lbl">Carrier:</span> {{ fulfillment.tracking_company }}<br>
-        {% endif %}
-        {% if fulfillment.tracking_number != blank %}
-          <span class="lbl">Tracking:</span> {{ fulfillment.tracking_number }}<br>
-        {% endif %}
-        {% if note != blank %}
-          <span class="lbl">Note:</span> {{ note }}
         {% endif %}
       </p>
     </div>
