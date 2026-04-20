@@ -4,6 +4,7 @@ const cors    = require('cors');
 const axios   = require('axios');
 const { createClient } = require('@supabase/supabase-js');
 const { sendDepositEmail } = require('./emailService');
+const { recalculate: recalculatePricing } = require('./services/pricing-engine');
 
 const app = express();
 app.use(cors());
@@ -654,6 +655,28 @@ app.post('/api/pine-webhook', async (req, res) => {
 });
 
 // ─────────────────────────────────────────
+// Pricing Engine
+// ─────────────────────────────────────────
+
+app.post('/pricing/recalculate', async (req, res) => {
+  const { draftOrderId } = req.body;
+  if (!draftOrderId) {
+    return res.status(400).json({ success: false, error: 'draftOrderId required' });
+  }
+  try {
+    const token  = await getShopifyToken();
+    const pricing = await recalculatePricing({
+      draftOrderId,
+      shopifyToken:    token,
+      shopifyStoreUrl: process.env.SHOPIFY_STORE_URL
+    });
+    return res.json({ success: true, pricing });
+  } catch (error) {
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ─────────────────────────────────────────
 // Start
 // ─────────────────────────────────────────
 
@@ -669,6 +692,7 @@ app.listen(PORT, async () => {
   console.log('  POST /api/cancel-transaction');
   console.log('  POST /api/pine-postback');
   console.log('  POST /api/pine-webhook');
+  console.log('  POST /pricing/recalculate');
   await initShopifyToken();
   console.log('🔄 Background poller started (30s)');
   setInterval(pollActiveTxns, 30000);
