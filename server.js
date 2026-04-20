@@ -668,7 +668,20 @@ app.post('/api/shopify-draft-updated', async (req, res) => {
     const discountAmount = discountObj ? Number(discountObj.amount || discountObj.value || 0) : 0;
 
     if (!discountAmount || discountAmount <= 0) {
-      console.log(`Draft updated webhook: #${draft.name} — no discount, skipping recalculation`);
+      console.log(`Draft updated webhook: #${draft.name} — no discount, skipping`);
+      return;
+    }
+
+    // Skip if properties already reflect this exact discount (loop prevention)
+    const productItems = (draft.line_items || []).filter(
+      item => !((item.title || '').toLowerCase().includes('discount') && parseFloat(item.price) < 0)
+    );
+    const existingRecalcDiscount = productItems.reduce((sum, item) => {
+      const prop = (item.properties || []).find(p => p.name === 'Discount Applied');
+      return sum + (prop ? parseFloat((prop.value || '0').replace('Rs', '')) : 0);
+    }, 0);
+    if (Math.abs(existingRecalcDiscount - discountAmount) < 0.01) {
+      console.log(`Draft updated webhook: #${draft.name} — already recalculated for Rs${discountAmount}, skipping`);
       return;
     }
 

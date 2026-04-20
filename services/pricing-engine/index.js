@@ -96,7 +96,6 @@ async function recalculate({ draftOrderId, shopifyToken, shopifyStoreUrl }) {
     const itemTaxable         = roundToTwo(taxableAfterDiscount * proportion);
     const itemGst             = roundToTwo(gst * proportion);
     const itemFinal           = roundToTwo(itemTaxable + itemGst);
-    const unitPrice           = roundToTwo(itemFinal / qty);
     const adjustedDiamond     = roundToTwo(diamond * qty - itemCorrectDiscount);
     const grossValue          = roundToTwo(itemFinal + itemDiscountDisplay);
 
@@ -114,7 +113,6 @@ async function recalculate({ draftOrderId, shopifyToken, shopifyStoreUrl }) {
       id:         item.id,
       variant_id: item.variant_id,
       quantity:   qty,
-      price:      unitPrice.toFixed(2),
       properties,
     };
 
@@ -127,10 +125,10 @@ async function recalculate({ draftOrderId, shopifyToken, shopifyStoreUrl }) {
     return updatedItem;
   });
 
-  // 5. Update draft order — clear applied_discount (absorbed into overridden line item price)
+  // 5. Update draft order — only write properties, leave price and applied_discount intact
   await axios.put(
     `${shopifyStoreUrl}/admin/api/2024-01/draft_orders/${draftOrderId}.json`,
-    { draft_order: { line_items: updatedLineItems, applied_discount: null } },
+    { draft_order: { line_items: updatedLineItems } },
     { headers: shopifyHeaders(shopifyToken), timeout: 15000 }
   );
 
