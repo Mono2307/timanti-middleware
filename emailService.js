@@ -15,19 +15,17 @@ const supabase = createClient(
 // Core Resend sender
 // ─────────────────────────────────────────
 
-async function sendEmail({ to, subject, html }) {
+async function sendEmail({ to, subject, html, cc }) {
+  const payload = { from: 'Timanti <hello@timanti.in>', to, subject, html };
+  if (cc) payload.cc = Array.isArray(cc) ? cc : [cc];
+
   const response = await fetch('https://api.resend.com/emails', {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${process.env.RESEND_API_KEY}`,
       'Content-Type': 'application/json'
     },
-    body: JSON.stringify({
-      from: 'Timanti <hello@timanti.in>',
-      to,
-      subject,
-      html
-    })
+    body: JSON.stringify(payload)
   });
   const data = await response.json();
   if (!response.ok) throw new Error(`Resend error: ${JSON.stringify(data)}`);

@@ -5,10 +5,12 @@ const axios   = require('axios');
 const { createClient } = require('@supabase/supabase-js');
 const { sendDepositEmail } = require('./emailService');
 const { recalculate: recalculatePricing } = require('./services/pricing-engine');
+const { handlePoWebhook } = require('./services/po-ops/webhook');
+const { handlePoAction }  = require('./services/po-ops/action');
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ verify: (req, _res, buf) => { req.rawBody = buf.toString('utf8'); } }));
 app.use(express.text({ type: '*/*' }));
 
 const supabase = createClient(
@@ -717,6 +719,15 @@ app.post('/pricing/recalculate', async (req, res) => {
 });
 
 // ─────────────────────────────────────────
+// PO Operations
+// ─────────────────────────────────────────
+
+const PO_DEPS = () => ({ supabase, getShopifyToken, shopifyStoreUrl: process.env.SHOPIFY_STORE_URL });
+
+app.post('/api/po-webhook', (req, res) => handlePoWebhook(req, res, PO_DEPS()));
+app.get('/api/po-action',   (req, res) => handlePoAction(req, res, PO_DEPS()));
+
+// ─────────────────────────────────────────
 // Start
 // ─────────────────────────────────────────
 
@@ -733,6 +744,8 @@ app.listen(PORT, async () => {
   console.log('  POST /api/pine-postback');
   console.log('  POST /api/pine-webhook');
   console.log('  POST /pricing/recalculate');
+  console.log('  POST /api/po-webhook');
+  console.log('  GET  /api/po-action');
   await initShopifyToken();
   console.log('🔄 Background poller started (30s)');
   setInterval(pollActiveTxns, 30000);
