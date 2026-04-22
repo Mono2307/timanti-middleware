@@ -144,11 +144,19 @@ async function createPoDraftOrder({ order, lineItems, poType, sourceOrderName, s
     }
   };
 
-  // Always carry customer email so the PO draft order shows who it's for
+  // Always carry customer identity so PO shows who it's for
   if (order.email) body.draft_order.email = order.email;
-  if (poType === 'mto') {
-    if (order.shipping_address) body.draft_order.shipping_address = order.shipping_address;
-    if (order.billing_address)  body.draft_order.billing_address  = order.billing_address;
+  const custFirst = order.customer?.first_name || order.billing_address?.first_name || order.shipping_address?.first_name || '';
+  const custLast  = order.customer?.last_name  || order.billing_address?.last_name  || order.shipping_address?.last_name  || '';
+  if (custFirst || custLast) {
+    body.draft_order.billing_address = {
+      ...(order.billing_address || {}),
+      first_name: custFirst,
+      last_name:  custLast
+    };
+  }
+  if (poType === 'mto' && order.shipping_address) {
+    body.draft_order.shipping_address = order.shipping_address;
   }
 
   const res = await axios.post(
@@ -278,14 +286,14 @@ async function handlePoWebhook(req, res, { supabase, getShopifyToken, shopifySto
   try { shopifyToken = await getShopifyToken(); }
   catch (e) { console.error('PO webhook: no Shopify token'); return; }
 
-  // Remove the trigger tag immediately so re-saves don't re-process
+  // Swap raise-po → raised-po so staff can see PO was processed
   const resource = isDraftOrder ? 'draft_orders' : 'orders';
-  const newTags  = tags.filter(t => t !== 'raise-po').join(', ');
+  const newTags  = [...tags.filter(t => t !== 'raise-po'), 'raised-po'].join(', ');
   axios.put(
     `${shopifyStoreUrl}/admin/api/2024-01/${resource}/${order.id}.json`,
     { [isDraftOrder ? 'draft_order' : 'order']: { id: order.id, tags: newTags } },
     { headers: shopifyHeaders(shopifyToken), timeout: 10000 }
-  ).catch(e => console.error('Failed to remove raise-po tag:', e.message));
+  ).catch(e => console.error('Failed to swap raise-po tag:', e.message));
 
   // Build groups from custom.po_mto_variants / custom.po_replenishment_variants metafields
   const groups = await getPoGroups(order.id, lineItems, isDraftOrder, shopifyToken, shopifyStoreUrl);
