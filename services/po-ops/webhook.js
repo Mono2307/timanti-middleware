@@ -286,10 +286,10 @@ async function handlePoWebhook(req, res, { supabase, getShopifyToken, shopifySto
   try { shopifyToken = await getShopifyToken(); }
   catch (e) { console.error('PO webhook: no Shopify token'); return; }
 
-  // Swap raise-po → raised-po so staff can see PO was processed
+  // Swap raise-po → raised-po synchronously before processing so retries don't double-fire
   const resource = isDraftOrder ? 'draft_orders' : 'orders';
   const newTags  = [...tags.filter(t => t !== 'raise-po'), 'raised-po'].join(', ');
-  axios.put(
+  await axios.put(
     `${shopifyStoreUrl}/admin/api/2024-01/${resource}/${order.id}.json`,
     { [isDraftOrder ? 'draft_order' : 'order']: { id: order.id, tags: newTags } },
     { headers: shopifyHeaders(shopifyToken), timeout: 10000 }
@@ -301,15 +301,22 @@ async function handlePoWebhook(req, res, { supabase, getShopifyToken, shopifySto
   if (Object.keys(groups).length === 0) return;
 
   for (const [poType, items] of Object.entries(groups)) {
-    // Idempotency: skip if PO already created for this order + type
+    // If PO already exists for this order+type, delete the old one first (clean re-raise)
     const { data: existing } = await supabase
       .from('po_records')
-      .select('id')
+      .select('id, draft_order_id, draft_order_name')
       .eq('source_order_id', sourceOrderId)
       .eq('po_type', poType)
       .maybeSingle();
 
-    if (existing) { console.log(`PO already exists for ${sourceOrderName}/${poType} — skipping`); continue; }
+    if (existing) {
+      console.log(`Re-raising PO for ${sourceOrderName}/${poType} — deleting old ${existing.draft_order_name}`);
+      await axios.delete(
+        `${shopifyStoreUrl}/admin/api/2024-01/draft_orders/${existing.draft_order_id}.json`,
+        { headers: shopifyHeaders(shopifyToken), timeout: 10000 }
+      ).catch(e => console.error('Failed to delete old draft order:', e.message));
+      await supabase.from('po_records').delete().eq('id', existing.id);
+    }
 
     const { draftOrder, token } = await createPoDraftOrder({
       order, lineItems: items, poType,
