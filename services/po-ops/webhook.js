@@ -5,8 +5,8 @@ const axios  = require('axios');
 const { sendEmail } = require('../../emailService');
 
 const WEBHOOK_SECRET  = process.env.SHOPIFY_WEBHOOK_SECRET;
-const HQ_EMAIL        = process.env.HQ_EMAIL;      // operations@timanti.in
-const HQ_CC_EMAIL     = process.env.HQ_CC_EMAIL;   // shweta@timanti.in
+const HQ_EMAIL        = process.env.HQ_EMAIL;
+const HQ_CC_EMAIL     = process.env.HQ_CC_EMAIL;
 const APPS_SCRIPT_URL = process.env.APPS_SCRIPT_URL;
 const MIDDLEWARE_URL  = process.env.MIDDLEWARE_BASE_URL;
 
@@ -16,12 +16,10 @@ function verifyHmac(rawBody, signature, secret) {
   try {
     const computed = crypto.createHmac('sha256', secret).update(rawBody, 'utf8').digest('base64');
     return crypto.timingSafeEqual(Buffer.from(computed), Buffer.from(signature));
-  } catch (_) {
-    return false;
-  }
+  } catch (_) { return false; }
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+// ─── Shopify helpers ──────────────────────────────────────────────────────────
 
 function shopifyHeaders(token) {
   return { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' };
@@ -31,18 +29,60 @@ function generateToken() {
   return crypto.randomBytes(32).toString('hex');
 }
 
+function buildLink(token, action) {
+  return `${MIDDLEWARE_URL}/api/po-action?action=${action}&token=${token}`;
+}
+
+// ─── Read po_routing metafield → group line items by po_type via SKU ──────────
+// Staff sets custom.po_routing on the order/draft order in Shopify admin:
+//   {"replenishment": ["SKU-A", "SKU-B"], "mto": ["SKU-C"]}
+// Works for both orders and draft_orders.
+
+async function getPoGroups(orderId, lineItems, isDraftOrder, shopifyToken, shopifyStoreUrl) {
+  const resource = isDraftOrder ? 'draft_orders' : 'orders';
+
+  let metas;
+  try {
+    const res = await axios.get(
+      `${shopifyStoreUrl}/admin/api/2024-01/${resource}/${orderId}/metafields.json`,
+      { headers: shopifyHeaders(shopifyToken), timeout: 10000 }
+    );
+    metas = res.data.metafields || [];
+  } catch (e) {
+    console.error('Metafield fetch failed:', e.message);
+    return {};
+  }
+
+  const routingMf = metas.find(m => m.namespace === 'custom' && m.key === 'po_routing');
+  if (!routingMf?.value) return {};
+
+  let routing;
+  try {
+    routing = typeof routingMf.value === 'string' ? JSON.parse(routingMf.value) : routingMf.value;
+  } catch (e) {
+    console.error(`custom.po_routing is not valid JSON on ${resource} ${orderId}:`, routingMf.value);
+    return {};
+  }
+
+  const groups = {};
+  for (const [poType, skus] of Object.entries(routing)) {
+    if (!['mto', 'replenishment'].includes(poType)) continue;
+    if (!Array.isArray(skus) || skus.length === 0) continue;
+    const matched = lineItems.filter(item => item.sku && skus.includes(item.sku));
+    if (matched.length > 0) groups[poType] = matched;
+  }
+
+  return groups;
+}
+
+// ─── Create PO draft order ───────────────────────────────────────────────────
+
 function getSpecialInstructions(item) {
   return (item.properties || [])
     .filter(p => !p.name.startsWith('_'))
     .map(p => `${p.name}: ${p.value}`)
     .join(' | ');
 }
-
-function buildLink(token, action) {
-  return `${MIDDLEWARE_URL}/api/po-action?action=${action}&token=${token}`;
-}
-
-// ─── Create PO draft order ───────────────────────────────────────────────────
 
 async function createPoDraftOrder({ order, lineItems, poType, sourceOrderName, sourceOrderId, shopifyToken, shopifyStoreUrl }) {
   const token = generateToken();
@@ -91,7 +131,7 @@ async function createPoDraftOrder({ order, lineItems, poType, sourceOrderName, s
   return { draftOrder: res.data.draft_order, token };
 }
 
-// ─── HQ email (no PDF — action links embedded in body) ───────────────────────
+// ─── HQ email ─────────────────────────────────────────────────────────────────
 
 async function sendPoEmail({ draftOrder, poType, sourceOrderName }) {
   const priority = (draftOrder.line_items?.[0]?.properties || []).find(p => p.name === '_po_priority')?.value || 'standard';
@@ -151,9 +191,10 @@ async function sendPoEmail({ draftOrder, poType, sourceOrderName }) {
   });
 }
 
-// ─── Sheets ───────────────────────────────────────────────────────────────────
+// ─── Google Sheets ────────────────────────────────────────────────────────────
 
 async function writeToSheets(row) {
+  if (!APPS_SCRIPT_URL) return;
   try {
     await axios.post(APPS_SCRIPT_URL, { action: 'append', row }, {
       headers: { 'Content-Type': 'application/json' }, timeout: 10000
@@ -176,27 +217,25 @@ async function handlePoWebhook(req, res, { supabase, getShopifyToken, shopifySto
   const order = req.body;
   if (!order?.id) return res.status(200).send('OK');
 
-  res.status(200).send('OK'); // respond to Shopify immediately
+  res.status(200).send('OK'); // Shopify needs a response within 5s
 
+  const topic           = req.headers['x-shopify-topic'] || '';
+  const isDraftOrder    = topic.startsWith('draft_orders');
   const sourceOrderId   = String(order.id);
   const sourceOrderName = order.name || `#${order.id}`;
+  const lineItems       = order.line_items || [];
 
-  const groups = {};
-  for (const item of (order.line_items || [])) {
-    const prop = (item.properties || []).find(p => p.name === '_po_type');
-    if (!prop?.value) continue;
-    const type = prop.value.toLowerCase().trim();
-    if (!['mto', 'replenishment'].includes(type)) continue;
-    if (!groups[type]) groups[type] = [];
-    groups[type].push(item);
-  }
+  let shopifyToken;
+  try { shopifyToken = await getShopifyToken(); }
+  catch (e) { console.error('PO webhook: no Shopify token'); return; }
+
+  // Build groups from custom.po_routing metafield (keyed by variant SKU)
+  const groups = await getPoGroups(order.id, lineItems, isDraftOrder, shopifyToken, shopifyStoreUrl);
 
   if (Object.keys(groups).length === 0) return;
 
-  let shopifyToken;
-  try { shopifyToken = await getShopifyToken(); } catch (e) { console.error('PO webhook: no Shopify token'); return; }
-
   for (const [poType, items] of Object.entries(groups)) {
+    // Idempotency: skip if PO already created for this order + type
     const { data: existing } = await supabase
       .from('po_records')
       .select('id')
