@@ -33,10 +33,18 @@ function buildLink(token, action) {
   return `${MIDDLEWARE_URL}/api/po-action?action=${action}&token=${token}`;
 }
 
-// ─── Read po_routing metafield → group line items by po_type via SKU ──────────
-// Staff sets custom.po_routing on the order/draft order in Shopify admin:
-//   {"replenishment": ["SKU-A", "SKU-B"], "mto": ["SKU-C"]}
-// Works for both orders and draft_orders.
+// ─── Read variant picker metafields → group line items by po_type ─────────────
+// Staff uses Shopify's native variant search picker on the order/draft order page.
+// Two metafield definitions needed (type: list.variant_reference) on Orders + Draft Orders:
+//   custom.po_mto_variants          → variants to raise as MTO PO
+//   custom.po_replenishment_variants → variants to raise as replenishment PO
+//
+// Shopify stores these as arrays of GIDs: ["gid://shopify/ProductVariant/12345", ...]
+// We extract the numeric ID and match against line_item.variant_id.
+
+function extractVariantId(gid) {
+  return String(gid).split('/').pop();
+}
 
 async function getPoGroups(orderId, lineItems, isDraftOrder, shopifyToken, shopifyStoreUrl) {
   const resource = isDraftOrder ? 'draft_orders' : 'orders';
@@ -53,23 +61,30 @@ async function getPoGroups(orderId, lineItems, isDraftOrder, shopifyToken, shopi
     return {};
   }
 
-  const routingMf = metas.find(m => m.namespace === 'custom' && m.key === 'po_routing');
-  if (!routingMf?.value) return {};
+  const find = key => metas.find(m => m.namespace === 'custom' && m.key === key);
+  const mtoMf = find('po_mto_variants');
+  const repMf = find('po_replenishment_variants');
 
-  let routing;
-  try {
-    routing = typeof routingMf.value === 'string' ? JSON.parse(routingMf.value) : routingMf.value;
-  } catch (e) {
-    console.error(`custom.po_routing is not valid JSON on ${resource} ${orderId}:`, routingMf.value);
-    return {};
-  }
+  if (!mtoMf?.value && !repMf?.value) return {};
+
+  // Values come as JSON arrays of GIDs or already-parsed arrays
+  const parseIds = mf => {
+    if (!mf?.value) return [];
+    const raw = typeof mf.value === 'string' ? JSON.parse(mf.value) : mf.value;
+    return (Array.isArray(raw) ? raw : [raw]).map(extractVariantId);
+  };
+
+  const mtoIds = parseIds(mtoMf);
+  const repIds = parseIds(repMf);
 
   const groups = {};
-  for (const [poType, skus] of Object.entries(routing)) {
-    if (!['mto', 'replenishment'].includes(poType)) continue;
-    if (!Array.isArray(skus) || skus.length === 0) continue;
-    const matched = lineItems.filter(item => item.sku && skus.includes(item.sku));
-    if (matched.length > 0) groups[poType] = matched;
+  if (mtoIds.length) {
+    const matched = lineItems.filter(i => mtoIds.includes(String(i.variant_id)));
+    if (matched.length) groups.mto = matched;
+  }
+  if (repIds.length) {
+    const matched = lineItems.filter(i => repIds.includes(String(i.variant_id)));
+    if (matched.length) groups.replenishment = matched;
   }
 
   return groups;
