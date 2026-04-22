@@ -253,11 +253,26 @@ async function handlePoWebhook(req, res, { supabase, getShopifyToken, shopifySto
   const sourceOrderName = order.name || `#${order.id}`;
   const lineItems       = order.line_items || [];
 
+  // Only process when staff explicitly adds the 'raise-po' tag
+  const tags = (order.tags || '').split(',').map(t => t.trim());
+  if (!tags.includes('raise-po')) return;
+
+  console.log(`PO webhook: raise-po tag found on ${sourceOrderName}`);
+
   let shopifyToken;
   try { shopifyToken = await getShopifyToken(); }
   catch (e) { console.error('PO webhook: no Shopify token'); return; }
 
-  // Build groups from custom.po_routing metafield (keyed by variant SKU)
+  // Remove the trigger tag immediately so re-saves don't re-process
+  const resource = isDraftOrder ? 'draft_orders' : 'orders';
+  const newTags  = tags.filter(t => t !== 'raise-po').join(', ');
+  axios.put(
+    `${shopifyStoreUrl}/admin/api/2024-01/${resource}/${order.id}.json`,
+    { [isDraftOrder ? 'draft_order' : 'order']: { id: order.id, tags: newTags } },
+    { headers: shopifyHeaders(shopifyToken), timeout: 10000 }
+  ).catch(e => console.error('Failed to remove raise-po tag:', e.message));
+
+  // Build groups from custom.po_mto_variants / custom.po_replenishment_variants metafields
   const groups = await getPoGroups(order.id, lineItems, isDraftOrder, shopifyToken, shopifyStoreUrl);
 
   if (Object.keys(groups).length === 0) return;
