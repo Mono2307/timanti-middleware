@@ -67,7 +67,13 @@ async function getPoGroups(orderId, lineItems, isDraftOrder, shopifyToken, shopi
   const mtoMf = find('po_mto_variants');
   const repMf = find('po_replenishment_variants');
 
-  if (!mtoMf?.value && !repMf?.value) return {};
+  console.log(`[PO] metafields — mto: ${mtoMf?.value || 'none'} | rep: ${repMf?.value || 'none'}`);
+  console.log(`[PO] line item variant_ids: ${lineItems.map(i => i.variant_id).join(', ')}`);
+
+  if (!mtoMf?.value && !repMf?.value) {
+    console.log('[PO] no po metafields set — skipping');
+    return {};
+  }
 
   // Values come as JSON arrays of GIDs or already-parsed arrays
   const parseIds = mf => {
@@ -79,16 +85,21 @@ async function getPoGroups(orderId, lineItems, isDraftOrder, shopifyToken, shopi
   const mtoIds = parseIds(mtoMf);
   const repIds = parseIds(repMf);
 
+  console.log(`[PO] parsed IDs — mto: [${mtoIds}] | rep: [${repIds}]`);
+
   const groups = {};
   if (mtoIds.length) {
     const matched = lineItems.filter(i => mtoIds.includes(String(i.variant_id)));
+    console.log(`[PO] mto matched ${matched.length}/${lineItems.length} items`);
     if (matched.length) groups.mto = matched;
   }
   if (repIds.length) {
     const matched = lineItems.filter(i => repIds.includes(String(i.variant_id)));
+    console.log(`[PO] rep matched ${matched.length}/${lineItems.length} items`);
     if (matched.length) groups.replenishment = matched;
   }
 
+  console.log(`[PO] groups to create: ${Object.keys(groups).join(', ') || 'none'}`);
   return groups;
 }
 
@@ -133,10 +144,11 @@ async function createPoDraftOrder({ order, lineItems, poType, sourceOrderName, s
     }
   };
 
+  // Always carry customer email so the PO draft order shows who it's for
+  if (order.email) body.draft_order.email = order.email;
   if (poType === 'mto') {
     if (order.shipping_address) body.draft_order.shipping_address = order.shipping_address;
     if (order.billing_address)  body.draft_order.billing_address  = order.billing_address;
-    if (order.email)            body.draft_order.email            = order.email;
   }
 
   const res = await axios.post(
@@ -253,14 +265,14 @@ async function handlePoWebhook(req, res, { supabase, getShopifyToken, shopifySto
   const topic           = req.headers['x-shopify-topic'] || '';
   const isDraftOrder    = topic.startsWith('draft_orders');
   const sourceOrderId   = String(order.id);
-  const sourceOrderName = order.name || `#${order.id}`;
+  const sourceOrderName = order.name || order.order_number ? `#${order.order_number}` : `#${order.id}`;
   const lineItems       = order.line_items || [];
 
   // Only process when staff explicitly adds the 'raise-po' tag
   const tags = (order.tags || '').split(',').map(t => t.trim());
   if (!tags.includes('raise-po')) return;
 
-  console.log(`PO webhook: raise-po tag found on ${sourceOrderName}`);
+  console.log(`PO webhook: raise-po tag found on ${sourceOrderName} (raw name: ${order.name}, order_number: ${order.order_number}, id: ${order.id})`);
 
   let shopifyToken;
   try { shopifyToken = await getShopifyToken(); }
@@ -315,7 +327,7 @@ async function handlePoWebhook(req, res, { supabase, getShopifyToken, shopifySto
       po_number:        draftOrder.name,
       po_type:          poType,
       source_order:     sourceOrderName,
-      customer_name:    poType === 'mto' ? `${order.shipping_address?.first_name || ''} ${order.shipping_address?.last_name || ''}`.trim() : '',
+      customer_name:    `${order.customer?.first_name || order.shipping_address?.first_name || order.billing_address?.first_name || ''} ${order.customer?.last_name || order.shipping_address?.last_name || order.billing_address?.last_name || ''}`.trim(),
       item_description: items.map(i => i.title).join(', '),
       gati_id:          '',
       sku:              items.map(i => i.sku || '').join(', '),
