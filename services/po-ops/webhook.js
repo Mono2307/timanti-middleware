@@ -10,6 +10,8 @@ const HQ_CC_EMAIL     = process.env.HQ_CC_EMAIL;
 const APPS_SCRIPT_URL = process.env.APPS_SCRIPT_URL;
 const MIDDLEWARE_URL  = process.env.MIDDLEWARE_BASE_URL;
 
+const ENABLE_CC = false; // set true once testing is done
+
 // ─── HMAC ─────────────────────────────────────────────────────────────────────
 
 function verifyHmac(rawBody, signature, secret) {
@@ -148,11 +150,19 @@ async function createPoDraftOrder({ order, lineItems, poType, sourceOrderName, s
 
 // ─── HQ email ─────────────────────────────────────────────────────────────────
 
+// Mirrors Shopify's handleize Liquid filter: lowercase, non-alphanumeric → hyphens
+function handleize(str) {
+  return str.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+}
+
 async function sendPoEmail({ draftOrder, poType, sourceOrderName }) {
   const priority = (draftOrder.line_items?.[0]?.properties || []).find(p => p.name === '_po_priority')?.value || 'standard';
   const attrs    = Object.fromEntries((draftOrder.note_attributes || []).map(na => [na.name, na.value]));
   const items    = (draftOrder.line_items || []).map(i => `${i.title} × ${i.quantity}`).join('<br>');
   const isUrgent = priority === 'urgent';
+
+  // OPP PDF link — same multiplier pattern as deposit receipt (id * 8108 for PO template)
+  const pdfUrl = `https://timanti.in/apps/download-pdf/drafts/291a11815ae190ec88fb/${draftOrder.id * 8108}/${handleize(draftOrder.name)}.pdf`;
 
   const html = `<!DOCTYPE html>
 <html lang="en">
@@ -181,8 +191,11 @@ async function sendPoEmail({ draftOrder, poType, sourceOrderName }) {
       </tr>
     </table>
   </td></tr>
+  <tr><td style="padding:0 30px 16px;text-align:center;">
+    <a href="${pdfUrl}" target="_blank" style="background:#000;color:#fff;padding:12px 24px;border-radius:4px;text-decoration:none;font-size:13px;font-weight:500;display:inline-block;">Download Purchase Order PDF</a>
+  </td></tr>
   <tr><td style="padding:0 30px 24px;">
-    <p style="font-size:13px;color:#555;margin:0 0 12px;">Update PO status using the links below:</p>
+    <p style="font-size:13px;color:#555;margin:0 0 12px;">Update PO status:</p>
     <table cellpadding="0" cellspacing="0">
       <tr>
         <td style="padding:0 8px 8px 0;"><a href="${attrs.action_acknowledge}" style="background:#2F5496;color:#fff;padding:10px 16px;border-radius:4px;text-decoration:none;font-size:13px;display:inline-block;">✓ Acknowledge</a></td>
@@ -200,7 +213,7 @@ async function sendPoEmail({ draftOrder, poType, sourceOrderName }) {
 
   await sendEmail({
     to:      HQ_EMAIL,
-    cc:      HQ_CC_EMAIL || undefined,
+    cc:      ENABLE_CC ? HQ_CC_EMAIL : undefined,
     subject: `${isUrgent ? '🔴 URGENT — ' : ''}New PO — ${draftOrder.name} — ${poType} — ${sourceOrderName}`,
     html
   });
