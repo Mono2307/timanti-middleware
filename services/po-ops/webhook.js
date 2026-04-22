@@ -238,7 +238,10 @@ async function handlePoWebhook(req, res, { supabase, getShopifyToken, shopifySto
   const rawBody    = req.rawBody || JSON.stringify(req.body);
   const hmacHeader = req.headers['x-shopify-hmac-sha256'];
 
+  console.log(`[PO] incoming — topic: ${req.headers['x-shopify-topic']} | hmac: ${hmacHeader ? 'present' : 'absent'} | body-len: ${rawBody.length}`);
+
   if (WEBHOOK_SECRET && hmacHeader && !verifyHmac(rawBody, hmacHeader, WEBHOOK_SECRET)) {
+    console.log('[PO] HMAC verification failed — 401');
     return res.status(401).send('Unauthorized');
   }
 
