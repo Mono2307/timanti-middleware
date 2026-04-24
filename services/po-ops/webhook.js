@@ -72,7 +72,7 @@ async function getPoGroups(orderId, lineItems, isDraftOrder, shopifyToken, shopi
 
   if (!mtoMf?.value && !repMf?.value) {
     console.log('[PO] no po metafields set — skipping');
-    return {};
+    return { groups: {}, comments: { mto: '', replenishment: '' } };
   }
 
   // Values come as JSON arrays of GIDs or already-parsed arrays
@@ -100,7 +100,13 @@ async function getPoGroups(orderId, lineItems, isDraftOrder, shopifyToken, shopi
   }
 
   console.log(`[PO] groups to create: ${Object.keys(groups).join(', ') || 'none'}`);
-  return groups;
+  return {
+    groups,
+    comments: {
+      mto:           find('mto_comments')?.value           || '',
+      replenishment: find('replenishment_comments')?.value || ''
+    }
+  };
 }
 
 // ─── Create PO draft order ───────────────────────────────────────────────────
@@ -112,7 +118,7 @@ function getSpecialInstructions(item) {
     .join(' | ');
 }
 
-async function createPoDraftOrder({ order, lineItems, poType, sourceOrderName, sourceOrderId, shopifyToken, shopifyStoreUrl }) {
+async function createPoDraftOrder({ order, lineItems, poType, sourceOrderName, sourceOrderId, shopifyToken, shopifyStoreUrl, poComments }) {
   const token = generateToken();
 
   const body = {
@@ -140,6 +146,7 @@ async function createPoDraftOrder({ order, lineItems, poType, sourceOrderName, s
         { namespace: 'custom', key: 'source_order_id',   value: sourceOrderId,   type: 'single_line_text_field' },
         { namespace: 'custom', key: 'source_order_name', value: sourceOrderName, type: 'single_line_text_field' },
         { namespace: 'custom', key: 'action_token',      value: token,           type: 'single_line_text_field' },
+        ...(poComments ? [{ namespace: 'custom', key: poType === 'mto' ? 'mto_comments' : 'replenishment_comments', value: poComments, type: 'multi_line_text_field' }] : [])
       ]
     }
   };
@@ -296,7 +303,7 @@ async function handlePoWebhook(req, res, { supabase, getShopifyToken, shopifySto
   ).catch(e => console.error('Failed to swap raise-po tag:', e.message));
 
   // Build groups from custom.po_mto_variants / custom.po_replenishment_variants metafields
-  const groups = await getPoGroups(order.id, lineItems, isDraftOrder, shopifyToken, shopifyStoreUrl);
+  const { groups, comments } = await getPoGroups(order.id, lineItems, isDraftOrder, shopifyToken, shopifyStoreUrl);
 
   if (Object.keys(groups).length === 0) return;
 
@@ -321,7 +328,8 @@ async function handlePoWebhook(req, res, { supabase, getShopifyToken, shopifySto
     const { draftOrder, token } = await createPoDraftOrder({
       order, lineItems: items, poType,
       sourceOrderName, sourceOrderId,
-      shopifyToken, shopifyStoreUrl
+      shopifyToken, shopifyStoreUrl,
+      poComments: comments[poType] || ''
     });
 
     if (!draftOrder) { console.error(`Draft order creation failed for ${sourceOrderName}/${poType}`); continue; }
@@ -349,6 +357,7 @@ async function handlePoWebhook(req, res, { supabase, getShopifyToken, shopifySto
       priority:         (first.properties || []).find(p => p.name === '_po_priority')?.value || 'standard',
       target_dispatch:  (first.properties || []).find(p => p.name === '_target_dispatch')?.value || '',
       customer_promise: (first.properties || []).find(p => p.name === '_customer_promise')?.value || '',
+      po_comments:      comments[poType] || '',
       po_sent_at:       new Date().toISOString()
     });
 

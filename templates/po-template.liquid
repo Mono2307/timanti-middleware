@@ -1,0 +1,271 @@
+{% assign po_type = order.metafields.custom.po_type | default: "replenishment" %}
+  {% assign po_priority = "standard" %}
+  {% assign original_order_ref = order.metafields.custom.source_order_name | default: "" %}
+  {% if po_type == "mto" %}
+    {% assign po_comments = order.metafields.custom.mto_comments | default: "" %}
+  {% else %}
+    {% assign po_comments = order.metafields.custom.replenishment_comments | default: "" %}
+  {% endif %}
+  <style>
+    @page { size: A4; margin: 0.8cm; }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    @media print {
+      body { padding: 5px !important; margin: 0; }
+      .container { page-break-inside: avoid !important; }
+      a { display: none !important; visibility: hidden !important; }
+    }
+    body { font-family: Arial, sans-serif; font-size: 8.5px; line-height: 1.3; padding: 10px; }
+    .container { max-width: 800px; margin: 0 auto; border: 2px solid #000; padding: 0; }
+    .po-type-banner { padding: 8px 14px; font-size: 10px; font-weight: bold; text-align: center; border-bottom: 2px solid #000; letter-spacing: 0.5px; }
+    .po-type-banner.replenishment { background-color: #e8f4ea; }
+    .po-type-banner.mto { background-color: #fff3e0; }
+    .header-text { text-align: right; padding: 3px 8px; font-size: 7px; font-style: italic; border-bottom: 1px solid #000; }
+    .title-header { text-align: center; padding: 8px 12px; border-bottom: 2px solid #000; min-height: 65px; display: flex; flex-direction: column;
+  justify-content: center; align-items: center; }
+    .logo { max-width: 130px; height: auto; margin-bottom: 3px; }
+    .title-center h1 { font-size: 16px; font-weight: bold; margin: 0; }
+    .title-center h2 { font-size: 10px; font-weight: normal; color: #555; margin: 2px 0 0 0; }
+    .company-po-grid { display: grid; grid-template-columns: 1.5fr 1fr; border-bottom: 2px solid #000; }
+    .company-section { padding: 6px 10px; border-right: 2px solid #000; font-size: 7.5px; line-height: 1.35; }
+    .company-section strong { font-size: 8.5px; }
+    .po-details-grid { display: grid; grid-template-rows: repeat(3, 1fr); }
+    .po-detail-row { display: grid; grid-template-columns: 1fr 1fr 1fr; border-bottom: 1px solid #000; }
+    .po-detail-row:last-child { border-bottom: none; }
+    .po-detail-cell { padding: 5px 7px; font-size: 7.5px; border-right: 1px solid #000; }
+    .po-detail-cell:last-child { border-right: none; }
+    .po-detail-cell strong { display: block; font-size: 7.5px; font-weight: bold; margin-bottom: 1px; }
+    .addresses-section { display: grid; grid-template-columns: 1fr 1fr; border-bottom: 2px solid #000; }
+    .address-block { padding: 6px 10px; font-size: 7.5px; line-height: 1.35; }
+    .address-block:first-child { border-right: 2px solid #000; }
+    .address-block strong { display: block; margin-bottom: 1px; font-size: 7.5px; }
+    .address-field { margin-bottom: 3px; }
+    .full-width-block { padding: 6px 10px; font-size: 7.5px; line-height: 1.35; border-bottom: 2px solid #000; }
+    .full-width-block strong { font-size: 7.5px; }
+    table { width: 100%; border-collapse: collapse; }
+    .items-table { font-size: 7.5px; }
+    .items-table th { background-color: #f0f0f0; padding: 5px 4px; text-align: left; font-weight: bold; border: 1px solid #000; font-size: 7.5px; }
+    .items-table td { padding: 5px 4px; border: 1px solid #000; vertical-align: top; }
+    .items-table .text-right { text-align: right; }
+    .items-table .text-center { text-align: center; }
+    .tbd { color: #999; font-style: italic; }
+    .instructions-block { padding: 6px 10px; font-size: 7.5px; line-height: 1.4; border-top: 1px solid #ccc; }
+    .po-comments-block { padding: 6px 10px; font-size: 7.5px; line-height: 1.4; border-top: 1px solid #ccc; background-color: #fffbe6; }
+    .auth-section { display: grid; grid-template-columns: 1fr 1fr 1fr; border-top: 2px solid #000; min-height: 55px; }
+    .auth-block { padding: 7px 10px; font-size: 7.5px; }
+    .auth-block:not(:last-child) { border-right: 1px solid #000; }
+    .auth-block strong { display: block; margin-bottom: 10px; font-size: 7.5px; }
+    .priority-urgent { color: #b00; font-weight: bold; }
+  </style>
+
+  <div class="container">
+
+    {% if po_type == "mto" %}
+    <div class="po-type-banner mto">
+      MADE TO ORDER — MANUFACTURING REQUEST &nbsp;|&nbsp; Route to Production
+    </div>
+    {% else %}
+    <div class="po-type-banner replenishment">
+      REPLENISHMENT ORDER — STOCK REQUEST &nbsp;|&nbsp; Route to Inventory / Dispatch
+    </div>
+    {% endif %}
+
+    <div class="header-text">Internal Copy — Not a Tax Document</div>
+
+    <div class="title-header">
+      <img src="https://cdn.shopify.com/s/files/1/0775/8322/0993/files/Timanti_Logo_Black.jpg?v=1766506323" alt="Timanti Logo" class="logo">
+      <div class="title-center">
+        <h1>Purchase Order</h1>
+        <h2>{% if po_type == "mto" %}MTO Manufacturing Request{% else %}Replenishment Request{% endif %}</h2>
+      </div>
+    </div>
+
+    <div class="company-po-grid">
+      <div class="company-section">
+        <strong>RAISED BY: AURACARAT PRIVATE LIMITED — BENGALURU STORE</strong><br>
+        <strong>Store:</strong> 17th Cross, 19th Main Rd, HSR Layout Sec 2, Bengaluru – 560102<br>
+        <strong>TO: HQ / Production — </strong> C207 Crystal Plaza, New Link Road, Andheri (W), Mumbai – 400053<br>
+        <strong>Tel:</strong> +91-7710938305 &nbsp;|&nbsp; <strong>Email:</strong> hello@timanti.in<br>
+        <strong>GSTIN</strong> – 29ABBCA3309B1Z7 &nbsp;|&nbsp; <strong>PAN</strong> – ABBCA3309B
+      </div>
+
+      <div class="po-details-grid">
+        <div class="po-detail-row">
+          <div class="po-detail-cell">
+            <strong>PO Number</strong>{{ order.order_number }}
+          </div>
+          <div class="po-detail-cell">
+            <strong>Draft Order</strong>{{ order.name }}
+          </div>
+          <div class="po-detail-cell">
+            <strong>PO Date</strong>{{ order.created_at | date: "%d-%m-%Y" }}
+          </div>
+        </div>
+        <div class="po-detail-row">
+          <div class="po-detail-cell">
+            <strong>PO Type</strong>
+            {% if po_type == "mto" %}MTO — Make to Order{% else %}Replenishment{% endif %}
+          </div>
+          <div class="po-detail-cell">
+            <strong>Priority</strong>
+            {% if po_priority == "urgent" %}<span class="priority-urgent">URGENT</span>{% else %}Standard{% endif %}
+          </div>
+          <div class="po-detail-cell">
+            <strong>Orig. Order Ref</strong>
+            {% if original_order_ref != "" %}{{ original_order_ref }}{% else %}—{% endif %}
+          </div>
+        </div>
+        <div class="po-detail-row">
+          <div class="po-detail-cell">
+            <strong>Target Dispatch</strong>
+            {% if order.metafields.custom.target_dispatch_date %}
+              {{ order.metafields.custom.target_dispatch_date }}
+            {% else %}To be confirmed{% endif %}
+          </div>
+          <div class="po-detail-cell">
+            <strong>Customer Promise</strong>
+            {% if order.metafields.custom.customer_promise_date %}
+              {{ order.metafields.custom.customer_promise_date }}
+            {% else %}—{% endif %}
+          </div>
+          <div class="po-detail-cell">
+            <strong>Items</strong>{{ order.line_items | size }} line item(s)
+          </div>
+        </div>
+      </div>
+    </div>
+
+    {% if po_type == "mto" %}
+    <div class="addresses-section">
+      <div class="address-block">
+        <strong>Customer Billing Details:</strong>
+        {% if order.billing_address %}
+          <div class="address-field"><strong>Name:</strong> {{ order.billing_address.first_name | upcase }} {{ order.billing_address.last_name | upcase
+  }}</div>
+          <div class="address-field"><strong>Address:</strong>
+            {{ order.billing_address.address1 }}{% if order.billing_address.address2 %}, {{ order.billing_address.address2 }}{% endif %},
+            {{ order.billing_address.city }}, {{ order.billing_address.province }}, {{ order.billing_address.country }}.
+          </div>
+          <div class="address-field"><strong>Mobile:</strong> {{ order.billing_address.phone | default: "—" }}</div>
+          <div class="address-field"><strong>Email:</strong> {{ order.email | default: "—" }}</div>
+          {% if order.customer.metafields.custom.pan_number %}
+          <div class="address-field"><strong>PAN:</strong> {{ order.customer.metafields.custom.pan_number }}</div>
+          {% endif %}
+        {% else %}
+          <div class="address-field" style="color:#999;">Not provided</div>
+        {% endif %}
+      </div>
+      <div class="address-block">
+        <strong>Customer Shipping Details:</strong>
+        {% if order.shipping_address %}
+          <div class="address-field"><strong>Name:</strong> {{ order.shipping_address.first_name | upcase }} {{ order.shipping_address.last_name | upcase
+  }}</div>
+          <div class="address-field"><strong>Address:</strong>
+            {{ order.shipping_address.address1 }}{% if order.shipping_address.address2 %}, {{ order.shipping_address.address2 }}{% endif %},
+            {{ order.shipping_address.city }}, {{ order.shipping_address.province }}{% if order.shipping_address.zip %} – {{ order.shipping_address.zip }}{%
+   endif %}, {{ order.shipping_address.country }}.
+          </div>
+          <div class="address-field"><strong>Mobile:</strong> {{ order.shipping_address.phone | default: "—" }}</div>
+          <div class="address-field"><strong>Email:</strong> {{ order.email | default: "—" }}</div>
+        {% else %}
+          <div class="address-field" style="color:#999;">Same as billing</div>
+        {% endif %}
+      </div>
+    </div>
+    {% endif %}
+
+    <table class="items-table">
+      <thead>
+        <tr>
+          <th style="width: 4%;" class="text-center">S.No.</th>
+          <th style="width: 34%;">Item Description</th>
+          <th style="width: 12%;" class="text-center">Variant SKU</th>
+          <th style="width: 8%;" class="text-center">Qty</th>
+          <th style="width: 8%;" class="text-center">Metal / Karat</th>
+          <th style="width: 8%;" class="text-center">Gross Wt (g)*</th>
+          <th style="width: 8%;" class="text-center">Dia Wt (cts)*</th>
+          <th style="width: 9%;" class="text-center">Col. Stone (cts)*</th>
+          {% if po_type == "mto" %}
+          <th style="width: 9%;">Special Instructions</th>
+          {% else %}
+          <th style="width: 9%;" class="text-center">Current Stock</th>
+          {% endif %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for line_item in order.line_items %}
+        <tr>
+          <td class="text-center">{{ forloop.index }}.</td>
+          <td>{{ line_item.title }}</td>
+          <td class="text-center">
+            {% if line_item.sku %}{{ line_item.sku }}{% else %}<span class="tbd">—</span>{% endif %}
+          </td>
+          <td class="text-center">{{ line_item.quantity }}</td>
+          <td class="text-center">
+            {% if line_item.variant.option1 %}{{ line_item.variant.option1 }}{% endif %}
+            {% if line_item.variant.option2 %} {{ line_item.variant.option2 }}{% endif %}
+          </td>
+          <td class="text-center">
+            {% assign gw = line_item.product.metafields.custom.gross_weight_g | default: line_item.product.metafields.custom.total_metal_weight_g %}
+            {% if gw %}{{ gw | round: 2 }}{% else %}<span class="tbd">TBC</span>{% endif %}
+          </td>
+          <td class="text-center">
+            {% if line_item.product.metafields.custom.totaldiamondweight %}
+              {{ line_item.product.metafields.custom.totaldiamondweight }}
+            {% else %}<span class="tbd">TBC</span>{% endif %}
+          </td>
+          <td class="text-center">
+            {% if line_item.product.metafields.custom.pplcode %}
+              {{ line_item.product.metafields.custom.pplcode }}
+            {% else %}—{% endif %}
+          </td>
+          <td>
+            {% if po_type == "mto" %}
+              {% assign has_instructions = false %}
+              {% for p in line_item.properties %}
+                {% assign p_key = p.first | downcase %}
+                {% unless p_key contains "_" or p.last == blank %}
+                  {% assign has_instructions = true %}
+                  <div>{{ p.first }}: {{ p.last }}</div>
+                {% endunless %}
+              {% endfor %}
+              {% unless has_instructions %}—{% endunless %}
+            {% else %}
+              {% if line_item.product.metafields.custom.current_stock %}
+                {{ line_item.product.metafields.custom.current_stock }}
+              {% else %}—{% endif %}
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    {% if po_comments != "" %}
+    <div class="po-comments-block">
+      <strong>{% if po_type == "mto" %}MTO Comments{% else %}Replenishment Comments{% endif %}:</strong> {{ po_comments }}
+    </div>
+    {% endif %}
+
+    <div class="instructions-block">
+      * Weights are indicative estimates from product metafields. Actual weights to be confirmed by production at time of manufacture / dispatch.<br>
+      {% if order.note and order.note != "" %}
+      <br><strong>Order Notes / Instructions:</strong> {{ order.note }}
+      {% endif %}
+    </div>
+
+    <div class="auth-section">
+      <div class="auth-block">
+        <strong>Raised By (Store)</strong>
+        <br>Signature &amp; Date:
+      </div>
+      <div class="auth-block">
+        <strong>Acknowledged By (HQ)</strong>
+        <br>Signature &amp; Date:
+      </div>
+      <div class="auth-block">
+        <strong>Dispatched / Completed</strong>
+        <br>Signature &amp; Date:
+      </div>
+    </div>
+
+  </div>
