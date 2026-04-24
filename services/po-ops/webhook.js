@@ -10,7 +10,7 @@ const HQ_CC_EMAIL     = process.env.HQ_CC_EMAIL;
 const APPS_SCRIPT_URL = process.env.APPS_SCRIPT_URL;
 const MIDDLEWARE_URL  = process.env.MIDDLEWARE_BASE_URL;
 
-const ENABLE_CC = false; // set true once testing is done
+const ENABLE_CC = true; // set true once testing is done
 
 // ─── HMAC ─────────────────────────────────────────────────────────────────────
 
