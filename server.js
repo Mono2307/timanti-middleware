@@ -968,6 +968,21 @@ app.post('/api/convert-to-order', async (req, res) => {
   }
 });
 
+app.get('/api/draft-order-metafields', async (req, res) => {
+  const { draftOrderId } = req.query;
+  if (!draftOrderId) return res.status(400).json({ success: false, error: 'draftOrderId required' });
+  try {
+    const token = await getShopifyToken();
+    const { data } = await axios.get(
+      `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}/metafields.json`,
+      { headers: { 'X-Shopify-Access-Token': token } }
+    );
+    return res.json({ success: true, metafields: data.metafields });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // ─────────────────────────────────────────
 // PO Operations
 // ─────────────────────────────────────────

@@ -1,0 +1,591 @@
+{
+  "info": {
+    "name": "Timanti Middleware — E2E Tests",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "Full end-to-end test suite for all payment flows. Set collection variables before running. Run folders in order — later tests depend on state created by earlier ones.\n\nIMPORTANT — Use a regular sales draft (e.g. D72, D75, D76), NOT a PO draft (D68, D69). PO drafts have different flow handling.\n\nDANGER — 5b (/api/convert-to-order) WILL irreversibly convert the draft to a real Shopify order regardless of the AUTO_CONVERT flag. Only run 5b when you are ready to complete the sale."
+  },
+  "variable": [
+    { "key": "BASE_URL",              "value": "https://timanti-middleware.fly.dev", "description": "Switch to http://localhost:8080 for local testing" },
+    { "key": "TEST_DRAFT_ORDER_ID",   "value": "", "description": "A real open Shopify draft order ID (numeric)" },
+    { "key": "TEST_DRAFT_ORDER_NAME", "value": "", "description": "e.g. #D1001" },
+    { "key": "TEST_CUSTOMER_PHONE",   "value": "", "description": "10-digit mobile, no country code" },
+    { "key": "TEST_CUSTOMER_EMAIL",   "value": "", "description": "Customer email for link notification" },
+    { "key": "TEST_CUSTOMER_NAME",    "value": "Test Customer", "description": "" },
+    { "key": "TEST_ADVANCE_AMOUNT",   "value": "1",  "description": "Advance payment amount in Rs (keep low for testing)" },
+    { "key": "TEST_TOTAL_AMOUNT",     "value": "2",  "description": "Full order total in Rs" },
+    { "key": "TEST_FINAL_AMOUNT",     "value": "1",  "description": "Final payment amount (total minus advance)" },
+    { "key": "GOKWIK_LINK_ID",        "value": "", "description": "Auto-set by Generate Advance Link test" },
+    { "key": "GOKWIK_FINAL_LINK_ID",  "value": "", "description": "Auto-set by Generate Final Link test" },
+    { "key": "CANCEL_LINK_ID",         "value": "", "description": "Auto-set by 3a Generate Link to Cancel" }
+  ],
+  "item": [
+
+    {
+      "name": "0 — Sanity Check",
+      "item": [
+        {
+          "name": "GET /api/test-db",
+          "request": {
+            "method": "GET",
+            "url": "{{BASE_URL}}/api/test-db"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test('Supabase connected', () => pm.expect(b.env.supabaseUrl).to.eql('SET'));",
+                  "pm.test('Shopify connected', () => pm.expect(b.env.shopifyUrl).to.eql('SET'));",
+                  "pm.test('Resend key set', () => pm.expect(b.env.resendApiKey).to.eql('SET'));",
+                  "console.log('Flags:', b.config);"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+
+    {
+      "name": "1 — GoKwik Advance Payment",
+      "description": "Creates an advance link, simulates payment via webhook, verifies deposit state.\n\nNOTE: 1a MUST be run before 1c. The webhook handler looks up an active payment_links row created by 1a — skipping 1a means 1c is a no-op (no link found, nothing updates).\n\nUse a regular sales draft for TEST_DRAFT_ORDER_ID. PO drafts will not work correctly.",
+      "item": [
+        {
+          "name": "1a. Generate Advance Link",
+          "request": {
+            "method": "POST",
+            "url": "{{BASE_URL}}/api/generate-payment-link",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"draftOrderId\": \"{{TEST_DRAFT_ORDER_ID}}\",\n  \"draftOrderName\": \"{{TEST_DRAFT_ORDER_NAME}}\",\n  \"amount\": {{TEST_ADVANCE_AMOUNT}},\n  \"totalAmount\": {{TEST_TOTAL_AMOUNT}},\n  \"customerPhone\": \"{{TEST_CUSTOMER_PHONE}}\",\n  \"customerName\": \"{{TEST_CUSTOMER_NAME}}\",\n  \"customerEmail\": \"{{TEST_CUSTOMER_EMAIL}}\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test('Success flag', () => pm.expect(b.success).to.be.true);",
+                  "pm.test('Has shortUrl', () => pm.expect(b.shortUrl).to.include('go.kwik.pe'));",
+                  "pm.test('installmentType is advance', () => pm.expect(b.installmentType).to.eql('advance'));",
+                  "pm.test('Has gokwikLinkId', () => pm.expect(b.gokwikLinkId).to.be.a('string'));",
+                  "pm.collectionVariables.set('GOKWIK_LINK_ID', b.gokwikLinkId);",
+                  "console.log('Link ID saved:', b.gokwikLinkId);",
+                  "console.log('Short URL:', b.shortUrl);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "1b. Check Link Status (GoKwik)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "https://gkx.gokwik.co/v1/payments/links?id={{GOKWIK_LINK_ID}}",
+              "host": ["gkx.gokwik.co"],
+              "path": ["v1", "payments", "links"],
+              "query": [{ "key": "id", "value": "{{GOKWIK_LINK_ID}}" }]
+            },
+            "header": [
+              { "key": "gk-app-id",     "value": "{{GOKWIK_APP_ID}}" },
+              { "key": "gk-app-secret", "value": "{{GOKWIK_APP_SECRET}}" }
+            ]
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test('Link status is created', () => pm.expect(b.data.status).to.eql('created'));",
+                  "pm.test('merchant_reference_id matches', () => pm.expect(b.data.merchant_reference_id).to.eql(pm.collectionVariables.get('TEST_DRAFT_ORDER_ID')));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "1c. Simulate GoKwik Webhook — Advance Paid",
+          "request": {
+            "method": "POST",
+            "url": "{{BASE_URL}}/api/gokwik-webhook",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"success\",\n  \"request_id\": \"test-adv-{{$randomUUID}}\",\n  \"gokwik_oid\": \"{{TEST_DRAFT_ORDER_ID}}\",\n  \"moid\": \"NA\",\n  \"transaction_id\": \"KWIKTEST_ADV_{{$randomAlphaNumeric}}\",\n  \"status_code\": \"E0000\",\n  \"status_description\": \"Transaction successful\",\n  \"timestamp\": {{$timestamp}},\n  \"payment_provider\": \"easebuzz\",\n  \"gateway_reference_id\": \"TESTADV{{$randomAlphaNumeric}}\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test('Acknowledged', () => pm.expect(b.success).to.be.true);",
+                  "console.log('Webhook accepted. Check Shopify draft tags and Supabase store_deposits for deposit:partial tag and payment_status=partial.');"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "1d. Verify — Tags + Metafields",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{BASE_URL}}/api/draft-orders",
+              "host": ["{{BASE_URL}}"],
+              "path": ["api", "draft-orders"]
+            },
+            "description": "Check tags via /api/draft-orders, then check metafields via the separate sub-resource endpoint."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "const draft = (b.draft_orders || []).find(d => d.id.toString() === pm.collectionVariables.get('TEST_DRAFT_ORDER_ID'));",
+                  "pm.test('Draft found', () => pm.expect(draft).to.exist);",
+                  "if (draft) {",
+                  "  pm.test('Has deposit:partial tag', () => pm.expect(draft.tags).to.include('deposit:partial'));",
+                  "  console.log('Tags:', draft.tags);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "1e. Verify — Metafields on Draft",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{BASE_URL}}/api/draft-order-metafields?draftOrderId={{TEST_DRAFT_ORDER_ID}}",
+              "host": ["{{BASE_URL}}"],
+              "path": ["api", "draft-order-metafields"],
+              "query": [{ "key": "draftOrderId", "value": "{{TEST_DRAFT_ORDER_ID}}" }]
+            },
+            "description": "Fetches metafields directly from Shopify sub-resource. Metafields are not included in draft order list responses."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test('Has metafields', () => pm.expect(b.metafields).to.be.an('array'));",
+                  "const mfMap = {};",
+                  "for (const mf of (b.metafields || [])) mfMap[mf.key] = mf.value;",
+                  "console.log('Metafields:', JSON.stringify(mfMap, null, 2));",
+                  "pm.test('payment_status = partial', () => pm.expect(mfMap['payment_status']).to.eql('partial'));",
+                  "pm.test('amount_paid set', () => pm.expect(mfMap['amount_paid']).to.exist);"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+
+    {
+      "name": "2 — GoKwik Final Payment",
+      "description": "Creates the final payment link after advance is recorded, simulates final payment.",
+      "item": [
+        {
+          "name": "2a. Generate Final Link",
+          "request": {
+            "method": "POST",
+            "url": "{{BASE_URL}}/api/generate-payment-link",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"draftOrderId\": \"{{TEST_DRAFT_ORDER_ID}}\",\n  \"draftOrderName\": \"{{TEST_DRAFT_ORDER_NAME}}\",\n  \"amount\": {{TEST_FINAL_AMOUNT}},\n  \"totalAmount\": {{TEST_TOTAL_AMOUNT}},\n  \"customerPhone\": \"{{TEST_CUSTOMER_PHONE}}\",\n  \"customerName\": \"{{TEST_CUSTOMER_NAME}}\",\n  \"customerEmail\": \"{{TEST_CUSTOMER_EMAIL}}\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test('Success flag', () => pm.expect(b.success).to.be.true);",
+                  "pm.test('installmentType is final', () => pm.expect(b.installmentType).to.eql('final'));",
+                  "pm.collectionVariables.set('GOKWIK_FINAL_LINK_ID', b.gokwikLinkId);",
+                  "console.log('Final link ID saved:', b.gokwikLinkId);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2b. Simulate GoKwik Webhook — Final Paid",
+          "request": {
+            "method": "POST",
+            "url": "{{BASE_URL}}/api/gokwik-webhook",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"success\",\n  \"request_id\": \"test-fin-{{$randomUUID}}\",\n  \"gokwik_oid\": \"{{TEST_DRAFT_ORDER_ID}}\",\n  \"moid\": \"NA\",\n  \"transaction_id\": \"KWIKTEST_FIN_{{$randomAlphaNumeric}}\",\n  \"status_code\": \"E0000\",\n  \"status_description\": \"Transaction successful\",\n  \"timestamp\": {{$timestamp}},\n  \"payment_provider\": \"easebuzz\",\n  \"gateway_reference_id\": \"TESTFIN{{$randomAlphaNumeric}}\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test('Acknowledged', () => pm.expect(b.success).to.be.true);",
+                  "console.log('Final payment webhook accepted.');",
+                  "console.log('Expected: deposit:fully-paid tag, payment_status=full metafield.');",
+                  "console.log('If AUTO_CONVERT=true, draft should now be an order in Shopify.');"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2c. Verify — Tags (Fully Paid)",
+          "request": {
+            "method": "GET",
+            "url": "{{BASE_URL}}/api/draft-orders"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "const draft = (b.draft_orders || []).find(d => d.id.toString() === pm.collectionVariables.get('TEST_DRAFT_ORDER_ID'));",
+                  "if (draft) {",
+                  "  pm.test('Has deposit:fully-paid tag', () => pm.expect(draft.tags).to.include('deposit:fully-paid'));",
+                  "  console.log('Tags:', draft.tags);",
+                  "} else {",
+                  "  console.log('Draft not found — may have been converted to order (expected if AUTO_CONVERT=true).');",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2d. Verify — Metafields (Fully Paid)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{BASE_URL}}/api/draft-order-metafields?draftOrderId={{TEST_DRAFT_ORDER_ID}}",
+              "host": ["{{BASE_URL}}"],
+              "path": ["api", "draft-order-metafields"],
+              "query": [{ "key": "draftOrderId", "value": "{{TEST_DRAFT_ORDER_ID}}" }]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "const mfMap = {};",
+                  "for (const mf of (b.metafields || [])) mfMap[mf.key] = mf.value;",
+                  "console.log('Metafields:', JSON.stringify(mfMap, null, 2));",
+                  "pm.test('payment_status = full', () => pm.expect(mfMap['payment_status']).to.eql('full'));",
+                  "pm.test('amount_pending = 0', () => pm.expect(String(mfMap['amount_pending'])).to.eql('0'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+
+    {
+      "name": "3 — Cancel Payment Link",
+      "description": "Creates a link and immediately cancels it. Uses a fresh draft order ID.",
+      "item": [
+        {
+          "name": "3a. Generate Link to Cancel",
+          "request": {
+            "method": "POST",
+            "url": "{{BASE_URL}}/api/generate-payment-link",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"draftOrderId\": \"{{TEST_DRAFT_ORDER_ID}}\",\n  \"draftOrderName\": \"{{TEST_DRAFT_ORDER_NAME}}\",\n  \"amount\": 1,\n  \"totalAmount\": 2,\n  \"customerPhone\": \"{{TEST_CUSTOMER_PHONE}}\",\n  \"customerName\": \"{{TEST_CUSTOMER_NAME}}\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test('Success', () => pm.expect(b.success).to.be.true);",
+                  "pm.collectionVariables.set('CANCEL_LINK_ID', b.gokwikLinkId);",
+                  "console.log('Link to cancel:', b.gokwikLinkId);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "3b. Cancel the Link",
+          "request": {
+            "method": "POST",
+            "url": "{{BASE_URL}}/api/cancel-payment-link",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"gokwikLinkId\": \"{{CANCEL_LINK_ID}}\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test('Cancelled', () => pm.expect(b.success).to.be.true);",
+                  "pm.test('Status is cancelled', () => pm.expect(b.status).to.eql('cancelled'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+
+    {
+      "name": "4 — Cash Payment Flow",
+      "description": "Log advance and final cash payments against a draft order.",
+      "item": [
+        {
+          "name": "4a. Log Advance Cash Payment",
+          "request": {
+            "method": "POST",
+            "url": "{{BASE_URL}}/api/log-cash-payment",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"draftOrderId\": \"{{TEST_DRAFT_ORDER_ID}}\",\n  \"draftOrderName\": \"{{TEST_DRAFT_ORDER_NAME}}\",\n  \"amountInRupees\": {{TEST_ADVANCE_AMOUNT}},\n  \"totalAmountInRupees\": {{TEST_TOTAL_AMOUNT}},\n  \"customerName\": \"{{TEST_CUSTOMER_NAME}}\",\n  \"notes\": \"Cash received at counter — E2E test\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test('Success', () => pm.expect(b.success).to.be.true);",
+                  "console.log('Advance cash recorded. Check deposit:partial tag in Shopify.');"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "4b. Log Final Cash Payment",
+          "request": {
+            "method": "POST",
+            "url": "{{BASE_URL}}/api/log-cash-payment",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"draftOrderId\": \"{{TEST_DRAFT_ORDER_ID}}\",\n  \"draftOrderName\": \"{{TEST_DRAFT_ORDER_NAME}}\",\n  \"amountInRupees\": {{TEST_FINAL_AMOUNT}},\n  \"totalAmountInRupees\": {{TEST_TOTAL_AMOUNT}},\n  \"customerName\": \"{{TEST_CUSTOMER_NAME}}\",\n  \"notes\": \"Final cash balance received — E2E test\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test('Success', () => pm.expect(b.success).to.be.true);",
+                  "console.log('Final cash recorded. Check deposit:fully-paid tag in Shopify.');"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+
+    {
+      "name": "5 — Manual Controls",
+      "description": "Test the manual override endpoints for invoice send and draft conversion.\n\nDANGER — 5b calls /api/convert-to-order which bypasses the AUTO_CONVERT_DRAFT_TO_ORDER flag entirely. It WILL permanently convert TEST_DRAFT_ORDER_ID into a real Shopify order. Only run 5b on a draft you are ready to complete.",
+      "item": [
+        {
+          "name": "5a. Send Draft Invoice",
+          "request": {
+            "method": "POST",
+            "url": "{{BASE_URL}}/api/send-draft-invoice",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"draftOrderId\": \"{{TEST_DRAFT_ORDER_ID}}\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test('Success', () => pm.expect(b.success).to.be.true);",
+                  "console.log('Draft invoice sent. Customer should receive Draft Order Invoice email from Shopify.');"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "5b. Convert Draft to Order [IRREVERSIBLE — bypasses AUTO_CONVERT flag]",
+          "request": {
+            "method": "POST",
+            "url": "{{BASE_URL}}/api/convert-to-order",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"draftOrderId\": \"{{TEST_DRAFT_ORDER_ID}}\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "console.warn('⚠️  5b ran — TEST_DRAFT_ORDER_ID has been permanently converted to a Shopify order.');",
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test('Success', () => pm.expect(b.success).to.be.true);",
+                  "pm.test('Has orderId', () => pm.expect(b.orderId).to.exist);",
+                  "console.log('Shopify Order ID:', b.orderId);",
+                  "console.log('Order Confirmation email should fire from Shopify.');"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+
+    {
+      "name": "6 — Error Cases",
+      "description": "Verify that bad requests are rejected cleanly.",
+      "item": [
+        {
+          "name": "6a. Generate Link — Missing customerPhone",
+          "request": {
+            "method": "POST",
+            "url": "{{BASE_URL}}/api/generate-payment-link",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"draftOrderId\": \"{{TEST_DRAFT_ORDER_ID}}\",\n  \"amount\": 100\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 400', () => pm.response.to.have.status(400));",
+                  "const b = pm.response.json();",
+                  "pm.test('Error mentions customerPhone', () => pm.expect(b.error).to.include('customerPhone'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "6b. Cancel Link — Non-existent linkId",
+          "request": {
+            "method": "POST",
+            "url": "{{BASE_URL}}/api/cancel-payment-link",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"gokwikLinkId\": \"KWIKLINK_DOES_NOT_EXIST\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Returns non-200', () => pm.response.to.not.have.status(200));",
+                  "console.log('Response:', pm.response.text());"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "6c. GoKwik Webhook — Unknown status",
+          "request": {
+            "method": "POST",
+            "url": "{{BASE_URL}}/api/gokwik-webhook",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"pending\",\n  \"gokwik_oid\": \"9999999999\",\n  \"transaction_id\": \"TEST\",\n  \"gateway_reference_id\": \"TEST\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Always 200 (idempotent)', () => pm.response.to.have.status(200));",
+                  "console.log('Unknown statuses should be silently ignored by the webhook handler.');"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "6d. Log Cash — Missing amount",
+          "request": {
+            "method": "POST",
+            "url": "{{BASE_URL}}/api/log-cash-payment",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"draftOrderId\": \"{{TEST_DRAFT_ORDER_ID}}\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 400', () => pm.response.to.have.status(400));",
+                  "pm.test('Error mentions amountInRupees', () => pm.expect(pm.response.json().error).to.include('amountInRupees'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+
+  ]
+}
