@@ -328,7 +328,7 @@ async function pushDraftOrderToTerminal({
     ClientId:                    parseInt(store.pine_client_id),
     StoreId:                     parseInt(store.pine_store_id),
     TotalInvoiceAmount:          amountInPaisa,
-    AutoCancelDurationInMinutes: 1
+    AutoCancelDurationInMinutes: 2
   };
 
   console.log(`UploadBilledTransaction txn ${txn.id} → "${store.store_name}" isPartial=${isPartial}`);
@@ -492,6 +492,20 @@ app.post('/api/shopify-draft-created', async (req, res) => {
     const shopifyLocationId = draft.location_id?.toString() || null;
     const terminalTag       = parseTerminalTag(draft.tags);
     console.log(`Shopify draft created: ${draftOrderName} Rs${amountInRupees}`);
+
+    // Run recalculation on every draft creation to lock gold rate as line item properties
+    try {
+      const token = await getShopifyToken();
+      await recalculatePricing({
+        draftOrderId:    draft.id,
+        shopifyToken:    token,
+        shopifyStoreUrl: process.env.SHOPIFY_STORE_URL
+      });
+      console.log(`Draft created: gold rate locked for ${draftOrderName}`);
+    } catch (recalcErr) {
+      console.error(`Draft created: recalculation failed for ${draftOrderName}:`, recalcErr.message);
+    }
+
     if (!AUTO_PUSH_TO_TERMINAL) { console.log(`Auto-push OFF — cashier pushes manually`); return; }
     if (!amountInRupees || parseFloat(amountInRupees) <= 0) { console.error(`Auto-push: zero amount — skipping`); return; }
     const result = await pushDraftOrderToTerminal({ draftOrderId, draftOrderName, amountInRupees, shopifyLocationId, terminalTag });
@@ -667,7 +681,12 @@ app.post('/api/shopify-draft-updated', async (req, res) => {
     if (!draft?.id) return;
 
     const discountObj = draft.applied_discount;
-    const discountAmount = discountObj ? Number(discountObj.amount || discountObj.value || 0) : 0;
+    let discountAmount = 0;
+    if (discountObj) {
+      const rawAmount = parseFloat(discountObj.amount || 0);
+      const rawValue  = parseFloat(discountObj.value  || 0);
+      discountAmount  = rawAmount > 0 ? rawAmount : rawValue;
+    }
 
     if (!discountAmount || discountAmount <= 0) {
       console.log(`Draft updated webhook: #${draft.name} — no discount, skipping`);
