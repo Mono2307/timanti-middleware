@@ -24,10 +24,16 @@ async function fetchVariantBreakdown(variantId, shopifyToken, shopifyStoreUrl) {
     const mf = metafields.find(m => m.namespace === namespace && m.key === key);
     return mf ? parseFloat(mf.value) || 0 : 0;
   };
+  const findStr = (namespace, key) => {
+    const mf = metafields.find(m => m.namespace === namespace && m.key === key);
+    return mf ? (mf.value || '') : '';
+  };
   return {
-    gold:    find('custom', 'price_breakup_gold'),
-    diamond: find('custom', 'price_breakup_diamond'),
-    making:  find('custom', 'price_breakup_making'),
+    gold:          find('custom', 'price_breakup_gold'),
+    diamond:       find('custom', 'price_breakup_diamond'),
+    making:        find('custom', 'price_breakup_making'),
+    goldRate:      findStr('custom', 'gold_rate'),
+    goldUpdatedAt: findStr('custom', 'gold_last_updated_at'),
   };
 }
 
@@ -51,7 +57,11 @@ async function recalculate({ draftOrderId, shopifyToken, shopifyStoreUrl }) {
   const discountObj = draftOrder.applied_discount;
   let discountAmount = 0;
   if (discountObj) {
-    discountAmount = Number(discountObj.amount || discountObj.value || 0);
+    // Shopify may send amount="0.0" (truthy string) on the first webhook even when a real
+    // discount is set — use value as ground truth when amount parses to zero.
+    const rawAmount = parseFloat(discountObj.amount || 0);
+    const rawValue  = parseFloat(discountObj.value  || 0);
+    discountAmount  = rawAmount > 0 ? rawAmount : rawValue;
   }
 
   const taxableBeforeDiscount = roundToTwo(grossTotal / 1.03);
@@ -73,7 +83,7 @@ async function recalculate({ draftOrderId, shopifyToken, shopifyStoreUrl }) {
   // 3. Fetch variant metafields for breakdown (gold/diamond/making) per line item
   const itemBreakdowns = await Promise.all(
     productItems.map(async (item) => {
-      let breakdown = { gold: 0, diamond: 0, making: 0 };
+      let breakdown = { gold: 0, diamond: 0, making: 0, goldRate: '', goldUpdatedAt: '' };
       if (item.variant_id) {
         try {
           breakdown = await fetchVariantBreakdown(item.variant_id, shopifyToken, shopifyStoreUrl);
@@ -86,7 +96,7 @@ async function recalculate({ draftOrderId, shopifyToken, shopifyStoreUrl }) {
   );
 
   // 4. Build updated line items: proportional pricing + breakdown properties
-  const updatedLineItems = itemBreakdowns.map(({ item, gold, diamond, making }) => {
+  const updatedLineItems = itemBreakdowns.map(({ item, gold, diamond, making, goldRate, goldUpdatedAt }) => {
     const qty            = parseInt(item.quantity, 10);
     const itemLineTotal  = parseFloat(item.price) * qty;
     const proportion     = grossTotal > 0 ? itemLineTotal / grossTotal : 1 / productItems.length;
@@ -108,6 +118,8 @@ async function recalculate({ draftOrderId, shopifyToken, shopifyStoreUrl }) {
       { name: 'GST',              value: `Rs${itemGst}` },
       { name: 'Gross Value',      value: `Rs${grossValue}` },
     ];
+    if (goldRate)      properties.push({ name: '_gold_rate',       value: goldRate });
+    if (goldUpdatedAt) properties.push({ name: '_gold_updated_at', value: goldUpdatedAt });
 
     const updatedItem = {
       id:         item.id,

@@ -4,6 +4,8 @@
 // All Resend sends go through this module
 // ─────────────────────────────────────────
 
+const SEND_DEPOSIT_EMAIL = false; // set true to re-enable deposit confirmation emails via Resend
+
 const { createClient } = require('@supabase/supabase-js');
 
 const supabase = createClient(
@@ -181,6 +183,10 @@ function buildDepositEmailHtml({ draft_order_name, customer_name, total_price, a
 // ─────────────────────────────────────────
 
 async function sendDepositEmail(shopifyDraftId, draftOrderName, newAmountPaid, newAmountPending, newStatus, deposit, getShopifyToken) {
+  if (!SEND_DEPOSIT_EMAIL) {
+    console.log(`sendDepositEmail: disabled — skipping for ${draftOrderName}`);
+    return;
+  }
   let draftOrder = null;
   try {
     const token = await getShopifyToken();

@@ -3,10 +3,12 @@ const express = require('express');
 const cors    = require('cors');
 const axios   = require('axios');
 const { createClient } = require('@supabase/supabase-js');
-const { sendDepositEmail } = require('./emailService');
+const { sendEmail, sendDepositEmail } = require('./emailService');
 const { recalculate: recalculatePricing } = require('./services/pricing-engine');
 const { handlePoWebhook } = require('./services/po-ops/webhook');
 const { handlePoAction }  = require('./services/po-ops/action');
+const { createPaymentLink: createGokwikLink, cancelPaymentLink: cancelGokwikLink } = require('./services/gokwik');
+const { sendSMS } = require('./services/sms');
 
 const app = express();
 app.use(cors());
@@ -18,7 +20,9 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_KEY
 );
 
-const AUTO_PUSH_TO_TERMINAL = process.env.AUTO_PUSH_TO_TERMINAL === 'true';
+const AUTO_PUSH_TO_TERMINAL       = process.env.AUTO_PUSH_TO_TERMINAL       === 'true';
+const AUTO_CONVERT_DRAFT_TO_ORDER = process.env.AUTO_CONVERT_DRAFT_TO_ORDER === 'true';
+const AUTO_SEND_DRAFT_INVOICE     = process.env.AUTO_SEND_DRAFT_INVOICE     === 'true';
 
 function getPinePaymentMode() {
   const mode = (process.env.PINE_PAYMENT_MODE || 'integer').toLowerCase();
@@ -134,6 +138,15 @@ function makePineTransactionNumber(draftOrderName) {
   return `${draftOrderName}-${Date.now()}`;
 }
 
+function extractPineTransactionData(transactionDataArray) {
+  const map = {};
+  for (const item of (transactionDataArray || [])) map[item.Tag] = item.Value;
+  return {
+    utr:         map['RRN'] || null,
+    paymentMode: (map['PaymentMode'] || '').toLowerCase() || null
+  };
+}
+
 // ─────────────────────────────────────────
 // Shopify Helpers
 // ─────────────────────────────────────────
@@ -183,15 +196,63 @@ async function tagShopifyDraftOrder(shopifyDraftId, amountPaid, amountPending, s
   }
 }
 
+function getMetafieldType(key) {
+  if (key === 'amount_paid' || key === 'amount_pending') return 'number_decimal';
+  if (key === 'is_finalized') return 'boolean';
+  return 'single_line_text_field';
+}
+
+async function updateDraftOrderMetafields(draftOrderId, fields) {
+  try {
+    const token = await getShopifyToken();
+    const metafields = Object.entries(fields)
+      .filter(([, v]) => v !== null && v !== undefined)
+      .map(([key, value]) => ({ namespace: 'custom', key, type: getMetafieldType(key), value: String(value) }));
+    if (metafields.length === 0) return;
+    await axios.put(
+      `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}.json`,
+      { draft_order: { id: draftOrderId, metafields } },
+      { headers: { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' }, timeout: 10000 }
+    );
+    console.log(`✅ Metafields updated for draft ${draftOrderId}`);
+  } catch (err) {
+    console.error('❌ Metafield update failed:', err.response?.data || err.message);
+  }
+}
+
+async function sendDraftOrderInvoice(draftOrderId) {
+  try {
+    const token = await getShopifyToken();
+    await axios.post(
+      `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}/send_invoice.json`,
+      { draft_order_invoice: {} },
+      { headers: { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' }, timeout: 10000 }
+    );
+    console.log(`✅ Draft invoice sent for ${draftOrderId}`);
+  } catch (err) {
+    console.error('❌ Draft invoice send failed:', err.response?.data || err.message);
+  }
+}
+
+async function convertDraftToOrder(draftOrderId, transactionDbId) {
+  if (!AUTO_CONVERT_DRAFT_TO_ORDER) {
+    console.log(`⏸️  AUTO_CONVERT off — draft ${draftOrderId} ready for manual conversion`);
+    return null;
+  }
+  return completeShopifyOrder(draftOrderId, transactionDbId);
+}
+
 // ─────────────────────────────────────────
 // Payment Completion Handler
 // ─────────────────────────────────────────
 
-async function handlePaymentCompletion(transaction) {
+async function handlePaymentCompletion(transaction, overrides = {}) {
   if (!transaction.shopify_draft_id) return;
+  const { utr = null, paymentSource = 'pine', paymentModeOverride = null } = overrides;
+  const paymentMode = paymentModeOverride || transaction.payment_mode || 'card';
 
   if (transaction.is_partial) {
-    console.log(`Partial payment confirmed for txn ${transaction.id} — updating store_deposits`);
+    console.log(`Partial payment confirmed — draft ${transaction.shopify_draft_id} source=${paymentSource}`);
     const amountPaidRupees = transaction.amount_paisa / 100;
 
     let { data: deposit } = await supabase
@@ -214,6 +275,7 @@ async function handlePaymentCompletion(transaction) {
 
     if (!deposit) { console.error(`Could not find or create store_deposits for draft ${transaction.shopify_draft_id}`); return; }
 
+    const installmentType  = deposit.payment_status === 'unpaid' ? 'advance' : 'final';
     const newAmountPaid    = parseFloat(deposit.amount_paid) + amountPaidRupees;
     const newAmountPending = parseFloat(deposit.total_amount) - newAmountPaid;
     const newStatus        = newAmountPending <= 0.01 ? 'paid' : 'partial';
@@ -226,47 +288,51 @@ async function handlePaymentCompletion(transaction) {
     }).eq('id', deposit.id);
 
     await supabase.from('store_deposit_payments').insert({
-      deposit_id:     deposit.id,
-      draft_order_id: transaction.shopify_draft_id,
-      amount:         amountPaidRupees,
-      payment_mode:   transaction.payment_mode || 'card',
-      notes:          `Pine txn ${transaction.id}`,
-      pine_ptrid:     transaction.pine_ref_id || null,
-      recorded_by:    'pos_terminal',
-      created_at:     new Date().toISOString()
+      deposit_id:       deposit.id,
+      draft_order_id:   transaction.shopify_draft_id,
+      amount:           amountPaidRupees,
+      payment_mode:     paymentMode,
+      notes:            `${paymentSource} txn ${transaction.id}`,
+      pine_ptrid:       transaction.pine_ref_id || null,
+      recorded_by:      paymentSource,
+      installment_type: installmentType,
+      utr:              utr,
+      payment_source:   paymentSource,
+      created_at:       new Date().toISOString()
     });
 
-    await tagShopifyDraftOrder(
-      transaction.shopify_draft_id,
-      newAmountPaid,
-      Math.max(0, newAmountPending),
-      newStatus
-    );
+    await tagShopifyDraftOrder(transaction.shopify_draft_id, newAmountPaid, Math.max(0, newAmountPending), newStatus);
 
-    // Re-fetch deposit to get updated email_sent flags
+    const metafieldUpdate = {
+      payment_status:  newStatus === 'paid' ? 'full' : 'partial',
+      amount_paid:     newAmountPaid.toFixed(2),
+      amount_pending:  Math.max(0, newAmountPending).toFixed(2)
+    };
+    if (installmentType === 'advance') metafieldUpdate.payment_mode_advance = paymentMode;
+    if (installmentType === 'final')   metafieldUpdate.payment_mode_final   = paymentMode;
+    await updateDraftOrderMetafields(transaction.shopify_draft_id, metafieldUpdate);
+
     const { data: updatedDeposit } = await supabase
       .from('store_deposits').select('*').eq('id', deposit.id).single();
 
-    // Send deposit confirmation email via emailService
     await sendDepositEmail(
-      transaction.shopify_draft_id,
-      transaction.draft_order_name,
-      newAmountPaid,
-      Math.max(0, newAmountPending),
-      newStatus,
-      updatedDeposit,
-      getShopifyToken  // pass token getter so emailService can fetch draft order
+      transaction.shopify_draft_id, transaction.draft_order_name,
+      newAmountPaid, Math.max(0, newAmountPending), newStatus, updatedDeposit, getShopifyToken
     );
 
+    if (newStatus === 'partial' && AUTO_SEND_DRAFT_INVOICE) {
+      await sendDraftOrderInvoice(transaction.shopify_draft_id);
+    }
+
     if (newStatus === 'paid') {
-      console.log(`✅ Fully paid — completing Shopify order for draft ${transaction.shopify_draft_id}`);
-      await completeShopifyOrder(transaction.shopify_draft_id, transaction.id);
+      console.log(`✅ Fully paid — draft ${transaction.shopify_draft_id}`);
+      await convertDraftToOrder(transaction.shopify_draft_id, transaction.id);
     } else {
-      console.log(`⏳ Partial recorded — Shopify NOT completed yet (Rs${newAmountPending.toFixed(2)} pending)`);
+      console.log(`⏳ ${installmentType} recorded — Rs${Math.max(0, newAmountPending).toFixed(2)} pending`);
     }
 
   } else {
-    await completeShopifyOrder(transaction.shopify_draft_id, transaction.id);
+    await convertDraftToOrder(transaction.shopify_draft_id, transaction.id);
   }
 }
 
@@ -390,8 +456,13 @@ async function pollActiveTxns() {
         console.log(`Poller: txn ${txn.id} PTRID=${ptrid}: code=${responseCode} msg="${responseMessage}"${newStatus ? ` → ${newStatus}` : ' (no change)'}`);
 
         if (newStatus && newStatus !== txn.status) {
-          await supabase.from('transactions').update({ status: newStatus }).eq('id', txn.id);
-          if (newStatus === 'PAID') await handlePaymentCompletion(txn);
+          const { utr, paymentMode } = extractPineTransactionData(pineResponse.data.TransactionData);
+          await supabase.from('transactions').update({
+            status: newStatus,
+            ...(utr         ? { utr }          : {}),
+            ...(paymentMode ? { payment_mode: paymentMode } : {})
+          }).eq('id', txn.id);
+          if (newStatus === 'PAID') await handlePaymentCompletion(txn, { utr, paymentSource: 'pine' });
         }
       } catch (err) { console.error(`Poller: error on txn ${txn.id}:`, err.message); }
     }
@@ -542,8 +613,13 @@ app.post('/api/check-status', async (req, res) => {
     const pineMessage                   = pineStatusResponse.data.ResponseMessage || '';
     const { newStatus, cashierMessage } = getPineStatusResult(pineResponseCode, pineMessage);
     if (newStatus && newStatus !== transaction.status) {
-      await supabase.from('transactions').update({ status: newStatus }).eq('id', transactionId);
-      if (newStatus === 'PAID') await handlePaymentCompletion(transaction);
+      const { utr, paymentMode } = extractPineTransactionData(pineStatusResponse.data.TransactionData);
+      await supabase.from('transactions').update({
+        status: newStatus,
+        ...(utr         ? { utr }          : {}),
+        ...(paymentMode ? { payment_mode: paymentMode } : {})
+      }).eq('id', transactionId);
+      if (newStatus === 'PAID') await handlePaymentCompletion(transaction, { utr, paymentSource: 'pine' });
     }
     return res.json({ success: true, status: newStatus || transaction.status, message: cashierMessage,
       calledPine: true, pineResponseCode, pineResponseMessage: pineMessage,
@@ -627,11 +703,13 @@ app.post('/api/pine-postback', async (req, res) => {
     const transaction = txnRows[0];
     const newStatus   = responseCode === 0 ? 'PAID' : 'FAILED';
     const paymentMode = data['PaymenMode'] || data['PaymentMode'] || null;
+    const utr         = data['RRN'] || null;
     await supabase.from('transactions').update({
-      status: newStatus, pine_ref_id: ptrid?.toString() || transaction.pine_ref_id, payment_mode: paymentMode
+      status: newStatus, pine_ref_id: ptrid?.toString() || transaction.pine_ref_id, payment_mode: paymentMode,
+      ...(utr ? { utr } : {})
     }).eq('id', transaction.id);
     console.log(`✅ PostBack: txn ${transaction.id} → ${newStatus}`);
-    if (newStatus === 'PAID') await handlePaymentCompletion(transaction);
+    if (newStatus === 'PAID') await handlePaymentCompletion(transaction, { utr, paymentSource: 'pine', paymentModeOverride: paymentMode });
   } catch (error) { console.error('PostBack error:', error.message); }
 });
 
@@ -738,6 +816,159 @@ app.post('/pricing/recalculate', async (req, res) => {
 });
 
 // ─────────────────────────────────────────
+// GoKwik Payment Links
+// ─────────────────────────────────────────
+
+app.post('/api/generate-payment-link', async (req, res) => {
+  const { draftOrderId, draftOrderName, amount, totalAmount, customerPhone, customerName, customerEmail } = req.body;
+  if (!draftOrderId || !amount || !customerPhone) {
+    return res.status(400).json({ success: false, error: 'Missing: draftOrderId, amount, customerPhone' });
+  }
+  try {
+    const { data: existingDeposit } = await supabase
+      .from('store_deposits').select('payment_status')
+      .eq('draft_order_id', draftOrderId.toString()).maybeSingle();
+    const installmentType = existingDeposit?.payment_status === 'partial' ? 'final' : 'advance';
+
+    const { gokwikLinkId, shortUrl, expiresAt } = await createGokwikLink({
+      draftOrderId, amount, customerPhone, customerName, customerEmail
+    });
+
+    await supabase.from('payment_links').insert({
+      draft_order_id:   draftOrderId.toString(),
+      draft_order_name: draftOrderName || draftOrderId.toString(),
+      gokwik_link_id:   gokwikLinkId,
+      short_url:        shortUrl,
+      amount,
+      total_amount:     totalAmount || null,
+      installment_type: installmentType,
+      status:           'created',
+      customer_phone:   customerPhone,
+      expires_at:       expiresAt
+    });
+
+    const smsMessage = `Your Timanti payment link: ${shortUrl} — Amount: Rs${amount}. Valid 7 days.`;
+    await sendSMS(customerPhone, smsMessage);
+
+    if (customerEmail) {
+      await sendEmail({
+        to:      customerEmail,
+        subject: `Timanti Payment Link — Rs${amount}`,
+        html:    `<p>Please use the link below to complete your payment of Rs${amount}:</p><p><a href="${shortUrl}">${shortUrl}</a></p><p>This link is valid for 7 days.</p>`
+      });
+    }
+
+    console.log(`✅ GoKwik link created for draft ${draftOrderId}: ${gokwikLinkId} (${installmentType})`);
+    return res.json({ success: true, shortUrl, gokwikLinkId, installmentType });
+  } catch (err) {
+    console.error('Generate payment link error:', err.response?.data || err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/cancel-payment-link', async (req, res) => {
+  const { gokwikLinkId } = req.body;
+  if (!gokwikLinkId) return res.status(400).json({ success: false, error: 'gokwikLinkId required' });
+  try {
+    const result = await cancelGokwikLink(gokwikLinkId);
+    await supabase.from('payment_links').update({ status: 'cancelled', updated_at: new Date().toISOString() })
+      .eq('gokwik_link_id', gokwikLinkId);
+    return res.json({ success: true, ...result });
+  } catch (err) {
+    console.error('Cancel payment link error:', err.response?.data || err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/gokwik-webhook', async (req, res) => {
+  res.status(200).json({ success: true });
+  try {
+    const { status, gokwik_oid, transaction_id, gateway_reference_id } = req.body;
+    console.log(`GoKwik webhook: status=${status} oid=${gokwik_oid} txn=${transaction_id}`);
+
+    if (status === 'success') {
+      const { data: link } = await supabase
+        .from('payment_links').select('*')
+        .eq('draft_order_id', gokwik_oid.toString())
+        .eq('status', 'created')
+        .order('created_at', { ascending: false })
+        .limit(1).maybeSingle();
+
+      if (!link) { console.error(`GoKwik webhook: no active link for draft ${gokwik_oid}`); return; }
+
+      await supabase.from('payment_links').update({
+        status: 'success', gokwik_txn_id: transaction_id,
+        utr: gateway_reference_id, updated_at: new Date().toISOString()
+      }).eq('gokwik_link_id', link.gokwik_link_id);
+
+      await handlePaymentCompletion({
+        shopify_draft_id:   gokwik_oid.toString(),
+        draft_order_name:   link.draft_order_name || gokwik_oid.toString(),
+        amount_paisa:       Math.round(link.amount * 100),
+        total_amount_paisa: link.total_amount ? Math.round(link.total_amount * 100) : null,
+        is_partial:         true,
+        pine_ref_id:        null,
+        id:                 `gk-${transaction_id}`
+      }, { utr: gateway_reference_id, paymentSource: 'gokwik', paymentModeOverride: 'gokwik_link' });
+    }
+
+    if (status === 'cancelled' || status === 'expired') {
+      await supabase.from('payment_links').update({ status, updated_at: new Date().toISOString() })
+        .eq('draft_order_id', gokwik_oid.toString()).eq('status', 'created');
+    }
+  } catch (err) {
+    console.error('GoKwik webhook error:', err.message);
+  }
+});
+
+app.post('/api/log-cash-payment', async (req, res) => {
+  const { draftOrderId, draftOrderName, amountInRupees, totalAmountInRupees, customerName, notes } = req.body;
+  if (!draftOrderId || !amountInRupees) {
+    return res.status(400).json({ success: false, error: 'Missing: draftOrderId, amountInRupees' });
+  }
+  try {
+    await handlePaymentCompletion({
+      shopify_draft_id:   draftOrderId.toString(),
+      draft_order_name:   draftOrderName || draftOrderId.toString(),
+      amount_paisa:       Math.round(parseFloat(amountInRupees) * 100),
+      total_amount_paisa: totalAmountInRupees ? Math.round(parseFloat(totalAmountInRupees) * 100) : null,
+      is_partial:         true,
+      pine_ref_id:        null,
+      customer_name:      customerName || '',
+      id:                 `cash-${Date.now()}`
+    }, { utr: null, paymentSource: 'cash', paymentModeOverride: 'cash' });
+
+    return res.json({ success: true, message: 'Cash payment recorded.' });
+  } catch (err) {
+    console.error('Log cash payment error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/send-draft-invoice', async (req, res) => {
+  const { draftOrderId } = req.body;
+  if (!draftOrderId) return res.status(400).json({ success: false, error: 'draftOrderId required' });
+  try {
+    await sendDraftOrderInvoice(draftOrderId);
+    return res.json({ success: true });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/convert-to-order', async (req, res) => {
+  const { draftOrderId } = req.body;
+  if (!draftOrderId) return res.status(400).json({ success: false, error: 'draftOrderId required' });
+  try {
+    const orderId = await completeShopifyOrder(draftOrderId, null);
+    if (!orderId) return res.status(500).json({ success: false, error: 'Shopify conversion failed — check logs' });
+    return res.json({ success: true, orderId });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ─────────────────────────────────────────
 // PO Operations
 // ─────────────────────────────────────────
 
@@ -747,13 +978,69 @@ app.post('/api/po-webhook', (req, res) => handlePoWebhook(req, res, PO_DEPS()));
 app.get('/api/po-action',   (req, res) => handlePoAction(req, res, PO_DEPS()));
 
 // ─────────────────────────────────────────
+// Price Update Trigger
+// ─────────────────────────────────────────
+
+app.post('/api/trigger-price-update', async (req, res) => {
+  const secret = req.headers['x-webhook-secret'];
+  if (!process.env.PRICE_UPDATE_WEBHOOK_SECRET || secret !== process.env.PRICE_UPDATE_WEBHOOK_SECRET) {
+    return res.status(401).json({ success: false, error: 'Unauthorized' });
+  }
+
+  const pure = parseFloat(req.body.pure_rate);
+  if (isNaN(pure) || pure < 1000 || pure > 200000) {
+    return res.status(400).json({ success: false, error: 'pure_rate must be between 1000 and 200000' });
+  }
+
+  const setAt   = new Date().toISOString();
+  const payload = JSON.stringify({ pure, set_at: setAt });
+
+  const { error: dbErr } = await supabase.from('config').upsert({
+    key:        'gold_rate',
+    value:      payload,
+    updated_at: setAt,
+  });
+
+  if (dbErr) {
+    console.error('Price update trigger: Supabase write failed:', dbErr.message);
+    return res.status(500).json({ success: false, error: 'Failed to save gold rate to Supabase' });
+  }
+
+  const { spawn } = require('child_process');
+  const testGati = (req.body.test_gati || '').toString().trim().toUpperCase();
+  const args     = ['/app/price_update/orchestrator.py'];
+  if (testGati) args.push('--test', testGati);
+
+  const proc = spawn('python3', args, {
+    detached: true,
+    stdio:    'ignore',
+  });
+  proc.unref();
+
+  const rate18k = (pure * 0.771).toFixed(2);
+  const rate14k = (pure * 0.604).toFixed(2);
+  const mode    = testGati ? `TEST (${testGati})` : 'FULL RUN';
+  console.log(`Price update triggered [${mode}] — pure Rs${pure}/g | 18K Rs${rate18k} | 14K Rs${rate14k} | PID ${proc.pid}`);
+
+  return res.json({
+    success:   true,
+    message:   'Gold rate saved. Price update started — results emailed when complete.',
+    pure_rate: pure,
+    rate_18k:  parseFloat(rate18k),
+    rate_14k:  parseFloat(rate14k),
+    set_at:    setAt,
+    mode:      testGati ? `test:${testGati}` : 'full',
+  });
+});
+
+// ─────────────────────────────────────────
 // Start
 // ─────────────────────────────────────────
 
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, async () => {
   console.log(`\n🚀 Timanti Middleware on port ${PORT}`);
-  console.log(`⚙️  AUTO_PUSH=${AUTO_PUSH_TO_TERMINAL} | PINE_MODE=${process.env.PINE_PAYMENT_MODE || 'integer'}`);
+  console.log(`⚙️  AUTO_PUSH=${AUTO_PUSH_TO_TERMINAL} | AUTO_CONVERT=${AUTO_CONVERT_DRAFT_TO_ORDER} | AUTO_INVOICE=${AUTO_SEND_DRAFT_INVOICE} | PINE_MODE=${process.env.PINE_PAYMENT_MODE || 'integer'}`);
   console.log('  GET  /api/test-db');
   console.log('  GET  /api/draft-orders');
   console.log('  POST /api/push-to-terminal');
@@ -763,8 +1050,15 @@ app.listen(PORT, async () => {
   console.log('  POST /api/pine-postback');
   console.log('  POST /api/pine-webhook');
   console.log('  POST /pricing/recalculate');
+  console.log('  POST /api/generate-payment-link');
+  console.log('  POST /api/cancel-payment-link');
+  console.log('  POST /api/gokwik-webhook');
+  console.log('  POST /api/log-cash-payment');
+  console.log('  POST /api/send-draft-invoice');
+  console.log('  POST /api/convert-to-order');
   console.log('  POST /api/po-webhook');
   console.log('  GET  /api/po-action');
+  console.log('  POST /api/trigger-price-update');
   await initShopifyToken();
   console.log('🔄 Background poller started (30s)');
   setInterval(pollActiveTxns, 30000);

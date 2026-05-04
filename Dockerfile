@@ -31,8 +31,16 @@ COPY . .
 # Final stage for app image
 FROM base
 
+# Python for price update scripts
+RUN apt-get update -qq && \
+    apt-get install --no-install-recommends -y python3 python3-pip && \
+    rm -rf /var/lib/apt/lists/*
+
 # Copy built application
 COPY --from=build /app /app
+
+# Install Python dependencies for price update
+RUN pip3 install --no-cache-dir -r /app/price_update/requirements.txt --break-system-packages
 
 # Start the server by default, this can be overwritten at runtime
 EXPOSE 3000
