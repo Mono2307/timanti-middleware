@@ -978,6 +978,36 @@ app.post('/api/po-webhook', (req, res) => handlePoWebhook(req, res, PO_DEPS()));
 app.get('/api/po-action',   (req, res) => handlePoAction(req, res, PO_DEPS()));
 
 // ─────────────────────────────────────────
+// Price Update Diagnostics
+// ─────────────────────────────────────────
+
+app.get('/api/price-update-diag', (req, res) => {
+  const { execFile } = require('child_process');
+  const script = [
+    'import sys, os',
+    'print("python:", sys.version)',
+    'import requests; print("requests: OK")',
+    'import resend; print("resend: OK")',
+    'from pathlib import Path',
+    'print("orchestrator:", Path("/app/price_update/orchestrator.py").exists())',
+    'print("snapshot:", Path("/app/price_update/shopify_snapshot.py").exists())',
+    'print("importer:", Path("/app/price_update/import_from_preview.mjs").exists())',
+    'print("SUPABASE_KEY set:", bool(os.environ.get("SUPABASE_SERVICE_KEY")))',
+    'print("RESEND_API_KEY set:", bool(os.environ.get("RESEND_API_KEY")))',
+    'print("FROM_EMAIL set:", bool(os.environ.get("FROM_EMAIL")))',
+  ].join('\n');
+
+  execFile('python3', ['-c', script], { timeout: 10000 }, (err, stdout, stderr) => {
+    res.json({
+      ok:     !err,
+      stdout: stdout || '',
+      stderr: stderr || '',
+      error:  err ? err.message : null,
+    });
+  });
+});
+
+// ─────────────────────────────────────────
 // Price Update Trigger
 // ─────────────────────────────────────────
 
@@ -1012,10 +1042,12 @@ app.post('/api/trigger-price-update', async (req, res) => {
   if (testGati) args.push('--test', testGati);
 
   const proc = spawn('python3', args, {
-    detached: true,
-    stdio:    'ignore',
+    detached: false,
+    stdio:    ['ignore', 'pipe', 'pipe'],
   });
-  proc.unref();
+  proc.stdout.on('data', d => console.log(`[price-update] ${d.toString().trim()}`));
+  proc.stderr.on('data', d => console.error(`[price-update ERR] ${d.toString().trim()}`));
+  proc.on('close', code => console.log(`[price-update] exited with code ${code}`));
 
   const rate18k = (pure * 0.771).toFixed(2);
   const rate14k = (pure * 0.604).toFixed(2);
