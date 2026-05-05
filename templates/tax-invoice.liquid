@@ -238,16 +238,17 @@
 
       {% for line_item in order.line_items %}
 
-      {% comment %}Extract pricing engine properties{% endcomment %}
       {% assign prop_discount_str = "0" %}
-      {% assign prop_gross_str = "" %}
+      {% assign prop_gross_str    = "" %}
+      {% assign prop_making_str   = "" %}
       {% assign prop_gross_wt = "" %}
       {% assign prop_net_wt   = "" %}
       {% assign prop_dia_cts  = "" %}
       {% assign prop_dia_pcs  = "" %}
       {% for p in line_item.properties %}
-        {% if p.first == "Discount Applied" %}{% assign prop_discount_str = p.last | remove: "Rs" %}{% endif %}
-        {% if p.first == "Gross Value" %}{% assign prop_gross_str = p.last | remove: "Rs" %}{% endif %}
+        {% if p.first == "Discount Applied" %}{% assign prop_discount_str = p.last | remove: "Rs" | strip %}{% endif %}
+        {% if p.first == "Gross Value"       %}{% assign prop_gross_str    = p.last | remove: "Rs" | strip %}{% endif %}
+        {% if p.first == "Making Charges" or p.first == "Making" %}{% assign prop_making_str = p.last | remove: "Rs" | strip %}{% endif %}
         {% if p.first == "_gross_wt"    %}{% assign prop_gross_wt = p.last %}{% endif %}
         {% if p.first == "_net_wt"      %}{% assign prop_net_wt   = p.last %}{% endif %}
         {% if p.first == "_diamond_cts" %}{% assign prop_dia_cts  = p.last %}{% endif %}
@@ -260,12 +261,7 @@
         {% assign gross_paise = line_item.final_line_price | plus: disc_paise %}
       {% endif %}
       {% assign total_gross_paise = total_gross_paise | plus: gross_paise %}
-      {% assign total_disc_paise = total_disc_paise | plus: disc_paise %}
-
-      {% assign prop_making_str = "" %}
-      {% for p in line_item.properties %}
-        {% if p.first == "Making Charges" or p.first == "Making" %}{% assign prop_making_str = p.last | remove: "Rs" | strip %}{% endif %}
-      {% endfor %}
+      {% assign total_disc_paise  = total_disc_paise  | plus: disc_paise %}
 
       <tr>
         <td>{{ line_item.title }}</td>
@@ -277,15 +273,15 @@
         <td class="text-center">
           {% if prop_gross_wt != "" %}{{ prop_gross_wt }}
           {% elsif jc_meta.gross_wt_grams %}{{ jc_meta.gross_wt_grams }}
-          {% elsif line_item.variant.metafields.custom.total_metal_weight_g %}{{ line_item.variant.metafields.custom.total_metal_weight_g | round: 3 }}
-          {% elsif line_item.variant.metafields.custom.gross_weight_g %}{{ line_item.variant.metafields.custom.gross_weight_g | round: 3 }}
+          {% elsif line_item.variant.metafields.custom.total_metal_weight_g %}{{ line_item.variant.metafields.custom.total_metal_weight_g | round: 2 }}
+          {% elsif line_item.variant.metafields.custom.gross_weight_g %}{{ line_item.variant.metafields.custom.gross_weight_g | round: 2 }}
           {% else %}–{% endif %}
         </td>
 
         <td class="text-center">
           {% if prop_net_wt != "" %}{{ prop_net_wt }}
           {% elsif jc_meta.net_wt_grams %}{{ jc_meta.net_wt_grams }}
-          {% elsif line_item.variant.metafields.custom.net_metal_weight_g %}{{ line_item.variant.metafields.custom.net_metal_weight_g | round: 3 }}
+          {% elsif line_item.variant.metafields.custom.net_metal_weight_g %}{{ line_item.variant.metafields.custom.net_metal_weight_g | round: 2 }}
           {% else %}–{% endif %}
         </td>
 
