@@ -881,8 +881,9 @@ app.post('/api/generate-payment-link', async (req, res) => {
     console.log(`✅ GoKwik link created for draft ${draftOrderId}: ${gokwikLinkId} (${installmentType})`);
     return res.json({ success: true, shortUrl, gokwikLinkId, installmentType });
   } catch (err) {
-    console.error('Generate payment link error:', err.response?.data || err.message);
-    return res.status(500).json({ success: false, error: err.message });
+    const detail = err.response?.data || err.message;
+    console.error('Generate payment link error:', detail);
+    return res.status(500).json({ success: false, error: err.message, detail });
   }
 });
 
@@ -904,17 +905,19 @@ app.post('/api/gokwik-webhook', async (req, res) => {
   res.status(200).json({ success: true });
   try {
     const { status, gokwik_oid, transaction_id, gateway_reference_id } = req.body;
-    console.log(`GoKwik webhook: status=${status} oid=${gokwik_oid} txn=${transaction_id}`);
+    // merchant_reference_id is "{draftOrderId}-{timestamp}" — strip the suffix
+    const draftOrderId = gokwik_oid ? gokwik_oid.toString().replace(/-\d+$/, '') : null;
+    console.log(`GoKwik webhook: status=${status} oid=${gokwik_oid} draft=${draftOrderId} txn=${transaction_id}`);
 
     if (status === 'success') {
       const { data: link } = await supabase
         .from('payment_links').select('*')
-        .eq('draft_order_id', gokwik_oid.toString())
+        .eq('draft_order_id', draftOrderId)
         .eq('status', 'created')
         .order('created_at', { ascending: false })
         .limit(1).maybeSingle();
 
-      if (!link) { console.error(`GoKwik webhook: no active link for draft ${gokwik_oid}`); return; }
+      if (!link) { console.error(`GoKwik webhook: no active link for draft ${draftOrderId}`); return; }
 
       await supabase.from('payment_links').update({
         status: 'success', gokwik_txn_id: transaction_id,
@@ -922,7 +925,7 @@ app.post('/api/gokwik-webhook', async (req, res) => {
       }).eq('gokwik_link_id', link.gokwik_link_id);
 
       await handlePaymentCompletion({
-        shopify_draft_id:   gokwik_oid.toString(),
+        shopify_draft_id:   draftOrderId,
         draft_order_name:   link.draft_order_name || gokwik_oid.toString(),
         amount_paisa:       Math.round(link.amount * 100),
         total_amount_paisa: link.total_amount ? Math.round(link.total_amount * 100) : null,
@@ -934,7 +937,7 @@ app.post('/api/gokwik-webhook', async (req, res) => {
 
     if (status === 'cancelled' || status === 'expired') {
       await supabase.from('payment_links').update({ status, updated_at: new Date().toISOString() })
-        .eq('draft_order_id', gokwik_oid.toString()).eq('status', 'created');
+        .eq('draft_order_id', draftOrderId).eq('status', 'created');
     }
   } catch (err) {
     console.error('GoKwik webhook error:', err.message);

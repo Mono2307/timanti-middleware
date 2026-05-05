@@ -9,10 +9,13 @@ const gkHeaders = () => ({
 
 async function createPaymentLink({ draftOrderId, amount, customerPhone, customerName, customerEmail }) {
   const expireAt = Math.floor(Date.now() / 1000) + 604800;
+  // Suffix with timestamp so GoKwik doesn't reject duplicate merchant_reference_id
+  // when multiple links are created for the same draft (advance + final, or retries)
+  const merchantRefId = `${draftOrderId}-${Date.now()}`;
   const response = await axios.post(`${BASE_URL()}/v1/payments/links`, {
     amount,
     currency:              'INR',
-    merchant_reference_id: draftOrderId.toString(),
+    merchant_reference_id: merchantRefId,
     mode:                  'standard',
     customer: {
       phone: customerPhone,
