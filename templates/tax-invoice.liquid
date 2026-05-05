@@ -48,6 +48,7 @@
   .watermark { position: relative; }
   .watermark-image { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); opacity: 0.1; width: 200px; height: auto; z-index: 0; pointer-events: none; }
   .breakdown { font-size: 7px; color: #555; margin-top: 3px; line-height: 1.5; }
+  .section-label-row td { font-style: italic; color: #555; font-size: 7px; padding: 2px 4px; }
 </style>
 
 {% comment %}
@@ -223,6 +224,7 @@
         <th class="text-center" style="width: 8%;">Dia Wt (cts)</th>
         <th class="text-center" style="width: 6%;">Dia Pcs</th>
         <th class="text-center" style="width: 7%;">Metal</th>
+        <th class="text-right" style="width: 7%;">Making<br>Charges</th>
         <th class="text-right" style="width: 9%;">Taxable Val.<br>(Before Disc.)</th>
         <th class="text-right" style="width: 8%;">Disc. on<br>Taxable</th>
         <th class="text-right" style="width: 9%;">Taxable Val.<br>(After Disc.)</th>
@@ -239,9 +241,17 @@
       {% comment %}Extract pricing engine properties{% endcomment %}
       {% assign prop_discount_str = "0" %}
       {% assign prop_gross_str = "" %}
+      {% assign prop_gross_wt = "" %}
+      {% assign prop_net_wt   = "" %}
+      {% assign prop_dia_cts  = "" %}
+      {% assign prop_dia_pcs  = "" %}
       {% for p in line_item.properties %}
         {% if p.first == "Discount Applied" %}{% assign prop_discount_str = p.last | remove: "Rs" %}{% endif %}
         {% if p.first == "Gross Value" %}{% assign prop_gross_str = p.last | remove: "Rs" %}{% endif %}
+        {% if p.first == "_gross_wt"    %}{% assign prop_gross_wt = p.last %}{% endif %}
+        {% if p.first == "_net_wt"      %}{% assign prop_net_wt   = p.last %}{% endif %}
+        {% if p.first == "_diamond_cts" %}{% assign prop_dia_cts  = p.last %}{% endif %}
+        {% if p.first == "_diamond_pcs" %}{% assign prop_dia_pcs  = p.last %}{% endif %}
       {% endfor %}
       {% assign disc_paise = prop_discount_str | times: 100 | round %}
       {% if prop_gross_str != "" %}
@@ -252,6 +262,11 @@
       {% assign total_gross_paise = total_gross_paise | plus: gross_paise %}
       {% assign total_disc_paise = total_disc_paise | plus: disc_paise %}
 
+      {% assign prop_making_str = "" %}
+      {% for p in line_item.properties %}
+        {% if p.first == "Making Charges" or p.first == "Making" %}{% assign prop_making_str = p.last | remove: "Rs" | strip %}{% endif %}
+      {% endfor %}
+
       <tr>
         <td class="text-center">{{ forloop.index }}.</td>
         <td>{{ line_item.title }}</td>
@@ -261,36 +276,31 @@
         <td class="text-center">{{ line_item.quantity }}</td>
 
         <td class="text-center">
-          {% if jc_meta.gross_wt_grams %}
-            {{ jc_meta.gross_wt_grams }}
-          {% elsif line_item.variant.metafields.custom.total_metal_weight_g %}
-            {{ line_item.variant.metafields.custom.total_metal_weight_g | round: 3 }}
-          {% elsif line_item.variant.metafields.custom.gross_weight_g %}
-            {{ line_item.variant.metafields.custom.gross_weight_g | round: 3 }}
+          {% if prop_gross_wt != "" %}{{ prop_gross_wt }}
+          {% elsif jc_meta.gross_wt_grams %}{{ jc_meta.gross_wt_grams }}
+          {% elsif line_item.variant.metafields.custom.total_metal_weight_g %}{{ line_item.variant.metafields.custom.total_metal_weight_g | round: 3 }}
+          {% elsif line_item.variant.metafields.custom.gross_weight_g %}{{ line_item.variant.metafields.custom.gross_weight_g | round: 3 }}
           {% else %}–{% endif %}
         </td>
 
         <td class="text-center">
-          {% if jc_meta.net_wt_grams %}
-            {{ jc_meta.net_wt_grams }}
-          {% elsif line_item.variant.metafields.custom.net_metal_weight_g %}
-            {{ line_item.variant.metafields.custom.net_metal_weight_g | round: 3 }}
+          {% if prop_net_wt != "" %}{{ prop_net_wt }}
+          {% elsif jc_meta.net_wt_grams %}{{ jc_meta.net_wt_grams }}
+          {% elsif line_item.variant.metafields.custom.net_metal_weight_g %}{{ line_item.variant.metafields.custom.net_metal_weight_g | round: 3 }}
           {% else %}–{% endif %}
         </td>
 
         <td class="text-center">
-          {% if jc_meta.diamond_wt_carats %}
-            {{ jc_meta.diamond_wt_carats }}
-          {% elsif line_item.product.metafields.custom.totaldiamondweight %}
-            {{ line_item.product.metafields.custom.totaldiamondweight }}
+          {% if prop_dia_cts != "" %}{{ prop_dia_cts }}
+          {% elsif jc_meta.diamond_wt_carats %}{{ jc_meta.diamond_wt_carats }}
+          {% elsif line_item.product.metafields.custom.totaldiamondweight %}{{ line_item.product.metafields.custom.totaldiamondweight }}
           {% else %}–{% endif %}
         </td>
 
         <td class="text-center">
-          {% if jc_meta.diamond_pcs %}
-            {{ jc_meta.diamond_pcs }}
-          {% elsif line_item.product.metafields.custom.totaldiamondcount %}
-            {{ line_item.product.metafields.custom.totaldiamondcount }}
+          {% if prop_dia_pcs != "" %}{{ prop_dia_pcs }}
+          {% elsif jc_meta.diamond_pcs %}{{ jc_meta.diamond_pcs }}
+          {% elsif line_item.product.metafields.custom.totaldiamondcount %}{{ line_item.product.metafields.custom.totaldiamondcount }}
           {% else %}–{% endif %}
         </td>
 
@@ -300,6 +310,10 @@
           {% elsif line_item.variant.option1 or line_item.variant.option2 %}
             {{ line_item.variant.option1 }}{% if line_item.variant.option2 %} {{ line_item.variant.option2 }}{% endif %}
           {% else %}–{% endif %}
+        </td>
+
+        <td class="text-right">
+          {% if prop_making_str != "" %}₹{{ prop_making_str | times: 100 | round | money_without_currency | remove: ',' }}{% else %}–{% endif %}
         </td>
 
         <td class="text-right">{{ gross_paise | divided_by: 1.03 | money_without_currency | remove: ',' }}</td>
@@ -312,7 +326,7 @@
 
       {% if cn_applied %}
       <tr class="totals-row">
-        <td colspan="11" class="text-right" style="color:#006630; font-style:italic;">Credit Note Applied &nbsp;({{ cn_code }})</td>
+        <td colspan="12" class="text-right" style="color:#006630; font-style:italic;">Credit Note Applied &nbsp;({{ cn_code }})</td>
         <td class="text-right" style="color:#006630; font-weight:bold;">− ₹{{ cn_amount | money_without_currency | remove: ',' }}</td>
       </tr>
       {% endif %}
@@ -329,17 +343,17 @@
       {% if is_same_state %}
         {% assign cgst_amount = taxable_value | times: 0.015 %}
         {% assign sgst_amount = taxable_value | times: 0.015 %}
-        <tr class="totals-row"><td colspan="11" class="text-right">IGST @ 3%</td><td class="text-right">₹0.00</td></tr>
-        <tr class="totals-row"><td colspan="11" class="text-right">CGST @ 1.5%</td><td class="text-right">₹{{ cgst_amount | money_without_currency | remove: ',' }}</td></tr>
-        <tr class="totals-row"><td colspan="11" class="text-right">SGST @ 1.5%</td><td class="text-right">₹{{ sgst_amount | money_without_currency | remove: ',' }}</td></tr>
+        <tr class="totals-row"><td colspan="12" class="text-right">IGST @ 3%</td><td class="text-right">₹0.00</td></tr>
+        <tr class="totals-row"><td colspan="12" class="text-right">CGST @ 1.5%</td><td class="text-right">₹{{ cgst_amount | money_without_currency | remove: ',' }}</td></tr>
+        <tr class="totals-row"><td colspan="12" class="text-right">SGST @ 1.5%</td><td class="text-right">₹{{ sgst_amount | money_without_currency | remove: ',' }}</td></tr>
       {% else %}
         {% assign igst_amount = taxable_value | times: 0.03 %}
-        <tr class="totals-row"><td colspan="11" class="text-right">IGST @ 3%</td><td class="text-right">₹{{ igst_amount | money_without_currency | remove: ',' }}</td></tr>
-        <tr class="totals-row"><td colspan="11" class="text-right">CGST @ 1.5%</td><td class="text-right">₹0.00</td></tr>
-        <tr class="totals-row"><td colspan="11" class="text-right">SGST @ 1.5%</td><td class="text-right">₹0.00</td></tr>
+        <tr class="totals-row"><td colspan="12" class="text-right">IGST @ 3%</td><td class="text-right">₹{{ igst_amount | money_without_currency | remove: ',' }}</td></tr>
+        <tr class="totals-row"><td colspan="12" class="text-right">CGST @ 1.5%</td><td class="text-right">₹0.00</td></tr>
+        <tr class="totals-row"><td colspan="12" class="text-right">SGST @ 1.5%</td><td class="text-right">₹0.00</td></tr>
       {% endif %}
       <tr class="totals-row">
-        <td colspan="11" class="text-right">Round Off +/(-)</td>
+        <td colspan="12" class="text-right">Round Off +/(-)</td>
         <td class="text-right">
           {% assign calculated_total = taxable_value | plus: total_tax %}
           {% assign rounded_total = taxable_base | round %}
@@ -348,18 +362,89 @@
         </td>
       </tr>
       <tr class="total-row">
-        <td colspan="11" class="text-right"><strong>Total Invoice Price</strong></td>
+        <td colspan="12" class="text-right"><strong>Total Invoice Price</strong></td>
         <td class="text-right"><strong>₹{{ taxable_base | money_without_currency | remove: ',' }}</strong></td>
       </tr>
+
+      {% assign og_value  = order.metafields.custom.old_gold_value  | plus: 0 %}
+      {% assign og_weight = order.metafields.custom.old_gold_weight | plus: 0 %}
+      {% assign og_karat  = order.metafields.custom.old_gold_karat  | default: "" %}
+      {% assign final_payable = taxable_base %}
+      {% if og_value > 0 %}
+        {% assign og_value_paise = og_value | times: 100 | round %}
+        <tr class="section-label-row">
+          <td colspan="13">Consideration against Gold</td>
+        </tr>
+        <tr class="totals-row">
+          <td colspan="12" class="text-right">
+            Gold Received ({{ og_weight }}g{% if og_karat != "" %} {{ og_karat }}kt{% endif %})
+          </td>
+          <td class="text-right">− ₹{{ og_value_paise | money_without_currency | remove: ',' }}</td>
+        </tr>
+        {% assign final_payable = taxable_base | minus: og_value_paise %}
+        <tr class="total-row">
+          <td colspan="12" class="text-right"><strong>Net Payable</strong></td>
+          <td class="text-right"><strong>₹{{ final_payable | money_without_currency | remove: ',' }}</strong></td>
+        </tr>
+      {% endif %}
+
+      {% assign pm_advance = order.metafields.custom.payment_mode_advance | default: "" %}
+      {% assign pm_final   = order.metafields.custom.payment_mode_final   | default: "" %}
+      {% assign is_partial    = false %}
+      {% assign is_fully_paid = false %}
+      {% assign paid_amount   = "" %}
+      {% assign pending_amount = "" %}
+      {% for tag in order.tags %}
+        {% assign t = tag | strip | downcase %}
+        {% if t == "deposit:partial"    %}{% assign is_partial    = true %}{% endif %}
+        {% if t == "deposit:fully-paid" %}{% assign is_fully_paid = true %}{% endif %}
+        {% if t contains "paid:rs"      %}{% assign paid_amount    = t | remove: "paid:rs" %}{% endif %}
+        {% if t contains "pending:rs"   %}{% assign pending_amount = t | remove: "pending:rs" %}{% endif %}
+      {% endfor %}
+      <tr class="section-label-row">
+        <td colspan="13">Payment Mode</td>
+      </tr>
+      {% if is_partial and paid_amount != "" %}
+        <tr class="totals-row">
+          <td colspan="12" class="text-right">
+            Amount Received – Advance{% if pm_advance != "" %}&nbsp; <em style="color:#555;">({{ pm_advance }})</em>{% endif %}
+          </td>
+          <td class="text-right">₹{{ paid_amount }}</td>
+        </tr>
+        <tr class="totals-row">
+          <td colspan="12" class="text-right"><strong>Balance Due</strong></td>
+          <td class="text-right"><strong>₹{{ pending_amount }}</strong></td>
+        </tr>
+      {% elsif is_fully_paid and paid_amount != "" %}
+        <tr class="totals-row">
+          <td colspan="12" class="text-right">
+            Amount Received{% if pm_advance != "" %}&nbsp; <em style="color:#555;">({{ pm_advance }}{% if pm_final != "" and pm_final != pm_advance %} / {{ pm_final }}{% endif %})</em>{% endif %}
+          </td>
+          <td class="text-right">₹{{ paid_amount }}</td>
+        </tr>
+        <tr class="totals-row">
+          <td colspan="12" class="text-right"><strong>Balance Due</strong></td>
+          <td class="text-right"><strong>₹0</strong></td>
+        </tr>
+      {% else %}
+        <tr class="totals-row">
+          <td colspan="12" class="text-right">Amount Received</td>
+          <td class="text-right">₹0</td>
+        </tr>
+        <tr class="totals-row">
+          <td colspan="12" class="text-right"><strong>Balance Due</strong></td>
+          <td class="text-right"><strong>₹{{ final_payable | money_without_currency | remove: ',' }}</strong></td>
+        </tr>
+      {% endif %}
     </tbody>
   </table>
 
   <div class="amount-words">
     <span>
-      {% assign total_rounded = taxable_base | divided_by: 100 | floor %}
+      {% assign total_rounded = final_payable | divided_by: 100 | floor %}
       {% assign ones = "Zero,One,Two,Three,Four,Five,Six,Seven,Eight,Nine,Ten,Eleven,Twelve,Thirteen,Fourteen,Fifteen,Sixteen,Seventeen,Eighteen,Nineteen" | split: "," %}
       {% assign tens = "Zero,Ten,Twenty,Thirty,Forty,Fifty,Sixty,Seventy,Eighty,Ninety" | split: "," %}
-      {% assign total_int = total_rounded | floor %}{% assign words = "" %}
+      {% assign total_int = final_payable | divided_by: 100 | floor %}{% assign words = "" %}
       {% assign crores = total_int | divided_by: 10000000 %}
       {% if crores > 0 %}{% assign temp = crores | modulo: 100 %}{% if temp < 20 %}{% assign words = words | append: ones[temp] | append: " " %}{% else %}{% assign tens_digit = temp | divided_by: 10 %}{% assign ones_digit = temp | modulo: 10 %}{% assign words = words | append: tens[tens_digit] %}{% if ones_digit > 0 %}{% assign words = words | append: "-" | append: ones[ones_digit] %}{% endif %}{% assign words = words | append: " " %}{% endif %}{% assign words = words | append: "Crore " %}{% assign total_int = total_int | modulo: 10000000 %}{% endif %}
       {% assign lakhs = total_int | divided_by: 100000 %}

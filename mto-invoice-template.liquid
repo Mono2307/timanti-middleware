@@ -382,29 +382,6 @@
         {% assign taxable_base = total_net_paise %}
       {% endif %}
 
-      {% comment %}
-        ── Consideration against Gold ──
-        Conditional: only shown when order.metafields.custom.old_gold_value > 0.
-        Shows gold weight + karat (if old_gold_karat metafield set) and deducts from total.
-      {% endcomment %}
-      {% assign og_value  = order.metafields.custom.old_gold_value  | plus: 0 %}
-      {% assign og_weight = order.metafields.custom.old_gold_weight | plus: 0 %}
-      {% assign og_karat  = order.metafields.custom.old_gold_karat  | default: "" %}
-      {% if og_value > 0 %}
-        {% assign og_value_paise = og_value | times: 100 | round %}
-        {% assign og_gross_paise = og_value | times: 103 | round %}
-        <tr class="section-label-row">
-          <td colspan="13">Consideration against Gold</td>
-        </tr>
-        <tr class="totals-row">
-          <td colspan="12" class="text-right">
-            Gold Received ({{ og_weight }}g{% if og_karat != "" %} {{ og_karat }}kt{% endif %})
-          </td>
-          <td class="text-right">− ₹{{ og_value_paise | money_without_currency | remove: ',' }}</td>
-        </tr>
-        {% assign taxable_base = taxable_base | minus: og_gross_paise %}
-      {% endif %}
-
       {% assign taxable_value = taxable_base | divided_by: 1.03 %}
       {% assign gst_computed  = taxable_value | times: 0.03 %}
 
@@ -433,46 +410,79 @@
         <td class="text-right"><strong>₹{{ taxable_base | money_without_currency | remove: ',' }}</strong></td>
       </tr>
 
+      {% comment %}── Consideration against Gold — deduction from final payable, after taxes ──{% endcomment %}
+      {% assign og_value  = order.metafields.custom.old_gold_value  | plus: 0 %}
+      {% assign og_weight = order.metafields.custom.old_gold_weight | plus: 0 %}
+      {% assign og_karat  = order.metafields.custom.old_gold_karat  | default: "" %}
+      {% assign final_payable = taxable_base %}
+      {% if og_value > 0 %}
+        {% assign og_value_paise = og_value | times: 100 | round %}
+        <tr class="section-label-row">
+          <td colspan="13">Consideration against Gold</td>
+        </tr>
+        <tr class="totals-row">
+          <td colspan="12" class="text-right">
+            Gold Received ({{ og_weight }}g{% if og_karat != "" %} {{ og_karat }}kt{% endif %})
+          </td>
+          <td class="text-right">− ₹{{ og_value_paise | money_without_currency | remove: ',' }}</td>
+        </tr>
+        {% assign final_payable = taxable_base | minus: og_value_paise %}
+        <tr class="total-row">
+          <td colspan="12" class="text-right"><strong>Net Payable</strong></td>
+          <td class="text-right"><strong>₹{{ final_payable | money_without_currency | remove: ',' }}</strong></td>
+        </tr>
+      {% endif %}
+
+      {% comment %}── Payment Mode ──{% endcomment %}
+      {% assign pm_advance = order.metafields.custom.payment_mode_advance | default: "" %}
+      {% assign pm_final   = order.metafields.custom.payment_mode_final   | default: "" %}
+      <tr class="section-label-row">
+        <td colspan="13">Payment Mode</td>
+      </tr>
       {% if is_partial and paid_amount != "" %}
-      <tr class="totals-row">
-        <td colspan="12" class="text-right">Amount Received</td>
-        <td class="text-right">₹{{ paid_amount }}</td>
-      </tr>
-      <tr class="totals-row">
-        <td colspan="12" class="text-right"><strong>Balance Pending</strong></td>
-        <td class="text-right"><strong>₹{{ pending_amount }}</strong></td>
-      </tr>
+        <tr class="totals-row">
+          <td colspan="12" class="text-right">
+            Amount Received – Advance{% if pm_advance != "" %}&nbsp; <em style="color:#555;">({{ pm_advance }})</em>{% endif %}
+          </td>
+          <td class="text-right">₹{{ paid_amount }}</td>
+        </tr>
+        <tr class="totals-row">
+          <td colspan="12" class="text-right"><strong>Balance Due</strong></td>
+          <td class="text-right"><strong>₹{{ pending_amount }}</strong></td>
+        </tr>
       {% elsif is_fully_paid and paid_amount != "" %}
-      <tr class="totals-row">
-        <td colspan="12" class="text-right">Amount Received</td>
-        <td class="text-right">₹{{ paid_amount }}</td>
-      </tr>
-      <tr class="totals-row">
-        <td colspan="12" class="text-right"><strong>Balance Pending</strong></td>
-        <td class="text-right"><strong>₹0</strong></td>
-      </tr>
+        <tr class="totals-row">
+          <td colspan="12" class="text-right">
+            Amount Received{% if pm_advance != "" %}&nbsp; <em style="color:#555;">({% if pm_advance != "" %}{{ pm_advance }}{% endif %}{% if pm_final != "" and pm_final != pm_advance %} / {{ pm_final }}{% endif %})</em>{% endif %}
+          </td>
+          <td class="text-right">₹{{ paid_amount }}</td>
+        </tr>
+        <tr class="totals-row">
+          <td colspan="12" class="text-right"><strong>Balance Due</strong></td>
+          <td class="text-right"><strong>₹0</strong></td>
+        </tr>
       {% else %}
-      <tr class="totals-row">
-        <td colspan="12" class="text-right">Amount Received</td>
-        <td class="text-right">₹0</td>
-      </tr>
-      <tr class="totals-row">
-        <td colspan="12" class="text-right"><strong>Balance Pending</strong></td>
-        <td class="text-right"><strong>₹{{ taxable_base | money_without_currency | remove: ',' }}</strong></td>
-      </tr>
+        <tr class="totals-row">
+          <td colspan="12" class="text-right">Amount Received</td>
+          <td class="text-right">₹0</td>
+        </tr>
+        <tr class="totals-row">
+          <td colspan="12" class="text-right"><strong>Balance Due</strong></td>
+          <td class="text-right"><strong>₹{{ final_payable | money_without_currency | remove: ',' }}</strong></td>
+        </tr>
       {% endif %}
     </tbody>
   </table>
 
-  <div style="padding: 4px 10px; font-size: 7.5px; font-style: italic; border-top: 1px solid #ccc;">
-    Weights shown are as per product specifications and may vary slightly for made-to-order pieces.
+  <div style="padding: 3px 8px; font-size: 6.5px; color: #777; font-style: italic; border-top: 1px solid #ccc; text-align: right;">
+    Weights are as per product specifications and may vary slightly for made-to-order pieces.
   </div>
 
   <div class="amount-words">
     <span>
       {% assign ones = "Zero,One,Two,Three,Four,Five,Six,Seven,Eight,Nine,Ten,Eleven,Twelve,Thirteen,Fourteen,Fifteen,Sixteen,Seventeen,Eighteen,Nineteen" | split: "," %}
       {% assign tens = "Zero,Ten,Twenty,Thirty,Forty,Fifty,Sixty,Seventy,Eighty,Ninety" | split: "," %}
-      {% assign total_int = taxable_base | divided_by: 100 | floor %}{% assign words = "" %}
+      {% assign total_int = final_payable | divided_by: 100 | floor %}{% assign words = "" %}
       {% assign crores = total_int | divided_by: 10000000 %}
       {% if crores > 0 %}{% assign temp = crores | modulo: 100 %}{% if temp < 20 %}{% assign words = words | append: ones[temp] | append: " " %}{% else %}{% assign td = temp | divided_by: 10 %}{% assign od = temp | modulo: 10 %}{% assign words = words | append: tens[td] %}{% if od > 0 %}{% assign words = words | append: "-" | append: ones[od] %}{% endif %}{% assign words = words | append: " " %}{% endif %}{% assign words = words | append: "Crore " %}{% assign total_int = total_int | modulo: 10000000 %}{% endif %}
       {% assign lakhs = total_int | divided_by: 100000 %}
