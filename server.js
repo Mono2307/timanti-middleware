@@ -897,12 +897,8 @@ async function handleRecalculatePriceTag(draft) {
     if (mf.namespace === 'timanti' && mf.key === 'jewelcode') mfMap['_timanti_jewelcode'] = mf.value;
   }
 
-  const newNetWt   = parseFloat(mfMap.net_wt);
-  const newGrossWt = parseFloat(mfMap.gross_wt) || 0;
-  const diamondCts = parseFloat(mfMap.diamond_cts) || 0;
-  const diamondPcs = parseInt(mfMap.diamond_pcs)   || 0;
-  // Read jewel code from timanti.jewelcode (JSON); fall back to custom.jewel_code
-  const jewel_code = mfMap['_timanti_jewelcode'] || mfMap.jewel_code || '';
+  // net_wt: per-order measured weight — from draft metafield (set by staff for this piece)
+  const newNetWt = parseFloat(mfMap.net_wt);
 
   if (!newNetWt) {
     console.warn(`Draft ${draftOrderId}: recalculate-price tag but net_wt metafield missing or zero`);
@@ -927,23 +923,33 @@ async function handleRecalculatePriceTag(draft) {
 
   // _gold_rate on the line item is the rate locked at order creation time.
   // For drafts that predate this feature, bootstrap from variant once and lock it.
+  // Always fetch variant metafields when variant_id exists — gross_wt/diamond_cts/diamond_pcs
+  // come from the variant (fixed design spec), not the draft order metafield.
   let goldRate = parseFloat(props['_gold_rate']);
   let bootstrapGoldRate = false;
+  const varMfCustom = {};
 
-  if (!goldRate && lineItem.variant_id) {
+  if (lineItem.variant_id) {
     const { data: varMfData } = await axios.get(
       `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/variants/${lineItem.variant_id}/metafields.json`,
       { headers: { 'X-Shopify-Access-Token': token }, timeout: 10000 }
     );
-    const gRateMf = (varMfData.metafields || []).find(
-      m => m.namespace === 'custom' && m.key === 'gold_rate'
-    );
-    if (gRateMf) {
-      goldRate = parseFloat(gRateMf.value);
+    for (const m of (varMfData.metafields || [])) {
+      if (m.namespace === 'custom') varMfCustom[m.key] = m.value;
+    }
+    if (!goldRate && varMfCustom.gold_rate) {
+      goldRate = parseFloat(varMfCustom.gold_rate);
       bootstrapGoldRate = true;
       console.log(`Draft ${draftOrderId}: bootstrapping _gold_rate=${goldRate} from variant — will lock to line item`);
     }
   }
+
+  // gross_wt, diamond_cts, diamond_pcs: fixed design spec — from variant metafield, draft metafield as fallback
+  // jewel_code: from timanti.jewelcode JSON metafield, fall back to custom.jewel_code
+  const newGrossWt = parseFloat(varMfCustom.gross_wt    || mfMap.gross_wt)    || 0;
+  const diamondCts = parseFloat(varMfCustom.diamond_cts  || mfMap.diamond_cts) || 0;
+  const diamondPcs = parseInt(  varMfCustom.diamond_pcs  || mfMap.diamond_pcs) || 0;
+  const jewel_code = mfMap['_timanti_jewelcode'] || mfMap.jewel_code || '';
 
   const oldGold = parseFloat((props['Gold'] || '0').replace('Rs', '').trim());
 
