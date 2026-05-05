@@ -893,8 +893,6 @@ async function handleRecalculatePriceTag(draft) {
   const mfMap = {};
   for (const mf of (mfData.metafields || [])) {
     if (mf.namespace === 'custom') mfMap[mf.key] = mf.value;
-    // jewel code lives at timanti.jewelcode (JSON metafield)
-    if (mf.namespace === 'timanti' && mf.key === 'jewelcode') mfMap['_timanti_jewelcode'] = mf.value;
   }
 
   // net_wt: per-order measured weight — from draft metafield (set by staff for this piece)
@@ -944,12 +942,13 @@ async function handleRecalculatePriceTag(draft) {
     }
   }
 
-  // gross_wt, diamond_cts, diamond_pcs: fixed design spec — from variant metafield, draft metafield as fallback
-  // jewel_code: from timanti.jewelcode JSON metafield, fall back to custom.jewel_code
-  const newGrossWt = parseFloat(varMfCustom.gross_wt    || mfMap.gross_wt)    || 0;
-  const diamondCts = parseFloat(varMfCustom.diamond_cts  || mfMap.diamond_cts) || 0;
-  const diamondPcs = parseInt(  varMfCustom.diamond_pcs  || mfMap.diamond_pcs) || 0;
-  const jewel_code = mfMap['_timanti_jewelcode'] || mfMap.jewel_code || '';
+  // gross_wt/diamond_cts/diamond_pcs: draft order metafield first (staff-entered MTO actual values),
+  // variant metafield as fallback (standard design spec)
+  const newGrossWt = parseFloat(mfMap.gross_wt    || varMfCustom.gross_wt)    || 0;
+  const diamondCts = parseFloat(mfMap.diamond_cts  || varMfCustom.diamond_cts) || 0;
+  const diamondPcs = parseInt(  mfMap.diamond_pcs  || varMfCustom.diamond_pcs) || 0;
+  // jewel_code identifier from custom.jewel_code draft metafield
+  const jewel_code = mfMap.jewel_code || '';
 
   const oldGold = parseFloat((props['Gold'] || '0').replace('Rs', '').trim());
 
@@ -1057,6 +1056,37 @@ async function handleRecalculatePriceTag(draft) {
     { headers, timeout: 15000 }
   );
   console.log(`✅ Repriced draft ${draftOrderId}: delta=${(delta*100).toFixed(2)}%, new gold=Rs${newGoldValue.toFixed(2)}, new final=Rs${newFinalValue.toFixed(2)}, shopify status=${putResp.status}`);
+
+  // Write timanti.jewelcode order metafield — consolidated JSON of all jewel inputs + computed data
+  try {
+    const existingJewelcodeMf = (mfData.metafields || []).find(
+      m => m.namespace === 'timanti' && m.key === 'jewelcode'
+    );
+    const mfPayload = {
+      metafield: {
+        namespace: 'timanti',
+        key:       'jewelcode',
+        value:     jewel_data,
+        type:      'json',
+      }
+    };
+    if (existingJewelcodeMf) {
+      await axios.put(
+        `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}/metafields/${existingJewelcodeMf.id}.json`,
+        mfPayload,
+        { headers, timeout: 10000 }
+      );
+    } else {
+      await axios.post(
+        `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}/metafields.json`,
+        mfPayload,
+        { headers, timeout: 10000 }
+      );
+    }
+    console.log(`Draft ${draftOrderId}: timanti.jewelcode metafield written`);
+  } catch (mfErr) {
+    console.error(`Draft ${draftOrderId}: failed to write timanti.jewelcode — ${mfErr.message}`);
+  }
 }
 
 // ─────────────────────────────────────────

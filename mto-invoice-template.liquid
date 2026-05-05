@@ -299,36 +299,36 @@
           </td>
           <td class="text-center">{{ line_item.quantity }}</td>
 
-          {% comment %}── Gross Wt: repriced → hidden prop; else variant metafield ──{% endcomment %}
+          {% comment %}── Gross Wt: line item prop first (_gross_wt), else variant metafield ──{% endcomment %}
           <td class="text-center">
-            {% if has_repriced_props and prop_gross_wt != "" %}{{ prop_gross_wt }}
-            {% elsif line_item.variant.metafields.custom.total_metal_weight_g %}{{ line_item.variant.metafields.custom.total_metal_weight_g | round: 2 }}*
-            {% elsif line_item.variant.metafields.custom.gross_weight_g %}{{ line_item.variant.metafields.custom.gross_weight_g | round: 2 }}*
-            {% elsif line_item.product.metafields.custom.total_metal_weight_g %}{{ line_item.product.metafields.custom.total_metal_weight_g | round: 2 }}*
+            {% if prop_gross_wt != "" %}{{ prop_gross_wt }}
+            {% elsif line_item.variant.metafields.custom.total_metal_weight_g %}{{ line_item.variant.metafields.custom.total_metal_weight_g | round: 2 }}
+            {% elsif line_item.variant.metafields.custom.gross_weight_g %}{{ line_item.variant.metafields.custom.gross_weight_g | round: 2 }}
+            {% elsif line_item.product.metafields.custom.total_metal_weight_g %}{{ line_item.product.metafields.custom.total_metal_weight_g | round: 2 }}
             {% else %}–{% endif %}
           </td>
 
           {% comment %}── Net Wt ──{% endcomment %}
           <td class="text-center">
-            {% if has_repriced_props and prop_net_wt != "" %}{{ prop_net_wt }}
-            {% elsif line_item.variant.metafields.custom.net_metal_weight_g %}{{ line_item.variant.metafields.custom.net_metal_weight_g | round: 2 }}*
-            {% elsif line_item.product.metafields.custom.net_metal_weight_g %}{{ line_item.product.metafields.custom.net_metal_weight_g | round: 2 }}*
+            {% if prop_net_wt != "" %}{{ prop_net_wt }}
+            {% elsif line_item.variant.metafields.custom.net_metal_weight_g %}{{ line_item.variant.metafields.custom.net_metal_weight_g | round: 2 }}
+            {% elsif line_item.product.metafields.custom.net_metal_weight_g %}{{ line_item.product.metafields.custom.net_metal_weight_g | round: 2 }}
             {% else %}–{% endif %}
           </td>
 
           {% comment %}── Dia Wt (cts) ──{% endcomment %}
           <td class="text-center">
-            {% if has_repriced_props and prop_dia_cts != "" %}{{ prop_dia_cts }}
-            {% elsif line_item.variant.metafields.custom.totaldiamondweight %}{{ line_item.variant.metafields.custom.totaldiamondweight }}*
-            {% elsif line_item.product.metafields.custom.totaldiamondweight %}{{ line_item.product.metafields.custom.totaldiamondweight }}*
+            {% if prop_dia_cts != "" %}{{ prop_dia_cts }}
+            {% elsif line_item.variant.metafields.custom.totaldiamondweight %}{{ line_item.variant.metafields.custom.totaldiamondweight }}
+            {% elsif line_item.product.metafields.custom.totaldiamondweight %}{{ line_item.product.metafields.custom.totaldiamondweight }}
             {% else %}–{% endif %}
           </td>
 
           {% comment %}── Dia Pcs ──{% endcomment %}
           <td class="text-center">
-            {% if has_repriced_props and prop_dia_pcs != "" %}{{ prop_dia_pcs }}
-            {% elsif line_item.variant.metafields.custom.diamond_pcs %}{{ line_item.variant.metafields.custom.diamond_pcs }}*
-            {% elsif line_item.product.metafields.custom.diamond_pcs %}{{ line_item.product.metafields.custom.diamond_pcs }}*
+            {% if prop_dia_pcs != "" %}{{ prop_dia_pcs }}
+            {% elsif line_item.variant.metafields.custom.diamond_pcs %}{{ line_item.variant.metafields.custom.diamond_pcs }}
+            {% elsif line_item.product.metafields.custom.diamond_pcs %}{{ line_item.product.metafields.custom.diamond_pcs }}
             {% else %}–{% endif %}
           </td>
 
@@ -465,7 +465,7 @@
   </table>
 
   <div style="padding: 4px 10px; font-size: 7.5px; font-style: italic; border-top: 1px solid #ccc;">
-    * Gold weights are indicative and may vary slightly from the final piece. Diamond and stone weights are as per product specifications.
+    Weights shown are as per product specifications and may vary slightly for made-to-order pieces.
   </div>
 
   <div class="amount-words">
