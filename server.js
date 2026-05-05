@@ -1026,10 +1026,17 @@ app.get('/api/price-update-diag', (req, res) => {
 // Price Update Trigger
 // ─────────────────────────────────────────
 
+let _priceUpdateRunning = false;
+
 app.post('/api/trigger-price-update', async (req, res) => {
   const secret = req.headers['x-webhook-secret'];
   if (!process.env.PRICE_UPDATE_WEBHOOK_SECRET || secret !== process.env.PRICE_UPDATE_WEBHOOK_SECRET) {
     return res.status(401).json({ success: false, error: 'Unauthorized' });
+  }
+
+  if (_priceUpdateRunning) {
+    console.warn('Price update already running — duplicate trigger ignored');
+    return res.status(409).json({ success: false, error: 'A price update is already running. Wait for it to finish.' });
   }
 
   const pure = parseFloat(req.body.pure_rate);
@@ -1056,13 +1063,17 @@ app.post('/api/trigger-price-update', async (req, res) => {
   const args     = ['/app/price_update/orchestrator.py'];
   if (testGati) args.push('--test', testGati);
 
+  _priceUpdateRunning = true;
   const proc = spawn('python3', args, {
     detached: false,
     stdio:    ['ignore', 'pipe', 'pipe'],
   });
   proc.stdout.on('data', d => console.log(`[price-update] ${d.toString().trim()}`));
   proc.stderr.on('data', d => console.error(`[price-update ERR] ${d.toString().trim()}`));
-  proc.on('close', code => console.log(`[price-update] exited with code ${code}`));
+  proc.on('close', code => {
+    _priceUpdateRunning = false;
+    console.log(`[price-update] exited with code ${code}`);
+  });
 
   const rate18k = (pure * 0.771).toFixed(2);
   const rate14k = (pure * 0.604).toFixed(2);
