@@ -8,6 +8,10 @@ primary_region = 'bom'
   PORT = "8080"
   MIDDLEWARE_BASE_URL = "https://timanti-middleware.fly.dev"
 
+[mounts]
+  source      = "price_update_data"
+  destination = "/data"
+
 [http_service]
   internal_port = 8080
   force_https = true

@@ -4,7 +4,9 @@ from pathlib import Path
 # /app/price_update → parent is /app
 _HERE        = Path(__file__).resolve().parent
 BASE         = _HERE.parent          # /app
-OUTPUTS      = BASE / 'Outputs'
+# /data is a persistent Fly volume — survives deploys and restarts
+# Falls back to /app/Outputs if volume not mounted (local dev)
+OUTPUTS      = Path('/data') if Path('/data').exists() else BASE / 'Outputs'
 LOGS_DIR     = OUTPUTS / 'logs'
 IMPORT_SCRIPT = _HERE / 'import_from_preview.mjs'
 SCRIPTS       = _HERE            # cwd for import_from_preview.mjs subprocess

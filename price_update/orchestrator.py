@@ -167,20 +167,23 @@ def _load_gold_rate(log: logging.Logger) -> dict:
 
 # ── Step 4: run the Node importer ─────────────────────────────────────────────
 
-def _run_importer(token: str, preview_csv: Path, log: logging.Logger) -> dict:
+def _run_importer(token: str, preview_csv: Path, log: logging.Logger,
+                  resume: bool = False) -> dict:
     env = {
         **os.environ,
         'ADMIN_API_TOKEN': token,
         'STORE_DOMAIN':    STORE_DOMAIN,
     }
 
-    log.info(f'Importer starting — {preview_csv.name}')
+    log.info(f'Importer starting — {preview_csv.name}  (resume={resume})')
     t0 = time.time()
 
+    args = ['node', str(IMPORT_SCRIPT), '--input', str(preview_csv)]
+    if not resume:
+        args.append('--no-resume')
+
     proc = subprocess.Popen(
-        ['node', str(IMPORT_SCRIPT),
-         '--input',     str(preview_csv),
-         '--no-resume'],
+        args,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
@@ -286,20 +289,31 @@ def run(test_gati: str = None):
         today       = datetime.now().strftime('%Y%m%d')
         preview_csv = OUTPUTS / f'PREVIEW_VARIANT_IMPORT_{today}_v2.csv'
 
-        log.info(f'Building snapshot → {preview_csv.name}')
-        snapshot_stats = build_snapshot(token, gold_rate, preview_csv, log,
-                                        test_gati=test_gati)
-
-        log.info(
-            f'Snapshot summary — '
-            f'{snapshot_stats["variants_priced"]:,} priced, '
-            f'{snapshot_stats["products_covered"]} products, '
-            f'{snapshot_stats["archived_skipped"]} archived skipped, '
-            f'{snapshot_stats["variants_no_weight"]} missing weight'
+        # Resume if today's CSV already exists and has data (e.g. after OOM/deploy restart)
+        resuming = (
+            not test_gati and
+            preview_csv.exists() and
+            preview_csv.stat().st_size > 500
         )
 
+        if resuming:
+            log.info(f'RESUMING — existing CSV found ({preview_csv.stat().st_size:,} bytes), skipping snapshot')
+            snapshot_stats = {'variants_priced': 0, 'products_covered': 0,
+                              'archived_skipped': 0, 'variants_no_weight': 0}
+        else:
+            log.info(f'Building snapshot → {preview_csv.name}')
+            snapshot_stats = build_snapshot(token, gold_rate, preview_csv, log,
+                                            test_gati=test_gati)
+            log.info(
+                f'Snapshot summary — '
+                f'{snapshot_stats["variants_priced"]:,} priced, '
+                f'{snapshot_stats["products_covered"]} products, '
+                f'{snapshot_stats["archived_skipped"]} archived skipped, '
+                f'{snapshot_stats["variants_no_weight"]} missing weight'
+            )
+
         # 4. Import to Shopify
-        import_stats = _run_importer(token, preview_csv, log)
+        import_stats = _run_importer(token, preview_csv, log, resume=resuming)
 
         # 5. Emails
         from notifier import send_run_report, send_rates_confirmation
