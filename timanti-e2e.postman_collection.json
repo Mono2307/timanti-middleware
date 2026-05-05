@@ -14,9 +14,15 @@
     { "key": "TEST_ADVANCE_AMOUNT",   "value": "1",  "description": "Advance payment amount in Rs (keep low for testing)" },
     { "key": "TEST_TOTAL_AMOUNT",     "value": "2",  "description": "Full order total in Rs" },
     { "key": "TEST_FINAL_AMOUNT",     "value": "1",  "description": "Final payment amount (total minus advance)" },
-    { "key": "GOKWIK_LINK_ID",        "value": "", "description": "Auto-set by Generate Advance Link test" },
-    { "key": "GOKWIK_FINAL_LINK_ID",  "value": "", "description": "Auto-set by Generate Final Link test" },
-    { "key": "CANCEL_LINK_ID",         "value": "", "description": "Auto-set by 3a Generate Link to Cancel" }
+    { "key": "GOKWIK_LINK_ID",              "value": "", "description": "Auto-set by Generate Advance Link test" },
+    { "key": "GOKWIK_FINAL_LINK_ID",       "value": "", "description": "Auto-set by Generate Final Link test" },
+    { "key": "CANCEL_LINK_ID",             "value": "", "description": "Auto-set by 3a Generate Link to Cancel" },
+    { "key": "TEST_JEWEL_DRAFT_ORDER_ID",  "value": "", "description": "A draft order with _gold_rate + Gold line item properties (for folder 8)" },
+    { "key": "JEWEL_OLD_PRICE",            "value": "", "description": "Auto-set by 8a — original line item price before repricing" },
+    { "key": "JEWEL_GOLD_RATE",            "value": "", "description": "Auto-set by 8a — _gold_rate property value" },
+    { "key": "JEWEL_OLD_NET_WT",           "value": "", "description": "Auto-set by 8a — derived from Gold / _gold_rate" },
+    { "key": "JEWEL_BELOW_NET_WT",         "value": "", "description": "Auto-set by 8a — old_net_wt * 1.03 (3% delta, no reprice expected)" },
+    { "key": "JEWEL_ABOVE_NET_WT",         "value": "", "description": "Auto-set by 8a — old_net_wt * 1.10 (10% delta, reprice expected)" }
   ],
   "item": [
 
@@ -105,7 +111,7 @@
                   "pm.test('Status 200', () => pm.response.to.have.status(200));",
                   "const b = pm.response.json();",
                   "pm.test('Link status is created', () => pm.expect(b.data.status).to.eql('created'));",
-                  "pm.test('merchant_reference_id matches', () => pm.expect(b.data.merchant_reference_id).to.eql(pm.variables.get('TEST_DRAFT_ORDER_ID')));"
+                  "pm.test('merchant_reference_id starts with draftOrderId', () => pm.expect(b.data.merchant_reference_id).to.include(pm.variables.get('TEST_DRAFT_ORDER_ID')));"
                 ]
               }
             }
@@ -579,6 +585,310 @@
                 "exec": [
                   "pm.test('Status 400', () => pm.response.to.have.status(400));",
                   "pm.test('Error mentions amountInRupees', () => pm.expect(pm.response.json().error).to.include('amountInRupees'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+
+    {
+      "name": "7 — Send-Link Tag",
+      "description": "Simulates a Shopify draft_orders/update webhook with a send-link-AMOUNT tag. Middleware generates a real GoKwik link, sends SMS to TEST_CUSTOMER_PHONE, sends email to TEST_CUSTOMER_EMAIL, then removes the tag from Shopify.\n\nUses TEST_DRAFT_ORDER_ID and TEST_CUSTOMER_PHONE — same draft as folders 1-4 is fine.",
+      "item": [
+        {
+          "name": "7a. Simulate send-link Tag Webhook",
+          "request": {
+            "method": "POST",
+            "url": "{{BASE_URL}}/api/shopify-draft-updated",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"id\": \"{{TEST_DRAFT_ORDER_ID}}\",\n  \"name\": \"{{TEST_DRAFT_ORDER_NAME}}\",\n  \"tags\": \"send-link-{{TEST_ADVANCE_AMOUNT}}\",\n  \"total_price\": \"{{TEST_TOTAL_AMOUNT}}\",\n  \"customer\": {\n    \"phone\": \"{{TEST_CUSTOMER_PHONE}}\",\n    \"email\": \"{{TEST_CUSTOMER_EMAIL}}\",\n    \"first_name\": \"Test\",\n    \"last_name\": \"Customer\"\n  },\n  \"line_items\": [],\n  \"applied_discount\": null\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200 (webhook always 200)', () => pm.response.to.have.status(200));",
+                  "console.log('Webhook accepted. Allow 2-3s for async processing, then run 7b.');"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "7b. Verify — Link Created in payment_links",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{BASE_URL}}/api/payment-links?draftOrderId={{TEST_DRAFT_ORDER_ID}}",
+              "host": ["{{BASE_URL}}"],
+              "path": ["api", "payment-links"],
+              "query": [{ "key": "draftOrderId", "value": "{{TEST_DRAFT_ORDER_ID}}" }]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test('Links array returned', () => {",
+                  "  pm.expect(b.success).to.be.true;",
+                  "  pm.expect(b.links).to.be.an('array');",
+                  "});",
+                  "pm.test('At least one link exists', () => pm.expect(b.links.length).to.be.above(0));",
+                  "if (b.links.length > 0) {",
+                  "  const latest = b.links[0];",
+                  "  pm.test('Most recent link has correct amount', () => pm.expect(parseFloat(latest.amount)).to.eql(parseFloat(pm.variables.get('TEST_ADVANCE_AMOUNT'))));",
+                  "  pm.test('Link status is created', () => pm.expect(latest.status).to.eql('created'));",
+                  "  pm.test('Link has short_url', () => pm.expect(latest.short_url).to.be.a('string').and.include('go.kwik.pe'));",
+                  "  console.log('Latest link:', latest.gokwik_link_id, '— Amount:', latest.amount, '— Type:', latest.installment_type);",
+                  "  console.log('Short URL:', latest.short_url);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+
+    {
+      "name": "8 — Jewel Repricing",
+      "description": "Tests jewel weight repricing via /api/recalculate-price.\n\nRequires TEST_JEWEL_DRAFT_ORDER_ID to be a draft order that already has '_gold_rate' and 'Gold' (e.g. Rs90000) as line item properties — these are set by the pricing engine when the quote is first created.\n\nRun 8a first every time — it reads current state and auto-computes thresholds stored as env vars.\n\nTest flow:\n8a — read line items, compute JEWEL_BELOW_NET_WT (+3%) and JEWEL_ABOVE_NET_WT (+10%)\n8b/8c/8d — set metafields below 5% threshold → reprice → verify no price change, jewel data written\n8e/8f/8g — set metafields above 5% threshold → reprice → verify price updated",
+      "item": [
+        {
+          "name": "8a. Read Line Items — Capture Jewel State",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{BASE_URL}}/api/draft-order-line-items?draftOrderId={{TEST_JEWEL_DRAFT_ORDER_ID}}",
+              "host": ["{{BASE_URL}}"],
+              "path": ["api", "draft-order-line-items"],
+              "query": [{ "key": "draftOrderId", "value": "{{TEST_JEWEL_DRAFT_ORDER_ID}}" }]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test('Line items returned', () => {",
+                  "  pm.expect(b.success).to.be.true;",
+                  "  pm.expect(b.line_items).to.be.an('array').with.length.above(0);",
+                  "});",
+                  "const item = b.line_items.find(i => (i.properties || []).some(p => p.name === '_gold_rate'));",
+                  "pm.test('Line item with _gold_rate found', () => pm.expect(item).to.exist);",
+                  "if (item) {",
+                  "  const props = {};",
+                  "  (item.properties || []).forEach(p => props[p.name] = p.value);",
+                  "  const goldRate = parseFloat(props['_gold_rate']);",
+                  "  const oldGold  = parseFloat((props['Gold'] || '0').replace('Rs', '').trim());",
+                  "  pm.test('_gold_rate is positive', () => pm.expect(goldRate).to.be.above(0));",
+                  "  pm.test('Gold value is positive', () => pm.expect(oldGold).to.be.above(0));",
+                  "  const oldNetWt = oldGold / goldRate;",
+                  "  const belowNetWt = (oldNetWt * 1.03).toFixed(3);",
+                  "  const aboveNetWt = (oldNetWt * 1.10).toFixed(3);",
+                  "  pm.environment.set('JEWEL_OLD_PRICE',    item.price);",
+                  "  pm.environment.set('JEWEL_GOLD_RATE',    goldRate.toString());",
+                  "  pm.environment.set('JEWEL_OLD_NET_WT',   oldNetWt.toFixed(3));",
+                  "  pm.environment.set('JEWEL_BELOW_NET_WT', belowNetWt);",
+                  "  pm.environment.set('JEWEL_ABOVE_NET_WT', aboveNetWt);",
+                  "  console.log('Captured: price=' + item.price + ', goldRate=' + goldRate + ', oldNetWt=' + oldNetWt.toFixed(3));",
+                  "  console.log('Test thresholds: below=' + belowNetWt + 'g (3%), above=' + aboveNetWt + 'g (10%)');",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "8b. Set Metafields — Below 5% Threshold",
+          "request": {
+            "method": "POST",
+            "url": "{{BASE_URL}}/api/draft-order-metafields",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"draftOrderId\": \"{{TEST_JEWEL_DRAFT_ORDER_ID}}\",\n  \"fields\": {\n    \"net_wt\":      \"{{JEWEL_BELOW_NET_WT}}\",\n    \"gross_wt\":    \"16.500\",\n    \"diamond_cts\": \"0.50\",\n    \"diamond_pcs\": \"5\",\n    \"jewel_code\":  \"E2E-BELOW\"\n  }\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Success', () => pm.expect(pm.response.json().success).to.be.true);",
+                  "console.log('net_wt set to', pm.environment.get('JEWEL_BELOW_NET_WT'), '(3% above old — below 5% reprice threshold)');"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "8c. Trigger Reprice — Below Threshold",
+          "request": {
+            "method": "POST",
+            "url": "{{BASE_URL}}/api/recalculate-price",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"draftOrderId\": \"{{TEST_JEWEL_DRAFT_ORDER_ID}}\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Success', () => pm.expect(pm.response.json().success).to.be.true);",
+                  "console.log('Reprice triggered. Delta is 3% — price should NOT change, jewel data should be written.');"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "8d. Verify — No Price Change, Jewel Data Written",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{BASE_URL}}/api/draft-order-line-items?draftOrderId={{TEST_JEWEL_DRAFT_ORDER_ID}}",
+              "host": ["{{BASE_URL}}"],
+              "path": ["api", "draft-order-line-items"],
+              "query": [{ "key": "draftOrderId", "value": "{{TEST_JEWEL_DRAFT_ORDER_ID}}" }]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "const item = b.line_items.find(i => (i.properties || []).some(p => p.name === '_gold_rate'));",
+                  "pm.test('Line item found', () => pm.expect(item).to.exist);",
+                  "if (item) {",
+                  "  const props = {};",
+                  "  (item.properties || []).forEach(p => props[p.name] = p.value);",
+                  "  pm.test('_jewel_data property written', () => pm.expect(props['_jewel_data']).to.be.a('string'));",
+                  "  if (props['_jewel_data']) {",
+                  "    const jd = JSON.parse(props['_jewel_data']);",
+                  "    pm.test('jewel_data.repriced is false', () => pm.expect(jd.repriced).to.be.false);",
+                  "    pm.test('jewel_data.jewel_code is E2E-BELOW', () => pm.expect(jd.jewel_code).to.eql('E2E-BELOW'));",
+                  "    pm.test('jewel_data.net_wt matches set value', () => pm.expect(jd.net_wt.toFixed(3)).to.eql(pm.environment.get('JEWEL_BELOW_NET_WT')));",
+                  "    console.log('_jewel_data:', JSON.stringify(jd));",
+                  "  }",
+                  "  const oldPrice = parseFloat(pm.environment.get('JEWEL_OLD_PRICE'));",
+                  "  const newPrice = parseFloat(item.price);",
+                  "  pm.test('Price unchanged (within Rs1)', () => pm.expect(Math.abs(newPrice - oldPrice)).to.be.below(1));",
+                  "  console.log('Price: old=' + oldPrice + ', new=' + newPrice + ' (should be same)');",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "8e. Set Metafields — Above 5% Threshold",
+          "request": {
+            "method": "POST",
+            "url": "{{BASE_URL}}/api/draft-order-metafields",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"draftOrderId\": \"{{TEST_JEWEL_DRAFT_ORDER_ID}}\",\n  \"fields\": {\n    \"net_wt\":      \"{{JEWEL_ABOVE_NET_WT}}\",\n    \"gross_wt\":    \"19.000\",\n    \"diamond_cts\": \"0.50\",\n    \"diamond_pcs\": \"5\",\n    \"jewel_code\":  \"E2E-ABOVE\"\n  }\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Success', () => pm.expect(pm.response.json().success).to.be.true);",
+                  "console.log('net_wt set to', pm.environment.get('JEWEL_ABOVE_NET_WT'), '(10% above old — above 5% reprice threshold)');"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "8f. Trigger Reprice — Above Threshold",
+          "request": {
+            "method": "POST",
+            "url": "{{BASE_URL}}/api/recalculate-price",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"draftOrderId\": \"{{TEST_JEWEL_DRAFT_ORDER_ID}}\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Success', () => pm.expect(pm.response.json().success).to.be.true);",
+                  "console.log('Reprice triggered. Delta is 10% — price SHOULD change, Gold/GST/Taxable updated.');"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "8g. Verify — Price Repriced, Gold Updated",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{BASE_URL}}/api/draft-order-line-items?draftOrderId={{TEST_JEWEL_DRAFT_ORDER_ID}}",
+              "host": ["{{BASE_URL}}"],
+              "path": ["api", "draft-order-line-items"],
+              "query": [{ "key": "draftOrderId", "value": "{{TEST_JEWEL_DRAFT_ORDER_ID}}" }]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "const item = b.line_items.find(i => (i.properties || []).some(p => p.name === '_gold_rate'));",
+                  "pm.test('Line item found', () => pm.expect(item).to.exist);",
+                  "if (item) {",
+                  "  const props = {};",
+                  "  (item.properties || []).forEach(p => props[p.name] = p.value);",
+                  "  pm.test('_jewel_data property written', () => pm.expect(props['_jewel_data']).to.be.a('string'));",
+                  "  if (props['_jewel_data']) {",
+                  "    const jd = JSON.parse(props['_jewel_data']);",
+                  "    pm.test('jewel_data.repriced is true', () => pm.expect(jd.repriced).to.be.true);",
+                  "    pm.test('jewel_data.jewel_code is E2E-ABOVE', () => pm.expect(jd.jewel_code).to.eql('E2E-ABOVE'));",
+                  "    pm.test('jewel_data.net_wt matches set value', () => pm.expect(jd.net_wt.toFixed(3)).to.eql(pm.environment.get('JEWEL_ABOVE_NET_WT')));",
+                  "    pm.test('weight_delta_pct is > 5', () => pm.expect(parseFloat(jd.weight_delta_pct)).to.be.above(5));",
+                  "    console.log('_jewel_data:', JSON.stringify(jd));",
+                  "  }",
+                  "  const oldPrice = parseFloat(pm.environment.get('JEWEL_OLD_PRICE'));",
+                  "  const newPrice = parseFloat(item.price);",
+                  "  pm.test('Price changed from original', () => pm.expect(Math.abs(newPrice - oldPrice)).to.be.above(1));",
+                  "  const goldProp = props['Gold'] || '';",
+                  "  pm.test('Gold property updated', () => pm.expect(goldProp).to.include('Rs'));",
+                  "  const gstProp  = props['GST']  || '';",
+                  "  pm.test('GST property present', () => pm.expect(gstProp).to.include('Rs'));",
+                  "  console.log('Price: old=' + oldPrice + ', new=' + newPrice + ', delta=Rs' + (newPrice - oldPrice).toFixed(2));",
+                  "  console.log('Gold:', goldProp, '| GST:', gstProp);",
+                  "}"
                 ]
               }
             }

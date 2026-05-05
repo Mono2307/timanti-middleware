@@ -23,6 +23,7 @@ const supabase = createClient(
 const AUTO_PUSH_TO_TERMINAL       = process.env.AUTO_PUSH_TO_TERMINAL       === 'true';
 const AUTO_CONVERT_DRAFT_TO_ORDER = process.env.AUTO_CONVERT_DRAFT_TO_ORDER === 'true';
 const AUTO_SEND_DRAFT_INVOICE     = process.env.AUTO_SEND_DRAFT_INVOICE     === 'true';
+const AUTO_SEND_DEPOSIT_EMAIL     = process.env.AUTO_SEND_DEPOSIT_EMAIL     === 'true';
 
 function getPinePaymentMode() {
   const mode = (process.env.PINE_PAYMENT_MODE || 'integer').toLowerCase();
@@ -330,9 +331,6 @@ async function handlePaymentCompletion(transaction, overrides = {}) {
     };
     if (installmentType === 'advance') {
       metafieldUpdate.payment_mode_advance = paymentMode;
-      // Set channel on the first (advance) payment — reflects how the customer paid
-      const channelMap = { gokwik_link: 'online', gokwik: 'online', pine: 'in_store', cash: 'in_store' };
-      metafieldUpdate.channel = channelMap[paymentSource] || paymentSource;
     }
     if (installmentType === 'final') metafieldUpdate.payment_mode_final = paymentMode;
     if (newStatus === 'paid')        metafieldUpdate.is_finalized = 'true';
@@ -341,10 +339,14 @@ async function handlePaymentCompletion(transaction, overrides = {}) {
     const { data: updatedDeposit } = await supabase
       .from('store_deposits').select('*').eq('id', deposit.id).single();
 
-    await sendDepositEmail(
-      transaction.shopify_draft_id, transaction.draft_order_name,
-      newAmountPaid, Math.max(0, newAmountPending), newStatus, updatedDeposit, getShopifyToken
-    );
+    if (AUTO_SEND_DEPOSIT_EMAIL) {
+      await sendDepositEmail(
+        transaction.shopify_draft_id, transaction.draft_order_name,
+        newAmountPaid, Math.max(0, newAmountPending), newStatus, updatedDeposit, getShopifyToken
+      );
+    } else {
+      console.log(`⏸️  AUTO_SEND_DEPOSIT_EMAIL off — skipping deposit email for draft ${transaction.shopify_draft_id}`);
+    }
 
     if (newStatus === 'partial' && AUTO_SEND_DRAFT_INVOICE) {
       await sendDraftOrderInvoice(transaction.shopify_draft_id);
@@ -775,7 +777,248 @@ app.post('/api/pine-webhook', async (req, res) => {
 });
 
 // ─────────────────────────────────────────
-// Pricing Engine
+// Pricing Engine — helpers
+// ─────────────────────────────────────────
+
+async function removeTagFromDraft(draftOrderId, tagToRemove) {
+  try {
+    const token = await getShopifyToken();
+    const { data: draftData } = await axios.get(
+      `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}.json`,
+      { headers: { 'X-Shopify-Access-Token': token }, timeout: 10000 }
+    );
+    const existingTags = draftData.draft_order.tags || '';
+    const tagList = existingTags.split(',').map(t => t.trim());
+    if (!tagList.some(t => t.toLowerCase() === tagToRemove.toLowerCase())) return;
+    const newTags = tagList.filter(t => t && t.toLowerCase() !== tagToRemove.toLowerCase()).join(', ');
+    await axios.put(
+      `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}.json`,
+      { draft_order: { id: draftOrderId, tags: newTags } },
+      { headers: { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' }, timeout: 10000 }
+    );
+    console.log(`✅ Tag "${tagToRemove}" removed from draft ${draftOrderId}`);
+  } catch (err) {
+    console.error(`❌ removeTagFromDraft failed for draft ${draftOrderId}:`, err.response?.data || err.message);
+  }
+}
+
+// Tag format: send-link-AMOUNT  e.g. send-link-5000 or send-link-5000.50
+// Phone + name + email come from draft.customer; total from draft.total_price
+async function handleSendLinkTag(draft) {
+  const tags = (draft.tags || '').split(',').map(t => t.trim());
+  const sendLinkTag = tags.find(t => /^send-link-(\d+(?:\.\d+)?)$/i.test(t));
+  if (!sendLinkTag) return;
+
+  const amount = parseFloat(sendLinkTag.replace(/^send-link-/i, ''));
+  if (!amount || amount <= 0) {
+    console.warn(`Draft ${draft.id}: invalid send-link tag "${sendLinkTag}", removing`);
+    await removeTagFromDraft(draft.id, sendLinkTag);
+    return;
+  }
+
+  const customer = draft.customer || {};
+  const rawPhone = customer.phone || draft.billing_address?.phone || draft.shipping_address?.phone || '';
+  const customerPhone = rawPhone.replace(/\D/g, '').slice(-10);
+  if (!customerPhone || customerPhone.length < 10) {
+    console.warn(`Draft ${draft.id}: send-link tag but no valid customer phone, removing tag`);
+    await removeTagFromDraft(draft.id, sendLinkTag);
+    return;
+  }
+
+  const customerName  = [customer.first_name, customer.last_name].filter(Boolean).join(' ') || null;
+  const customerEmail = customer.email || null;
+  const draftOrderName = draft.name || draft.id.toString();
+  const totalAmount    = parseFloat(draft.total_price) || null;
+
+  const { data: existingDeposit } = await supabase
+    .from('store_deposits').select('payment_status')
+    .eq('draft_order_id', draft.id.toString()).maybeSingle();
+  const installmentType = existingDeposit?.payment_status === 'partial' ? 'final' : 'advance';
+
+  const { gokwikLinkId, shortUrl, expiresAt } = await createGokwikLink({
+    draftOrderId: draft.id, amount, customerPhone, customerName, customerEmail
+  });
+
+  await supabase.from('payment_links').insert({
+    draft_order_id:   draft.id.toString(),
+    draft_order_name: draftOrderName,
+    gokwik_link_id:   gokwikLinkId,
+    short_url:        shortUrl,
+    amount,
+    total_amount:     totalAmount,
+    installment_type: installmentType,
+    status:           'created',
+    customer_phone:   customerPhone,
+    expires_at:       expiresAt
+  });
+
+  const smsMessage = `Your Timanti payment link: ${shortUrl} — Amount: Rs${amount}. Valid 7 days.`;
+  await sendSMS(customerPhone, smsMessage);
+
+  if (customerEmail) {
+    await sendEmail({
+      to:      customerEmail,
+      subject: `Timanti Payment Link — Rs${amount}`,
+      html:    `<p>Please use the link below to complete your payment of Rs${amount}:</p><p><a href="${shortUrl}">${shortUrl}</a></p><p>This link is valid for 7 days.</p>`
+    });
+  }
+
+  console.log(`✅ GoKwik link created via tag for draft ${draft.id}: ${gokwikLinkId} (${installmentType})`);
+  await removeTagFromDraft(draft.id, sendLinkTag);
+}
+
+// Tag: recalculate-price
+// Reads jewel metafields (net_wt, gross_wt, diamond_cts, diamond_pcs, jewel_code) from draft,
+// computes weight delta against _gold_rate from line item properties,
+// reprices if delta > 5%, always stores _jewel_data hidden property.
+// Removes tag atomically in the same PUT as any line item update (loop prevention).
+async function handleRecalculatePriceTag(draft) {
+  const tags = (draft.tags || '').split(',').map(t => t.trim());
+  if (!tags.some(t => t.toLowerCase() === 'recalculate-price')) return;
+
+  const draftOrderId = draft.id;
+  const token = await getShopifyToken();
+  const headers = { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' };
+  const tagsWithoutRecalc = tags.filter(t => t && t.toLowerCase() !== 'recalculate-price').join(', ');
+
+  // Fetch jewel metafields set manually by staff
+  const { data: mfData } = await axios.get(
+    `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}/metafields.json`,
+    { headers: { 'X-Shopify-Access-Token': token }, timeout: 10000 }
+  );
+  const mfMap = {};
+  for (const mf of (mfData.metafields || [])) {
+    if (mf.namespace === 'custom') mfMap[mf.key] = mf.value;
+  }
+
+  const newNetWt   = parseFloat(mfMap.net_wt);
+  const newGrossWt = parseFloat(mfMap.gross_wt) || 0;
+  const diamondCts = parseFloat(mfMap.diamond_cts) || 0;
+  const diamondPcs = parseInt(mfMap.diamond_pcs)   || 0;
+  const jewel_code = mfMap.jewel_code || '';
+
+  if (!newNetWt) {
+    console.warn(`Draft ${draftOrderId}: recalculate-price tag but net_wt metafield missing or zero`);
+    await removeTagFromDraft(draftOrderId, 'recalculate-price');
+    return;
+  }
+
+  const lineItem = (draft.line_items || []).find(item =>
+    !((item.title || '').toLowerCase().includes('discount') && parseFloat(item.price) < 0) &&
+    (item.properties || []).some(p => p.name === '_gold_rate')
+  );
+
+  if (!lineItem) {
+    console.warn(`Draft ${draftOrderId}: no line item with _gold_rate, skipping reprice`);
+    await removeTagFromDraft(draftOrderId, 'recalculate-price');
+    return;
+  }
+
+  const props = {};
+  for (const p of (lineItem.properties || [])) props[p.name] = p.value;
+
+  const goldRate = parseFloat(props['_gold_rate']);
+  const oldGold  = parseFloat((props['Gold'] || '0').replace('Rs', '').trim());
+
+  if (!goldRate || !oldGold) {
+    console.warn(`Draft ${draftOrderId}: missing Gold or _gold_rate on line item, skipping`);
+    await removeTagFromDraft(draftOrderId, 'recalculate-price');
+    return;
+  }
+
+  const oldNetWt = oldGold / goldRate;
+  const delta    = Math.abs(newNetWt - oldNetWt) / oldNetWt;
+  const repriced = delta > 0.05;
+
+  const metal    = (lineItem.variant_title || '').split(' / ')[0] || '';
+  const category = lineItem.title || '';
+
+  const jewel_data = JSON.stringify({
+    jewel_code,
+    gross_wt:         newGrossWt,
+    net_wt:           newNetWt,
+    diamond_cts:      diamondCts,
+    diamond_pcs:      diamondPcs,
+    metal,
+    category,
+    gold_rate_locked: goldRate,
+    weight_delta_pct: parseFloat((delta * 100).toFixed(2)),
+    repriced
+  });
+
+  // Build updated properties: keep all existing, replace/add hidden jewel props
+  const hiddenJewelProps = {
+    '_gross_wt':    newGrossWt.toFixed(3),
+    '_net_wt':      newNetWt.toFixed(3),
+    '_diamond_cts': diamondCts.toFixed(2),
+    '_diamond_pcs': diamondPcs.toString(),
+    '_jewel_code':  jewel_code,
+    '_jewel_data':  jewel_data
+  };
+
+  let updatedProperties = (lineItem.properties || []).filter(p => !(p.name in hiddenJewelProps));
+  for (const [name, value] of Object.entries(hiddenJewelProps)) {
+    updatedProperties.push({ name, value });
+  }
+
+  let newPrice = parseFloat(lineItem.price);
+
+  if (repriced) {
+    const newGoldValue    = newNetWt * goldRate;
+    const deltaGold       = newGoldValue - oldGold;
+    const oldGrossValue   = parseFloat((props['Gross Value'] || lineItem.price).toString().replace('Rs', '').trim());
+    const discountAmount  = parseFloat(draft.applied_discount?.amount || 0);
+
+    const newGrossValue   = oldGrossValue + deltaGold;
+    const newFinalValue   = newGrossValue - discountAmount;
+    const newTaxableValue = newFinalValue / 1.03;
+    const newGst          = newTaxableValue * 0.03;
+    newPrice              = parseFloat(newFinalValue.toFixed(2));
+
+    const repricedPriceProps = {
+      'Gold':          `Rs${newGoldValue.toFixed(2)}`,
+      'Gross Value':   `Rs${newGrossValue.toFixed(2)}`,
+      'Taxable Value': `Rs${newTaxableValue.toFixed(2)}`,
+      'GST':           `Rs${newGst.toFixed(2)}`
+    };
+    updatedProperties = updatedProperties.filter(p => !(p.name in repricedPriceProps));
+    for (const [name, value] of Object.entries(repricedPriceProps)) {
+      updatedProperties.push({ name, value });
+    }
+    console.log(`✅ Repriced draft ${draftOrderId}: delta=${(delta*100).toFixed(2)}%, new gold=Rs${newGoldValue.toFixed(2)}, new final=Rs${newFinalValue.toFixed(2)}`);
+  } else {
+    console.log(`Draft ${draftOrderId}: delta=${(delta*100).toFixed(2)}% ≤ 5%, jewel data stored, no reprice`);
+  }
+
+  // Combined PUT: update line items + remove tag in one call (prevents webhook loop)
+  await axios.put(
+    `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}.json`,
+    {
+      draft_order: {
+        id:   draftOrderId,
+        tags: tagsWithoutRecalc,
+        line_items: draft.line_items.map(item => {
+          const base = {
+            id:         item.id,
+            variant_id: item.variant_id,
+            quantity:   item.quantity,
+            price:      item.price,
+            properties: item.properties || []
+          };
+          if (item.id === lineItem.id) {
+            return { ...base, price: newPrice.toFixed(2), properties: updatedProperties };
+          }
+          return base;
+        })
+      }
+    },
+    { headers, timeout: 15000 }
+  );
+  console.log(`✅ Draft ${draftOrderId}: jewel data written, recalculate-price tag removed`);
+}
+
+// ─────────────────────────────────────────
+// Pricing Engine — routes
 // ─────────────────────────────────────────
 
 app.post('/api/shopify-draft-updated', async (req, res) => {
@@ -784,6 +1027,11 @@ app.post('/api/shopify-draft-updated', async (req, res) => {
     const draft = req.body;
     if (!draft?.id) return;
 
+    // Tag-based handlers (fire independently, each removes its own tag)
+    await handleSendLinkTag(draft);
+    await handleRecalculatePriceTag(draft);
+
+    // Existing: discount-driven recalculation
     const discountObj = draft.applied_discount;
     let discountAmount = 0;
     if (discountObj) {
@@ -838,6 +1086,30 @@ app.post('/pricing/recalculate', async (req, res) => {
     return res.json({ success: true, pricing });
   } catch (error) {
     return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Manual trigger for jewel weight repricing (same logic as recalculate-price tag).
+// Requires jewel metafields (net_wt, gross_wt, diamond_cts, diamond_pcs, jewel_code) already set on the draft.
+app.post('/api/recalculate-price', async (req, res) => {
+  const { draftOrderId } = req.body;
+  if (!draftOrderId) return res.status(400).json({ success: false, error: 'draftOrderId required' });
+  try {
+    const token = await getShopifyToken();
+    const { data: draftData } = await axios.get(
+      `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}.json`,
+      { headers: { 'X-Shopify-Access-Token': token }, timeout: 10000 }
+    );
+    // Inject the tag so handleRecalculatePriceTag processes it
+    const draft = { ...draftData.draft_order };
+    const existingTags = (draft.tags || '').split(',').map(t => t.trim()).filter(Boolean);
+    if (!existingTags.some(t => t.toLowerCase() === 'recalculate-price')) {
+      draft.tags = [...existingTags, 'recalculate-price'].join(', ');
+    }
+    await handleRecalculatePriceTag(draft);
+    return res.json({ success: true, draftOrderId });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message, detail: err.response?.data });
   }
 });
 
@@ -1034,6 +1306,46 @@ app.get('/api/draft-order-metafields', async (req, res) => {
   } catch (err) {
     return res.status(500).json({ success: false, error: err.message });
   }
+});
+
+app.post('/api/draft-order-metafields', async (req, res) => {
+  const { draftOrderId, fields } = req.body;
+  if (!draftOrderId || !fields || typeof fields !== 'object') {
+    return res.status(400).json({ success: false, error: 'draftOrderId and fields object required' });
+  }
+  try {
+    await updateDraftOrderMetafields(draftOrderId, fields);
+    return res.json({ success: true });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.get('/api/draft-order-line-items', async (req, res) => {
+  const { draftOrderId } = req.query;
+  if (!draftOrderId) return res.status(400).json({ success: false, error: 'draftOrderId required' });
+  try {
+    const token = await getShopifyToken();
+    const { data } = await axios.get(
+      `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}.json`,
+      { headers: { 'X-Shopify-Access-Token': token } }
+    );
+    const { line_items, tags, name } = data.draft_order;
+    return res.json({ success: true, draftOrderId, name, tags, line_items });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.get('/api/payment-links', async (req, res) => {
+  const { draftOrderId } = req.query;
+  if (!draftOrderId) return res.status(400).json({ success: false, error: 'draftOrderId required' });
+  const { data, error } = await supabase
+    .from('payment_links').select('*')
+    .eq('draft_order_id', draftOrderId.toString())
+    .order('created_at', { ascending: false });
+  if (error) return res.status(500).json({ success: false, error: error.message });
+  return res.json({ success: true, links: data || [] });
 });
 
 // ─────────────────────────────────────────
