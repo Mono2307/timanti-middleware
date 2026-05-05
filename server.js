@@ -948,7 +948,35 @@ async function handleRecalculatePriceTag(draft) {
 
   const oldNetWt = oldGold / goldRate;
   const delta    = Math.abs(newNetWt - oldNetWt) / oldNetWt;
-  const repriced = delta > 0.05;
+
+  if (delta <= 0.05) {
+    // Below threshold: only remove tag — no line item changes, no jewel properties written
+    await axios.put(
+      `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}.json`,
+      { draft_order: { id: draftOrderId, tags: tagsWithoutRecalc } },
+      { headers, timeout: 15000 }
+    );
+    console.log(`Draft ${draftOrderId}: delta=${(delta*100).toFixed(2)}% ≤ 5% — tag removed, no line item changes`);
+    return;
+  }
+
+  // Above threshold: full reprice
+  const newGoldValue  = newNetWt * goldRate;
+  const deltaGold     = newGoldValue - oldGold;
+  const oldGrossValue = parseFloat((props['Gross Value'] || lineItem.price).toString().replace('Rs', '').trim());
+
+  // Prefer live applied_discount; fall back to Discount Applied property (if discount was already absorbed by a prior reprice)
+  let discountAmount = parseFloat(draft.applied_discount?.amount || 0);
+  if (!discountAmount) {
+    const discProp = (lineItem.properties || []).find(p => p.name === 'Discount Applied');
+    if (discProp) discountAmount = parseFloat((discProp.value || '0').replace('Rs', '').trim()) || 0;
+  }
+
+  const newGrossValue   = oldGrossValue + deltaGold;
+  const newFinalValue   = newGrossValue - discountAmount;
+  const newTaxableValue = newFinalValue / 1.03;
+  const newGst          = newTaxableValue * 0.03;
+  const newPrice        = parseFloat(newFinalValue.toFixed(2));
 
   const metal    = (lineItem.variant_title || '').split(' / ')[0] || '';
   const category = lineItem.title || '';
@@ -963,62 +991,38 @@ async function handleRecalculatePriceTag(draft) {
     category,
     gold_rate_locked: goldRate,
     weight_delta_pct: parseFloat((delta * 100).toFixed(2)),
-    repriced
+    repriced:         true
   });
 
-  // Build updated properties: keep all existing, replace/add hidden jewel props
-  const hiddenJewelProps = {
-    '_gross_wt':    newGrossWt.toFixed(3),
-    '_net_wt':      newNetWt.toFixed(3),
-    '_diamond_cts': diamondCts.toFixed(2),
-    '_diamond_pcs': diamondPcs.toString(),
-    '_jewel_code':  jewel_code,
-    '_jewel_data':  jewel_data
+  const repricedProps = {
+    'Gold':             `Rs${newGoldValue.toFixed(2)}`,
+    'Gross Value':      `Rs${newGrossValue.toFixed(2)}`,
+    'Taxable Value':    `Rs${newTaxableValue.toFixed(2)}`,
+    'GST':              `Rs${newGst.toFixed(2)}`,
+    'Discount Applied': `Rs${discountAmount.toFixed(2)}`,
+    '_gross_wt':        newGrossWt.toFixed(3),
+    '_net_wt':          newNetWt.toFixed(3),
+    '_diamond_cts':     diamondCts.toFixed(2),
+    '_diamond_pcs':     diamondPcs.toString(),
+    '_jewel_code':      jewel_code,
+    '_jewel_data':      jewel_data
   };
-  // Lock gold rate to line item on first reprice (bootstrap from variant — never updated again)
-  if (bootstrapGoldRate) hiddenJewelProps['_gold_rate'] = goldRate.toString();
+  if (bootstrapGoldRate) repricedProps['_gold_rate'] = goldRate.toString();
 
-  let updatedProperties = (lineItem.properties || []).filter(p => !(p.name in hiddenJewelProps));
-  for (const [name, value] of Object.entries(hiddenJewelProps)) {
+  const updatedProperties = (lineItem.properties || []).filter(p => !(p.name in repricedProps));
+  for (const [name, value] of Object.entries(repricedProps)) {
     updatedProperties.push({ name, value });
   }
 
-  let newPrice = parseFloat(lineItem.price);
-
-  if (repriced) {
-    const newGoldValue    = newNetWt * goldRate;
-    const deltaGold       = newGoldValue - oldGold;
-    const oldGrossValue   = parseFloat((props['Gross Value'] || lineItem.price).toString().replace('Rs', '').trim());
-    const discountAmount  = parseFloat(draft.applied_discount?.amount || 0);
-
-    const newGrossValue   = oldGrossValue + deltaGold;
-    const newFinalValue   = newGrossValue - discountAmount;
-    const newTaxableValue = newFinalValue / 1.03;
-    const newGst          = newTaxableValue * 0.03;
-    newPrice              = parseFloat(newFinalValue.toFixed(2));
-
-    const repricedPriceProps = {
-      'Gold':          `Rs${newGoldValue.toFixed(2)}`,
-      'Gross Value':   `Rs${newGrossValue.toFixed(2)}`,
-      'Taxable Value': `Rs${newTaxableValue.toFixed(2)}`,
-      'GST':           `Rs${newGst.toFixed(2)}`
-    };
-    updatedProperties = updatedProperties.filter(p => !(p.name in repricedPriceProps));
-    for (const [name, value] of Object.entries(repricedPriceProps)) {
-      updatedProperties.push({ name, value });
-    }
-    console.log(`✅ Repriced draft ${draftOrderId}: delta=${(delta*100).toFixed(2)}%, new gold=Rs${newGoldValue.toFixed(2)}, new final=Rs${newFinalValue.toFixed(2)}`);
-  } else {
-    console.log(`Draft ${draftOrderId}: delta=${(delta*100).toFixed(2)}% ≤ 5%, jewel data stored, no reprice`);
-  }
-
-  // Combined PUT: update line items + remove tag in one call (prevents webhook loop)
+  // applied_discount: null absorbs the discount into the line item price, preventing
+  // the shopify-draft-updated webhook from re-running recalculatePricing and overwriting our repriced values.
   await axios.put(
     `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}.json`,
     {
       draft_order: {
-        id:   draftOrderId,
-        tags: tagsWithoutRecalc,
+        id:               draftOrderId,
+        tags:             tagsWithoutRecalc,
+        applied_discount: null,
         line_items: draft.line_items.map(item => {
           const base = {
             id:         item.id,
@@ -1036,7 +1040,7 @@ async function handleRecalculatePriceTag(draft) {
     },
     { headers, timeout: 15000 }
   );
-  console.log(`✅ Draft ${draftOrderId}: jewel data written, recalculate-price tag removed`);
+  console.log(`✅ Repriced draft ${draftOrderId}: delta=${(delta*100).toFixed(2)}%, new gold=Rs${newGoldValue.toFixed(2)}, new final=Rs${newFinalValue.toFixed(2)}, discount absorbed`);
 }
 
 // ─────────────────────────────────────────
