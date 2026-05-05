@@ -417,8 +417,9 @@
       {% assign final_payable = taxable_base %}
       {% if og_value > 0 %}
         {% assign og_value_paise = og_value | times: 100 | round %}
-        <tr class="section-label-row">
-          <td colspan="13">Consideration against Gold</td>
+        <tr class="totals-row">
+          <td colspan="12" class="text-right" style="font-style:italic; color:#555; border-top: 1px solid #ccc;">Consideration against Gold</td>
+          <td style="border-top: 1px solid #ccc;"></td>
         </tr>
         <tr class="totals-row">
           <td colspan="12" class="text-right">
@@ -436,8 +437,9 @@
       {% comment %}── Payment Mode ──{% endcomment %}
       {% assign pm_advance = order.metafields.custom.payment_mode_advance | default: "" %}
       {% assign pm_final   = order.metafields.custom.payment_mode_final   | default: "" %}
-      <tr class="section-label-row">
-        <td colspan="13">Payment Mode</td>
+      <tr class="totals-row">
+        <td colspan="12" class="text-right" style="font-style:italic; color:#555; border-top: 1px solid #ccc;">Payment Mode</td>
+        <td style="border-top: 1px solid #ccc;"></td>
       </tr>
       {% if is_partial and paid_amount != "" %}
         <tr class="totals-row">
