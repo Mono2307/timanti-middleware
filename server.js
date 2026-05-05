@@ -889,13 +889,16 @@ async function handleRecalculatePriceTag(draft) {
   const mfMap = {};
   for (const mf of (mfData.metafields || [])) {
     if (mf.namespace === 'custom') mfMap[mf.key] = mf.value;
+    // jewel code lives at timanti.jewelcode (JSON metafield)
+    if (mf.namespace === 'timanti' && mf.key === 'jewelcode') mfMap['_timanti_jewelcode'] = mf.value;
   }
 
   const newNetWt   = parseFloat(mfMap.net_wt);
   const newGrossWt = parseFloat(mfMap.gross_wt) || 0;
   const diamondCts = parseFloat(mfMap.diamond_cts) || 0;
   const diamondPcs = parseInt(mfMap.diamond_pcs)   || 0;
-  const jewel_code = mfMap.jewel_code || '';
+  // Read jewel code from timanti.jewelcode (JSON); fall back to custom.jewel_code
+  const jewel_code = mfMap['_timanti_jewelcode'] || mfMap.jewel_code || '';
 
   if (!newNetWt) {
     console.warn(`Draft ${draftOrderId}: recalculate-price tag but net_wt metafield missing or zero`);
@@ -948,6 +951,7 @@ async function handleRecalculatePriceTag(draft) {
 
   const oldNetWt = oldGold / goldRate;
   const delta    = Math.abs(newNetWt - oldNetWt) / oldNetWt;
+  console.log(`Draft ${draftOrderId}: reprice check — newNetWt=${newNetWt}, oldGold=${oldGold}, goldRate=${goldRate}, oldNetWt=${oldNetWt.toFixed(4)}, delta=${(delta*100).toFixed(2)}%`);
 
   if (delta <= 0.05) {
     // Below threshold: only remove tag — no line item changes, no jewel properties written
@@ -1016,31 +1020,33 @@ async function handleRecalculatePriceTag(draft) {
 
   // applied_discount: null absorbs the discount into the line item price, preventing
   // the shopify-draft-updated webhook from re-running recalculatePricing and overwriting our repriced values.
-  await axios.put(
+  const putBody = {
+    draft_order: {
+      id:               draftOrderId,
+      tags:             tagsWithoutRecalc,
+      applied_discount: null,
+      line_items: draft.line_items.map(item => {
+        const base = {
+          id:         item.id,
+          variant_id: item.variant_id || undefined,
+          quantity:   item.quantity,
+          price:      item.price,
+          properties: item.properties || []
+        };
+        if (item.id === lineItem.id) {
+          return { ...base, price: newPrice.toFixed(2), properties: updatedProperties };
+        }
+        return base;
+      })
+    }
+  };
+  console.log(`Draft ${draftOrderId}: sending reprice PUT — newPrice=${newPrice}, lineItems=${putBody.draft_order.line_items.length}`);
+  const putResp = await axios.put(
     `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}.json`,
-    {
-      draft_order: {
-        id:               draftOrderId,
-        tags:             tagsWithoutRecalc,
-        applied_discount: null,
-        line_items: draft.line_items.map(item => {
-          const base = {
-            id:         item.id,
-            variant_id: item.variant_id,
-            quantity:   item.quantity,
-            price:      item.price,
-            properties: item.properties || []
-          };
-          if (item.id === lineItem.id) {
-            return { ...base, price: newPrice.toFixed(2), properties: updatedProperties };
-          }
-          return base;
-        })
-      }
-    },
+    putBody,
     { headers, timeout: 15000 }
   );
-  console.log(`✅ Repriced draft ${draftOrderId}: delta=${(delta*100).toFixed(2)}%, new gold=Rs${newGoldValue.toFixed(2)}, new final=Rs${newFinalValue.toFixed(2)}, discount absorbed`);
+  console.log(`✅ Repriced draft ${draftOrderId}: delta=${(delta*100).toFixed(2)}%, new gold=Rs${newGoldValue.toFixed(2)}, new final=Rs${newFinalValue.toFixed(2)}, shopify status=${putResp.status}`);
 }
 
 // ─────────────────────────────────────────
