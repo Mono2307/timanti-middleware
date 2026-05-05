@@ -2,7 +2,7 @@
   "info": {
     "name": "Timanti Middleware — E2E Tests",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
-    "description": "Full end-to-end test suite for all payment flows. Set collection variables before running. Run folders in order — later tests depend on state created by earlier ones.\n\nIMPORTANT — Use a regular sales draft (e.g. D72, D75, D76), NOT a PO draft (D68, D69). PO drafts have different flow handling.\n\nDANGER — 5b (/api/convert-to-order) WILL irreversibly convert the draft to a real Shopify order regardless of the AUTO_CONVERT flag. Only run 5b when you are ready to complete the sale."
+    "description": "Full end-to-end test suite for all payment flows. Set collection variables before running. Run folders in order — later tests depend on state created by earlier ones.\n\nAny open draft works — sales drafts, MTO drafts, replenishment POs. All support deposit payment tracking.\n\nDANGER — 5b (/api/convert-to-order) WILL irreversibly convert the draft to a real Shopify order regardless of the AUTO_CONVERT flag. Only run 5b when you are ready to complete the sale."
   },
   "variable": [
     { "key": "BASE_URL",              "value": "https://timanti-middleware.fly.dev", "description": "Switch to http://localhost:8080 for local testing" },
@@ -50,7 +50,7 @@
 
     {
       "name": "1 — GoKwik Advance Payment",
-      "description": "Creates an advance link, simulates payment via webhook, verifies deposit state.\n\nNOTE: 1a MUST be run before 1c. The webhook handler looks up an active payment_links row created by 1a — skipping 1a means 1c is a no-op (no link found, nothing updates).\n\nUse a regular sales draft for TEST_DRAFT_ORDER_ID. PO drafts will not work correctly.",
+      "description": "Creates an advance link, simulates payment via webhook, verifies deposit state.\n\nNOTE: 1a MUST be run before 1c. The webhook handler looks up an active payment_links row created by 1a — skipping 1a means 1c is a no-op (no link found, nothing updates).",
       "item": [
         {
           "name": "1a. Generate Advance Link",
@@ -74,7 +74,7 @@
                   "pm.test('Has shortUrl', () => pm.expect(b.shortUrl).to.include('go.kwik.pe'));",
                   "pm.test('installmentType is advance', () => pm.expect(b.installmentType).to.eql('advance'));",
                   "pm.test('Has gokwikLinkId', () => pm.expect(b.gokwikLinkId).to.be.a('string'));",
-                  "pm.collectionVariables.set('GOKWIK_LINK_ID', b.gokwikLinkId);",
+                  "pm.environment.set('GOKWIK_LINK_ID', b.gokwikLinkId);",
                   "console.log('Link ID saved:', b.gokwikLinkId);",
                   "console.log('Short URL:', b.shortUrl);"
                 ]
@@ -105,7 +105,7 @@
                   "pm.test('Status 200', () => pm.response.to.have.status(200));",
                   "const b = pm.response.json();",
                   "pm.test('Link status is created', () => pm.expect(b.data.status).to.eql('created'));",
-                  "pm.test('merchant_reference_id matches', () => pm.expect(b.data.merchant_reference_id).to.eql(pm.collectionVariables.get('TEST_DRAFT_ORDER_ID')));"
+                  "pm.test('merchant_reference_id matches', () => pm.expect(b.data.merchant_reference_id).to.eql(pm.variables.get('TEST_DRAFT_ORDER_ID')));"
                 ]
               }
             }
@@ -154,7 +154,7 @@
                 "exec": [
                   "pm.test('Status 200', () => pm.response.to.have.status(200));",
                   "const b = pm.response.json();",
-                  "const draft = (b.draft_orders || []).find(d => d.id.toString() === pm.collectionVariables.get('TEST_DRAFT_ORDER_ID'));",
+                  "const draft = (b.draft_orders || []).find(d => d.id.toString() === pm.variables.get('TEST_DRAFT_ORDER_ID'));",
                   "pm.test('Draft found', () => pm.expect(draft).to.exist);",
                   "if (draft) {",
                   "  pm.test('Has deposit:partial tag', () => pm.expect(draft.tags).to.include('deposit:partial'));",
@@ -222,7 +222,7 @@
                   "const b = pm.response.json();",
                   "pm.test('Success flag', () => pm.expect(b.success).to.be.true);",
                   "pm.test('installmentType is final', () => pm.expect(b.installmentType).to.eql('final'));",
-                  "pm.collectionVariables.set('GOKWIK_FINAL_LINK_ID', b.gokwikLinkId);",
+                  "pm.environment.set('GOKWIK_FINAL_LINK_ID', b.gokwikLinkId);",
                   "console.log('Final link ID saved:', b.gokwikLinkId);"
                 ]
               }
@@ -269,7 +269,7 @@
                 "exec": [
                   "pm.test('Status 200', () => pm.response.to.have.status(200));",
                   "const b = pm.response.json();",
-                  "const draft = (b.draft_orders || []).find(d => d.id.toString() === pm.collectionVariables.get('TEST_DRAFT_ORDER_ID'));",
+                  "const draft = (b.draft_orders || []).find(d => d.id.toString() === pm.variables.get('TEST_DRAFT_ORDER_ID'));",
                   "if (draft) {",
                   "  pm.test('Has deposit:fully-paid tag', () => pm.expect(draft.tags).to.include('deposit:fully-paid'));",
                   "  console.log('Tags:', draft.tags);",
@@ -335,7 +335,7 @@
                   "pm.test('Status 200', () => pm.response.to.have.status(200));",
                   "const b = pm.response.json();",
                   "pm.test('Success', () => pm.expect(b.success).to.be.true);",
-                  "pm.collectionVariables.set('CANCEL_LINK_ID', b.gokwikLinkId);",
+                  "pm.environment.set('CANCEL_LINK_ID', b.gokwikLinkId);",
                   "console.log('Link to cancel:', b.gokwikLinkId);"
                 ]
               }

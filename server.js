@@ -192,7 +192,7 @@ async function tagShopifyDraftOrder(shopifyDraftId, amountPaid, amountPending, s
     );
     console.log(`✅ Shopify draft ${shopifyDraftId} tagged: ${newTag}`);
   } catch (err) {
-    console.error('❌ Shopify tag update failed:', err.response?.data || err.message);
+    console.error(`❌ Shopify tag update failed for draft ${shopifyDraftId}:`, JSON.stringify(err.response?.data) || err.message);
   }
 }
 
@@ -205,18 +205,38 @@ function getMetafieldType(key) {
 async function updateDraftOrderMetafields(draftOrderId, fields) {
   try {
     const token = await getShopifyToken();
-    const metafields = Object.entries(fields)
-      .filter(([, v]) => v !== null && v !== undefined)
-      .map(([key, value]) => ({ namespace: 'custom', key, type: getMetafieldType(key), value: String(value) }));
-    if (metafields.length === 0) return;
-    await axios.put(
-      `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}.json`,
-      { draft_order: { id: draftOrderId, metafields } },
-      { headers: { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' }, timeout: 10000 }
+    const headers = { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' };
+
+    // Fetch existing metafields so we can UPDATE by ID rather than create (Shopify 422s on duplicate key)
+    const { data: existing } = await axios.get(
+      `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}/metafields.json`,
+      { headers: { 'X-Shopify-Access-Token': token }, timeout: 10000 }
     );
-    console.log(`✅ Metafields updated for draft ${draftOrderId}`);
+    const existingById = {};
+    for (const mf of (existing.metafields || [])) {
+      if (mf.namespace === 'custom') existingById[mf.key] = mf.id;
+    }
+
+    for (const [key, value] of Object.entries(fields)) {
+      if (value === null || value === undefined) continue;
+      const existingId = existingById[key];
+      if (existingId) {
+        await axios.put(
+          `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/metafields/${existingId}.json`,
+          { metafield: { id: existingId, value: String(value), type: getMetafieldType(key) } },
+          { headers, timeout: 10000 }
+        );
+      } else {
+        await axios.post(
+          `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}/metafields.json`,
+          { metafield: { namespace: 'custom', key, value: String(value), type: getMetafieldType(key) } },
+          { headers, timeout: 10000 }
+        );
+      }
+    }
+    console.log(`✅ Metafields updated for draft ${draftOrderId}`, Object.keys(fields));
   } catch (err) {
-    console.error('❌ Metafield update failed:', err.response?.data || err.message);
+    console.error('❌ Metafield update failed for draft', draftOrderId, ':', err.response?.data || err.message);
   }
 }
 
