@@ -328,8 +328,14 @@ async function handlePaymentCompletion(transaction, overrides = {}) {
       amount_paid:     newAmountPaid.toFixed(2),
       amount_pending:  Math.max(0, newAmountPending).toFixed(2)
     };
-    if (installmentType === 'advance') metafieldUpdate.payment_mode_advance = paymentMode;
-    if (installmentType === 'final')   metafieldUpdate.payment_mode_final   = paymentMode;
+    if (installmentType === 'advance') {
+      metafieldUpdate.payment_mode_advance = paymentMode;
+      // Set channel on the first (advance) payment — reflects how the customer paid
+      const channelMap = { gokwik_link: 'online', gokwik: 'online', pine: 'in_store', cash: 'in_store' };
+      metafieldUpdate.channel = channelMap[paymentSource] || paymentSource;
+    }
+    if (installmentType === 'final') metafieldUpdate.payment_mode_final = paymentMode;
+    if (newStatus === 'paid')        metafieldUpdate.is_finalized = 'true';
     await updateDraftOrderMetafields(transaction.shopify_draft_id, metafieldUpdate);
 
     const { data: updatedDeposit } = await supabase
@@ -896,8 +902,32 @@ app.post('/api/cancel-payment-link', async (req, res) => {
       .eq('gokwik_link_id', gokwikLinkId);
     return res.json({ success: true, ...result });
   } catch (err) {
-    console.error('Cancel payment link error:', err.response?.data || err.message);
-    return res.status(500).json({ success: false, error: err.message });
+    const detail = err.response?.data || err.message;
+    console.error('Cancel payment link error:', detail);
+    return res.status(500).json({ success: false, error: err.message, detail });
+  }
+});
+
+// Cancel by draft order ID — looks up the active link so staff don't need the GoKwik link ID
+app.post('/api/cancel-active-link', async (req, res) => {
+  const { draftOrderId } = req.body;
+  if (!draftOrderId) return res.status(400).json({ success: false, error: 'draftOrderId required' });
+  try {
+    const { data: link } = await supabase
+      .from('payment_links').select('gokwik_link_id, amount, installment_type')
+      .eq('draft_order_id', draftOrderId.toString())
+      .eq('status', 'created')
+      .order('created_at', { ascending: false })
+      .limit(1).maybeSingle();
+    if (!link) return res.status(404).json({ success: false, error: 'No active link found for this draft' });
+    const result = await cancelGokwikLink(link.gokwik_link_id);
+    await supabase.from('payment_links').update({ status: 'cancelled', updated_at: new Date().toISOString() })
+      .eq('gokwik_link_id', link.gokwik_link_id);
+    return res.json({ success: true, cancelledLinkId: link.gokwik_link_id, ...result });
+  } catch (err) {
+    const detail = err.response?.data || err.message;
+    console.error('Cancel active link error:', detail);
+    return res.status(500).json({ success: false, error: err.message, detail });
   }
 });
 
