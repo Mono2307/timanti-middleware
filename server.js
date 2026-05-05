@@ -873,8 +873,12 @@ async function handleSendLinkTag(draft) {
 // reprices if delta > 5%, always stores _jewel_data hidden property.
 // Removes tag atomically in the same PUT as any line item update (loop prevention).
 async function handleRecalculatePriceTag(draft) {
+  console.log(`handleRecalculatePriceTag called — draft=${draft?.id}, tags="${draft?.tags}"`);
   const tags = (draft.tags || '').split(',').map(t => t.trim());
-  if (!tags.some(t => t.toLowerCase() === 'recalculate-price')) return;
+  if (!tags.some(t => t.toLowerCase() === 'recalculate-price')) {
+    console.log(`handleRecalculatePriceTag: no recalculate-price tag, skipping`);
+    return;
+  }
 
   const draftOrderId = draft.id;
   const token = await getShopifyToken();

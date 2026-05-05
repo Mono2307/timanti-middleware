@@ -147,7 +147,19 @@ class RecalculationService {
         { name: 'GST',              value: `Rs${itemGst}` },
         { name: 'Gross Value',      value: `Rs${grossValue}` },
       ];
-      if (goldRate)      properties.push({ name: '_gold_rate',       value: goldRate });
+
+      // Preserve all hidden (_xxx) properties from the existing line item.
+      // _gold_rate is locked at order-creation time — never overwrite it with today's variant rate.
+      // _gross_wt/_net_wt/_diamond_cts/_diamond_pcs/_jewel_code/_jewel_data are written by the
+      // jewel reprice handler and must survive discount recalculations.
+      const existingHidden = (item.properties || []).filter(p => p.name.startsWith('_') && p.name !== '_gold_updated_at');
+      properties.push(...existingHidden);
+
+      // _gold_rate bootstrap: only add from variant if the line item has no locked rate yet
+      const hasLockedRate = existingHidden.some(p => p.name === '_gold_rate');
+      if (!hasLockedRate && goldRate) properties.push({ name: '_gold_rate', value: goldRate });
+
+      // _gold_updated_at is informational — always reflect the variant's latest timestamp
       if (goldUpdatedAt) properties.push({ name: '_gold_updated_at', value: goldUpdatedAt });
 
       const updatedItem = {
