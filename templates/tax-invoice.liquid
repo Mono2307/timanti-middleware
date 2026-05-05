@@ -215,19 +215,19 @@
   <table class="items-table">
     <thead>
       <tr>
-        <th class="text-center" style="width: 6.5%;">S. No.</th>
-        <th style="width: 22%;">Item Description</th>
-        <th class="text-center" style="width: 7%;">HSN Code</th>
-        <th class="text-center" style="width: 5.5%;">Qty</th>
-        <th class="text-center" style="width: 8%;">Gross Wt (g)</th>
-        <th class="text-center" style="width: 8%;">Net Wt (g)</th>
-        <th class="text-center" style="width: 8%;">Dia Wt (cts)</th>
-        <th class="text-center" style="width: 6%;">Dia Pcs</th>
-        <th class="text-center" style="width: 7%;">Metal</th>
-        <th class="text-right" style="width: 7%;">Making<br>Charges</th>
-        <th class="text-right" style="width: 9%;">Taxable Val.<br>(Before Disc.)</th>
-        <th class="text-right" style="width: 8%;">Disc. on<br>Taxable</th>
-        <th class="text-right" style="width: 9%;">Taxable Val.<br>(After Disc.)</th>
+        <th style="width: 15%;">Item Description</th>
+        <th class="text-center" style="width: 6%;">HSN Code</th>
+        <th class="text-center" style="width: 3%;">Qty</th>
+        <th class="text-center" style="width: 5%;">Gross Wt (g)</th>
+        <th class="text-center" style="width: 5%;">Net Wt (g)</th>
+        <th class="text-center" style="width: 5%;">Dia Wt (cts)</th>
+        <th class="text-center" style="width: 4%;">Dia Pcs</th>
+        <th class="text-center" style="width: 4%;">Col. Stone (Pcs)</th>
+        <th class="text-center" style="width: 5%;">Metal</th>
+        <th class="text-right"  style="width: 8%;">Making<br>Charges</th>
+        <th class="text-right"  style="width: 9%;">Taxable Val.<br>(Before Disc.)</th>
+        <th class="text-right"  style="width: 8%;">Disc. on<br>Taxable</th>
+        <th class="text-right"  style="width: 9%;">Taxable Val.<br>(After Disc.)</th>
       </tr>
     </thead>
     <tbody class="watermark">
@@ -268,7 +268,6 @@
       {% endfor %}
 
       <tr>
-        <td class="text-center">{{ forloop.index }}.</td>
         <td>{{ line_item.title }}</td>
         <td class="text-center">
           {% if line_item.product.metafields.custom.hsn_code %}{{ line_item.product.metafields.custom.hsn_code }}{% else %}71131914{% endif %}
@@ -301,6 +300,12 @@
           {% if prop_dia_pcs != "" %}{{ prop_dia_pcs }}
           {% elsif jc_meta.diamond_pcs %}{{ jc_meta.diamond_pcs }}
           {% elsif line_item.product.metafields.custom.totaldiamondcount %}{{ line_item.product.metafields.custom.totaldiamondcount }}
+          {% else %}–{% endif %}
+        </td>
+
+        <td class="text-center">
+          {% if line_item.variant.metafields.custom.coloured_stone_pcs %}{{ line_item.variant.metafields.custom.coloured_stone_pcs }}
+          {% elsif line_item.product.metafields.custom.coloured_stone_pcs %}{{ line_item.product.metafields.custom.coloured_stone_pcs }}
           {% else %}–{% endif %}
         </td>
 
