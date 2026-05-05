@@ -219,7 +219,7 @@ async function updateDraftOrderMetafields(draftOrderId, fields) {
     }
 
     for (const [key, value] of Object.entries(fields)) {
-      if (value === null || value === undefined) continue;
+      if (value === null || value === undefined || String(value).trim() === '') continue;
       const existingId = existingById[key];
       if (existingId) {
         await axios.put(
@@ -903,13 +903,14 @@ async function handleRecalculatePriceTag(draft) {
     return;
   }
 
+  // Find the priced product line item — identified by Gold property set by pricing engine
   const lineItem = (draft.line_items || []).find(item =>
     !((item.title || '').toLowerCase().includes('discount') && parseFloat(item.price) < 0) &&
-    (item.properties || []).some(p => p.name === '_gold_rate')
+    (item.properties || []).some(p => p.name === 'Gold')
   );
 
   if (!lineItem) {
-    console.warn(`Draft ${draftOrderId}: no line item with _gold_rate, skipping reprice`);
+    console.warn(`Draft ${draftOrderId}: no priced line item with Gold property, skipping`);
     await removeTagFromDraft(draftOrderId, 'recalculate-price');
     return;
   }
@@ -917,11 +918,30 @@ async function handleRecalculatePriceTag(draft) {
   const props = {};
   for (const p of (lineItem.properties || [])) props[p.name] = p.value;
 
-  const goldRate = parseFloat(props['_gold_rate']);
-  const oldGold  = parseFloat((props['Gold'] || '0').replace('Rs', '').trim());
+  // _gold_rate on the line item is the rate locked at order creation time.
+  // For drafts that predate this feature, bootstrap from variant once and lock it.
+  let goldRate = parseFloat(props['_gold_rate']);
+  let bootstrapGoldRate = false;
+
+  if (!goldRate && lineItem.variant_id) {
+    const { data: varMfData } = await axios.get(
+      `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/variants/${lineItem.variant_id}/metafields.json`,
+      { headers: { 'X-Shopify-Access-Token': token }, timeout: 10000 }
+    );
+    const gRateMf = (varMfData.metafields || []).find(
+      m => m.namespace === 'custom' && m.key === 'gold_rate'
+    );
+    if (gRateMf) {
+      goldRate = parseFloat(gRateMf.value);
+      bootstrapGoldRate = true;
+      console.log(`Draft ${draftOrderId}: bootstrapping _gold_rate=${goldRate} from variant — will lock to line item`);
+    }
+  }
+
+  const oldGold = parseFloat((props['Gold'] || '0').replace('Rs', '').trim());
 
   if (!goldRate || !oldGold) {
-    console.warn(`Draft ${draftOrderId}: missing Gold or _gold_rate on line item, skipping`);
+    console.warn(`Draft ${draftOrderId}: gold rate (${goldRate}) or Gold value (${oldGold}) missing — ensure variant has custom.gold_rate metafield`);
     await removeTagFromDraft(draftOrderId, 'recalculate-price');
     return;
   }
@@ -955,6 +975,8 @@ async function handleRecalculatePriceTag(draft) {
     '_jewel_code':  jewel_code,
     '_jewel_data':  jewel_data
   };
+  // Lock gold rate to line item on first reprice (bootstrap from variant — never updated again)
+  if (bootstrapGoldRate) hiddenJewelProps['_gold_rate'] = goldRate.toString();
 
   let updatedProperties = (lineItem.properties || []).filter(p => !(p.name in hiddenJewelProps));
   for (const [name, value] of Object.entries(hiddenJewelProps)) {
@@ -1313,6 +1335,12 @@ app.post('/api/draft-order-metafields', async (req, res) => {
   if (!draftOrderId || !fields || typeof fields !== 'object') {
     return res.status(400).json({ success: false, error: 'draftOrderId and fields object required' });
   }
+  const blankKeys = Object.entries(fields)
+    .filter(([, v]) => v === null || v === undefined || String(v).trim() === '')
+    .map(([k]) => k);
+  if (blankKeys.length) {
+    return res.status(400).json({ success: false, error: `Blank values for: ${blankKeys.join(', ')} — did 8a run first?` });
+  }
   try {
     await updateDraftOrderMetafields(draftOrderId, fields);
     return res.json({ success: true });
@@ -1331,7 +1359,32 @@ app.get('/api/draft-order-line-items', async (req, res) => {
       { headers: { 'X-Shopify-Access-Token': token } }
     );
     const { line_items, tags, name } = data.draft_order;
-    return res.json({ success: true, draftOrderId, name, tags, line_items });
+
+    // For product line items without a locked _gold_rate, inject the current variant rate
+    // so callers (e.g. 8a) can compute thresholds. handleRecalculatePriceTag will lock it on first reprice.
+    const enriched = await Promise.all(line_items.map(async (item) => {
+      const hasLock = (item.properties || []).some(p => p.name === '_gold_rate');
+      if (!hasLock && item.variant_id && (item.properties || []).some(p => p.name === 'Gold')) {
+        try {
+          const { data: varMf } = await axios.get(
+            `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/variants/${item.variant_id}/metafields.json`,
+            { headers: { 'X-Shopify-Access-Token': token }, timeout: 10000 }
+          );
+          const gRateMf = (varMf.metafields || []).find(
+            m => m.namespace === 'custom' && m.key === 'gold_rate'
+          );
+          if (gRateMf) {
+            return {
+              ...item,
+              properties: [...(item.properties || []), { name: '_gold_rate', value: gRateMf.value, _source: 'variant_bootstrap' }]
+            };
+          }
+        } catch (_) {}
+      }
+      return item;
+    }));
+
+    return res.json({ success: true, draftOrderId, name, tags, line_items: enriched });
   } catch (err) {
     return res.status(500).json({ success: false, error: err.message });
   }
