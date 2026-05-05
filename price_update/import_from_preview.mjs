@@ -41,9 +41,10 @@ const RESUME = !_args.includes('--no-resume');
 // Progress and error logs are scoped to the input file so daily runs never
 // collide with manual runs or each other.
 const _stem      = basename(INPUT_CSV, '.csv');
-const ERROR_LOG    = resolve(__dirname, `../Outputs/import_preview_errors_${_stem}.json`);
-const PROGRESS_LOG = resolve(__dirname, `../Outputs/import_preview_progress_${_stem}.json`);
-const SKIPPED_LOG  = resolve(__dirname, `../Outputs/import_preview_skipped_${_stem}.json`);
+const OUTPUTS_DIR  = process.env.OUTPUTS_DIR || resolve(__dirname, '../Outputs');
+const ERROR_LOG    = resolve(OUTPUTS_DIR, `import_preview_errors_${_stem}.json`);
+const PROGRESS_LOG = resolve(OUTPUTS_DIR, `import_preview_progress_${_stem}.json`);
+const SKIPPED_LOG  = resolve(OUTPUTS_DIR, `import_preview_skipped_${_stem}.json`);
 
 const STORE_DOMAIN    = (process.env.STORE_DOMAIN    || '').trim();
 const ADMIN_API_TOKEN = (process.env.ADMIN_API_TOKEN || '').trim();
