@@ -42,6 +42,9 @@ COPY --from=build /app /app
 # Install Python dependencies for price update
 RUN pip3 install --no-cache-dir -r /app/price_update/requirements.txt --break-system-packages
 
+# Ensure Outputs dir exists as fallback when /data volume is not mounted
+RUN mkdir -p /app/Outputs
+
 # Start the server by default, this can be overwritten at runtime
 EXPOSE 3000
 CMD [ "npm", "run", "start" ]

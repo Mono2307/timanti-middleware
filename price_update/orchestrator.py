@@ -173,6 +173,7 @@ def _run_importer(token: str, preview_csv: Path, log: logging.Logger,
         **os.environ,
         'ADMIN_API_TOKEN': token,
         'STORE_DOMAIN':    STORE_DOMAIN,
+        'OUTPUTS_DIR':     str(OUTPUTS),
     }
 
     log.info(f'Importer starting — {preview_csv.name}  (resume={resume})')

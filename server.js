@@ -1499,6 +1499,26 @@ app.get('/api/price-update-diag', (req, res) => {
 // ─────────────────────────────────────────
 
 let _priceUpdateRunning = false;
+const PRICE_UPDATE_FLAG = '/data/price_update.running';
+
+function _spawnPriceUpdate(extraArgs = []) {
+  const { spawn } = require('child_process');
+  const fs = require('fs');
+  _priceUpdateRunning = true;
+  try { fs.writeFileSync(PRICE_UPDATE_FLAG, String(process.pid)); } catch (_) {}
+  const proc = spawn('python3', ['/app/price_update/orchestrator.py', ...extraArgs], {
+    detached: false,
+    stdio:    ['ignore', 'pipe', 'pipe'],
+  });
+  proc.stdout.on('data', d => console.log(`[price-update] ${d.toString().trim()}`));
+  proc.stderr.on('data', d => console.error(`[price-update ERR] ${d.toString().trim()}`));
+  proc.on('close', code => {
+    _priceUpdateRunning = false;
+    try { fs.unlinkSync(PRICE_UPDATE_FLAG); } catch (_) {}
+    console.log(`[price-update] exited with code ${code}`);
+  });
+  return proc;
+}
 
 app.post('/api/trigger-price-update', async (req, res) => {
   const secret = req.headers['x-webhook-secret'];
@@ -1530,22 +1550,9 @@ app.post('/api/trigger-price-update', async (req, res) => {
     return res.status(500).json({ success: false, error: 'Failed to save gold rate to Supabase' });
   }
 
-  const { spawn } = require('child_process');
   const testGati = (req.body.test_gati || '').toString().trim().toUpperCase();
-  const args     = ['/app/price_update/orchestrator.py'];
-  if (testGati) args.push('--test', testGati);
-
-  _priceUpdateRunning = true;
-  const proc = spawn('python3', args, {
-    detached: false,
-    stdio:    ['ignore', 'pipe', 'pipe'],
-  });
-  proc.stdout.on('data', d => console.log(`[price-update] ${d.toString().trim()}`));
-  proc.stderr.on('data', d => console.error(`[price-update ERR] ${d.toString().trim()}`));
-  proc.on('close', code => {
-    _priceUpdateRunning = false;
-    console.log(`[price-update] exited with code ${code}`);
-  });
+  const extraArgs = testGati ? ['--test', testGati] : [];
+  const proc = _spawnPriceUpdate(extraArgs);
 
   const rate18k = (pure * 0.771).toFixed(2);
   const rate14k = (pure * 0.604).toFixed(2);
@@ -1589,6 +1596,14 @@ app.listen(PORT, async () => {
   console.log('  POST /api/po-webhook');
   console.log('  GET  /api/po-action');
   console.log('  POST /api/trigger-price-update');
+  // Clean up stale flag from a previous run killed by a deploy
+  try {
+    const fs = require('fs');
+    if (fs.existsSync(PRICE_UPDATE_FLAG)) {
+      fs.unlinkSync(PRICE_UPDATE_FLAG);
+      console.log('⚠️  Stale price-update flag cleared — previous run was interrupted. Re-trigger to resume.');
+    }
+  } catch (_) {}
   await initShopifyToken();
   console.log('🔄 Background poller started (30s)');
   setInterval(pollActiveTxns, 30000);
