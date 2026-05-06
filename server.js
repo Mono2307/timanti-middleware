@@ -170,7 +170,7 @@ async function completeShopifyOrder(shopifyDraftId, transactionDbId) {
   }
 }
 
-async function tagShopifyDraftOrder(shopifyDraftId, amountPaid, amountPending, status) {
+async function tagShopifyDraftOrder(shopifyDraftId, amountPaid, amountPending, status, paymentMode = null, installmentType = null) {
   try {
     const token = await getShopifyToken();
     const getResponse = await axios.get(
@@ -180,12 +180,16 @@ async function tagShopifyDraftOrder(shopifyDraftId, amountPaid, amountPending, s
     const existingTags = getResponse.data.draft_order.tags || '';
     const cleanedTags = existingTags
       .split(',').map(t => t.trim())
-      .filter(t => t && !t.startsWith('paid:') && !t.startsWith('pending:') && !t.startsWith('deposit:'))
+      .filter(t => t && !t.startsWith('paid:') && !t.startsWith('pending:') && !t.startsWith('deposit:')
+                     && !t.startsWith('pmode-advance:') && !t.startsWith('pmode-final:'))
       .join(', ');
     const newTag = status === 'paid'
       ? `deposit:fully-paid, paid:Rs${amountPaid.toFixed(0)}`
       : `deposit:partial, paid:Rs${amountPaid.toFixed(0)}, pending:Rs${amountPending.toFixed(0)}`;
-    const finalTags = cleanedTags ? `${cleanedTags}, ${newTag}` : newTag;
+    const pmodeTag = paymentMode && installmentType
+      ? `, pmode-${installmentType}:${paymentMode}`
+      : '';
+    const finalTags = cleanedTags ? `${cleanedTags}, ${newTag}${pmodeTag}` : `${newTag}${pmodeTag}`;
     await axios.put(
       `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${shopifyDraftId}.json`,
       { draft_order: { id: shopifyDraftId, tags: finalTags } },
@@ -322,7 +326,7 @@ async function handlePaymentCompletion(transaction, overrides = {}) {
       created_at:       new Date().toISOString()
     });
 
-    await tagShopifyDraftOrder(transaction.shopify_draft_id, newAmountPaid, Math.max(0, newAmountPending), newStatus);
+    await tagShopifyDraftOrder(transaction.shopify_draft_id, newAmountPaid, Math.max(0, newAmountPending), newStatus, paymentMode, installmentType);
 
     const metafieldUpdate = {
       payment_status:  newStatus === 'paid' ? 'full' : 'partial',

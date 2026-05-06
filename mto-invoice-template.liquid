@@ -3,16 +3,20 @@
     deposit:partial, paid:Rs X, pending:Rs X  → partial payment
     deposit:fully-paid, paid:Rs X             → fully paid
 {% endcomment %}
-{% assign is_partial    = false %}
-{% assign is_fully_paid = false %}
-{% assign paid_amount   = "" %}
+{% assign is_partial     = false %}
+{% assign is_fully_paid  = false %}
+{% assign paid_amount    = "" %}
 {% assign pending_amount = "" %}
+{% assign pm_advance     = "" %}
+{% assign pm_final       = "" %}
 {% for tag in order.tags %}
   {% assign t = tag | strip | downcase %}
-  {% if t == "deposit:partial"   %}{% assign is_partial    = true %}{% endif %}
-  {% if t == "deposit:fully-paid"%}{% assign is_fully_paid = true %}{% endif %}
-  {% if t contains "paid:rs"     %}{% assign paid_amount    = t | remove: "paid:rs" %}{% endif %}
-  {% if t contains "pending:rs"  %}{% assign pending_amount = t | remove: "pending:rs" %}{% endif %}
+  {% if t == "deposit:partial"    %}{% assign is_partial    = true %}{% endif %}
+  {% if t == "deposit:fully-paid" %}{% assign is_fully_paid = true %}{% endif %}
+  {% if t contains "paid:rs"      %}{% assign paid_amount    = t | remove: "paid:rs" %}{% endif %}
+  {% if t contains "pending:rs"   %}{% assign pending_amount = t | remove: "pending:rs" %}{% endif %}
+  {% if t contains "pmode-advance:" %}{% assign pm_advance = tag | strip | remove: "pmode-advance:" %}{% endif %}
+  {% if t contains "pmode-final:"   %}{% assign pm_final   = tag | strip | remove: "pmode-final:"   %}{% endif %}
 {% endfor %}
 
 {% comment %}TEMP OVERRIDE: Set to true to print shipping details under billing details{% endcomment %}
@@ -228,19 +232,19 @@
   <table class="items-table">
     <thead>
       <tr>
-        <th style="width: 15%;">Item Description</th>
+        <th style="width: 17%;">Item Description</th>
         <th class="text-center" style="width: 6%;">HSN Code</th>
         <th class="text-center" style="width: 3%;">Qty</th>
-        <th class="text-center" style="width: 5%;">Gross Wt (g)</th>
-        <th class="text-center" style="width: 5%;">Net Wt (g)</th>
+        <th class="text-center" style="width: 5.5%;">Gross Wt (g)</th>
+        <th class="text-center" style="width: 5.5%;">Net Wt (g)</th>
         <th class="text-center" style="width: 5%;">Dia Wt (cts)</th>
         <th class="text-center" style="width: 4%;">Dia Pcs</th>
-        <th class="text-center" style="width: 4%;">Col. Stone (Pcs)</th>
+        <th class="text-center" style="width: 5.5%;">Col. Stone (Pcs)</th>
         <th class="text-center" style="width: 5%;">Metal</th>
-        <th class="text-right"  style="width: 8%;">Making Charges</th>
-        <th class="text-right"  style="width: 9%;">Taxable Val.<br>(Before Disc.)</th>
-        <th class="text-right"  style="width: 8%;">Disc. on<br>Taxable</th>
-        <th class="text-right"  style="width: 9%;">Taxable Val.<br>(After Disc.)</th>
+        <th class="text-right"  style="width: 6%;">Making<br>Charges</th>
+        <th class="text-right"  style="width: 8.5%;">Taxable Val.<br>(Before Disc.)</th>
+        <th class="text-right"  style="width: 7%;">Disc. on<br>Taxable</th>
+        <th class="text-right"  style="width: 8.5%;">Taxable Val.<br>(After Disc.)</th>
       </tr>
     </thead>
     <tbody class="watermark">
@@ -434,9 +438,7 @@
         </tr>
       {% endif %}
 
-      {% comment %}── Payment Mode ──{% endcomment %}
-      {% assign pm_advance = order.metafields.custom.payment_mode_advance | default: "" %}
-      {% assign pm_final   = order.metafields.custom.payment_mode_final   | default: "" %}
+      {% comment %}── Payment Mode — pm_advance/pm_final read from pmode-advance:/pmode-final: tags at top ──{% endcomment %}
       <tr class="totals-row">
         <td colspan="12" class="text-right" style="font-style:italic; color:#555; border-top: 1px solid #ccc;">Payment Mode</td>
         <td style="border-top: 1px solid #ccc;"></td>

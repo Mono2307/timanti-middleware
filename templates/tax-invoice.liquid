@@ -390,18 +390,20 @@
         </tr>
       {% endif %}
 
-      {% assign pm_advance = order.metafields.custom.payment_mode_advance | default: "" %}
-      {% assign pm_final   = order.metafields.custom.payment_mode_final   | default: "" %}
-      {% assign is_partial    = false %}
-      {% assign is_fully_paid = false %}
-      {% assign paid_amount   = "" %}
+      {% assign is_partial     = false %}
+      {% assign is_fully_paid  = false %}
+      {% assign paid_amount    = "" %}
       {% assign pending_amount = "" %}
+      {% assign pm_advance     = "" %}
+      {% assign pm_final       = "" %}
       {% for tag in order.tags %}
         {% assign t = tag | strip | downcase %}
-        {% if t == "deposit:partial"    %}{% assign is_partial    = true %}{% endif %}
-        {% if t == "deposit:fully-paid" %}{% assign is_fully_paid = true %}{% endif %}
-        {% if t contains "paid:rs"      %}{% assign paid_amount    = t | remove: "paid:rs" %}{% endif %}
-        {% if t contains "pending:rs"   %}{% assign pending_amount = t | remove: "pending:rs" %}{% endif %}
+        {% if t == "deposit:partial"      %}{% assign is_partial    = true %}{% endif %}
+        {% if t == "deposit:fully-paid"   %}{% assign is_fully_paid = true %}{% endif %}
+        {% if t contains "paid:rs"        %}{% assign paid_amount    = t | remove: "paid:rs" %}{% endif %}
+        {% if t contains "pending:rs"     %}{% assign pending_amount = t | remove: "pending:rs" %}{% endif %}
+        {% if t contains "pmode-advance:" %}{% assign pm_advance = tag | strip | remove: "pmode-advance:" %}{% endif %}
+        {% if t contains "pmode-final:"   %}{% assign pm_final   = tag | strip | remove: "pmode-final:"   %}{% endif %}
       {% endfor %}
       <tr class="totals-row">
         <td colspan="12" class="text-right" style="font-style:italic; color:#555; border-top: 1px solid #ccc;">Payment Mode</td>
