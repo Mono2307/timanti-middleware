@@ -118,8 +118,13 @@ async function recalculate({ draftOrderId, shopifyToken, shopifyStoreUrl }) {
       { name: 'GST',              value: `Rs${itemGst}` },
       { name: 'Gross Value',      value: `Rs${grossValue}` },
     ];
-    if (goldRate)      properties.push({ name: '_gold_rate',       value: goldRate });
-    if (goldUpdatedAt) properties.push({ name: '_gold_updated_at', value: goldUpdatedAt });
+    // Preserve locked order-date rate — only write from variant on first-ever recalculation
+    const existingGoldRate      = (item.properties || []).find(p => p.name === '_gold_rate');
+    const existingGoldUpdatedAt = (item.properties || []).find(p => p.name === '_gold_updated_at');
+    const lockedRate      = existingGoldRate      ? existingGoldRate.value      : goldRate;
+    const lockedUpdatedAt = existingGoldUpdatedAt ? existingGoldUpdatedAt.value : goldUpdatedAt;
+    if (lockedRate)      properties.push({ name: '_gold_rate',       value: lockedRate });
+    if (lockedUpdatedAt) properties.push({ name: '_gold_updated_at', value: lockedUpdatedAt });
 
     const updatedItem = {
       id:         item.id,

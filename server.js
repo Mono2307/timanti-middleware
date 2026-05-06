@@ -180,8 +180,14 @@ async function tagShopifyDraftOrder(shopifyDraftId, amountPaid, amountPending, s
     const existingTags = getResponse.data.draft_order.tags || '';
     const cleanedTags = existingTags
       .split(',').map(t => t.trim())
-      .filter(t => t && !t.startsWith('paid:') && !t.startsWith('pending:') && !t.startsWith('deposit:')
-                     && !t.startsWith('pmode-advance:') && !t.startsWith('pmode-final:'))
+      .filter(t => {
+        if (!t) return false;
+        if (t.startsWith('paid:') || t.startsWith('pending:') || t.startsWith('deposit:')) return false;
+        // On final: keep pmode-advance (advance mode must survive), strip only pmode-final
+        if (installmentType === 'final') return !t.startsWith('pmode-final:');
+        // On advance or unknown: clean slate for all pmode tags
+        return !t.startsWith('pmode-advance:') && !t.startsWith('pmode-final:');
+      })
       .join(', ');
     const newTag = status === 'paid'
       ? `deposit:fully-paid, paid:Rs${amountPaid.toFixed(0)}`
@@ -274,7 +280,7 @@ async function convertDraftToOrder(draftOrderId, transactionDbId) {
 async function handlePaymentCompletion(transaction, overrides = {}) {
   if (!transaction.shopify_draft_id) return;
   const { utr = null, paymentSource = 'pine', paymentModeOverride = null } = overrides;
-  const paymentMode = paymentModeOverride || transaction.payment_mode || 'card';
+  const paymentMode = paymentModeOverride || transaction.payment_mode || 'pos';
 
   if (transaction.is_partial) {
     console.log(`Partial payment confirmed — draft ${transaction.shopify_draft_id} source=${paymentSource}`);
@@ -285,7 +291,19 @@ async function handlePaymentCompletion(transaction, overrides = {}) {
       .eq('draft_order_id', transaction.shopify_draft_id).maybeSingle();
 
     if (!deposit) {
-      const totalRupees = transaction.total_amount_paisa ? transaction.total_amount_paisa / 100 : amountPaidRupees;
+      let totalRupees;
+      try {
+        const token = await getShopifyToken();
+        const { data: draftData } = await axios.get(
+          `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${transaction.shopify_draft_id}.json`,
+          { headers: { 'X-Shopify-Access-Token': token }, timeout: 10000 }
+        );
+        totalRupees = parseFloat(draftData.draft_order.total_price);
+        console.log(`Draft ${transaction.shopify_draft_id}: order total from Shopify = Rs${totalRupees}`);
+      } catch (fetchErr) {
+        console.error(`Draft ${transaction.shopify_draft_id}: could not fetch order total — ${fetchErr.message}`);
+        totalRupees = transaction.total_amount_paisa ? transaction.total_amount_paisa / 100 : amountPaidRupees;
+      }
       const { data: newDeposit } = await supabase.from('store_deposits').insert({
         draft_order_id:   transaction.shopify_draft_id,
         draft_order_name: transaction.draft_order_name,
@@ -871,6 +889,135 @@ async function handleSendLinkTag(draft) {
   await removeTagFromDraft(draft.id, sendLinkTag);
 }
 
+// Tag format: cash-AMOUNT  e.g. cash-10000 or cash-10000.50
+// Cashier adds this tag in Shopify admin. Middleware records deposit, writes back payment tags,
+// and strips the cash tag atomically in a single PUT to prevent webhook re-trigger loops.
+async function handleCashPaymentTag(draft) {
+  const tags = (draft.tags || '').split(',').map(t => t.trim());
+  const cashTag = tags.find(t => /^cash-(\d+(?:\.\d+)?)$/i.test(t));
+  if (!cashTag) return;
+
+  const amountRupees = parseFloat(cashTag.replace(/^cash-/i, ''));
+  if (!amountRupees || amountRupees <= 0) {
+    console.warn(`Draft ${draft.id}: invalid cash tag "${cashTag}", removing`);
+    await removeTagFromDraft(draft.id, cashTag);
+    return;
+  }
+
+  const draftOrderId   = draft.id.toString();
+  const draftOrderName = draft.name || draftOrderId;
+  const customer       = draft.customer || {};
+  const customerName   = [customer.first_name, customer.last_name].filter(Boolean).join(' ') || '';
+
+  let totalRupees;
+  try {
+    const token = await getShopifyToken();
+    const { data: draftData } = await axios.get(
+      `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}.json`,
+      { headers: { 'X-Shopify-Access-Token': token }, timeout: 10000 }
+    );
+    totalRupees = parseFloat(draftData.draft_order.total_price);
+  } catch (fetchErr) {
+    console.error(`Cash tag: could not fetch total for draft ${draftOrderId} — ${fetchErr.message}`);
+    totalRupees = amountRupees;
+  }
+
+  let { data: deposit } = await supabase
+    .from('store_deposits').select('*')
+    .eq('draft_order_id', draftOrderId).maybeSingle();
+
+  if (!deposit) {
+    const { data: newDeposit } = await supabase.from('store_deposits').insert({
+      draft_order_id:   draftOrderId,
+      draft_order_name: draftOrderName,
+      customer_name:    customerName,
+      total_amount:     totalRupees,
+      amount_paid:      0,
+      amount_pending:   totalRupees,
+      payment_status:   'unpaid'
+    }).select().single();
+    deposit = newDeposit;
+  }
+
+  if (!deposit) {
+    console.error(`Cash tag: could not find or create store_deposits for draft ${draftOrderId}`);
+    return;
+  }
+
+  const installmentType  = deposit.payment_status === 'unpaid' ? 'advance' : 'final';
+  const newAmountPaid    = parseFloat(deposit.amount_paid) + amountRupees;
+  const newAmountPending = parseFloat(deposit.total_amount) - newAmountPaid;
+  const newStatus        = newAmountPending <= 0.01 ? 'paid' : 'partial';
+
+  await supabase.from('store_deposits').update({
+    amount_paid:    newAmountPaid,
+    amount_pending: Math.max(0, newAmountPending),
+    payment_status: newStatus,
+    updated_at:     new Date().toISOString()
+  }).eq('id', deposit.id);
+
+  await supabase.from('store_deposit_payments').insert({
+    deposit_id:       deposit.id,
+    draft_order_id:   draftOrderId,
+    amount:           amountRupees,
+    payment_mode:     'cash',
+    notes:            `cash tag ${cashTag}`,
+    pine_ptrid:       null,
+    recorded_by:      'cash',
+    installment_type: installmentType,
+    utr:              null,
+    payment_source:   'cash',
+    created_at:       new Date().toISOString()
+  });
+
+  // Strip cashTag + old payment tags, write new payment tags — single atomic PUT prevents re-trigger
+  const token = await getShopifyToken();
+  const cleanedTags = (draft.tags || '').split(',').map(t => t.trim())
+    .filter(t => {
+      if (!t) return false;
+      if (t.toLowerCase() === cashTag.toLowerCase()) return false;
+      if (t.startsWith('paid:') || t.startsWith('pending:') || t.startsWith('deposit:')) return false;
+      if (installmentType === 'final') return !t.startsWith('pmode-final:');
+      return !t.startsWith('pmode-advance:') && !t.startsWith('pmode-final:');
+    });
+
+  const paymentTag = newStatus === 'paid'
+    ? `deposit:fully-paid, paid:Rs${newAmountPaid.toFixed(0)}`
+    : `deposit:partial, paid:Rs${newAmountPaid.toFixed(0)}, pending:Rs${Math.max(0, newAmountPending).toFixed(0)}`;
+  const finalTags = [...cleanedTags, paymentTag, `pmode-${installmentType}:cash`].filter(Boolean).join(', ');
+
+  await axios.put(
+    `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}.json`,
+    { draft_order: { id: parseInt(draftOrderId), tags: finalTags } },
+    { headers: { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' }, timeout: 10000 }
+  );
+
+  const metafieldUpdate = {
+    payment_status:  newStatus === 'paid' ? 'full' : 'partial',
+    amount_paid:     newAmountPaid.toFixed(2),
+    amount_pending:  Math.max(0, newAmountPending).toFixed(2)
+  };
+  if (installmentType === 'advance') metafieldUpdate.payment_mode_advance = 'cash';
+  if (installmentType === 'final')   metafieldUpdate.payment_mode_final   = 'cash';
+  if (newStatus === 'paid')          metafieldUpdate.is_finalized          = 'true';
+  await updateDraftOrderMetafields(draftOrderId, metafieldUpdate);
+
+  console.log(`✅ Cash Rs${amountRupees} (${installmentType}) recorded for draft ${draftOrderId} — ${newStatus}`);
+
+  if (AUTO_SEND_DEPOSIT_EMAIL) {
+    const { data: updatedDeposit } = await supabase.from('store_deposits').select('*').eq('id', deposit.id).single();
+    await sendDepositEmail(draftOrderId, draftOrderName, newAmountPaid, Math.max(0, newAmountPending), newStatus, updatedDeposit, getShopifyToken);
+  }
+
+  if (newStatus === 'partial' && AUTO_SEND_DRAFT_INVOICE) {
+    await sendDraftOrderInvoice(draftOrderId);
+  }
+
+  if (newStatus === 'paid') {
+    await convertDraftToOrder(draftOrderId, null);
+  }
+}
+
 // Tag: recalculate-price
 // Reads jewel metafields (net_wt, gross_wt, diamond_cts, diamond_pcs, jewel_code) from draft,
 // computes weight delta against _gold_rate from line item properties,
@@ -1105,6 +1252,7 @@ app.post('/api/shopify-draft-updated', async (req, res) => {
 
     // Tag-based handlers (fire independently, each removes its own tag)
     await handleSendLinkTag(draft);
+    await handleCashPaymentTag(draft);
     await handleRecalculatePriceTag(draft);
 
     // Existing: discount-driven recalculation
