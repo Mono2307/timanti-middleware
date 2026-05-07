@@ -101,18 +101,31 @@ async function recalculate({ draftOrderId, shopifyToken, shopifyStoreUrl }) {
     const itemLineTotal  = parseFloat(item.price) * qty;
     const proportion     = grossTotal > 0 ? itemLineTotal / grossTotal : 1 / productItems.length;
 
+    // If this item was jewel-repriced, Gold/Diamond/Making on the line item reflect actual
+    // measured weight — use those instead of variant design-spec metafields.
+    let isRepriced = false;
+    const jewelDataProp = (item.properties || []).find(p => p.name === '_jewel_data');
+    if (jewelDataProp) {
+      try { isRepriced = JSON.parse(jewelDataProp.value).repriced === true; } catch (_) {}
+    }
+    const readProp = (name) =>
+      parseFloat(((item.properties || []).find(p => p.name === name)?.value || '0').replace('Rs', '')) || 0;
+    const effectiveGold    = isRepriced ? readProp('Gold')    / qty : gold;
+    const effectiveDiamond = isRepriced ? readProp('Diamond') / qty : diamond;
+    const effectiveMaking  = isRepriced ? readProp('Making')  / qty : making;
+
     const itemCorrectDiscount = roundToTwo(correctDiscount * proportion);
     const itemDiscountDisplay = roundToTwo(discountAmount * proportion);
     const itemTaxable         = roundToTwo(taxableAfterDiscount * proportion);
     const itemGst             = roundToTwo(gst * proportion);
     const itemFinal           = roundToTwo(itemTaxable + itemGst);
-    const adjustedDiamond     = roundToTwo(diamond * qty - itemCorrectDiscount);
+    const adjustedDiamond     = roundToTwo(effectiveDiamond * qty - itemCorrectDiscount);
     const grossValue          = roundToTwo(itemFinal + itemDiscountDisplay);
 
     const properties = [
-      { name: 'Gold',             value: `Rs${roundToTwo(gold * qty)}` },
+      { name: 'Gold',             value: `Rs${roundToTwo(effectiveGold * qty)}` },
       { name: 'Diamond',          value: `Rs${adjustedDiamond}` },
-      { name: 'Making',           value: `Rs${roundToTwo(making * qty)}` },
+      { name: 'Making',           value: `Rs${roundToTwo(effectiveMaking * qty)}` },
       { name: 'Discount Applied', value: `Rs${itemDiscountDisplay}` },
       { name: 'Taxable Value',    value: `Rs${itemTaxable}` },
       { name: 'GST',              value: `Rs${itemGst}` },

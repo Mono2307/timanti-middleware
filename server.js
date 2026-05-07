@@ -1217,13 +1217,13 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
     updatedProperties.push({ name, value });
   }
 
-  // applied_discount: null absorbs the discount into the line item price, preventing
-  // the shopify-draft-updated webhook from re-running recalculatePricing and overwriting our repriced values.
+  // Line item price = new gross (pre-discount). applied_discount is preserved so Shopify admin
+  // shows the discount correctly. Loop prevention works via the "Discount Applied" property
+  // matching applied_discount.amount — the discount recalc skips when they match.
   const putBody = {
     draft_order: {
-      id:               draftOrderId,
-      tags:             tagsWithoutRecalc,
-      applied_discount: null,
+      id:   draftOrderId,
+      tags: tagsWithoutRecalc,
       line_items: draft.line_items.map(item => {
         const base = {
           id:         item.id,
@@ -1233,7 +1233,7 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
           properties: item.properties || []
         };
         if (item.id === lineItem.id) {
-          return { ...base, price: newPrice.toFixed(2), properties: updatedProperties };
+          return { ...base, price: newGrossValue.toFixed(2), properties: updatedProperties };
         }
         return base;
       })
