@@ -47,11 +47,28 @@ async function recalculate({ draftOrderId, shopifyToken, shopifyStoreUrl }) {
   const draftOrder = fetchResponse.data.draft_order;
   const lineItems  = draftOrder.line_items || [];
 
-  const productItems = lineItems.filter(item => !isDiscountLineItem(item));
+  const productItems = lineItems.filter(item => !isDiscountLineItem(item)).map(item => {
+    // For force-repriced items, Shopify may reset item.price to catalog on discount apply —
+    // the Gross Value property is the authoritative gross for repriced line items.
+    let isRepriced = false;
+    const jewelDataProp = (item.properties || []).find(p => p.name === '_jewel_data');
+    if (jewelDataProp) {
+      try { isRepriced = JSON.parse(jewelDataProp.value).repriced === true; } catch (_) {}
+    }
+    let effectivePrice = parseFloat(item.price);
+    if (isRepriced) {
+      const gvProp = (item.properties || []).find(p => p.name === 'Gross Value');
+      if (gvProp) {
+        const gv = parseFloat(gvProp.value.replace('Rs', '').trim());
+        if (gv > 0) effectivePrice = gv;
+      }
+    }
+    return { ...item, isRepriced, effectivePrice };
+  });
 
   // 2. Compute order-level totals
   const grossTotal = productItems.reduce(
-    (sum, item) => sum + parseFloat(item.price) * parseInt(item.quantity, 10), 0
+    (sum, item) => sum + item.effectivePrice * parseInt(item.quantity, 10), 0
   );
 
   const discountObj = draftOrder.applied_discount;
@@ -98,16 +115,11 @@ async function recalculate({ draftOrderId, shopifyToken, shopifyStoreUrl }) {
   // 4. Build updated line items: proportional pricing + breakdown properties
   const updatedLineItems = itemBreakdowns.map(({ item, gold, diamond, making, goldRate, goldUpdatedAt }) => {
     const qty            = parseInt(item.quantity, 10);
-    const itemLineTotal  = parseFloat(item.price) * qty;
+    const itemLineTotal  = item.effectivePrice * qty;
     const proportion     = grossTotal > 0 ? itemLineTotal / grossTotal : 1 / productItems.length;
 
-    // If this item was jewel-repriced, Gold/Diamond/Making on the line item reflect actual
-    // measured weight — use those instead of variant design-spec metafields.
-    let isRepriced = false;
-    const jewelDataProp = (item.properties || []).find(p => p.name === '_jewel_data');
-    if (jewelDataProp) {
-      try { isRepriced = JSON.parse(jewelDataProp.value).repriced === true; } catch (_) {}
-    }
+    // isRepriced already computed; Gold/Diamond/Making from properties when repriced
+    const { isRepriced } = item;
     const readProp = (name) =>
       parseFloat(((item.properties || []).find(p => p.name === name)?.value || '0').replace('Rs', '')) || 0;
     const effectiveGold    = isRepriced ? readProp('Gold')    / qty : gold;
@@ -143,6 +155,7 @@ async function recalculate({ draftOrderId, shopifyToken, shopifyStoreUrl }) {
       id:         item.id,
       variant_id: item.variant_id,
       quantity:   qty,
+      price:      grossValue.toFixed(2),
       properties,
     };
 
