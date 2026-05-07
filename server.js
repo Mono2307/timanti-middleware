@@ -1262,16 +1262,9 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
   await writeJewelcodeMetafield(jewel_data);
 }
 
-// Reads payment metafields set manually in Shopify Admin and writes the
-// corresponding payment tags so the invoice shows correct status/mode.
-// Only fires when no deposit: tag exists yet — loop-safe.
-async function handlePaymentMetafieldSync(draft) {
-  const draftOrderId = draft?.id?.toString();
-  if (!draftOrderId) return;
-
-  const existingTags = (draft.tags || '').split(',').map(t => t.trim()).filter(Boolean);
-  if (existingTags.some(t => t.startsWith('deposit:') || t.startsWith('paid:'))) return;
-
+// Reads payment metafields and writes corresponding payment tags.
+// Called either via sync-payment tag (draft_orders/update) or metafields/update webhook.
+async function syncPaymentMetafieldsToTags(draftOrderId, existingTags) {
   const token = await getShopifyToken();
   const headers = { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' };
 
@@ -1284,19 +1277,23 @@ async function handlePaymentMetafieldSync(draft) {
     return m ? m.value : null;
   };
 
-  const paymentStatus   = mf('payment_status');
-  const isFinalized     = mf('is_finalized') === 'true';
-  const amountPaid      = parseFloat(mf('amount_paid')    || 0);
-  const amountPending   = parseFloat(mf('amount_pending') || 0);
-  const modeFinal       = mf('payment_mode_final');
-  const modeAdvance     = mf('payment_mode_advance');
+  const paymentStatus = mf('payment_status');
+  const isFinalized   = mf('is_finalized') === 'true';
+  const amountPaid    = parseFloat(mf('amount_paid')    || 0);
+  const amountPending = parseFloat(mf('amount_pending') || 0);
+  const modeFinal     = mf('payment_mode_final');
+  const modeAdvance   = mf('payment_mode_advance');
 
   const isFull    = isFinalized || paymentStatus === 'full';
   const isPartial = !isFull && paymentStatus === 'partial';
 
-  if ((!isFull && !isPartial) || !amountPaid) return;
+  if ((!isFull && !isPartial) || !amountPaid) {
+    console.log(`Draft ${draftOrderId}: sync-payment — no actionable payment metafields, skipping`);
+    return;
+  }
 
   const cleanedTags = existingTags.filter(t =>
+    t && t.toLowerCase() !== 'sync-payment' &&
     !t.startsWith('deposit:') && !t.startsWith('paid:') &&
     !t.startsWith('pending:') && !t.startsWith('pmode-')
   );
@@ -1312,7 +1309,17 @@ async function handlePaymentMetafieldSync(draft) {
     { draft_order: { id: parseInt(draftOrderId), tags: [...cleanedTags, ...paymentTags].join(', ') } },
     { headers, timeout: 10000 }
   );
-  console.log(`Draft ${draftOrderId}: metafield sync → tags [${paymentTags.join(', ')}]`);
+  console.log(`Draft ${draftOrderId}: payment metafields → tags [${paymentTags.join(', ')}]`);
+}
+
+// sync-payment tag handler — cashier adds tag in Admin after setting payment metafields
+async function handlePaymentMetafieldSync(draft) {
+  const tags = (draft.tags || '').split(',').map(t => t.trim()).filter(Boolean);
+  if (!tags.some(t => t.toLowerCase() === 'sync-payment')) return;
+  const draftOrderId = draft.id?.toString();
+  if (!draftOrderId) return;
+  console.log(`Draft ${draftOrderId}: sync-payment tag detected — reading metafields`);
+  await syncPaymentMetafieldsToTags(draftOrderId, tags);
 }
 
 // ─────────────────────────────────────────
@@ -1689,6 +1696,36 @@ const PO_DEPS = () => ({ supabase, getShopifyToken, shopifyStoreUrl: process.env
 
 app.post('/api/po-webhook', (req, res) => handlePoWebhook(req, res, PO_DEPS()));
 app.get('/api/po-action',   (req, res) => handlePoAction(req, res, PO_DEPS()));
+
+// Shopify metafields/create + metafields/update webhook
+// Register in Shopify: Settings → Notifications → Webhooks → metafields/update → this URL
+app.post('/api/shopify-metafield-updated', async (req, res) => {
+  res.status(200).send('OK');
+  try {
+    const mf = req.body;
+    if (mf.owner_resource !== 'draft_order') return;
+    const paymentKeys = ['payment_status', 'is_finalized', 'amount_paid', 'amount_pending', 'payment_mode_final', 'payment_mode_advance'];
+    if (mf.namespace !== 'custom' || !paymentKeys.includes(mf.key)) return;
+
+    const draftOrderId = mf.owner_id?.toString();
+    if (!draftOrderId) return;
+
+    const token = await getShopifyToken();
+    const { data: draftData } = await axios.get(
+      `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}.json`,
+      { headers: { 'X-Shopify-Access-Token': token }, timeout: 10000 }
+    );
+    const draft = draftData.draft_order;
+    const existingTags = (draft.tags || '').split(',').map(t => t.trim()).filter(Boolean);
+
+    if (existingTags.some(t => t.startsWith('deposit:') || t.startsWith('paid:'))) return;
+
+    console.log(`Metafield webhook: draft ${draftOrderId} key=${mf.key} — syncing payment tags`);
+    await syncPaymentMetafieldsToTags(draftOrderId, existingTags);
+  } catch (err) {
+    console.error('Metafield webhook error:', err.message);
+  }
+});
 
 // ─────────────────────────────────────────
 // Price Update Diagnostics
