@@ -1262,6 +1262,59 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
   await writeJewelcodeMetafield(jewel_data);
 }
 
+// Reads payment metafields set manually in Shopify Admin and writes the
+// corresponding payment tags so the invoice shows correct status/mode.
+// Only fires when no deposit: tag exists yet — loop-safe.
+async function handlePaymentMetafieldSync(draft) {
+  const draftOrderId = draft?.id?.toString();
+  if (!draftOrderId) return;
+
+  const existingTags = (draft.tags || '').split(',').map(t => t.trim()).filter(Boolean);
+  if (existingTags.some(t => t.startsWith('deposit:') || t.startsWith('paid:'))) return;
+
+  const token = await getShopifyToken();
+  const headers = { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' };
+
+  const { data: mfData } = await axios.get(
+    `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}/metafields.json`,
+    { headers, timeout: 10000 }
+  );
+  const mf = (key) => {
+    const m = (mfData.metafields || []).find(m => m.namespace === 'custom' && m.key === key);
+    return m ? m.value : null;
+  };
+
+  const paymentStatus   = mf('payment_status');
+  const isFinalized     = mf('is_finalized') === 'true';
+  const amountPaid      = parseFloat(mf('amount_paid')    || 0);
+  const amountPending   = parseFloat(mf('amount_pending') || 0);
+  const modeFinal       = mf('payment_mode_final');
+  const modeAdvance     = mf('payment_mode_advance');
+
+  const isFull    = isFinalized || paymentStatus === 'full';
+  const isPartial = !isFull && paymentStatus === 'partial';
+
+  if ((!isFull && !isPartial) || !amountPaid) return;
+
+  const cleanedTags = existingTags.filter(t =>
+    !t.startsWith('deposit:') && !t.startsWith('paid:') &&
+    !t.startsWith('pending:') && !t.startsWith('pmode-')
+  );
+
+  const paymentTags = isFull
+    ? [`deposit:fully-paid`, `paid:Rs${Math.round(amountPaid)}`,
+       ...(modeFinal ? [`pmode-final:${modeFinal}`] : modeAdvance ? [`pmode-advance:${modeAdvance}`] : [])]
+    : [`deposit:partial`, `paid:Rs${Math.round(amountPaid)}`, `pending:Rs${Math.round(amountPending)}`,
+       ...(modeAdvance ? [`pmode-advance:${modeAdvance}`] : [])];
+
+  await axios.put(
+    `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}.json`,
+    { draft_order: { id: parseInt(draftOrderId), tags: [...cleanedTags, ...paymentTags].join(', ') } },
+    { headers, timeout: 10000 }
+  );
+  console.log(`Draft ${draftOrderId}: metafield sync → tags [${paymentTags.join(', ')}]`);
+}
+
 // ─────────────────────────────────────────
 // Pricing Engine — routes
 // ─────────────────────────────────────────
@@ -1277,6 +1330,7 @@ app.post('/api/shopify-draft-updated', async (req, res) => {
     await handleCashPaymentTag(draft);
     await handleRecalculatePriceTag(draft, { force: false });
     await handleRecalculatePriceTag(draft, { force: true });
+    await handlePaymentMetafieldSync(draft);
 
     // Existing: discount-driven recalculation
     const discountObj = draft.applied_discount;
