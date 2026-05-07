@@ -1054,14 +1054,15 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
     return;
   }
 
-  // Find the priced product line item — identified by Gold property set by pricing engine
+  // Find the product line item to reprice. Gold property is present after pricing engine has run;
+  // for fresh drafts (no discount yet) fall back to any non-discount line item with a variant_id.
   const lineItem = (draft.line_items || []).find(item =>
     !((item.title || '').toLowerCase().includes('discount') && parseFloat(item.price) < 0) &&
-    (item.properties || []).some(p => p.name === 'Gold')
+    ((item.properties || []).some(p => p.name === 'Gold') || !!item.variant_id)
   );
 
   if (!lineItem) {
-    console.warn(`Draft ${draftOrderId}: no priced line item with Gold property, skipping`);
+    console.warn(`Draft ${draftOrderId}: no product line item found (no Gold property, no variant_id), skipping`);
     await removeTagFromDraft(draftOrderId, tagToProcess);
     return;
   }
@@ -1099,10 +1100,13 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
   // jewel_code: read from custom.jewel_code if set, blank otherwise
   const jewel_code = mfMap.jewel_code || '';
 
-  const oldGold = parseFloat((props['Gold'] || '0').replace('Rs', '').trim());
+  const goldPropValue = parseFloat((props['Gold'] || '0').replace('Rs', '').trim());
+  // Fresh draft (pricing engine hasn't run yet): derive baseline gold value from variant breakdown
+  const oldGold = goldPropValue
+    || parseFloat(varMfCustom.price_breakup_gold || 0) * (lineItem.quantity || 1);
 
   if (!goldRate || !oldGold) {
-    console.warn(`Draft ${draftOrderId}: gold rate (${goldRate}) or Gold value (${oldGold}) missing — ensure variant has custom.gold_rate metafield`);
+    console.warn(`Draft ${draftOrderId}: gold rate (${goldRate}) or Gold value (${oldGold}) missing — ensure variant has custom.gold_rate and price_breakup_gold metafields`);
     await removeTagFromDraft(draftOrderId, tagToProcess);
     return;
   }
@@ -1211,6 +1215,14 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
     '_jewel_data':      jewel_data
   };
   if (bootstrapGoldRate) repricedProps['_gold_rate'] = goldRate.toString();
+  // Fresh draft: pricing engine hasn't written Diamond/Making yet — populate from variant breakdown
+  if (!goldPropValue) {
+    const qty = lineItem.quantity || 1;
+    const varDiamond = parseFloat(varMfCustom.price_breakup_diamond || 0) * qty;
+    const varMaking  = parseFloat(varMfCustom.price_breakup_making  || 0) * qty;
+    if (varDiamond) repricedProps['Diamond'] = `Rs${varDiamond.toFixed(2)}`;
+    if (varMaking)  repricedProps['Making']  = `Rs${varMaking.toFixed(2)}`;
+  }
 
   const updatedProperties = (lineItem.properties || []).filter(p => !(p.name in repricedProps));
   for (const [name, value] of Object.entries(repricedProps)) {
