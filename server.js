@@ -1018,23 +1018,22 @@ async function handleCashPaymentTag(draft) {
   }
 }
 
-// Tag: recalculate-price
-// Reads jewel metafields (net_wt, gross_wt, diamond_cts, diamond_pcs, jewel_code) from draft,
-// computes weight delta against _gold_rate from line item properties,
-// reprices if delta > 5%, always stores _jewel_data hidden property.
-// Removes tag atomically in the same PUT as any line item update (loop prevention).
-async function handleRecalculatePriceTag(draft) {
-  console.log(`handleRecalculatePriceTag called — draft=${draft?.id}, tags="${draft?.tags}"`);
+// Tags: recalculate-price (threshold — reprice only if delta > 5%) | force-reprice (blanket — always reprice)
+// Both modes always write jewel hidden props (_net_wt, _gross_wt, _jewel_data, etc.) to the line item.
+// Tag is removed atomically in the same PUT (loop prevention).
+async function handleRecalculatePriceTag(draft, { force = false } = {}) {
+  const tagToProcess = force ? 'force-reprice' : 'recalculate-price';
+  console.log(`handleRecalculatePriceTag called — draft=${draft?.id}, force=${force}, tags="${draft?.tags}"`);
   const tags = (draft.tags || '').split(',').map(t => t.trim());
-  if (!tags.some(t => t.toLowerCase() === 'recalculate-price')) {
-    console.log(`handleRecalculatePriceTag: no recalculate-price tag, skipping`);
+  if (!tags.some(t => t.toLowerCase() === tagToProcess)) {
+    console.log(`handleRecalculatePriceTag: no ${tagToProcess} tag, skipping`);
     return;
   }
 
   const draftOrderId = draft.id;
   const token = await getShopifyToken();
   const headers = { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' };
-  const tagsWithoutRecalc = tags.filter(t => t && t.toLowerCase() !== 'recalculate-price').join(', ');
+  const tagsWithoutRecalc = tags.filter(t => t && t.toLowerCase() !== tagToProcess).join(', ');
 
   // Fetch jewel metafields set manually by staff
   const { data: mfData } = await axios.get(
@@ -1046,12 +1045,12 @@ async function handleRecalculatePriceTag(draft) {
     if (mf.namespace === 'custom') mfMap[mf.key] = mf.value;
   }
 
-  // net_wt: per-order measured weight — from draft metafield (set by staff for this piece)
-  const newNetWt = parseFloat(mfMap.net_wt);
+  // net_wt: per-order measured weight — from custom.jewelcode_net_weight draft metafield
+  const newNetWt = parseFloat(mfMap.jewelcode_net_weight);
 
   if (!newNetWt) {
-    console.warn(`Draft ${draftOrderId}: recalculate-price tag but net_wt metafield missing or zero`);
-    await removeTagFromDraft(draftOrderId, 'recalculate-price');
+    console.warn(`Draft ${draftOrderId}: ${tagToProcess} tag but jewelcode_net_weight metafield missing or zero`);
+    await removeTagFromDraft(draftOrderId, tagToProcess);
     return;
   }
 
@@ -1063,7 +1062,7 @@ async function handleRecalculatePriceTag(draft) {
 
   if (!lineItem) {
     console.warn(`Draft ${draftOrderId}: no priced line item with Gold property, skipping`);
-    await removeTagFromDraft(draftOrderId, 'recalculate-price');
+    await removeTagFromDraft(draftOrderId, tagToProcess);
     return;
   }
 
@@ -1093,19 +1092,18 @@ async function handleRecalculatePriceTag(draft) {
     }
   }
 
-  // gross_wt/diamond_cts/diamond_pcs: draft order metafield first (staff-entered MTO actual values),
-  // variant metafield as fallback (standard design spec)
-  const newGrossWt = parseFloat(mfMap.gross_wt    || varMfCustom.gross_wt)    || 0;
-  const diamondCts = parseFloat(mfMap.diamond_cts  || varMfCustom.diamond_cts) || 0;
-  const diamondPcs = parseInt(  mfMap.diamond_pcs  || varMfCustom.diamond_pcs) || 0;
-  // jewel_code identifier from custom.jewel_code draft metafield
+  // jewel measurements: draft metafields (jewelcode_* keys) first, variant spec as fallback
+  const newGrossWt = parseFloat(mfMap.jewelcode_gross_weight   || varMfCustom.gross_wt)    || 0;
+  const diamondCts = parseFloat(mfMap.jewelcode_diamond_carats || varMfCustom.diamond_cts) || 0;
+  const diamondPcs = parseInt(  mfMap.jewelcode_diamond_pieces || varMfCustom.diamond_pcs) || 0;
+  // jewel_code: read from custom.jewel_code if set, blank otherwise
   const jewel_code = mfMap.jewel_code || '';
 
   const oldGold = parseFloat((props['Gold'] || '0').replace('Rs', '').trim());
 
   if (!goldRate || !oldGold) {
     console.warn(`Draft ${draftOrderId}: gold rate (${goldRate}) or Gold value (${oldGold}) missing — ensure variant has custom.gold_rate metafield`);
-    await removeTagFromDraft(draftOrderId, 'recalculate-price');
+    await removeTagFromDraft(draftOrderId, tagToProcess);
     return;
   }
 
@@ -1113,18 +1111,77 @@ async function handleRecalculatePriceTag(draft) {
   const delta    = Math.abs(newNetWt - oldNetWt) / oldNetWt;
   console.log(`Draft ${draftOrderId}: reprice check — newNetWt=${newNetWt}, oldGold=${oldGold}, goldRate=${goldRate}, oldNetWt=${oldNetWt.toFixed(4)}, delta=${(delta*100).toFixed(2)}%`);
 
-  if (delta <= 0.05) {
-    // Below threshold: only remove tag — no line item changes, no jewel properties written
+  // Shared across both paths — always available regardless of delta or force
+  const metal    = (lineItem.variant_title || '').split(' / ')[0] || '';
+  const category = lineItem.title || '';
+
+  const makeJewelData = (repriced) => JSON.stringify({
+    jewel_code, gross_wt: newGrossWt, net_wt: newNetWt,
+    diamond_cts: diamondCts, diamond_pcs: diamondPcs,
+    metal, category, gold_rate_locked: goldRate,
+    weight_delta_pct: parseFloat((delta * 100).toFixed(2)),
+    repriced
+  });
+
+  const jewelHiddenProps = {
+    '_gross_wt':   newGrossWt.toFixed(3),
+    '_net_wt':     newNetWt.toFixed(3),
+    '_diamond_cts': diamondCts.toFixed(2),
+    '_diamond_pcs': diamondPcs.toString(),
+    '_jewel_code':  jewel_code,
+  };
+
+  const writeJewelcodeMetafield = async (jewel_data) => {
+    try {
+      const existingJewelcodeMf = (mfData.metafields || []).find(
+        m => m.namespace === 'timanti' && m.key === 'jewelcode'
+      );
+      const mfPayload = { metafield: { namespace: 'timanti', key: 'jewelcode', value: jewel_data, type: 'json' } };
+      if (existingJewelcodeMf) {
+        await axios.put(
+          `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}/metafields/${existingJewelcodeMf.id}.json`,
+          mfPayload, { headers, timeout: 10000 }
+        );
+      } else {
+        await axios.post(
+          `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}/metafields.json`,
+          mfPayload, { headers, timeout: 10000 }
+        );
+      }
+      console.log(`Draft ${draftOrderId}: timanti.jewelcode metafield written`);
+    } catch (mfErr) {
+      console.error(`Draft ${draftOrderId}: failed to write timanti.jewelcode — ${mfErr.message}`);
+    }
+  };
+
+  if (!force && delta <= 0.05) {
+    // Threshold not breached: write jewel data to line item but leave price unchanged
+    const jewel_data = makeJewelData(false);
+    const jewelProps = { ...jewelHiddenProps, '_jewel_data': jewel_data };
+    const updatedProps = (lineItem.properties || [])
+      .filter(p => !(p.name in jewelProps))
+      .concat(Object.entries(jewelProps).map(([name, value]) => ({ name, value })));
     await axios.put(
       `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}.json`,
-      { draft_order: { id: draftOrderId, tags: tagsWithoutRecalc } },
+      {
+        draft_order: {
+          id: draftOrderId,
+          tags: tagsWithoutRecalc,
+          line_items: draft.line_items.map(item => {
+            const base = { id: item.id, variant_id: item.variant_id || undefined, quantity: item.quantity, price: item.price, properties: item.properties || [] };
+            if (item.id === lineItem.id) return { ...base, properties: updatedProps };
+            return base;
+          })
+        }
+      },
       { headers, timeout: 15000 }
     );
-    console.log(`Draft ${draftOrderId}: delta=${(delta*100).toFixed(2)}% ≤ 5% — tag removed, no line item changes`);
+    console.log(`Draft ${draftOrderId}: delta=${(delta*100).toFixed(2)}% ≤ 5% — jewel data written, price unchanged`);
+    await writeJewelcodeMetafield(jewel_data);
     return;
   }
 
-  // Above threshold: full reprice
+  // Full reprice: force=true OR delta > 5%
   const newGoldValue  = newNetWt * goldRate;
   const deltaGold     = newGoldValue - oldGold;
   const oldGrossValue = parseFloat((props['Gross Value'] || lineItem.price).toString().replace('Rs', '').trim());
@@ -1142,21 +1199,7 @@ async function handleRecalculatePriceTag(draft) {
   const newGst          = newTaxableValue * 0.03;
   const newPrice        = parseFloat(newFinalValue.toFixed(2));
 
-  const metal    = (lineItem.variant_title || '').split(' / ')[0] || '';
-  const category = lineItem.title || '';
-
-  const jewel_data = JSON.stringify({
-    jewel_code,
-    gross_wt:         newGrossWt,
-    net_wt:           newNetWt,
-    diamond_cts:      diamondCts,
-    diamond_pcs:      diamondPcs,
-    metal,
-    category,
-    gold_rate_locked: goldRate,
-    weight_delta_pct: parseFloat((delta * 100).toFixed(2)),
-    repriced:         true
-  });
+  const jewel_data = makeJewelData(true);
 
   const repricedProps = {
     'Gold':             `Rs${newGoldValue.toFixed(2)}`,
@@ -1164,11 +1207,7 @@ async function handleRecalculatePriceTag(draft) {
     'Taxable Value':    `Rs${newTaxableValue.toFixed(2)}`,
     'GST':              `Rs${newGst.toFixed(2)}`,
     'Discount Applied': `Rs${discountAmount.toFixed(2)}`,
-    '_gross_wt':        newGrossWt.toFixed(3),
-    '_net_wt':          newNetWt.toFixed(3),
-    '_diamond_cts':     diamondCts.toFixed(2),
-    '_diamond_pcs':     diamondPcs.toString(),
-    '_jewel_code':      jewel_code,
+    ...jewelHiddenProps,
     '_jewel_data':      jewel_data
   };
   if (bootstrapGoldRate) repricedProps['_gold_rate'] = goldRate.toString();
@@ -1208,36 +1247,7 @@ async function handleRecalculatePriceTag(draft) {
   );
   console.log(`✅ Repriced draft ${draftOrderId}: delta=${(delta*100).toFixed(2)}%, new gold=Rs${newGoldValue.toFixed(2)}, new final=Rs${newFinalValue.toFixed(2)}, shopify status=${putResp.status}`);
 
-  // Write timanti.jewelcode order metafield — consolidated JSON of all jewel inputs + computed data
-  try {
-    const existingJewelcodeMf = (mfData.metafields || []).find(
-      m => m.namespace === 'timanti' && m.key === 'jewelcode'
-    );
-    const mfPayload = {
-      metafield: {
-        namespace: 'timanti',
-        key:       'jewelcode',
-        value:     jewel_data,
-        type:      'json',
-      }
-    };
-    if (existingJewelcodeMf) {
-      await axios.put(
-        `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}/metafields/${existingJewelcodeMf.id}.json`,
-        mfPayload,
-        { headers, timeout: 10000 }
-      );
-    } else {
-      await axios.post(
-        `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}/metafields.json`,
-        mfPayload,
-        { headers, timeout: 10000 }
-      );
-    }
-    console.log(`Draft ${draftOrderId}: timanti.jewelcode metafield written`);
-  } catch (mfErr) {
-    console.error(`Draft ${draftOrderId}: failed to write timanti.jewelcode — ${mfErr.message}`);
-  }
+  await writeJewelcodeMetafield(jewel_data);
 }
 
 // ─────────────────────────────────────────
@@ -1253,7 +1263,8 @@ app.post('/api/shopify-draft-updated', async (req, res) => {
     // Tag-based handlers (fire independently, each removes its own tag)
     await handleSendLinkTag(draft);
     await handleCashPaymentTag(draft);
-    await handleRecalculatePriceTag(draft);
+    await handleRecalculatePriceTag(draft, { force: false });
+    await handleRecalculatePriceTag(draft, { force: true });
 
     // Existing: discount-driven recalculation
     const discountObj = draft.applied_discount;
@@ -1316,7 +1327,7 @@ app.post('/pricing/recalculate', async (req, res) => {
 // Manual trigger for jewel weight repricing (same logic as recalculate-price tag).
 // Requires jewel metafields (net_wt, gross_wt, diamond_cts, diamond_pcs, jewel_code) already set on the draft.
 app.post('/api/recalculate-price', async (req, res) => {
-  const { draftOrderId } = req.body;
+  const { draftOrderId, force = false } = req.body;
   if (!draftOrderId) return res.status(400).json({ success: false, error: 'draftOrderId required' });
   try {
     const token = await getShopifyToken();
@@ -1324,13 +1335,13 @@ app.post('/api/recalculate-price', async (req, res) => {
       `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}.json`,
       { headers: { 'X-Shopify-Access-Token': token }, timeout: 10000 }
     );
-    // Inject the tag so handleRecalculatePriceTag processes it
+    const tagToInject = force ? 'force-reprice' : 'recalculate-price';
     const draft = { ...draftData.draft_order };
     const existingTags = (draft.tags || '').split(',').map(t => t.trim()).filter(Boolean);
-    if (!existingTags.some(t => t.toLowerCase() === 'recalculate-price')) {
-      draft.tags = [...existingTags, 'recalculate-price'].join(', ');
+    if (!existingTags.some(t => t.toLowerCase() === tagToInject)) {
+      draft.tags = [...existingTags, tagToInject].join(', ');
     }
-    await handleRecalculatePriceTag(draft);
+    await handleRecalculatePriceTag(draft, { force });
     return res.json({ success: true, draftOrderId });
   } catch (err) {
     return res.status(500).json({ success: false, error: err.message, detail: err.response?.data });
@@ -1560,7 +1571,7 @@ app.get('/api/draft-order-line-items', async (req, res) => {
       `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}.json`,
       { headers: { 'X-Shopify-Access-Token': token } }
     );
-    const { line_items, tags, name } = data.draft_order;
+    const { line_items, tags, name, total_price, applied_discount } = data.draft_order;
 
     // For product line items without a locked _gold_rate, inject the current variant rate
     // so callers (e.g. 8a) can compute thresholds. handleRecalculatePriceTag will lock it on first reprice.
@@ -1586,7 +1597,7 @@ app.get('/api/draft-order-line-items', async (req, res) => {
       return item;
     }));
 
-    return res.json({ success: true, draftOrderId, name, tags, line_items: enriched });
+    return res.json({ success: true, draftOrderId, name, tags, total_price, applied_discount, line_items: enriched });
   } catch (err) {
     return res.status(500).json({ success: false, error: err.message });
   }
