@@ -1494,11 +1494,12 @@ app.post('/api/gokwik-webhook', async (req, res) => {
 });
 
 app.post('/api/log-cash-payment', async (req, res) => {
-  const { draftOrderId, draftOrderName, amountInRupees, totalAmountInRupees, customerName, notes } = req.body;
+  const { draftOrderId, draftOrderName, amountInRupees, totalAmountInRupees, customerName, notes, paymentMode } = req.body;
   if (!draftOrderId || !amountInRupees) {
     return res.status(400).json({ success: false, error: 'Missing: draftOrderId, amountInRupees' });
   }
   try {
+    const resolvedMode = paymentMode || 'cash';
     await handlePaymentCompletion({
       shopify_draft_id:   draftOrderId.toString(),
       draft_order_name:   draftOrderName || draftOrderId.toString(),
@@ -1508,7 +1509,7 @@ app.post('/api/log-cash-payment', async (req, res) => {
       pine_ref_id:        null,
       customer_name:      customerName || '',
       id:                 `cash-${Date.now()}`
-    }, { utr: null, paymentSource: 'cash', paymentModeOverride: 'cash' });
+    }, { utr: null, paymentSource: resolvedMode === 'cash' ? 'cash' : 'manual', paymentModeOverride: resolvedMode });
 
     return res.json({ success: true, message: 'Cash payment recorded.' });
   } catch (err) {
