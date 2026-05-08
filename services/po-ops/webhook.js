@@ -139,7 +139,10 @@ async function createPoDraftOrder({ order, lineItems, poType, sourceOrderName, s
         { name: 'action_ordered',     value: buildLink(token, 'ordered') },
         { name: 'action_qc_passed',   value: buildLink(token, 'qc_passed') },
         { name: 'action_shipped',     value: buildLink(token, 'shipped') },
+        { name: 'action_cancelled',   value: buildLink(token, 'cancelled') },
+        ...(poComments ? [{ name: 'po_comments', value: poComments }] : []),
       ],
+      tags: `po-draft, ${poType}`,
       metafields: [
         { namespace: 'custom', key: 'po_type',           value: poType,          type: 'single_line_text_field' },
         { namespace: 'custom', key: 'po_status',         value: 'pending',       type: 'single_line_text_field' },
@@ -231,6 +234,8 @@ async function sendPoEmail({ draftOrder, poType, sourceOrderName }) {
         <td style="padding:0 0 8px 0;"  ><a href="${attrs.action_shipped}"     style="background:#27AE60;color:#fff;padding:10px 16px;border-radius:4px;text-decoration:none;font-size:13px;display:inline-block;">🚚 Shipped</a></td>
       </tr>
     </table>
+    <p style="font-size:11px;color:#aaa;margin:12px 0 8px;border-top:1px solid #eee;padding-top:12px;">Customer cancelled? Use the link below to void this PO:</p>
+    <a href="${attrs.action_cancelled}" style="background:#c0392b;color:#fff;padding:10px 18px;border-radius:4px;text-decoration:none;font-size:13px;display:inline-block;">✕ Cancel PO</a>
   </td></tr>
   <tr><td style="border-top:1px solid #eee;padding:16px 30px;text-align:center;font-size:11px;color:#999;">
     Timanti by Auracarat — internal PO notification
@@ -240,7 +245,7 @@ async function sendPoEmail({ draftOrder, poType, sourceOrderName }) {
 
   await sendEmail({
     to:      HQ_EMAIL,
-    cc:      ENABLE_CC ? [HQ_CC_EMAIL, 'monodeep.dutta@timanti.in'].filter(Boolean) : undefined,
+    cc:      ENABLE_CC ? [HQ_CC_EMAIL, 'hsrstore@timanti.in', 'monodeep.dutta@timanti.in'].filter(Boolean) : undefined,
     subject: `${isUrgent ? '🔴 URGENT — ' : ''}New PO — ${draftOrder.name} — ${poType} — ${sourceOrderName}`,
     html
   });
@@ -293,9 +298,9 @@ async function handlePoWebhook(req, res, { supabase, getShopifyToken, shopifySto
   try { shopifyToken = await getShopifyToken(); }
   catch (e) { console.error('PO webhook: no Shopify token'); return; }
 
-  // Swap raise-po → raised-po synchronously before processing so retries don't double-fire
+  // Swap raise-po → po-confirmed synchronously before processing so retries don't double-fire
   const resource = isDraftOrder ? 'draft_orders' : 'orders';
-  const newTags  = [...tags.filter(t => t !== 'raise-po'), 'raised-po'].join(', ');
+  const newTags  = [...tags.filter(t => t !== 'raise-po'), 'po-confirmed'].join(', ');
   await axios.put(
     `${shopifyStoreUrl}/admin/api/2024-01/${resource}/${order.id}.json`,
     { [isDraftOrder ? 'draft_order' : 'order']: { id: order.id, tags: newTags } },

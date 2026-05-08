@@ -4,27 +4,33 @@ const axios = require('axios');
 
 const APPS_SCRIPT_URL = process.env.APPS_SCRIPT_URL;
 
-const VALID_ACTIONS = ['acknowledge', 'ordered', 'qc_passed', 'shipped'];
+const VALID_ACTIONS = ['acknowledge', 'ordered', 'qc_passed', 'shipped', 'cancelled'];
 
 const ACTION_TO_STATUS = {
   acknowledge: 'acknowledged',
   ordered:     'ordered',
   qc_passed:   'qc_passed',
-  shipped:     'shipped'
+  shipped:     'shipped',
+  cancelled:   'cancelled'
 };
 
 const ACTION_TO_SHEETS_COL = {
   acknowledge: 'acknowledged_at',
   ordered:     'ordered_at',
   qc_passed:   'qc_at',
-  shipped:     'shipped_at'
+  shipped:     'shipped_at',
+  cancelled:   'cancelled_at'
 };
 
 const CARD_STYLE = 'body{font-family:Arial,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;background:#f5f5f5;}.card{background:#fff;padding:40px;border-radius:8px;text-align:center;max-width:400px;box-shadow:0 2px 8px rgba(0,0,0,.1);}h2{margin-bottom:8px;}p{color:#555;}';
 
 function successPage(poName, action) {
-  const label = { acknowledge: 'acknowledged', ordered: 'marked as ordered', qc_passed: 'marked QC passed', shipped: 'marked as shipped to store' };
-  return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>PO Updated</title><style>${CARD_STYLE}h2{color:#27AE60;}</style></head><body><div class="card"><h2>✓ Done</h2><p><strong>${poName}</strong> has been ${label[action] || action}.</p><p style="color:#999;font-size:13px;margin-top:20px;">You can close this tab.</p></div></body></html>`;
+  const label = { acknowledge: 'acknowledged', ordered: 'marked as ordered', qc_passed: 'marked QC passed', shipped: 'marked as shipped to store', cancelled: 'cancelled' };
+  const isCancelled = action === 'cancelled';
+  const color = isCancelled ? '#c0392b' : '#27AE60';
+  const icon  = isCancelled ? '✕' : '✓';
+  const note  = isCancelled ? '<p style="color:#999;font-size:13px;margin-top:12px;">The store team has been notified. Draft order has been kept for reference.</p>' : '';
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>PO Updated</title><style>${CARD_STYLE}h2{color:${color};}</style></head><body><div class="card"><h2>${icon} ${isCancelled ? 'PO Cancelled' : 'Done'}</h2><p><strong>${poName}</strong> has been ${label[action] || action}.</p>${note}<p style="color:#999;font-size:13px;margin-top:20px;">You can close this tab.</p></div></body></html>`;
 }
 
 function errorPage(message) {
