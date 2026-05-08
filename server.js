@@ -1312,14 +1312,14 @@ async function syncPaymentMetafieldsToTags(draftOrderId, existingTags) {
   console.log(`Draft ${draftOrderId}: payment metafields → tags [${paymentTags.join(', ')}]`);
 }
 
-// sync-payment tag handler — cashier adds tag in Admin after setting payment metafields
+// Runs on every draft_orders/update webhook.
+// If no payment tags exist yet but payment metafields are set, writes the tags automatically.
 async function handlePaymentMetafieldSync(draft) {
-  const tags = (draft.tags || '').split(',').map(t => t.trim()).filter(Boolean);
-  if (!tags.some(t => t.toLowerCase() === 'sync-payment')) return;
-  const draftOrderId = draft.id?.toString();
+  const draftOrderId = draft?.id?.toString();
   if (!draftOrderId) return;
-  console.log(`Draft ${draftOrderId}: sync-payment tag detected — reading metafields`);
-  await syncPaymentMetafieldsToTags(draftOrderId, tags);
+  const existingTags = (draft.tags || '').split(',').map(t => t.trim()).filter(Boolean);
+  if (existingTags.some(t => t.startsWith('deposit:') || t.startsWith('paid:'))) return;
+  await syncPaymentMetafieldsToTags(draftOrderId, existingTags);
 }
 
 // ─────────────────────────────────────────
@@ -1697,35 +1697,6 @@ const PO_DEPS = () => ({ supabase, getShopifyToken, shopifyStoreUrl: process.env
 app.post('/api/po-webhook', (req, res) => handlePoWebhook(req, res, PO_DEPS()));
 app.get('/api/po-action',   (req, res) => handlePoAction(req, res, PO_DEPS()));
 
-// Shopify metafields/create + metafields/update webhook
-// Register in Shopify: Settings → Notifications → Webhooks → metafields/update → this URL
-app.post('/api/shopify-metafield-updated', async (req, res) => {
-  res.status(200).send('OK');
-  try {
-    const mf = req.body;
-    if (mf.owner_resource !== 'draft_order') return;
-    const paymentKeys = ['payment_status', 'is_finalized', 'amount_paid', 'amount_pending', 'payment_mode_final', 'payment_mode_advance'];
-    if (mf.namespace !== 'custom' || !paymentKeys.includes(mf.key)) return;
-
-    const draftOrderId = mf.owner_id?.toString();
-    if (!draftOrderId) return;
-
-    const token = await getShopifyToken();
-    const { data: draftData } = await axios.get(
-      `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}.json`,
-      { headers: { 'X-Shopify-Access-Token': token }, timeout: 10000 }
-    );
-    const draft = draftData.draft_order;
-    const existingTags = (draft.tags || '').split(',').map(t => t.trim()).filter(Boolean);
-
-    if (existingTags.some(t => t.startsWith('deposit:') || t.startsWith('paid:'))) return;
-
-    console.log(`Metafield webhook: draft ${draftOrderId} key=${mf.key} — syncing payment tags`);
-    await syncPaymentMetafieldsToTags(draftOrderId, existingTags);
-  } catch (err) {
-    console.error('Metafield webhook error:', err.message);
-  }
-});
 
 // ─────────────────────────────────────────
 // Price Update Diagnostics

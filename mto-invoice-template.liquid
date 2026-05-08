@@ -1,79 +1,87 @@
-{% comment %}
-  PAYMENT STATUS — reads deposit tags written by POS middleware:
-    deposit:partial, paid:Rs X, pending:Rs X  → partial payment
-    deposit:fully-paid, paid:Rs X             → fully paid
-{% endcomment %}
 {% assign is_partial     = false %}
 {% assign is_fully_paid  = false %}
 {% assign paid_amount    = "" %}
 {% assign pending_amount = "" %}
 {% assign pm_advance     = "" %}
 {% assign pm_final       = "" %}
+{% comment %}Primary: metafields set in Shopify Admin{% endcomment %}
+{% if order.metafields.custom.payment_status %}
+  {% assign _mf_status = order.metafields.custom.payment_status | downcase %}
+  {% if _mf_status == "full"    %}{% assign is_fully_paid = true %}{% endif %}
+  {% if _mf_status == "partial" %}{% assign is_partial    = true %}{% endif %}
+{% endif %}
+{% if order.metafields.custom.is_finalized %}{% assign is_fully_paid = true %}{% endif %}
+{% if order.metafields.custom.amount_paid    %}{% assign paid_amount    = order.metafields.custom.amount_paid    | round %}{% endif %}
+{% if order.metafields.custom.amount_pending %}{% assign pending_amount = order.metafields.custom.amount_pending | round %}{% endif %}
+{% if order.metafields.custom.payment_mode_final   %}{% assign pm_final   = order.metafields.custom.payment_mode_final   %}{% endif %}
+{% if order.metafields.custom.payment_mode_advance %}{% assign pm_advance = order.metafields.custom.payment_mode_advance %}{% endif %}
+{% comment %}Fallback: tags written by middleware payment flows{% endcomment %}
 {% for tag in order.tags %}
   {% assign t = tag | strip | downcase %}
-  {% if t == "deposit:partial"    %}{% assign is_partial    = true %}{% endif %}
-  {% if t == "deposit:fully-paid" %}{% assign is_fully_paid = true %}{% endif %}
-  {% if t contains "paid:rs"      %}{% assign paid_amount    = t | remove: "paid:rs" %}{% endif %}
-  {% if t contains "pending:rs"   %}{% assign pending_amount = t | remove: "pending:rs" %}{% endif %}
-  {% if t contains "pmode-advance:" %}{% assign pm_advance = tag | strip | remove: "pmode-advance:" %}{% endif %}
-  {% if t contains "pmode-final:"   %}{% assign pm_final   = tag | strip | remove: "pmode-final:"   %}{% endif %}
+  {% if t == "deposit:partial"    and is_partial == false and is_fully_paid == false %}{% assign is_partial    = true %}{% endif %}
+  {% if t == "deposit:fully-paid" and is_partial == false and is_fully_paid == false %}{% assign is_fully_paid = true %}{% endif %}
+  {% if t contains "paid:rs"        and paid_amount    == "" %}{% assign paid_amount    = t | remove: "paid:rs"        %}{% endif %}
+  {% if t contains "pending:rs"     and pending_amount == "" %}{% assign pending_amount = t | remove: "pending:rs"     %}{% endif %}
+  {% if t contains "pmode-advance:" and pm_advance     == "" %}{% assign pm_advance = tag | strip | remove: "pmode-advance:" %}{% endif %}
+  {% if t contains "pmode-final:"   and pm_final       == "" %}{% assign pm_final   = tag | strip | remove: "pmode-final:"   %}{% endif %}
 {% endfor %}
 
-{% comment %}TEMP OVERRIDE: Set to true to print shipping details under billing details{% endcomment %}
-{% assign show_shipping_under_billing = false %}
 
 <style>
   @page { size: A4; margin: 0.5cm; }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   @media print {
     body { padding: 5px !important; margin: 0; }
-    .container { page-break-inside: avoid !important; }
+    .container { page-break-inside: avoid !important; page-break-after: avoid !important; page-break-before: avoid !important; }
     a { display: none !important; visibility: hidden !important; }
   }
-  body { font-family: Arial, sans-serif; font-size: 8.5px; line-height: 1.2; padding: 10px; }
+  body { font-family: Arial, sans-serif; font-size: 9.5px; line-height: 1.35; padding: 10px; }
   .container { max-width: 800px; margin: 0 auto; border: 2px solid #000; padding: 0; }
   .disclaimer-banner { background-color: #fff8e1; border-bottom: 2px solid #000; padding: 7px 10px; font-size: 7.5px; line-height: 1.35; text-align: center; }
   .disclaimer-banner strong { font-size: 8px; display: block; margin-bottom: 2px; }
-  .header-text { text-align: right; padding: 3px 8px; font-size: 7px; font-style: italic; border-bottom: 1px solid #000; }
-  .title-header { text-align: center; padding: 7px 10px; border-bottom: 2px solid #000; min-height: 60px; display: flex; flex-direction: column; justify-content: center; align-items: center; }
-  .logo { max-width: 130px; height: auto; margin-bottom: 3px; }
-  .title-center h1 { font-size: 15px; font-weight: bold; margin: 0; }
+  .header-text { text-align: right; padding: 4px 10px; font-size: 8px; font-style: italic; border-bottom: 1px solid #000; }
+  .title-header { text-align: center; padding: 10px 14px; border-bottom: 2px solid #000; min-height: 75px; display: flex; flex-direction: column; justify-content: center; align-items: center; }
+  .logo { max-width: 140px; height: auto; margin-bottom: 4px; }
+  .title-center h1 { font-size: 17px; font-weight: bold; margin: 0; }
   .title-center h2 { font-size: 10px; font-weight: normal; color: #555; margin: 2px 0 0 0; }
   .company-invoice-grid { display: grid; grid-template-columns: 1.5fr 1fr; border-bottom: 2px solid #000; }
-  .company-section { padding: 5px 8px; border-right: 2px solid #000; font-size: 7px; line-height: 1.3; }
-  .company-section strong { font-size: 8px; }
+  .company-section { padding: 8px 10px; border-right: 2px solid #000; font-size: 8px; line-height: 1.45; }
+  .company-section strong { font-size: 9px; }
   .invoice-details-grid { display: grid; grid-template-rows: repeat(3, 1fr); }
   .invoice-detail-row { display: grid; grid-template-columns: 1fr 1fr 1fr; border-bottom: 1px solid #000; }
   .invoice-detail-row:last-child { border-bottom: none; }
-  .invoice-detail-cell { padding: 4px 6px; font-size: 7px; border-right: 1px solid #000; }
+  .invoice-detail-cell { padding: 6px 8px; font-size: 8px; border-right: 1px solid #000; }
   .invoice-detail-cell:last-child { border-right: none; }
-  .invoice-detail-cell strong { display: block; font-size: 7px; font-weight: bold; margin-bottom: 1px; }
+  .invoice-detail-cell strong { display: block; font-size: 8px; font-weight: bold; margin-bottom: 2px; }
   .addresses-section { display: grid; grid-template-columns: 1fr 1fr; border-bottom: 2px solid #000; }
-  .address-block { padding: 5px 8px; font-size: 7px; line-height: 1.3; }
+  .address-block { padding: 8px 10px; font-size: 8px; line-height: 1.45; }
   .address-block:first-child { border-right: 2px solid #000; }
-  .address-block strong { display: block; margin-bottom: 1px; font-size: 7px; }
-  .address-field { margin-bottom: 3px; }
+  .address-block strong { display: block; margin-bottom: 2px; font-size: 8px; }
+  .address-field { margin-bottom: 4px; }
   table { width: 100%; border-collapse: collapse; }
-  .items-table { font-size: 6.5px; }
-  .items-table th { background-color: #f0f0f0; padding: 3px 2px; text-align: left; font-weight: bold; border: 1px solid #000; font-size: 6.5px; line-height: 1.2; }
-  .items-table td { padding: 3px 2px; border: 1px solid #000; vertical-align: top; }
+  .items-table { font-size: 8px; }
+  .items-table th { background-color: #f0f0f0; padding: 6px 4px; text-align: left; font-weight: bold; border: 1px solid #000; font-size: 8px; }
+  .items-table td { padding: 6px 4px; border: 1px solid #000; vertical-align: top; }
   .items-table .text-right { text-align: right; }
   .items-table .text-center { text-align: center; }
   .tbd { color: #999; font-style: italic; }
-  .totals-row td { font-weight: normal; padding: 3px 4px; font-size: 7px; }
-  .total-row td { font-weight: bold; font-size: 8px; }
+  .totals-row td { font-weight: normal; padding: 5px 6px; font-size: 8px; }
+  .total-row td { font-weight: bold; font-size: 9px; }
   .section-label-row td { font-style: italic; color: #555; font-size: 7px; padding: 2px 4px; }
-  .amount-words { padding: 4px 8px; text-align: right; font-size: 7px; font-weight: bold; border-top: 2px solid #000; display: flex; justify-content: space-between; }
-  .footer-section { display: grid; grid-template-columns: 1fr 1fr; border-top: 2px solid #000; font-size: 6.5px; line-height: 1.25; }
-  .footer-left { padding: 6px 8px; border-right: 2px solid #000; }
-  .footer-right { padding: 6px 8px; }
-  .footer-left h3, .footer-right h3 { font-size: 7px; margin-bottom: 3px; font-weight: bold; }
-  .footer-left p, .footer-right p { margin-bottom: 2px; }
+  .amount-words { padding: 6px 10px; text-align: right; font-size: 8px; font-weight: bold; border-top: 2px solid #000; display: flex; justify-content: space-between; }
+  .footer-section { display: grid; grid-template-columns: 1fr 1fr; border-top: 2px solid #000; font-size: 7.5px; line-height: 1.4; }
+  .footer-left { padding: 10px 12px; border-right: 2px solid #000; }
+  .footer-right { padding: 10px 12px; }
+  .footer-left h3, .footer-right h3 { font-size: 8px; margin-bottom: 4px; font-weight: bold; }
+  .footer-left p, .footer-right p { margin-bottom: 3px; }
+  .signature-section { display: grid; grid-template-columns: 1fr 1fr; border-top: 2px solid #000; min-height: 90px; }
+  .signature-block { padding: 10px 12px; font-size: 8px; }
+  .signature-block:first-child { border-right: 2px solid #000; }
+  .signature-block strong { display: block; margin-bottom: 12px; }
+  .signature-block p { font-size: 7.5px; line-height: 1.35; }
   .watermark { position: relative; }
   .watermark-image { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); opacity: 0.1; width: 200px; height: auto; z-index: 0; pointer-events: none; }
-  .payment-banner { padding: 5px 10px; font-size: 7.5px; text-align: center; border-bottom: 2px solid #000; font-weight: bold; }
-  .payment-banner.partial { background-color: #fff3cd; }
-  .payment-banner.paid { background-color: #d4edda; }
+  .breakdown { font-size: 7px; color: #555; margin-top: 3px; line-height: 1.5; }
 </style>
 
 <div class="container">
@@ -82,10 +90,6 @@
     <strong>PROFORMA INVOICE — NOT A TAX DOCUMENT</strong>
     This document confirms your order and payment. A GST Tax Invoice will be issued at the time of dispatch.
   </div>
-
-  {% if is_fully_paid %}
-  <div class="payment-banner paid">FULLY PAID — Rs{{ paid_amount }} received</div>
-  {% endif %}
 
   <div class="header-text">Advance / Proforma Copy</div>
 
@@ -165,48 +169,19 @@
     </div>
   </div>
 
-  {% if show_shipping_under_billing %}
-  <div style="border-bottom: 2px solid #000; padding: 5px 8px; font-size: 7px; line-height: 1.3;">
-    <strong>Billing Details:</strong>
-    {% if order.shipping_address %}
-      <div class="address-field"><strong>Customer Name:</strong> {{ order.shipping_address.first_name | upcase }} {{ order.shipping_address.last_name | upcase }}</div>
-      <div class="address-field"><strong>Address:</strong>
-        {{ order.shipping_address.address1 }}{% if order.shipping_address.address2 %}, {{ order.shipping_address.address2 }}{% endif %},
-        {{ order.shipping_address.city }}, {{ order.shipping_address.province }}{% if order.shipping_address.zip %} – {{ order.shipping_address.zip }}{% endif %}, {{ order.shipping_address.country }}.
-      </div>
-      <div class="address-field"><strong>Mobile:</strong> {{ order.shipping_address.phone | default: "+91" }}</div>
-      <div class="address-field"><strong>Email:</strong> {{ order.email }}</div>
-      <div style="display: flex; justify-content: space-between; margin-top: 4px;">
-        <div><strong>GSTIN:</strong></div>
-        <div><strong>PAN:</strong> {% if order.customer.metafields.custom.pan_number %}{{ order.customer.metafields.custom.pan_number }}{% endif %}</div>
-        <div><strong>State Code:</strong> {{ state_code }}</div>
-      </div>
-    {% endif %}
-    <div style="margin-top: 6px; padding-top: 5px; border-top: 1px solid #000;">
-      <strong>Shipping Details:</strong>
-      {% if order.shipping_address %}
-        <div class="address-field"><strong>Customer Name:</strong> {{ order.shipping_address.first_name | upcase }} {{ order.shipping_address.last_name | upcase }}</div>
-        <div class="address-field"><strong>Address:</strong>
-          {{ order.shipping_address.address1 }}{% if order.shipping_address.address2 %}, {{ order.shipping_address.address2 }}{% endif %},
-          {{ order.shipping_address.city }}, {{ order.shipping_address.province }}{% if order.shipping_address.zip %} – {{ order.shipping_address.zip }}{% endif %}, {{ order.shipping_address.country }}.
-        </div>
-        <div class="address-field"><strong>Mobile:</strong> {{ order.shipping_address.phone | default: "+91" }}</div>
-        <div class="address-field"><strong>Email:</strong> {{ order.email }}</div>
-      {% endif %}
-    </div>
-  </div>
-  {% else %}
   <div class="addresses-section">
     <div class="address-block">
       <strong>Billing Details:</strong>
       {% if order.billing_address %}
-        <div class="address-field"><strong>Customer Name:</strong> {{ order.billing_address.first_name | upcase }} {{ order.billing_address.last_name | upcase }}</div>
+        <div class="address-field"><strong>Customer Name:</strong> {{ order.billing_address.name | upcase }}</div>
         <div class="address-field"><strong>Address:</strong>
           {{ order.billing_address.address1 }}{% if order.billing_address.address2 %}, {{ order.billing_address.address2 }}{% endif %},
-          {{ order.billing_address.city }}, {{ order.billing_address.province }}, {{ order.billing_address.country }}.
+          {{ order.billing_address.city }}, {{ order.billing_address.province }}{% if order.billing_address.zip %} – {{ order.billing_address.zip }}{% endif %}, {{ order.billing_address.country }}.
         </div>
-        <div class="address-field"><strong>Mobile:</strong> {{ order.billing_address.phone | default: "+91" }}</div>
-        <div class="address-field"><strong>Email:</strong> {{ order.email }}</div>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 5px;">
+          <div><strong>Mobile:</strong> {{ order.billing_address.phone | default: "+91" }}</div>
+          <div><strong>Email:</strong> {{ order.email }}</div>
+        </div>
         <div style="display: flex; justify-content: space-between; margin-top: 4px;">
           <div><strong>GSTIN:</strong></div>
           <div><strong>PAN:</strong> {% if order.customer.metafields.custom.pan_number %}{{ order.customer.metafields.custom.pan_number }}{% endif %}</div>
@@ -217,34 +192,35 @@
     <div class="address-block">
       <strong>Shipping Details:</strong>
       {% if order.shipping_address %}
-        <div class="address-field"><strong>Customer Name:</strong> {{ order.shipping_address.first_name | upcase }} {{ order.shipping_address.last_name | upcase }}</div>
+        <div class="address-field"><strong>Customer Name:</strong> {{ order.shipping_address.name | upcase }}</div>
         <div class="address-field"><strong>Address:</strong>
           {{ order.shipping_address.address1 }}{% if order.shipping_address.address2 %}, {{ order.shipping_address.address2 }}{% endif %},
           {{ order.shipping_address.city }}, {{ order.shipping_address.province }}{% if order.shipping_address.zip %} – {{ order.shipping_address.zip }}{% endif %}, {{ order.shipping_address.country }}.
         </div>
-        <div class="address-field"><strong>Mobile:</strong> {{ order.shipping_address.phone | default: "+91" }}</div>
-        <div class="address-field"><strong>Email:</strong> {{ order.email }}</div>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 5px;">
+          <div><strong>Mobile:</strong> {{ order.shipping_address.phone | default: "+91" }}</div>
+          <div><strong>Email:</strong> {{ order.email }}</div>
+        </div>
       {% endif %}
     </div>
   </div>
-  {% endif %}
 
   <table class="items-table">
     <thead>
       <tr>
-        <th style="width: 17%;">Item Description</th>
+        <th style="width: 15%;">Item Description</th>
         <th class="text-center" style="width: 6%;">HSN Code</th>
         <th class="text-center" style="width: 3%;">Qty</th>
-        <th class="text-center" style="width: 5.5%;">Gross Wt (g)</th>
-        <th class="text-center" style="width: 5.5%;">Net Wt (g)</th>
+        <th class="text-center" style="width: 5%;">Gross Wt (g)</th>
+        <th class="text-center" style="width: 5%;">Net Wt (g)</th>
         <th class="text-center" style="width: 5%;">Dia Wt (cts)</th>
         <th class="text-center" style="width: 4%;">Dia Pcs</th>
-        <th class="text-center" style="width: 5.5%;">Col. Stone (Pcs)</th>
+        <th class="text-center" style="width: 4%;">Col. Stone (Pcs)</th>
         <th class="text-center" style="width: 5%;">Metal</th>
-        <th class="text-right"  style="width: 6%;">Making<br>Charges</th>
-        <th class="text-right"  style="width: 8.5%;">Taxable Val.<br>(Before Disc.)</th>
-        <th class="text-right"  style="width: 7%;">Disc. on<br>Taxable</th>
-        <th class="text-right"  style="width: 8.5%;">Taxable Val.<br>(After Disc.)</th>
+        <th class="text-right"  style="width: 8%;">Making<br>Charges</th>
+        <th class="text-right"  style="width: 9%;">Taxable Val.<br>(Before Disc.)</th>
+        <th class="text-right"  style="width: 8%;">Disc. on<br>Taxable</th>
+        <th class="text-right"  style="width: 9%;">Taxable Val.<br>(After Disc.)</th>
       </tr>
     </thead>
     <tbody class="watermark">
@@ -455,9 +431,17 @@
           <td class="text-right"><strong>₹{{ pending_amount }}</strong></td>
         </tr>
       {% elsif is_fully_paid and paid_amount != "" %}
+        {% assign pm_display = "" %}
+        {% if pm_advance != "" and pm_final != "" and pm_final != pm_advance %}
+          {% assign pm_display = pm_advance | append: " / " | append: pm_final %}
+        {% elsif pm_advance != "" %}
+          {% assign pm_display = pm_advance %}
+        {% elsif pm_final != "" %}
+          {% assign pm_display = pm_final %}
+        {% endif %}
         <tr class="totals-row">
           <td colspan="12" class="text-right">
-            Amount Received{% if pm_advance != "" %}&nbsp; <em style="color:#555;">({% if pm_advance != "" %}{{ pm_advance }}{% endif %}{% if pm_final != "" and pm_final != pm_advance %} / {{ pm_final }}{% endif %})</em>{% endif %}
+            Amount Received{% if pm_display != "" %}&nbsp; <em style="color:#555;">({{ pm_display }})</em>{% endif %}
           </td>
           <td class="text-right">₹{{ paid_amount }}</td>
         </tr>
@@ -507,12 +491,29 @@
     {% for line_item in order.line_items %}
       {% assign sku_parts = line_item.variant.sku | split: "|" %}
       {% assign karat = sku_parts[2] | strip %}
-      {% if karat == "18" and rate_18k == "" %}{% assign rate_18k = line_item.variant.metafields.custom.gold_rate %}{% assign gold_updated = line_item.variant.metafields.custom.gold_last_updated_at %}{% endif %}
-      {% if karat == "14" and rate_14k == "" %}{% assign rate_14k = line_item.variant.metafields.custom.gold_rate %}{% if gold_updated == "" %}{% assign gold_updated = line_item.variant.metafields.custom.gold_last_updated_at %}{% endif %}{% endif %}
+      {% assign locked_rate = "" %}
+      {% assign locked_ts   = "" %}
+      {% for p in line_item.properties %}
+        {% if p.first == "_gold_rate"       %}{% assign locked_rate = p.last %}{% endif %}
+        {% if p.first == "_gold_updated_at" %}{% assign locked_ts   = p.last %}{% endif %}
+      {% endfor %}
+      {% if karat == "18" and rate_18k == "" and locked_rate != "" %}{% assign rate_18k = locked_rate %}{% if locked_ts != "" %}{% assign gold_updated = locked_ts %}{% endif %}{% endif %}
+      {% if karat == "14" and rate_14k == "" and locked_rate != "" %}{% assign rate_14k = locked_rate %}{% if gold_updated == "" and locked_ts != "" %}{% assign gold_updated = locked_ts %}{% endif %}{% endif %}
     {% endfor %}
     {% if rate_18k == "" and rate_14k != "" %}{% assign rate_18k = rate_14k | plus: 0 | times: 0.771 | divided_by: 0.604 | round: 2 %}{% endif %}
     {% if rate_14k == "" and rate_18k != "" %}{% assign rate_14k = rate_18k | plus: 0 | times: 0.604 | divided_by: 0.771 | round: 2 %}{% endif %}
-    Gold rate — 18kt: Rs {{ rate_18k }} &nbsp;|&nbsp; 14kt: Rs {{ rate_14k }}{% if gold_updated != "" %}{% assign ist_ts = gold_updated | date: "%s" | plus: 19800 %} &nbsp;(as of {{ ist_ts | date: "%d %b %Y %H:%M" }} IST){% endif %}
+    Gold rate at order date — 18kt: Rs {{ rate_18k }} &nbsp;|&nbsp; 14kt: Rs {{ rate_14k }}{% if gold_updated != "" %}{% assign ist_ts = gold_updated | date: "%s" | plus: 19800 %} &nbsp;(as of {{ ist_ts | date: "%d %b %Y %H:%M" }} IST){% endif %}
+  </div>
+
+  <div class="signature-section">
+    <div class="signature-block">
+      <strong>Customer Acknowledgement</strong>
+      <p>Signature: ___________________________</p>
+    </div>
+    <div class="signature-block" style="text-align: right;">
+      <strong>For – Auracarat Private Limited</strong>
+      <p>Authorized Signatory</p>
+    </div>
   </div>
 
   <div class="footer-section">

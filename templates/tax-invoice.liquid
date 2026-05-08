@@ -49,6 +49,7 @@
   .watermark-image { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); opacity: 0.1; width: 200px; height: auto; z-index: 0; pointer-events: none; }
   .breakdown { font-size: 7px; color: #555; margin-top: 3px; line-height: 1.5; }
   .section-label-row td { font-style: italic; color: #555; font-size: 7px; padding: 2px 4px; }
+  .tbd { color: #999; font-style: italic; }
 </style>
 
 {% comment %}
@@ -184,14 +185,15 @@
         <div class="address-field"><strong>Customer Name:</strong> {{ order.billing_address.name | upcase }}</div>
         <div class="address-field"><strong>Address:</strong>
           {{ order.billing_address.address1 }}{% if order.billing_address.address2 %}, {{ order.billing_address.address2 }}{% endif %},
-          {{ order.billing_address.city }}, {{ order.billing_address.province }}, {{ order.billing_address.country }}.
+          {{ order.billing_address.city }}, {{ order.billing_address.province }}{% if order.billing_address.zip %} – {{ order.billing_address.zip }}{% endif %}, {{ order.billing_address.country }}.
         </div>
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 5px;">
           <div><strong>Mobile:</strong> {{ order.billing_address.phone | default: "+91" }}</div>
           <div><strong>Email:</strong> {{ order.email }}</div>
         </div>
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 5px; margin-top: 5px;">
+        <div style="display: flex; justify-content: space-between; margin-top: 4px;">
           <div><strong>GSTIN:</strong></div>
+          <div><strong>PAN:</strong> {% if order.customer.metafields.custom.pan_number %}{{ order.customer.metafields.custom.pan_number }}{% endif %}</div>
           <div><strong>State Code:</strong> {{ state_code }}</div>
         </div>
       {% endif %}
@@ -202,7 +204,7 @@
         <div class="address-field"><strong>Customer Name:</strong> {{ order.shipping_address.name | upcase }}</div>
         <div class="address-field"><strong>Address:</strong>
           {{ order.shipping_address.address1 }}{% if order.shipping_address.address2 %}, {{ order.shipping_address.address2 }}{% endif %},
-          {{ order.shipping_address.city }}, {{ order.shipping_address.province }}, {{ order.shipping_address.country }}.
+          {{ order.shipping_address.city }}, {{ order.shipping_address.province }}{% if order.shipping_address.zip %} – {{ order.shipping_address.zip }}{% endif %}, {{ order.shipping_address.country }}.
         </div>
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 5px;">
           <div><strong>Mobile:</strong> {{ order.shipping_address.phone | default: "+91" }}</div>
@@ -396,14 +398,26 @@
       {% assign pending_amount = "" %}
       {% assign pm_advance     = "" %}
       {% assign pm_final       = "" %}
+      {% comment %}Primary: metafields set directly in Shopify Admin{% endcomment %}
+      {% if order.metafields.custom.payment_status %}
+        {% assign _mf_status = order.metafields.custom.payment_status | downcase %}
+        {% if _mf_status == "full"    %}{% assign is_fully_paid = true %}{% endif %}
+        {% if _mf_status == "partial" %}{% assign is_partial    = true %}{% endif %}
+      {% endif %}
+      {% if order.metafields.custom.is_finalized %}{% assign is_fully_paid = true %}{% endif %}
+      {% if order.metafields.custom.amount_paid    %}{% assign paid_amount    = order.metafields.custom.amount_paid    | round %}{% endif %}
+      {% if order.metafields.custom.amount_pending %}{% assign pending_amount = order.metafields.custom.amount_pending | round %}{% endif %}
+      {% if order.metafields.custom.payment_mode_final   %}{% assign pm_final   = order.metafields.custom.payment_mode_final   %}{% endif %}
+      {% if order.metafields.custom.payment_mode_advance %}{% assign pm_advance = order.metafields.custom.payment_mode_advance %}{% endif %}
+      {% comment %}Fallback: tags written by middleware payment flows{% endcomment %}
       {% for tag in order.tags %}
         {% assign t = tag | strip | downcase %}
-        {% if t == "deposit:partial"      %}{% assign is_partial    = true %}{% endif %}
-        {% if t == "deposit:fully-paid"   %}{% assign is_fully_paid = true %}{% endif %}
-        {% if t contains "paid:rs"        %}{% assign paid_amount    = t | remove: "paid:rs" %}{% endif %}
-        {% if t contains "pending:rs"     %}{% assign pending_amount = t | remove: "pending:rs" %}{% endif %}
-        {% if t contains "pmode-advance:" %}{% assign pm_advance = tag | strip | remove: "pmode-advance:" %}{% endif %}
-        {% if t contains "pmode-final:"   %}{% assign pm_final   = tag | strip | remove: "pmode-final:"   %}{% endif %}
+        {% if t == "deposit:partial"    and is_partial == false and is_fully_paid == false %}{% assign is_partial    = true %}{% endif %}
+        {% if t == "deposit:fully-paid" and is_partial == false and is_fully_paid == false %}{% assign is_fully_paid = true %}{% endif %}
+        {% if t contains "paid:rs"        and paid_amount    == "" %}{% assign paid_amount    = t | remove: "paid:rs"        %}{% endif %}
+        {% if t contains "pending:rs"     and pending_amount == "" %}{% assign pending_amount = t | remove: "pending:rs"     %}{% endif %}
+        {% if t contains "pmode-advance:" and pm_advance     == "" %}{% assign pm_advance = tag | strip | remove: "pmode-advance:" %}{% endif %}
+        {% if t contains "pmode-final:"   and pm_final       == "" %}{% assign pm_final   = tag | strip | remove: "pmode-final:"   %}{% endif %}
       {% endfor %}
       <tr class="totals-row">
         <td colspan="12" class="text-right" style="font-style:italic; color:#555; border-top: 1px solid #ccc;">Payment Mode</td>
@@ -421,9 +435,17 @@
           <td class="text-right"><strong>₹{{ pending_amount }}</strong></td>
         </tr>
       {% elsif is_fully_paid and paid_amount != "" %}
+        {% assign pm_display = "" %}
+        {% if pm_advance != "" and pm_final != "" and pm_final != pm_advance %}
+          {% assign pm_display = pm_advance | append: " / " | append: pm_final %}
+        {% elsif pm_advance != "" %}
+          {% assign pm_display = pm_advance %}
+        {% elsif pm_final != "" %}
+          {% assign pm_display = pm_final %}
+        {% endif %}
         <tr class="totals-row">
           <td colspan="12" class="text-right">
-            Amount Received{% if pm_advance != "" %}&nbsp; <em style="color:#555;">({{ pm_advance }}{% if pm_final != "" and pm_final != pm_advance %} / {{ pm_final }}{% endif %})</em>{% endif %}
+            Amount Received{% if pm_display != "" %}&nbsp; <em style="color:#555;">({{ pm_display }})</em>{% endif %}
           </td>
           <td class="text-right">₹{{ paid_amount }}</td>
         </tr>
@@ -483,6 +505,17 @@
       </p>
       <br>
       <p style="text-align: right;"><strong>For – Auracarat Private Limited</strong></p>
+    </div>
+  </div>
+
+  <div class="signature-section">
+    <div class="signature-block">
+      <strong>Customer Acknowledgement</strong>
+      <p>Signature: ___________________________</p>
+    </div>
+    <div class="signature-block" style="text-align: right;">
+      <strong>For – Auracarat Private Limited</strong>
+      <p>Authorized Signatory</p>
     </div>
   </div>
 
