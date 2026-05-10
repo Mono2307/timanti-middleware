@@ -81,6 +81,7 @@ function onFormSubmit(e) {
       diamondCarats:   String(answers['diamondCarats']     || '').trim(),
       diamondPcs:      String(answers['diamondPcs']        || '').trim(),
       gemstoneWeights: String(answers['gemstoneWeights']   || '').trim(),
+      invoiceDate:     String(answers['Invoice Date']      || '').trim(),
     };
 
     let payload;

@@ -1036,6 +1036,7 @@ async function gqlSetDraftLineItems(draftOrderId, lineItems, token, opts = {}) {
   const input = { lineItems: gqlLineItems };
   if (opts.clearDiscount) input.appliedDiscount = null;
   if (opts.tags !== undefined) input.tags = opts.tags;
+  if (opts.noteAttributes) input.customAttributes = opts.noteAttributes.map(a => ({ key: a.name, value: String(a.value) }));
   const mutation = `mutation draftOrderUpdate($id: ID!, $input: DraftOrderInput!) { draftOrderUpdate(id: $id, input: $input) { draftOrder { lineItems(first: 20) { nodes { id originalUnitPrice discountedUnitPrice } } } userErrors { field message } } }`;
   const resp = await axios.post(
     `${process.env.SHOPIFY_STORE_URL}/admin/api/2025-01/graphql.json`,
@@ -1749,8 +1750,13 @@ app.post('/api/form-reprice', async (req, res) => {
           return { variant_id: item.variant_id || undefined, quantity: t ? t.qty : item.quantity, price: t ? t.pricePerUnit : item.price, properties: t ? t.newProps : (item.properties || []), title: item.title, taxable: item.taxable, requires_shipping: item.requires_shipping };
         });
 
+      // Merge invoice_date override into existing note_attributes (order-level, read by invoice template)
+      const invoiceDate = String(req.body.invoiceDate || '').trim();
+      const mergedNoteAttrs = (draft.note_attributes || []).filter(a => a.name !== 'invoice_date');
+      if (invoiceDate) mergedNoteAttrs.push({ name: 'invoice_date', value: invoiceDate });
+
       console.log(`[form-reprice] sending ${lineItemsToSet.length} items:`, JSON.stringify(lineItemsToSet.map(li => ({ v: li.variant_id || li.title, price: li.price }))));
-      const gqlNodes = await gqlSetDraftLineItems(draftOrderId, lineItemsToSet, token, { clearDiscount: true });
+      const gqlNodes = await gqlSetDraftLineItems(draftOrderId, lineItemsToSet, token, { clearDiscount: true, noteAttributes: mergedNoteAttrs });
       gqlNodes.forEach((li, i) => console.log(`[form-reprice] item[${i}] id=${li.id} originalUnitPrice=${li.originalUnitPrice} discountedUnitPrice=${li.discountedUnitPrice}`));
       return res.json({ success: true, draftOrderId, mode: 'manual', updatedCount: overrideCount, ...(rate18ktResponse ? { rate18kt: rate18ktResponse } : {}) });
 
