@@ -2,45 +2,40 @@
  * Timanti Draft Order Reprice — Google Apps Script
  *
  * ════════════════════════════════════════════════════════════════
- * FORM STRUCTURE  (exact field titles matter)
+ * FORM FIELD TITLES  (must match exactly — case-sensitive)
  * ════════════════════════════════════════════════════════════════
  *
  * Page 1  (always shown)
- *   1.  Draft Order ID          Short answer   — numeric ID or full Shopify admin URL
- *   2.  Mode                    Multiple choice
- *         ○ Manual Price Override   → go to Section 2
- *         ○ Weight-based Reprice    → go to Section 3
+ *   Draft Order ID     Short answer
+ *   Mode               Multiple choice
+ *       ○ Manual Price Override   → go to Section 2
+ *       ○ Weight-based Reprice    → go to Section 3
  *
- * ── Section 2: Manual Price Override ──  (all comma-separated, positional per item)
- *   Separator: use "/" between items (e.g. "21,165/26,422"). Commas within a number are stripped.
- *   3.  Gold Rate (Rs/g)        Short answer   — e.g. "5500" (for the karat entered below)
- *   4.  Gold Karat              Short answer   — e.g. "22"  (leave blank if entering gold in Rs directly)
- *   5.  Gold (Rs)               Short answer   — overrides rate×wt if filled; blank = auto-compute from rate×netWt
- *   6.  Diamond (Rs)            Short answer
- *   7.  Making (Rs)             Short answer
- *   8.  Discount (Rs)           Short answer   — leave blank = Rs 0
- *   9.  Net Weight (g)          Short answer
- *   10. Gross Weight (g)        Short answer
- *   11. Diamond Carats          Short answer   — blank if none
- *   12. Diamond Pieces          Short answer   — blank if none
- *   13. Gemstone Carats         Short answer   — blank if none
- *   → Submit
+ * ── Section 2: Manual Price Override ──
+ *   Separator: use "/" between items. Commas inside numbers are fine.
+ *   e.g.  "21,165/26,422"  →  item1=21165  item2=26422
+ *
+ *   gold            Gold value in Rs per line item
+ *   diamond         Diamond value in Rs per line item
+ *   making          Making charges in Rs per line item
+ *   discount        Discount in Rs per line item  (blank = 0)
+ *   netWeights      Net weight in grams per item
+ *   grossWeights    Gross weight in grams per item
+ *   diamondCarats   Diamond carats per item
+ *   diamondPcs      Diamond pieces per item
+ *   gemstoneWeights Gemstone carats per item
+ *   Gold Rate (Rs/g) Optional — locks gold rate; auto-computes gold if gold blank
+ *   Gold Karat       Required if Gold Rate is filled (e.g. 22)
  *
  * ── Section 3: Weight-based Reprice ──
- *   3.  Gold Rate (Rs/g)        Short answer   — optional; locks _gold_rate before reprice
- *   4.  Gold Karat              Short answer   — required if Gold Rate is filled
- *   9.  Net Weight (g)          Short answer
- *   10. Gross Weight (g)        Short answer
- *   11. Diamond Carats          Short answer
- *   12. Diamond Pieces          Short answer
- *   13. Gemstone Carats         Short answer
- *   14. Force reprice?          Checkbox       — tick to skip 5% delta guard
- *   → Submit
- *
- * Gold rate logic:
- *   _gold_rate stored = input rate converted to each item's own karat (from variant title).
- *   18kt back-calc = inputRate × (18 / inputKarat). Locked to form submission timestamp.
- *   In manual mode, if Gold (Rs) is blank, gold = rate_for_item_karat × Net Weight.
+ *   netWeights      Net weight in grams per item
+ *   grossWeights    Gross weight in grams per item
+ *   diamondCarats   Diamond carats per item
+ *   diamondPcs      Diamond pieces per item
+ *   gemstoneWeights Gemstone carats per item
+ *   Gold Rate (Rs/g) Optional — updates _gold_rate before reprice
+ *   Gold Karat       Required if Gold Rate is filled
+ *   Force reprice?  Checkbox — tick to skip 5% delta guard
  *
  * ════════════════════════════════════════════════════════════════
  * SETUP
@@ -48,15 +43,14 @@
  * 1. Create the form above. Link responses to a Google Sheet.
  * 2. Sheet → Extensions → Apps Script → paste this file.
  * 3. Set SERVER_URL below.
- * 4. Triggers → Add Trigger → choose function "onFormSubmit"
+ * 4. Triggers → Add Trigger → onFormSubmit
  *    → Event source: From spreadsheet  → Event type: On form submit
- *    DO NOT run the function manually — it requires a real form-submit event object.
+ *    DO NOT run onFormSubmit manually — use testRow4() instead.
  */
 
 const SERVER_URL = 'https://YOUR_SERVER_URL_HERE'; // ← replace
 
 function onFormSubmit(e) {
-  // Guard: this function requires a real form-submit event. Running it manually will fail.
   if (!e || !e.response) {
     Logger.log('onFormSubmit called without a valid event object. Run via trigger, not manually.');
     return;
@@ -71,22 +65,22 @@ function onFormSubmit(e) {
     const rawId        = String(answers['Draft Order ID'] || '').trim();
     const draftOrderId = (rawId.match(/\d{8,}/) || [])[0];
     if (!draftOrderId) {
-      logResult('ERROR', rawId, '—', 'Could not parse Draft Order ID — paste the numeric ID or full URL');
+      logResult('ERROR', rawId, '—', 'Could not parse Draft Order ID');
       return;
     }
 
     const modeAnswer = String(answers['Mode'] || '');
     const mode       = modeAnswer.includes('Manual') ? 'manual' : 'weights';
 
-    // Shared fields — appear in both sections
+    // Shared fields — same titles in both sections
     const shared = {
       goldRate:        String(answers['Gold Rate (Rs/g)']  || '').trim(),
       goldKarat:       String(answers['Gold Karat']        || '').trim(),
-      netWeights:      String(answers['Net Weight (g)']    || '').trim(),
-      grossWeights:    String(answers['Gross Weight (g)']  || '').trim(),
-      diamondCarats:   String(answers['Diamond Carats']    || '').trim(),
-      diamondPcs:      String(answers['Diamond Pieces']    || '').trim(),
-      gemstoneWeights: String(answers['Gemstone Carats']   || '').trim(),
+      netWeights:      String(answers['netWeights']        || '').trim(),
+      grossWeights:    String(answers['grossWeights']      || '').trim(),
+      diamondCarats:   String(answers['diamondCarats']     || '').trim(),
+      diamondPcs:      String(answers['diamondPcs']        || '').trim(),
+      gemstoneWeights: String(answers['gemstoneWeights']   || '').trim(),
     };
 
     let payload;
@@ -94,10 +88,10 @@ function onFormSubmit(e) {
       payload = {
         draftOrderId,
         mode: 'manual',
-        gold:     String(answers['Gold (Rs)']     || '').trim(),
-        diamond:  String(answers['Diamond (Rs)']  || '').trim(),
-        making:   String(answers['Making (Rs)']   || '').trim(),
-        discount: String(answers['Discount (Rs)'] || '').trim(),
+        gold:     String(answers['gold']     || '').trim(),
+        diamond:  String(answers['diamond']  || '').trim(),
+        making:   String(answers['making']   || '').trim(),
+        discount: String(answers['discount'] || '').trim(),
         ...shared,
       };
     } else {
@@ -128,23 +122,34 @@ function onFormSubmit(e) {
 }
 
 /**
- * Test helper — directly POSTs the row 3 values to the server.
- * Edit the payload below to match your actual inputs, then run this function.
- * ── SEPARATOR GUIDE ──────────────────────────────────────────────────────
- * Use "/" to separate values for multiple items.
- * Commas inside a number are fine (Indian format):
- *   "21,165/26,422"  →  item1=21165  item2=26422  ✓
- *   "21165/26422"    →  same result  ✓
- *   "21165,26422"    →  WRONG — reads as four numbers, not two  ✗
- * ─────────────────────────────────────────────────────────────────────────
+ * Replays the row 4 form response through onFormSubmit.
+ * Row 1 = headers, Row 2 = 1st response (index 0), Row 4 = index 2.
+ * Run this from the Apps Script editor to test without resubmitting the form.
  */
-function testRow3() {
+function testRow4() {
+  const ss   = SpreadsheetApp.getActiveSpreadsheet();
+  const form = FormApp.openByUrl(ss.getFormUrl());
+  const responses = form.getResponses();
+  const response  = responses[2]; // row 4 = index 2
+  if (!response) {
+    Logger.log('No response at index 2 (row 4). Check the form has at least 3 submissions.');
+    return;
+  }
+  Logger.log('Replaying row 4: ' + response.getId());
+  onFormSubmit({ response });
+}
+
+/**
+ * Direct API test — POSTs row 4 values straight to the server.
+ * Run this if testRow4() has field-title issues or for quick iteration.
+ */
+function testRow4Direct() {
   const payload = {
     draftOrderId:    '1365166719233',
     mode:            'manual',
     gold:            '21165/26422',
-    diamond:         'FILL_ME/FILL_ME',  // ← replace with actual diamond values
-    making:          '20732/588',
+    diamond:         '72850/55200',
+    making:          '2073/2588',
     discount:        '0/0',
     netWeights:      '2.18/2.72',
     grossWeights:    '2.54/3.0',
