@@ -1747,7 +1747,7 @@ app.post('/api/form-reprice', async (req, res) => {
 
       console.log(`[form-reprice] GraphQL sending ${gqlLineItems.length} items:`, JSON.stringify(gqlLineItems.map(li => ({ v: li.variantId || li.title, price: li.originalUnitPrice }))));
 
-      const gqlMutation = `mutation draftOrderUpdate($id: ID!, $input: DraftOrderInput!) { draftOrderUpdate(id: $id, input: $input) { draftOrder { lineItems(first: 20) { nodes { id originalUnitPrice } } } userErrors { field message } } }`;
+      const gqlMutation = `mutation draftOrderUpdate($id: ID!, $input: DraftOrderInput!) { draftOrderUpdate(id: $id, input: $input) { draftOrder { lineItems(first: 20) { nodes { id originalUnitPrice discountedUnitPrice { amount } appliedDiscount { value valueType } } } } userErrors { field message } } }`;
       const gqlResp = await axios.post(
         `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/graphql.json`,
         { query: gqlMutation, variables: { id: `gid://shopify/DraftOrder/${draftOrderId}`, input: { lineItems: gqlLineItems, appliedDiscount: null } } },
@@ -1762,7 +1762,7 @@ app.post('/api/form-reprice', async (req, res) => {
         return res.status(500).json({ success: false, error: `GraphQL error: ${errMsg}` });
       }
       const gqlNodes = gqlData?.data?.draftOrderUpdate?.draftOrder?.lineItems?.nodes || [];
-      gqlNodes.forEach((li, i) => console.log(`[form-reprice] GraphQL item[${i}] id=${li.id} price=${li.originalUnitPrice}`));
+      gqlNodes.forEach((li, i) => console.log(`[form-reprice] GraphQL item[${i}] originalUnitPrice=${li.originalUnitPrice} discountedUnitPrice=${li.discountedUnitPrice?.amount} appliedDiscount=${JSON.stringify(li.appliedDiscount)}`));
       return res.json({ success: true, draftOrderId, mode: 'manual', updatedCount: overrideCount, ...(rate18ktResponse ? { rate18kt: rate18ktResponse } : {}) });
 
     } else if (mode === 'weights') {
