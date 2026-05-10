@@ -156,8 +156,8 @@ function testRow4Direct() {
     diamondCarats:   '1.79/1.38',
     diamondPcs:      '38/1',
     gemstoneWeights: '0/0',
-    goldRate:        '',
-    goldKarat:       '',
+    goldRate:        '9713',
+    goldKarat:       '14',
   };
 
   const resp = UrlFetchApp.fetch(SERVER_URL + '/api/form-reprice', {
