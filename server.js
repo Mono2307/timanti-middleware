@@ -1685,20 +1685,22 @@ app.post('/api/form-reprice', async (req, res) => {
         const dia    = pick(diaArr,    idx, existingPropNum(item, 'Diamond'));
         const making = pick(makingArr, idx, existingPropNum(item, 'Making'));
         const disc   = pick(discArr,   idx, existingPropNum(item, 'Discount Applied'));
-        const gross  = gold + dia + making;
-        const final  = gross - disc;
-        const taxable= final / 1.03;
-        const gst    = taxable * 0.03;
+        // Entered values are ex-GST component amounts.
+        // Taxable = sum of components minus discount; GST added on top.
+        const grossComponents = gold + dia + making;    // pre-discount, ex-GST
+        const taxable         = grossComponents - disc; // taxable value after discount, ex-GST
+        const gst             = taxable * 0.03;
+        const grossValue      = taxable + gst;          // what customer pays (Gross Value)
 
         const preserved = (item.properties || []).filter(p => !OVERWRITE_PROPS.has(p.name));
         const newProps  = [
-          { name: 'Gold',             value: `Rs${gold.toFixed(2)}`    },
-          { name: 'Diamond',          value: `Rs${dia.toFixed(2)}`     },
-          { name: 'Making',           value: `Rs${making.toFixed(2)}`  },
-          { name: 'Gross Value',      value: `Rs${gross.toFixed(2)}`   },
-          { name: 'Discount Applied', value: `Rs${disc.toFixed(2)}`    },
-          { name: 'Taxable Value',    value: `Rs${taxable.toFixed(2)}` },
-          { name: 'GST',              value: `Rs${gst.toFixed(2)}`     },
+          { name: 'Gold',             value: `Rs${gold.toFixed(2)}`          },
+          { name: 'Diamond',          value: `Rs${dia.toFixed(2)}`           },
+          { name: 'Making',           value: `Rs${making.toFixed(2)}`        },
+          { name: 'Gross Value',      value: `Rs${grossValue.toFixed(2)}`    },
+          { name: 'Discount Applied', value: `Rs${disc.toFixed(2)}`          },
+          { name: 'Taxable Value',    value: `Rs${taxable.toFixed(2)}`       },
+          { name: 'GST',              value: `Rs${gst.toFixed(2)}`           },
           ...preserved,
         ];
         if (netWt  !== null) newProps.push({ name: '_net_wt',       value: netWt.toFixed(3)  });
@@ -1718,12 +1720,17 @@ app.post('/api/form-reprice', async (req, res) => {
         try { jd = JSON.parse(existingJd?.value || '{}'); } catch (_) {}
         newProps.push({ name: '_jewel_data', value: JSON.stringify({ ...jd, repriced: true }) });
 
-        const updatedItem = { id: item.id, variant_id: item.variant_id || undefined, quantity: qty, price: (final / qty).toFixed(2), properties: newProps };
+        const updatedItem = { id: item.id, variant_id: item.variant_id || undefined, quantity: qty, price: (grossValue / qty).toFixed(2), properties: newProps };
         if (!item.variant_id) updatedItem.title = item.title;
         return updatedItem;
       });
 
       const rate18ktResponse = rate18kt ? parseFloat(rate18kt.toFixed(2)) : undefined;
+
+      console.log(`[form-reprice] manual draft=${draftOrderId} productItems=${productItems.length} overrideCount=${overrideCount}`);
+      updatedLineItems.forEach((li, i) => {
+        console.log(`[form-reprice] item[${i}] id=${li.id} price=${li.price} props=${li.properties.filter(p => !p.name.startsWith('_')).map(p => `${p.name}=${p.value}`).join(' ')}`);
+      });
 
       await writeJewelMfs(draftOrderId, headers, {
         jewelcode_net_weight:      String(netWeights     || '').trim(),
@@ -1732,11 +1739,15 @@ app.post('/api/form-reprice', async (req, res) => {
         jewelcode_gemstone_weight: String(gemstoneWeights|| '').trim(),
       });
 
-      await axios.put(
+      const putResp = await axios.put(
         `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}.json`,
         { draft_order: { line_items: updatedLineItems, applied_discount: null } },
         { headers, timeout: 15000 }
       );
+      const respItems = putResp.data?.draft_order?.line_items || [];
+      respItems.forEach((li, i) => {
+        console.log(`[form-reprice] shopify confirmed item[${i}] id=${li.id} price=${li.price} subtotal=${li.pre_tax_price}`);
+      });
       return res.json({ success: true, draftOrderId, mode: 'manual', updatedCount: overrideCount, ...(rate18ktResponse ? { rate18kt: rate18ktResponse } : {}) });
 
     } else if (mode === 'weights') {
