@@ -1632,9 +1632,15 @@ app.post('/api/form-reprice', async (req, res) => {
     if (mode === 'manual') {
       // Every invoice field as comma-separated input, positionally applied per product line item.
       // Blank entry in a CSV position → fall back to the item's existing property value.
-      const inputGoldRate = parseFloat(req.body.goldRate) || 0;
-      const inputGoldKt   = parseFloat(req.body.goldKarat) || 0;
-      const lockedAt      = new Date().toISOString();
+      const inputGoldRate  = parseFloat(req.body.goldRate) || 0;
+      const inputGoldKt    = parseFloat(req.body.goldKarat) || 0;
+      const invoiceDateRaw = String(req.body.invoiceDate || '').trim();
+      const lockedAt = (() => {
+        if (!invoiceDateRaw) return new Date().toISOString();
+        const parts = invoiceDateRaw.split(/[-\/]/);
+        const parsed = parts.length === 3 ? new Date(`${parts[2]}-${parts[1]}-${parts[0]}T12:00:00.000Z`) : null;
+        return parsed && !isNaN(parsed.getTime()) ? parsed.toISOString() : new Date().toISOString();
+      })();
 
       const goldArr   = parseCsv(req.body.gold);
       const diaArr    = parseCsv(req.body.diamond);
@@ -1751,9 +1757,8 @@ app.post('/api/form-reprice', async (req, res) => {
         });
 
       // Merge invoice_date override into existing note_attributes (order-level, read by invoice template)
-      const invoiceDate = String(req.body.invoiceDate || '').trim();
       const mergedNoteAttrs = (draft.note_attributes || []).filter(a => a.name !== 'invoice_date');
-      if (invoiceDate) mergedNoteAttrs.push({ name: 'invoice_date', value: invoiceDate });
+      if (invoiceDateRaw) mergedNoteAttrs.push({ name: 'invoice_date', value: invoiceDateRaw });
 
       console.log(`[form-reprice] sending ${lineItemsToSet.length} items:`, JSON.stringify(lineItemsToSet.map(li => ({ v: li.variant_id || li.title, price: li.price }))));
       const gqlNodes = await gqlSetDraftLineItems(draftOrderId, lineItemsToSet, token, { clearDiscount: true, noteAttributes: mergedNoteAttrs });
@@ -1769,7 +1774,13 @@ app.post('/api/form-reprice', async (req, res) => {
       // so handleRecalculatePriceTag picks up the new rate from _gold_rate props.
       const inputGoldRate = parseFloat(req.body.goldRate) || 0;
       const inputGoldKt   = parseFloat(req.body.goldKarat) || 0;
-      const lockedAt      = new Date().toISOString();
+      const lockedAt = (() => {
+        const raw = String(req.body.invoiceDate || '').trim();
+        if (!raw) return new Date().toISOString();
+        const parts = raw.split(/[-\/]/);
+        const parsed = parts.length === 3 ? new Date(`${parts[2]}-${parts[1]}-${parts[0]}T12:00:00.000Z`) : null;
+        return parsed && !isNaN(parsed.getTime()) ? parsed.toISOString() : new Date().toISOString();
+      })();
       if (inputGoldRate > 0 && inputGoldKt > 0) {
         const ratePatched = (draft.line_items || []).map(item => {
           const ikt         = itemKarat(item) || inputGoldKt;

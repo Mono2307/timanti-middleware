@@ -158,16 +158,9 @@
         </div>
       </div>
       <div class="invoice-detail-row">
-        <div class="invoice-detail-cell" style="font-size: 6px; word-break: break-all;">
-          <strong>Item ID</strong>
-          {% for line_item in order.line_items %}{{ line_item.variant.sku }}{% unless forloop.last %}<br>{% endunless %}{% endfor %}
-        </div>
-        <div class="invoice-detail-cell" style="font-size: 6px; word-break: break-all;">
+        <div class="invoice-detail-cell" style="grid-column: 1 / -1; font-size: 6px; word-break: break-all;">
           <strong>SKU Code</strong>
           {% for line_item in order.line_items %}{{ line_item.sku }}{% unless forloop.last %}<br>{% endunless %}{% endfor %}
-        </div>
-        <div class="invoice-detail-cell">
-          <strong>Reverse Charge</strong>No
         </div>
       </div>
     </div>

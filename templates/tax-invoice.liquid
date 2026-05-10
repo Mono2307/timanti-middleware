@@ -165,14 +165,8 @@
       </div>
 
       <div class="invoice-detail-row">
-        <div class="invoice-detail-cell">
-          <strong>Reverse Charge</strong>No
-        </div>
-        <div class="invoice-detail-cell">
-          <strong>Item SKU</strong>{% if order.line_items.first.sku %}{{ order.line_items.first.sku }}{% endif %}
-        </div>
-        <div class="invoice-detail-cell">
-          <strong>Jewellery Code</strong>{% if jc_meta.jewelcode %}{{ jc_meta.jewelcode }}{% else %}–{% endif %}
+        <div class="invoice-detail-cell" style="grid-column: 1 / -1; word-break: break-all;">
+          <strong>SKU Code</strong>{% for line_item in order.line_items %}{{ line_item.sku }}{% unless forloop.last %}<br>{% endunless %}{% endfor %}
         </div>
       </div>
     </div>
@@ -425,16 +419,12 @@
         {% if t contains "paid:rs"        and paid_amount    == "" %}{% assign paid_amount    = t | remove: "paid:rs"        %}{% endif %}
         {% if t contains "pending:rs"     and pending_amount == "" %}{% assign pending_amount = t | remove: "pending:rs"     %}{% endif %}
       {% endfor %}
-      <tr class="totals-row">
-        <td colspan="12" class="text-right" style="font-style:italic; color:#555; border-top: 1px solid #ccc;">Payment Mode</td>
-        <td style="border-top: 1px solid #ccc;"></td>
-      </tr>
       {% if is_partial and paid_amount != "" %}
         <tr class="totals-row">
-          <td colspan="12" class="text-right">
+          <td colspan="12" class="text-right" style="border-top: 1px solid #ccc;">
             Amount Received – Advance{% if pm_advance != "" %}&nbsp; <em style="color:#555;">({{ pm_advance }})</em>{% endif %}
           </td>
-          <td class="text-right">₹{{ paid_amount }}</td>
+          <td class="text-right" style="border-top: 1px solid #ccc;">₹{{ paid_amount }}</td>
         </tr>
         <tr class="totals-row">
           <td colspan="12" class="text-right"><strong>Balance Due</strong></td>
