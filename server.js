@@ -1729,46 +1729,40 @@ app.post('/api/form-reprice', async (req, res) => {
         jewelcode_gemstone_weight: String(gemstoneWeights|| '').trim(),
       });
 
-      // Step 1: Push new properties. Shopify recreates variant items at catalog price (new IDs returned).
-      const step1Items = (draft.line_items || []).map(item => {
-        const t = targets.get(item.id);
-        const props = t ? t.newProps : (item.properties || []);
-        const qty   = t ? t.qty      : item.quantity;
-        if (item.variant_id) return { variant_id: item.variant_id, quantity: qty, properties: props };
-        return { title: item.title, price: t ? t.pricePerUnit : item.price, quantity: qty, properties: props };
-      });
+      // GraphQL update: sets properties (customAttributes) + price (originalUnitPrice) in one shot.
+      // REST PUT always resets variant line item price to catalog on recreation; GraphQL's
+      // originalUnitPrice is an explicit override that Shopify honours regardless of catalog price.
+      const gqlLineItems = (draft.line_items || [])
+        .filter(item => !((item.title || '').toLowerCase().includes('discount') && parseFloat(item.price) < 0))
+        .map(item => {
+          const t     = targets.get(item.id);
+          const qty   = t ? t.qty          : item.quantity;
+          const price = t ? t.pricePerUnit : item.price;
+          const attrs = (t ? t.newProps : (item.properties || [])).map(p => ({ key: p.name, value: p.value }));
+          if (item.variant_id) {
+            return { variantId: `gid://shopify/ProductVariant/${item.variant_id}`, quantity: qty, originalUnitPrice: String(price), customAttributes: attrs };
+          }
+          return { title: item.title, quantity: qty, originalUnitPrice: String(price), taxable: item.taxable ?? true, requiresShipping: item.requires_shipping ?? false, customAttributes: attrs };
+        });
 
-      const step1Resp = await axios.put(
-        `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}.json`,
-        { draft_order: { line_items: step1Items } },
+      console.log(`[form-reprice] GraphQL sending ${gqlLineItems.length} items:`, JSON.stringify(gqlLineItems.map(li => ({ v: li.variantId || li.title, price: li.originalUnitPrice }))));
+
+      const gqlMutation = `mutation draftOrderUpdate($id: ID!, $input: DraftOrderInput!) { draftOrderUpdate(id: $id, input: $input) { draftOrder { lineItems(first: 20) { nodes { id originalUnitPrice { amount } } } } userErrors { field message } } }`;
+      const gqlResp = await axios.post(
+        `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/graphql.json`,
+        { query: gqlMutation, variables: { id: `gid://shopify/DraftOrder/${draftOrderId}`, input: { lineItems: gqlLineItems, appliedDiscount: null } } },
         { headers, timeout: 15000 }
       );
-      const freshItems = step1Resp.data.draft_order.line_items || [];
-      console.log(`[form-reprice] step1 status=${step1Resp.status} items=${freshItems.map(li => `${li.id}@${li.price}`).join(' ')}`);
 
-      // Step 2: Override prices with new IDs. Properties are UNCHANGED (same as step1 response)
-      // so Shopify will not recreate the items and will accept our custom price.
-      const originalItems = draft.line_items || [];
-      const step2Items = freshItems.map((li, i) => {
-        const originalItem = originalItems[i];
-        const t = originalItem ? targets.get(originalItem.id) : null;
-        const result = { id: li.id, quantity: li.quantity, price: t ? t.pricePerUnit : li.price, properties: li.properties || [] };
-        if (li.variant_id) result.variant_id = li.variant_id;
-        else if (li.title) result.title = li.title;
-        return result;
-      });
-
-      console.log(`[form-reprice] step2 sending:`, JSON.stringify(step2Items.map(li => ({ id: li.id, price: li.price }))));
-      const putResp = await axios.put(
-        `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}.json`,
-        { draft_order: { line_items: step2Items, applied_discount: null } },
-        { headers, timeout: 15000 }
-      );
-      console.log(`[form-reprice] step2 status=${putResp.status}`);
-      const respItems = putResp.data?.draft_order?.line_items || [];
-      respItems.forEach((li, i) => {
-        console.log(`[form-reprice] shopify final item[${i}] id=${li.id} price=${li.price}`);
-      });
+      const gqlData = gqlResp.data;
+      const userErrors = gqlData?.data?.draftOrderUpdate?.userErrors || [];
+      if (gqlData?.errors?.length || userErrors.length) {
+        const errMsg = JSON.stringify(gqlData.errors || userErrors);
+        console.log(`[form-reprice] GraphQL errors:`, errMsg);
+        return res.status(500).json({ success: false, error: `GraphQL error: ${errMsg}` });
+      }
+      const gqlNodes = gqlData?.data?.draftOrderUpdate?.draftOrder?.lineItems?.nodes || [];
+      gqlNodes.forEach((li, i) => console.log(`[form-reprice] GraphQL item[${i}] id=${li.id} price=${li.originalUnitPrice?.amount}`));
       return res.json({ success: true, draftOrderId, mode: 'manual', updatedCount: overrideCount, ...(rate18ktResponse ? { rate18kt: rate18ktResponse } : {}) });
 
     } else if (mode === 'weights') {
