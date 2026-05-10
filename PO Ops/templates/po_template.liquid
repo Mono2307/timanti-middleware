@@ -1,10 +1,11 @@
 {% assign po_type = order.metafields.custom.po_type | default: "replenishment" %}
   {% assign po_priority = "standard" %}
   {% assign original_order_ref = order.metafields.custom.source_order_name | default: "" %}
-  {% assign po_comments = "" %}
-  {% for na in order.note_attributes %}
-    {% if na.name == "po_comments" %}{% assign po_comments = na.value %}{% endif %}
-  {% endfor %}
+  {% if po_type == "mto" %}
+    {% assign po_comments = order.metafields.custom.mto_comments | default: "" %}
+  {% else %}
+    {% assign po_comments = order.metafields.custom.replenishment_comments | default: "" %}
+  {% endif %}
   <style>
     @page { size: A4; margin: 0.8cm; }
     * { margin: 0; padding: 0; box-sizing: border-box; }

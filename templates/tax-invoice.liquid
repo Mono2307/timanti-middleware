@@ -380,18 +380,17 @@
       {% assign og_value  = order.metafields.custom.old_gold_value  | plus: 0 %}
       {% assign og_weight = order.metafields.custom.old_gold_weight | plus: 0 %}
       {% assign og_karat  = order.metafields.custom.old_gold_karat  | default: "" %}
+      {% for attr in order.note_attributes %}
+        {% if attr.name == "old_gold_value"  and og_value  == 0 %}{% assign og_value  = attr.value | plus: 0 %}{% endif %}
+        {% if attr.name == "old_gold_weight" and og_weight == 0 %}{% assign og_weight = attr.value | plus: 0 %}{% endif %}
+        {% if attr.name == "old_gold_karat"  and og_karat  == "" %}{% assign og_karat  = attr.value %}{% endif %}
+      {% endfor %}
       {% assign final_payable = taxable_base %}
       {% if og_value > 0 %}
         {% assign og_value_paise = og_value | times: 100 | round %}
         <tr class="totals-row">
-          <td colspan="12" class="text-right" style="font-style:italic; color:#555; border-top: 1px solid #ccc;">Consideration against Gold</td>
-          <td style="border-top: 1px solid #ccc;"></td>
-        </tr>
-        <tr class="totals-row">
-          <td colspan="12" class="text-right">
-            Gold Received ({{ og_weight }}g{% if og_karat != "" %} {{ og_karat }}kt{% endif %})
-          </td>
-          <td class="text-right">− ₹{{ og_value_paise | money_without_currency | remove: ',' }}</td>
+          <td colspan="12" class="text-right" style="border-top: 1px solid #ccc;">Consideration against Gold received ({{ og_weight }}g{% if og_karat != "" %}, {{ og_karat }}kt{% endif %})</td>
+          <td class="text-right" style="border-top: 1px solid #ccc;">− ₹{{ og_value_paise | money_without_currency | remove: ',' }}</td>
         </tr>
         {% assign final_payable = taxable_base | minus: og_value_paise %}
         <tr class="total-row">
@@ -417,6 +416,7 @@
       {% if order.metafields.custom.amount_pending %}{% assign pending_amount = order.metafields.custom.amount_pending | round %}{% endif %}
       {% if order.metafields.custom.payment_mode_final   %}{% assign pm_final   = order.metafields.custom.payment_mode_final   %}{% endif %}
       {% if order.metafields.custom.payment_mode_advance %}{% assign pm_advance = order.metafields.custom.payment_mode_advance %}{% endif %}
+      {% if pm_final != "" %}{% assign is_fully_paid = true %}{% assign is_partial = false %}{% endif %}
       {% comment %}Fallback: tags written by middleware payment flows{% endcomment %}
       {% for tag in order.tags %}
         {% assign t = tag | strip | downcase %}
@@ -440,7 +440,7 @@
           <td colspan="12" class="text-right"><strong>Balance Due</strong></td>
           <td class="text-right"><strong>₹{{ pending_amount }}</strong></td>
         </tr>
-      {% elsif is_fully_paid and paid_amount != "" %}
+      {% elsif is_fully_paid %}
         {% assign pm_display = "" %}
         {% if pm_advance != "" and pm_final != "" and pm_final != pm_advance %}
           {% assign pm_display = pm_advance | append: " / " | append: pm_final %}
@@ -453,7 +453,7 @@
           <td colspan="12" class="text-right">
             Amount Received{% if pm_display != "" %}&nbsp; <em style="color:#555;">({{ pm_display }})</em>{% endif %}
           </td>
-          <td class="text-right">₹{{ paid_amount }}</td>
+          <td class="text-right">{% if paid_amount != "" %}₹{{ paid_amount }}{% else %}₹{{ final_payable | money_without_currency | remove: ',' }}{% endif %}</td>
         </tr>
         <tr class="totals-row">
           <td colspan="12" class="text-right"><strong>Balance Due</strong></td>

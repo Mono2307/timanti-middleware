@@ -1553,22 +1553,35 @@ app.post('/api/set-line-prices', async (req, res) => {
 // Unified form-driven reprice endpoint — called by the Google Form Apps Script.
 // All value fields are comma-separated strings positionally mapped to product line items.
 //
-// mode="manual": Gold+Diamond+Making drive price. All invoice fields settable.
+// mode="manual": Gold+Diamond+Making+Discount drive price. Gold can be auto-computed from goldRate×netWt.
 //   gold, diamond, making, discount, netWeights, grossWeights, diamondCarats, diamondPcs, gemstoneWeights
+//   goldRate (Rs/g for goldKarat), goldKarat (number e.g. 22)
 //   Price = (Gold+Diamond+Making−Discount)/qty. GST auto-computed.
+//   _gold_rate stored as rate for each item's own karat, locked to submission timestamp.
 //
 // mode="weights": gold-rate-driven reprice; price computed automatically from gold rate × net wt.
 //   netWeights, grossWeights, diamondCarats, diamondPcs, gemstoneWeights, force
+//   goldRate + goldKarat — if provided, _gold_rate is updated on line items BEFORE the reprice runs.
 app.post('/api/form-reprice', async (req, res) => {
   const { draftOrderId, mode, netWeights, grossWeights, diamondCarats, diamondPcs, gemstoneWeights, force = false } = req.body;
   if (!draftOrderId || !mode) {
     return res.status(400).json({ success: false, error: 'draftOrderId and mode required' });
   }
 
-  const FINANCIAL_PROPS = new Set(['Gross Value', 'Discount Applied', 'Taxable Value', 'GST']);
-  const WEIGHT_PROPS    = new Set(['_net_wt', '_gross_wt', '_diamond_cts', '_gemstone_cts']);
   const parseCsv = (val) => String(val || '').split(',').map(s => s.trim()).map(parseFloat);
-  const csvAt    = (arr, i) => (isNaN(arr[i]) ? 0 : arr[i]);
+
+  // Extract karat number from variant_title / title (e.g. "18Kt Yellow Gold" → 18)
+  const itemKarat = (item) => {
+    const text = [item.variant_title, item.title].filter(Boolean).join(' ');
+    const m = text.match(/(\d+)\s*[Kk][Tt]?/);
+    return m ? parseInt(m[1]) : null;
+  };
+
+  // Convert an input rate from inputKarat to targetKarat using simple proportional purity
+  const convertRate = (rate, fromKt, toKt) => {
+    if (!rate || !fromKt || !toKt || fromKt === toKt) return rate;
+    return rate * (toKt / fromKt);
+  };
 
   const writeJewelMfs = async (id, hdrs, mfMap) => {
     const { data: mfData } = await axios.get(
@@ -1604,19 +1617,25 @@ app.post('/api/form-reprice', async (req, res) => {
     if (mode === 'manual') {
       // Every invoice field as comma-separated input, positionally applied per product line item.
       // Blank entry in a CSV position → fall back to the item's existing property value.
+      const inputGoldRate = parseFloat(req.body.goldRate) || 0;
+      const inputGoldKt   = parseFloat(req.body.goldKarat) || 0;
+      const lockedAt      = new Date().toISOString();
+
       const goldArr   = parseCsv(req.body.gold);
       const diaArr    = parseCsv(req.body.diamond);
       const makingArr = parseCsv(req.body.making);
-      const discArr   = parseCsv(req.body.discount);   // Discount Applied per item
+      const discArr   = parseCsv(req.body.discount);
       const netArr    = parseCsv(netWeights);
       const grossArr  = parseCsv(grossWeights);
       const diaCtsArr = parseCsv(diamondCarats);
-      const diaPcsArr = parseCsv(req.body.diamondPcs);
+      const diaPcsArr = parseCsv(req.body.diamondPcs || diamondPcs);
       const gemArr    = parseCsv(gemstoneWeights);
 
-      // How many product items are being touched — driven by whichever array has the most valid entries
       const allArrays     = [goldArr, diaArr, makingArr, discArr, netArr, grossArr, diaCtsArr, diaPcsArr, gemArr];
-      const overrideCount = Math.max(...allArrays.map(arr => arr.filter(v => !isNaN(v) && v !== null).length));
+      const overrideCount = Math.max(
+        ...(inputGoldRate > 0 ? [1] : []),
+        ...allArrays.map(arr => arr.filter(v => !isNaN(v)).length)
+      );
       if (overrideCount === 0) {
         return res.status(400).json({ success: false, error: 'At least one field required for manual mode' });
       }
@@ -1626,26 +1645,24 @@ app.post('/api/form-reprice', async (req, res) => {
         return p ? parseFloat((p.value || '0').replace('Rs', '').trim()) || 0 : 0;
       };
 
-      const pick = (arr, idx, fallback) => (arr[idx] !== undefined && !isNaN(arr[idx])) ? arr[idx] : fallback;
+      const pick = (arr, idx, fallback) => (!isNaN(arr[idx]) ? arr[idx] : fallback);
 
-      const OVERWRITE_PROPS = new Set(['Gold', 'Diamond', 'Making', 'Gross Value', 'Discount Applied', 'Taxable Value', 'GST', '_net_wt', '_gross_wt', '_diamond_cts', '_diamond_pcs', '_gemstone_cts', '_jewel_data']);
+      const OVERWRITE_PROPS = new Set(['Gold', 'Diamond', 'Making', 'Gross Value', 'Discount Applied',
+        'Taxable Value', 'GST', '_net_wt', '_gross_wt', '_diamond_cts', '_diamond_pcs',
+        '_gemstone_cts', '_jewel_data', '_gold_rate', '_gold_updated_at']);
+
+      const rate18kt = inputGoldRate && inputGoldKt ? convertRate(inputGoldRate, inputGoldKt, 18) : 0;
 
       const updatedLineItems = (draft.line_items || []).map(item => {
         const idx = productItems.findIndex(pi => pi.id === item.id);
         if (idx === -1 || idx >= overrideCount) {
           return { id: item.id, variant_id: item.variant_id || undefined, quantity: item.quantity, price: item.price, properties: item.properties || [] };
         }
-        const qty    = item.quantity || 1;
+        const qty = item.quantity || 1;
 
-        // Price breakdown — blank field falls back to current prop value
-        const gold   = pick(goldArr,   idx, existingPropNum(item, 'Gold'));
-        const dia    = pick(diaArr,    idx, existingPropNum(item, 'Diamond'));
-        const making = pick(makingArr, idx, existingPropNum(item, 'Making'));
-        const disc   = pick(discArr,   idx, existingPropNum(item, 'Discount Applied'));
-        const gross  = gold + dia + making;
-        const final  = gross - disc;           // tax-inclusive final per line
-        const taxable= final / 1.03;
-        const gst    = taxable * 0.03;
+        // Gold rate for this item's karat — convert from input karat if needed
+        const ikt         = itemKarat(item) || inputGoldKt || 18;
+        const rateForItem = inputGoldRate && inputGoldKt ? convertRate(inputGoldRate, inputGoldKt, ikt) : 0;
 
         // Physical measurements — blank = omit (don't overwrite existing)
         const netWt  = pick(netArr,    idx, null);
@@ -1653,6 +1670,24 @@ app.post('/api/form-reprice', async (req, res) => {
         const diaCts = pick(diaCtsArr, idx, null);
         const diaPcs = pick(diaPcsArr, idx, null);
         const gemWt  = pick(gemArr,    idx, null);
+
+        // Gold: explicit value > rate×netWt auto-compute > existing prop
+        let gold;
+        if (!isNaN(goldArr[idx])) {
+          gold = goldArr[idx];
+        } else if (rateForItem > 0 && netWt !== null && netWt > 0) {
+          gold = rateForItem * netWt;
+        } else {
+          gold = existingPropNum(item, 'Gold');
+        }
+
+        const dia    = pick(diaArr,    idx, existingPropNum(item, 'Diamond'));
+        const making = pick(makingArr, idx, existingPropNum(item, 'Making'));
+        const disc   = pick(discArr,   idx, existingPropNum(item, 'Discount Applied'));
+        const gross  = gold + dia + making;
+        const final  = gross - disc;
+        const taxable= final / 1.03;
+        const gst    = taxable * 0.03;
 
         const preserved = (item.properties || []).filter(p => !OVERWRITE_PROPS.has(p.name));
         const newProps  = [
@@ -1665,13 +1700,18 @@ app.post('/api/form-reprice', async (req, res) => {
           { name: 'GST',              value: `Rs${gst.toFixed(2)}`     },
           ...preserved,
         ];
-        if (netWt  !== null) newProps.push({ name: '_net_wt',       value: netWt.toFixed(3)   });
-        if (grossWt!== null) newProps.push({ name: '_gross_wt',     value: grossWt.toFixed(3)  });
-        if (diaCts !== null) newProps.push({ name: '_diamond_cts',  value: diaCts.toFixed(2)   });
+        if (netWt  !== null) newProps.push({ name: '_net_wt',       value: netWt.toFixed(3)  });
+        if (grossWt!== null) newProps.push({ name: '_gross_wt',     value: grossWt.toFixed(3) });
+        if (diaCts !== null) newProps.push({ name: '_diamond_cts',  value: diaCts.toFixed(2)  });
         if (diaPcs !== null) newProps.push({ name: '_diamond_pcs',  value: String(Math.round(diaPcs)) });
-        if (gemWt  !== null) newProps.push({ name: '_gemstone_cts', value: gemWt.toFixed(2)    });
+        if (gemWt  !== null) newProps.push({ name: '_gemstone_cts', value: gemWt.toFixed(2)   });
 
-        // Preserve _jewel_data metadata but mark repriced so pricing-engine uses Gross Value
+        // Lock gold rate at submission time
+        if (rateForItem > 0) {
+          newProps.push({ name: '_gold_rate',       value: rateForItem.toFixed(2) });
+          newProps.push({ name: '_gold_updated_at', value: lockedAt               });
+        }
+
         const existingJd = (item.properties || []).find(p => p.name === '_jewel_data');
         let jd = {};
         try { jd = JSON.parse(existingJd?.value || '{}'); } catch (_) {}
@@ -1681,6 +1721,8 @@ app.post('/api/form-reprice', async (req, res) => {
         if (!item.variant_id) updatedItem.title = item.title;
         return updatedItem;
       });
+
+      const rate18ktResponse = rate18kt ? parseFloat(rate18kt.toFixed(2)) : undefined;
 
       await writeJewelMfs(draftOrderId, headers, {
         jewelcode_net_weight:      String(netWeights     || '').trim(),
@@ -1694,12 +1736,35 @@ app.post('/api/form-reprice', async (req, res) => {
         { draft_order: { line_items: updatedLineItems, applied_discount: null } },
         { headers, timeout: 15000 }
       );
-      return res.json({ success: true, draftOrderId, mode: 'manual', updatedCount: overrideCount });
+      return res.json({ success: true, draftOrderId, mode: 'manual', updatedCount: overrideCount, ...(rate18ktResponse ? { rate18kt: rate18ktResponse } : {}) });
 
     } else if (mode === 'weights') {
       if (!String(netWeights || '').trim()) {
         return res.status(400).json({ success: false, error: 'netWeights required for weights mode' });
       }
+
+      // If a gold rate is provided, lock it onto each line item BEFORE the reprice runs
+      // so handleRecalculatePriceTag picks up the new rate from _gold_rate props.
+      const inputGoldRate = parseFloat(req.body.goldRate) || 0;
+      const inputGoldKt   = parseFloat(req.body.goldKarat) || 0;
+      const lockedAt      = new Date().toISOString();
+      if (inputGoldRate > 0 && inputGoldKt > 0) {
+        const ratePatched = (draft.line_items || []).map(item => {
+          const ikt         = itemKarat(item) || inputGoldKt;
+          const rateForItem = convertRate(inputGoldRate, inputGoldKt, ikt);
+          const props = (item.properties || [])
+            .filter(p => p.name !== '_gold_rate' && p.name !== '_gold_updated_at');
+          props.push({ name: '_gold_rate',       value: rateForItem.toFixed(2) });
+          props.push({ name: '_gold_updated_at', value: lockedAt               });
+          return { id: item.id, variant_id: item.variant_id || undefined, quantity: item.quantity, price: item.price, properties: props };
+        });
+        await axios.put(
+          `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}.json`,
+          { draft_order: { line_items: ratePatched } },
+          { headers, timeout: 15000 }
+        );
+      }
+
       await writeJewelMfs(draftOrderId, headers, {
         jewelcode_net_weight:      String(netWeights     || '').trim(),
         jewelcode_gross_weight:    String(grossWeights   || '').trim(),

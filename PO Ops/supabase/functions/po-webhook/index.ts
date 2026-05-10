@@ -136,6 +136,7 @@ async function createPoDraftOrder(
         ].filter(p => p.value)
       })),
       note: `Auto-generated ${poType} PO for ${sourceOrderName}`,
+      tags: `internal-po, po-${poType}`,
       note_attributes: [
         { name: "action_acknowledge", value: buildActionLink(token, "acknowledge") },
         { name: "action_ordered",     value: buildActionLink(token, "ordered") },
