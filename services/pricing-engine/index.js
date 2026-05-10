@@ -152,28 +152,37 @@ async function recalculate({ draftOrderId, shopifyToken, shopifyStoreUrl }) {
     if (lockedUpdatedAt) properties.push({ name: '_gold_updated_at', value: lockedUpdatedAt });
 
     const updatedItem = {
-      id:         item.id,
-      variant_id: item.variant_id,
+      variant_id: item.variant_id || undefined,
       quantity:   qty,
       price:      grossValue.toFixed(2),
       properties,
+      title:      item.title,
     };
-
-    // Custom line items (no variant_id) need title preserved
-    if (!item.variant_id) {
-      updatedItem.title      = item.title;
-      updatedItem.variant_id = undefined;
-    }
 
     return updatedItem;
   });
 
-  // 5. Update draft order — only write properties, leave price and applied_discount intact
-  await axios.put(
-    `${shopifyStoreUrl}/admin/api/2024-01/draft_orders/${draftOrderId}.json`,
-    { draft_order: { line_items: updatedLineItems } },
+  // 5. Update draft order via GraphQL (REST resets variant prices to catalog on any PUT)
+  const gqlLineItems = updatedLineItems.map(item => {
+    const attrs = (item.properties || []).map(p => ({ key: p.name, value: p.value }));
+    const priceStr = parseFloat(item.price).toFixed(2);
+    if (item.variant_id) {
+      return { variantId: `gid://shopify/ProductVariant/${item.variant_id}`, quantity: item.quantity, priceOverride: { amount: priceStr, currencyCode: 'INR' }, customAttributes: attrs };
+    }
+    return { title: item.title, quantity: item.quantity, originalUnitPriceWithCurrency: { amount: priceStr, currencyCode: 'INR' }, taxable: true, requiresShipping: false, customAttributes: attrs };
+  });
+  const gqlResp = await axios.post(
+    `${shopifyStoreUrl}/admin/api/2025-01/graphql.json`,
+    {
+      query: `mutation draftOrderUpdate($id: ID!, $input: DraftOrderInput!) { draftOrderUpdate(id: $id, input: $input) { draftOrder { id } userErrors { field message } } }`,
+      variables: { id: `gid://shopify/DraftOrder/${draftOrderId}`, input: { lineItems: gqlLineItems } },
+    },
     { headers: shopifyHeaders(shopifyToken), timeout: 15000 }
   );
+  const gqlErrors = gqlResp.data?.data?.draftOrderUpdate?.userErrors || [];
+  if (gqlResp.data?.errors?.length || gqlErrors.length) {
+    throw new Error(`GraphQL draftOrderUpdate: ${JSON.stringify(gqlResp.data?.errors || gqlErrors)}`);
+  }
 
   return {
     draftOrderId:           draftOrder.id,

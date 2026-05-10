@@ -162,26 +162,35 @@ class RecalculationService {
       // _gold_updated_at is informational — always reflect the variant's latest timestamp
       if (goldUpdatedAt) properties.push({ name: '_gold_updated_at', value: goldUpdatedAt });
 
-      const updatedItem = {
-        id:         item.id,
-        variant_id: item.variant_id,
+      return {
+        variant_id: item.variant_id || undefined,
         quantity:   qty,
         price:      unitPrice.toFixed(2),
         properties,
+        title:      item.title,
       };
+    });
 
-      if (!item.variant_id) {
-        updatedItem.title      = item.title;
-        updatedItem.variant_id = undefined;
+    // 6. Update draft order via GraphQL (REST resets variant prices to catalog on any PUT)
+    const gqlLineItems = updatedLineItems.map(item => {
+      const attrs = (item.properties || []).map(p => ({ key: p.name, value: p.value }));
+      const priceStr = parseFloat(item.price).toFixed(2);
+      if (item.variant_id) {
+        return { variantId: `gid://shopify/ProductVariant/${item.variant_id}`, quantity: item.quantity, priceOverride: { amount: priceStr, currencyCode: 'INR' }, customAttributes: attrs };
       }
-
-      return updatedItem;
+      return { title: item.title, quantity: item.quantity, originalUnitPriceWithCurrency: { amount: priceStr, currencyCode: 'INR' }, taxable: true, requiresShipping: false, customAttributes: attrs };
     });
-
-    // 6. Update draft order — clear applied_discount (absorbed into overridden line item prices)
-    await shopifyClient.put(`/draft_orders/${draftOrderId}.json`, {
-      draft_order: { line_items: updatedLineItems, applied_discount: null },
-    });
+    const gqlResp = await shopifyClient.post(
+      `https://${process.env.SHOPIFY_SHOP_DOMAIN}/admin/api/2025-01/graphql.json`,
+      {
+        query: `mutation draftOrderUpdate($id: ID!, $input: DraftOrderInput!) { draftOrderUpdate(id: $id, input: $input) { draftOrder { id } userErrors { field message } } }`,
+        variables: { id: `gid://shopify/DraftOrder/${draftOrderId}`, input: { lineItems: gqlLineItems, appliedDiscount: null } },
+      }
+    );
+    const gqlErrors = gqlResp.data?.data?.draftOrderUpdate?.userErrors || [];
+    if (gqlResp.data?.errors?.length || gqlErrors.length) {
+      throw new Error(`GraphQL draftOrderUpdate: ${JSON.stringify(gqlResp.data?.errors || gqlErrors)}`);
+    }
 
     return {
       draftOrderId:           draftOrder.id,
