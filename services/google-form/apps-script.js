@@ -12,6 +12,7 @@
  *         ○ Weight-based Reprice    → go to Section 3
  *
  * ── Section 2: Manual Price Override ──  (all comma-separated, positional per item)
+ *   Separator: use "/" between items (e.g. "21,165/26,422"). Commas within a number are stripped.
  *   3.  Gold Rate (Rs/g)        Short answer   — e.g. "5500" (for the karat entered below)
  *   4.  Gold Karat              Short answer   — e.g. "22"  (leave blank if entering gold in Rs directly)
  *   5.  Gold (Rs)               Short answer   — overrides rate×wt if filled; blank = auto-compute from rate×netWt

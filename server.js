@@ -1568,7 +1568,8 @@ app.post('/api/form-reprice', async (req, res) => {
     return res.status(400).json({ success: false, error: 'draftOrderId and mode required' });
   }
 
-  const parseCsv = (val) => String(val || '').split(',').map(s => s.trim()).map(parseFloat);
+  // Items separated by "/" so users can type Indian-formatted numbers freely (e.g. "21,165/26,422")
+  const parseCsv = (val) => String(val || '').split('/').map(s => s.replace(/,/g, '').trim()).map(parseFloat);
 
   // Extract karat number from variant_title / title (e.g. "18Kt Yellow Gold" → 18)
   const itemKarat = (item) => {
