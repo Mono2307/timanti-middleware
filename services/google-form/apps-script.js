@@ -128,22 +128,45 @@ function onFormSubmit(e) {
 }
 
 /**
- * Test helper — runs onFormSubmit using the actual row 3 form response.
- * Row 1 = headers, Row 2 = 1st submission, Row 3 = 2nd submission.
- * Run this from the Apps Script editor instead of onFormSubmit directly.
+ * Test helper — directly POSTs the row 3 values to the server.
+ * Edit the payload below to match your actual inputs, then run this function.
+ * ── SEPARATOR GUIDE ──────────────────────────────────────────────────────
+ * Use "/" to separate values for multiple items.
+ * Commas inside a number are fine (Indian format):
+ *   "21,165/26,422"  →  item1=21165  item2=26422  ✓
+ *   "21165/26422"    →  same result  ✓
+ *   "21165,26422"    →  WRONG — reads as four numbers, not two  ✗
+ * ─────────────────────────────────────────────────────────────────────────
  */
 function testRow3() {
-  const ss   = SpreadsheetApp.getActiveSpreadsheet();
-  const form = FormApp.openByUrl(ss.getFormUrl());
-  const responses = form.getResponses();
-  // Row 3 corresponds to index 1 (0-based) — row 2 = index 0
-  const response = responses[1];
-  if (!response) {
-    Logger.log('No form response found at index 1 (row 3). Check that the form has at least 2 submissions.');
-    return;
-  }
-  Logger.log('Replaying row 3 response: ' + response.getId());
-  onFormSubmit({ response });
+  const payload = {
+    draftOrderId:    '1365166719233',
+    mode:            'manual',
+    gold:            '21165/26422',
+    diamond:         'FILL_ME/FILL_ME',  // ← replace with actual diamond values
+    making:          '20732/588',
+    discount:        '0/0',
+    netWeights:      '2.18/2.72',
+    grossWeights:    '2.54/3.0',
+    diamondCarats:   '1.79/1.38',
+    diamondPcs:      '38/1',
+    gemstoneWeights: '0/0',
+    goldRate:        '',
+    goldKarat:       '',
+  };
+
+  const resp = UrlFetchApp.fetch(SERVER_URL + '/api/form-reprice', {
+    method:             'post',
+    contentType:        'application/json',
+    payload:            JSON.stringify(payload),
+    muteHttpExceptions: true,
+  });
+
+  const result = JSON.parse(resp.getContentText());
+  Logger.log('Raw response: ' + resp.getContentText());
+  const detail = result.error
+    || ('updated=' + (result.updatedCount ?? '—') + ' rate18kt=' + (result.rate18kt ?? '—'));
+  logResult(result.success ? 'OK' : 'FAIL', payload.draftOrderId, payload.mode, detail);
 }
 
 function logResult(status, draftOrderId, mode, detail) {
