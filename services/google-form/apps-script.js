@@ -126,6 +126,25 @@ function onFormSubmit(e) {
   }
 }
 
+/**
+ * Test helper — runs onFormSubmit using the actual row 3 form response.
+ * Row 1 = headers, Row 2 = 1st submission, Row 3 = 2nd submission.
+ * Run this from the Apps Script editor instead of onFormSubmit directly.
+ */
+function testRow3() {
+  const ss   = SpreadsheetApp.getActiveSpreadsheet();
+  const form = FormApp.openByUrl(ss.getFormUrl());
+  const responses = form.getResponses();
+  // Row 3 corresponds to index 1 (0-based) — row 2 = index 0
+  const response = responses[1];
+  if (!response) {
+    Logger.log('No form response found at index 1 (row 3). Check that the form has at least 2 submissions.');
+    return;
+  }
+  Logger.log('Replaying row 3 response: ' + response.getId());
+  onFormSubmit({ response });
+}
+
 function logResult(status, draftOrderId, mode, detail) {
   Logger.log(`[${status}] draft=${draftOrderId} mode=${mode} — ${detail}`);
   try {
