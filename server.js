@@ -1739,14 +1739,19 @@ app.post('/api/form-reprice', async (req, res) => {
         jewelcode_gemstone_weight: String(gemstoneWeights|| '').trim(),
       });
 
+      const putBody = { draft_order: { line_items: updatedLineItems, applied_discount: null } };
+      console.log(`[form-reprice] PUT sending:`, JSON.stringify(putBody.draft_order.line_items.map(li => ({ id: li.id, price: li.price }))));
       const putResp = await axios.put(
         `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}.json`,
-        { draft_order: { line_items: updatedLineItems, applied_discount: null } },
+        putBody,
         { headers, timeout: 15000 }
       );
-      const respItems = putResp.data?.draft_order?.line_items || [];
+      console.log(`[form-reprice] PUT status=${putResp.status}`);
+      const respDO = putResp.data?.draft_order;
+      if (respDO?.errors) console.log(`[form-reprice] PUT errors:`, JSON.stringify(respDO.errors));
+      const respItems = respDO?.line_items || [];
       respItems.forEach((li, i) => {
-        console.log(`[form-reprice] shopify confirmed item[${i}] id=${li.id} price=${li.price} subtotal=${li.pre_tax_price}`);
+        console.log(`[form-reprice] shopify returned item[${i}] id=${li.id} price=${li.price} pre_tax=${li.pre_tax_price} total=${li.pre_tax_price}`);
       });
       return res.json({ success: true, draftOrderId, mode: 'manual', updatedCount: overrideCount, ...(rate18ktResponse ? { rate18kt: rate18ktResponse } : {}) });
 
