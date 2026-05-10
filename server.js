@@ -1740,16 +1740,16 @@ app.post('/api/form-reprice', async (req, res) => {
           const price = t ? t.pricePerUnit : item.price;
           const attrs = (t ? t.newProps : (item.properties || [])).map(p => ({ key: p.name, value: p.value }));
           if (item.variant_id) {
-            return { variantId: `gid://shopify/ProductVariant/${item.variant_id}`, quantity: qty, originalUnitPrice: String(price), customAttributes: attrs };
+            return { variantId: `gid://shopify/ProductVariant/${item.variant_id}`, quantity: qty, priceOverride: { amount: String(price), currencyCode: 'INR' }, customAttributes: attrs };
           }
-          return { title: item.title, quantity: qty, originalUnitPrice: String(price), taxable: item.taxable ?? true, requiresShipping: item.requires_shipping ?? false, customAttributes: attrs };
+          return { title: item.title, quantity: qty, originalUnitPriceWithCurrency: { amount: String(price), currencyCode: 'INR' }, taxable: item.taxable ?? true, requiresShipping: item.requires_shipping ?? false, customAttributes: attrs };
         });
 
-      console.log(`[form-reprice] GraphQL sending ${gqlLineItems.length} items:`, JSON.stringify(gqlLineItems.map(li => ({ v: li.variantId || li.title, price: li.originalUnitPrice }))));
+      console.log(`[form-reprice] GraphQL sending ${gqlLineItems.length} items:`, JSON.stringify(gqlLineItems.map(li => ({ v: li.variantId || li.title, price: li.priceOverride?.amount || li.originalUnitPriceWithCurrency?.amount }))));
 
-      const gqlMutation = `mutation draftOrderUpdate($id: ID!, $input: DraftOrderInput!) { draftOrderUpdate(id: $id, input: $input) { draftOrder { lineItems(first: 20) { nodes { id originalUnitPrice discountedUnitPrice appliedDiscount { value valueType } } } } userErrors { field message } } }`;
+      const gqlMutation = `mutation draftOrderUpdate($id: ID!, $input: DraftOrderInput!) { draftOrderUpdate(id: $id, input: $input) { draftOrder { lineItems(first: 20) { nodes { id originalUnitPrice discountedUnitPrice } } } userErrors { field message } } }`;
       const gqlResp = await axios.post(
-        `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/graphql.json`,
+        `${process.env.SHOPIFY_STORE_URL}/admin/api/2025-01/graphql.json`,
         { query: gqlMutation, variables: { id: `gid://shopify/DraftOrder/${draftOrderId}`, input: { lineItems: gqlLineItems, appliedDiscount: null } } },
         { headers, timeout: 15000 }
       );
@@ -1762,7 +1762,7 @@ app.post('/api/form-reprice', async (req, res) => {
         return res.status(500).json({ success: false, error: `GraphQL error: ${errMsg}` });
       }
       const gqlNodes = gqlData?.data?.draftOrderUpdate?.draftOrder?.lineItems?.nodes || [];
-      gqlNodes.forEach((li, i) => console.log(`[form-reprice] GraphQL item[${i}] originalUnitPrice=${li.originalUnitPrice} discountedUnitPrice=${li.discountedUnitPrice?.amount} appliedDiscount=${JSON.stringify(li.appliedDiscount)}`));
+      gqlNodes.forEach((li, i) => console.log(`[form-reprice] GraphQL item[${i}] originalUnitPrice=${li.originalUnitPrice} discountedUnitPrice=${li.discountedUnitPrice}`));
       return res.json({ success: true, draftOrderId, mode: 'manual', updatedCount: overrideCount, ...(rate18ktResponse ? { rate18kt: rate18ktResponse } : {}) });
 
     } else if (mode === 'weights') {
