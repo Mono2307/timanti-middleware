@@ -69,8 +69,6 @@
   {% if t == "deposit:fully-paid" and is_partial == false and is_fully_paid == false %}{% assign is_fully_paid = true %}{% endif %}
   {% if t contains "paid:rs"        and paid_amount    == "" %}{% assign paid_amount    = t | remove: "paid:rs"        | strip %}{% endif %}
   {% if t contains "pending:rs"     and pending_amount == "" %}{% assign pending_amount = t | remove: "pending:rs"     | strip %}{% endif %}
-  {% if t contains "pmode-advance:" and pm_advance     == "" %}{% assign pm_advance = tag | strip | remove: "pmode-advance:" %}{% endif %}
-  {% if t contains "pmode-final:"   and pm_final       == "" %}{% assign pm_final   = tag | strip | remove: "pmode-final:"   %}{% endif %}
 {% endfor %}
 
 {% comment %}── State code ──{% endcomment %}
@@ -250,15 +248,17 @@
           line item properties only when delta > 5%. Use those; fall back to variant metafields.
         {% endcomment %}
         {% assign has_repriced_props = false %}
-        {% assign prop_gross_wt = "" %}
-        {% assign prop_net_wt   = "" %}
-        {% assign prop_dia_cts  = "" %}
-        {% assign prop_dia_pcs  = "" %}
+        {% assign prop_gross_wt  = "" %}
+        {% assign prop_net_wt    = "" %}
+        {% assign prop_dia_cts   = "" %}
+        {% assign prop_dia_pcs   = "" %}
+        {% assign prop_gem_cts   = "" %}
         {% for p in line_item.properties %}
-          {% if p.first == "_gross_wt"    %}{% assign has_repriced_props = true %}{% assign prop_gross_wt = p.last %}{% endif %}
-          {% if p.first == "_net_wt"      %}{% assign prop_net_wt   = p.last %}{% endif %}
-          {% if p.first == "_diamond_cts" %}{% assign prop_dia_cts  = p.last %}{% endif %}
-          {% if p.first == "_diamond_pcs" %}{% assign prop_dia_pcs  = p.last %}{% endif %}
+          {% if p.first == "_gross_wt"     %}{% assign has_repriced_props = true %}{% assign prop_gross_wt = p.last %}{% endif %}
+          {% if p.first == "_net_wt"       %}{% assign prop_net_wt    = p.last %}{% endif %}
+          {% if p.first == "_diamond_cts"  %}{% assign prop_dia_cts   = p.last %}{% endif %}
+          {% if p.first == "_diamond_pcs"  %}{% assign prop_dia_pcs   = p.last %}{% endif %}
+          {% if p.first == "_gemstone_cts" %}{% assign prop_gem_cts   = p.last %}{% endif %}
         {% endfor %}
 
         {% comment %}── Metal from variant title: "18K / YG / 18"" → "18K/YG" ──{% endcomment %}
@@ -292,24 +292,28 @@
 
           {% comment %}── Dia Wt (cts) ──{% endcomment %}
           <td class="text-center">
-            {% if has_repriced_props and prop_dia_cts != "" %}{{ prop_dia_cts }}
-            {% elsif line_item.variant.metafields.custom.totaldiamondweight %}{{ line_item.variant.metafields.custom.totaldiamondweight }}
+            {% if prop_dia_cts != "" %}{{ prop_dia_cts }}
             {% elsif line_item.product.metafields.custom.totaldiamondweight %}{{ line_item.product.metafields.custom.totaldiamondweight }}
+            {% elsif line_item.variant.metafields.custom.totaldiamondweight %}{{ line_item.variant.metafields.custom.totaldiamondweight }}
             {% else %}–{% endif %}
           </td>
 
           {% comment %}── Dia Pcs ──{% endcomment %}
           <td class="text-center">
-            {% if has_repriced_props and prop_dia_pcs != "" %}{{ prop_dia_pcs }}
-            {% elsif line_item.variant.metafields.custom.diamond_pcs %}{{ line_item.variant.metafields.custom.diamond_pcs }}
+            {% if prop_dia_pcs != "" %}{{ prop_dia_pcs }}
             {% elsif line_item.product.metafields.custom.diamond_pcs %}{{ line_item.product.metafields.custom.diamond_pcs }}
+            {% elsif line_item.variant.metafields.custom.diamond_pcs %}{{ line_item.variant.metafields.custom.diamond_pcs }}
             {% else %}–{% endif %}
           </td>
 
-          {% comment %}── Col. Stone Pcs ──{% endcomment %}
+          {% comment %}── Col. Stone Pcs + gemstone cts if set ──{% endcomment %}
           <td class="text-center">
-            {% if line_item.variant.metafields.custom.coloured_stone_pcs %}{{ line_item.variant.metafields.custom.coloured_stone_pcs }}
-            {% elsif line_item.product.metafields.custom.coloured_stone_pcs %}{{ line_item.product.metafields.custom.coloured_stone_pcs }}
+            {% assign stone_pcs = "" %}
+            {% if line_item.product.metafields.custom.coloured_stone_pcs %}{% assign stone_pcs = line_item.product.metafields.custom.coloured_stone_pcs %}
+            {% elsif line_item.variant.metafields.custom.coloured_stone_pcs %}{% assign stone_pcs = line_item.variant.metafields.custom.coloured_stone_pcs %}
+            {% endif %}
+            {% if stone_pcs != "" %}{{ stone_pcs }} pcs{% if prop_gem_cts != "" and prop_gem_cts != "0.00" %} / {{ prop_gem_cts }} cts{% endif %}
+            {% elsif prop_gem_cts != "" and prop_gem_cts != "0.00" %}{{ prop_gem_cts }} cts
             {% else %}–{% endif %}
           </td>
 
@@ -317,7 +321,9 @@
 
           {% comment %}── Making Charges (component value, pre-GST) ──{% endcomment %}
           <td class="text-right">
-            {% if prop_making_str != "" %}₹{{ prop_making_str | times: 100 | round | money_without_currency | remove: ',' }}{% else %}–{% endif %}
+            {% if prop_making_str != "" %}₹{{ prop_making_str | times: 100 | round | money_without_currency | remove: ',' }}
+          {% elsif line_item.variant.metafields.custom.price_breakup_making %}₹{{ line_item.variant.metafields.custom.price_breakup_making | times: line_item.quantity | times: 100 | round | money_without_currency | remove: ',' }}
+          {% else %}–{% endif %}
           </td>
 
           <td class="text-right">₹{{ gross_paise | divided_by: 1.03 | money_without_currency | remove: ',' }}</td>
@@ -404,22 +410,45 @@
       </tr>
       {% endif %}
 
-      {% assign payment_mode_label = order.metafields.custom.payment_mode | default: "" %}
-      {% if payment_mode_label != "" %}
-      <tr class="section-label-row">
-        <td colspan="13" class="text-right">{{ payment_mode_label }}</td>
-      </tr>
-      {% endif %}
-
-      {% if is_fully_paid and paid_amount != "" %}
-        <tr class="totals-row"><td colspan="12" class="text-right">Amount Paid</td><td class="text-right">₹{{ paid_amount }}</td></tr>
-        <tr class="totals-row"><td colspan="12" class="text-right"><strong>Amount Due</strong></td><td class="text-right"><strong>₹0.00</strong></td></tr>
-      {% elsif is_partial and paid_amount != "" %}
-        <tr class="totals-row"><td colspan="12" class="text-right">Amount Paid</td><td class="text-right">₹{{ paid_amount }}</td></tr>
-        <tr class="totals-row"><td colspan="12" class="text-right"><strong>Amount Due</strong></td><td class="text-right"><strong>₹{{ pending_amount }}</strong></td></tr>
+      {% if is_partial and paid_amount != "" %}
+        <tr class="totals-row">
+          <td colspan="12" class="text-right">
+            Amount Received – Advance{% if pm_advance != "" %}&nbsp; <em style="color:#555;">({{ pm_advance }})</em>{% endif %}
+          </td>
+          <td class="text-right">₹{{ paid_amount }}</td>
+        </tr>
+        <tr class="totals-row">
+          <td colspan="12" class="text-right"><strong>Balance Due</strong></td>
+          <td class="text-right"><strong>₹{{ pending_amount }}</strong></td>
+        </tr>
+      {% elsif is_fully_paid and paid_amount != "" %}
+        {% assign pm_display = "" %}
+        {% if pm_advance != "" and pm_final != "" and pm_final != pm_advance %}
+          {% assign pm_display = pm_advance | append: " / " | append: pm_final %}
+        {% elsif pm_advance != "" %}
+          {% assign pm_display = pm_advance %}
+        {% elsif pm_final != "" %}
+          {% assign pm_display = pm_final %}
+        {% endif %}
+        <tr class="totals-row">
+          <td colspan="12" class="text-right">
+            Amount Received{% if pm_display != "" %}&nbsp; <em style="color:#555;">({{ pm_display }})</em>{% endif %}
+          </td>
+          <td class="text-right">₹{{ paid_amount }}</td>
+        </tr>
+        <tr class="totals-row">
+          <td colspan="12" class="text-right"><strong>Balance Due</strong></td>
+          <td class="text-right"><strong>₹0</strong></td>
+        </tr>
       {% else %}
-        <tr class="totals-row"><td colspan="12" class="text-right">Amount Paid</td><td class="text-right">₹0.00</td></tr>
-        <tr class="totals-row"><td colspan="12" class="text-right"><strong>Amount Due</strong></td><td class="text-right"><strong>₹{{ taxable_base | money_without_currency | remove: ',' }}</strong></td></tr>
+        <tr class="totals-row">
+          <td colspan="12" class="text-right">Amount Received</td>
+          <td class="text-right">₹0</td>
+        </tr>
+        <tr class="totals-row">
+          <td colspan="12" class="text-right"><strong>Balance Due</strong></td>
+          <td class="text-right"><strong>₹{{ taxable_base | money_without_currency | remove: ',' }}</strong></td>
+        </tr>
       {% endif %}
 
     </tbody>
@@ -451,8 +480,14 @@
     {% for line_item in order.line_items %}
       {% assign sku_parts = line_item.variant.sku | split: "|" %}
       {% assign karat = sku_parts[2] | strip %}
-      {% if karat == "18" and rate_18k == "" %}{% assign rate_18k = line_item.variant.metafields.custom.gold_rate %}{% assign gold_updated = line_item.variant.metafields.custom.gold_last_updated_at %}{% endif %}
-      {% if karat == "14" and rate_14k == "" %}{% assign rate_14k = line_item.variant.metafields.custom.gold_rate %}{% if gold_updated == "" %}{% assign gold_updated = line_item.variant.metafields.custom.gold_last_updated_at %}{% endif %}{% endif %}
+      {% assign locked_rate = "" %}
+      {% assign locked_ts   = "" %}
+      {% for p in line_item.properties %}
+        {% if p.first == "_gold_rate"       %}{% assign locked_rate = p.last %}{% endif %}
+        {% if p.first == "_gold_updated_at" %}{% assign locked_ts   = p.last %}{% endif %}
+      {% endfor %}
+      {% if karat == "18" and rate_18k == "" and locked_rate != "" %}{% assign rate_18k = locked_rate %}{% if locked_ts != "" %}{% assign gold_updated = locked_ts %}{% endif %}{% endif %}
+      {% if karat == "14" and rate_14k == "" and locked_rate != "" %}{% assign rate_14k = locked_rate %}{% if gold_updated == "" and locked_ts != "" %}{% assign gold_updated = locked_ts %}{% endif %}{% endif %}
     {% endfor %}
     {% if rate_18k == "" and rate_14k != "" %}{% assign rate_18k = rate_14k | plus: 0 | times: 0.771 | divided_by: 0.604 | round: 2 %}{% endif %}
     {% if rate_14k == "" and rate_18k != "" %}{% assign rate_14k = rate_18k | plus: 0 | times: 0.604 | divided_by: 0.771 | round: 2 %}{% endif %}
