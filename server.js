@@ -1654,27 +1654,22 @@ app.post('/api/form-reprice', async (req, res) => {
 
       const rate18kt = inputGoldRate && inputGoldKt ? convertRate(inputGoldRate, inputGoldKt, 18) : 0;
 
-      const updatedLineItems = (draft.line_items || []).map(item => {
+      // Compute target price + properties for each item to override
+      const targets = new Map(); // original item.id → { qty, pricePerUnit, newProps }
+      (draft.line_items || []).forEach(item => {
         const idx = productItems.findIndex(pi => pi.id === item.id);
-        if (idx === -1 || idx >= overrideCount) {
-          const pass = { variant_id: item.variant_id || undefined, quantity: item.quantity, price: item.price, properties: item.properties || [] };
-          if (!item.variant_id) pass.title = item.title;
-          return pass;
-        }
+        if (idx === -1 || idx >= overrideCount) return;
         const qty = item.quantity || 1;
 
-        // Gold rate for this item's karat — convert from input karat if needed
         const ikt         = itemKarat(item) || inputGoldKt || 18;
         const rateForItem = inputGoldRate && inputGoldKt ? convertRate(inputGoldRate, inputGoldKt, ikt) : 0;
 
-        // Physical measurements — blank = omit (don't overwrite existing)
         const netWt  = pick(netArr,    idx, null);
         const grossWt= pick(grossArr,  idx, null);
         const diaCts = pick(diaCtsArr, idx, null);
         const diaPcs = pick(diaPcsArr, idx, null);
         const gemWt  = pick(gemArr,    idx, null);
 
-        // Gold: explicit value > rate×netWt auto-compute > existing prop
         let gold;
         if (!isNaN(goldArr[idx])) {
           gold = goldArr[idx];
@@ -1687,12 +1682,10 @@ app.post('/api/form-reprice', async (req, res) => {
         const dia    = pick(diaArr,    idx, existingPropNum(item, 'Diamond'));
         const making = pick(makingArr, idx, existingPropNum(item, 'Making'));
         const disc   = pick(discArr,   idx, existingPropNum(item, 'Discount Applied'));
-        // Entered values are ex-GST component amounts.
-        // Taxable = sum of components minus discount; GST added on top.
-        const grossComponents = gold + dia + making;    // pre-discount, ex-GST
-        const taxable         = grossComponents - disc; // taxable value after discount, ex-GST
+        const grossComponents = gold + dia + making;
+        const taxable         = grossComponents - disc;
         const gst             = taxable * 0.03;
-        const grossValue      = taxable + gst;          // what customer pays (Gross Value)
+        const grossValue      = taxable + gst;
 
         const preserved = (item.properties || []).filter(p => !OVERWRITE_PROPS.has(p.name));
         const newProps  = [
@@ -1702,36 +1695,31 @@ app.post('/api/form-reprice', async (req, res) => {
           { name: 'Gross Value',      value: `Rs${grossValue.toFixed(2)}`    },
           { name: 'Discount Applied', value: `Rs${disc.toFixed(2)}`          },
           { name: 'Taxable Value',    value: `Rs${taxable.toFixed(2)}`       },
-          { name: 'GST',              value: `Rs${gst.toFixed(2)}`           },
+          { name: 'GST',             value: `Rs${gst.toFixed(2)}`            },
           ...preserved,
         ];
-        if (netWt  !== null) newProps.push({ name: '_net_wt',       value: netWt.toFixed(3)  });
+        if (netWt  !== null) newProps.push({ name: '_net_wt',       value: netWt.toFixed(3)   });
         if (grossWt!== null) newProps.push({ name: '_gross_wt',     value: grossWt.toFixed(3) });
         if (diaCts !== null) newProps.push({ name: '_diamond_cts',  value: diaCts.toFixed(2)  });
         if (diaPcs !== null) newProps.push({ name: '_diamond_pcs',  value: String(Math.round(diaPcs)) });
         if (gemWt  !== null) newProps.push({ name: '_gemstone_cts', value: gemWt.toFixed(2)   });
-
-        // Lock gold rate at submission time
         if (rateForItem > 0) {
           newProps.push({ name: '_gold_rate',       value: rateForItem.toFixed(2) });
           newProps.push({ name: '_gold_updated_at', value: lockedAt               });
         }
-
         const existingJd = (item.properties || []).find(p => p.name === '_jewel_data');
         let jd = {};
         try { jd = JSON.parse(existingJd?.value || '{}'); } catch (_) {}
         newProps.push({ name: '_jewel_data', value: JSON.stringify({ ...jd, repriced: true }) });
 
-        const updatedItem = { variant_id: item.variant_id || undefined, quantity: qty, price: (grossValue / qty).toFixed(2), properties: newProps };
-        if (!item.variant_id) updatedItem.title = item.title;
-        return updatedItem;
+        targets.set(item.id, { qty, pricePerUnit: (grossValue / qty).toFixed(2), newProps });
       });
 
       const rate18ktResponse = rate18kt ? parseFloat(rate18kt.toFixed(2)) : undefined;
 
       console.log(`[form-reprice] manual draft=${draftOrderId} productItems=${productItems.length} overrideCount=${overrideCount}`);
-      updatedLineItems.forEach((li, i) => {
-        console.log(`[form-reprice] item[${i}] id=${li.id} price=${li.price} props=${li.properties.filter(p => !p.name.startsWith('_')).map(p => `${p.name}=${p.value}`).join(' ')}`);
+      targets.forEach((t, id) => {
+        console.log(`[form-reprice] target id=${id} price=${t.pricePerUnit} props=${t.newProps.filter(p => !p.name.startsWith('_')).map(p => `${p.name}=${p.value}`).join(' ')}`);
       });
 
       await writeJewelMfs(draftOrderId, headers, {
@@ -1741,19 +1729,45 @@ app.post('/api/form-reprice', async (req, res) => {
         jewelcode_gemstone_weight: String(gemstoneWeights|| '').trim(),
       });
 
-      const putBody = { draft_order: { line_items: updatedLineItems, applied_discount: null } };
-      console.log(`[form-reprice] PUT sending:`, JSON.stringify(putBody.draft_order.line_items.map(li => ({ id: li.id, price: li.price }))));
-      const putResp = await axios.put(
+      // Step 1: Push new properties. Shopify recreates variant items at catalog price (new IDs returned).
+      const step1Items = (draft.line_items || []).map(item => {
+        const t = targets.get(item.id);
+        const props = t ? t.newProps : (item.properties || []);
+        const qty   = t ? t.qty      : item.quantity;
+        if (item.variant_id) return { variant_id: item.variant_id, quantity: qty, properties: props };
+        return { title: item.title, price: t ? t.pricePerUnit : item.price, quantity: qty, properties: props };
+      });
+
+      const step1Resp = await axios.put(
         `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}.json`,
-        putBody,
+        { draft_order: { line_items: step1Items } },
         { headers, timeout: 15000 }
       );
-      console.log(`[form-reprice] PUT status=${putResp.status}`);
-      const respDO = putResp.data?.draft_order;
-      if (respDO?.errors) console.log(`[form-reprice] PUT errors:`, JSON.stringify(respDO.errors));
-      const respItems = respDO?.line_items || [];
+      const freshItems = step1Resp.data.draft_order.line_items || [];
+      console.log(`[form-reprice] step1 status=${step1Resp.status} items=${freshItems.map(li => `${li.id}@${li.price}`).join(' ')}`);
+
+      // Step 2: Override prices with new IDs. Properties are UNCHANGED (same as step1 response)
+      // so Shopify will not recreate the items and will accept our custom price.
+      const originalItems = draft.line_items || [];
+      const step2Items = freshItems.map((li, i) => {
+        const originalItem = originalItems[i];
+        const t = originalItem ? targets.get(originalItem.id) : null;
+        const result = { id: li.id, quantity: li.quantity, price: t ? t.pricePerUnit : li.price, properties: li.properties || [] };
+        if (li.variant_id) result.variant_id = li.variant_id;
+        else if (li.title) result.title = li.title;
+        return result;
+      });
+
+      console.log(`[form-reprice] step2 sending:`, JSON.stringify(step2Items.map(li => ({ id: li.id, price: li.price }))));
+      const putResp = await axios.put(
+        `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}.json`,
+        { draft_order: { line_items: step2Items, applied_discount: null } },
+        { headers, timeout: 15000 }
+      );
+      console.log(`[form-reprice] step2 status=${putResp.status}`);
+      const respItems = putResp.data?.draft_order?.line_items || [];
       respItems.forEach((li, i) => {
-        console.log(`[form-reprice] shopify returned item[${i}] id=${li.id} price=${li.price} pre_tax=${li.pre_tax_price} total=${li.pre_tax_price}`);
+        console.log(`[form-reprice] shopify final item[${i}] id=${li.id} price=${li.price}`);
       });
       return res.json({ success: true, draftOrderId, mode: 'manual', updatedCount: overrideCount, ...(rate18ktResponse ? { rate18kt: rate18ktResponse } : {}) });
 
