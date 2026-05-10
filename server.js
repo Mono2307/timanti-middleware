@@ -1303,7 +1303,7 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
     const updatedProperties = (item.properties || []).filter(p => !(p.name in repricedProps));
     for (const [name, value] of Object.entries(repricedProps)) updatedProperties.push({ name, value });
 
-    repricedMap.set(item.id, { id: item.id, variant_id: item.variant_id || undefined, quantity: item.quantity, price: newGrossValue.toFixed(2), properties: updatedProperties });
+    repricedMap.set(item.id, { id: item.id, variant_id: item.variant_id || undefined, quantity: item.quantity, price: (newFinalValue / (item.quantity || 1)).toFixed(2), properties: updatedProperties });
     allJewelData.push(jewel_data);
     console.log(`Draft ${draftOrderId} item ${item.id}: repriced — delta=${(delta*100).toFixed(2)}%, gold=Rs${newGoldValue.toFixed(2)}, dia=Rs${newDiamondValue.toFixed(2)}, making=Rs${newMakingValue.toFixed(2)}, gross=Rs${newGrossValue.toFixed(2)}`);
   }));
@@ -1316,7 +1316,7 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
 
   await axios.put(
     `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}.json`,
-    { draft_order: { id: draftOrderId, tags: tagsWithoutRecalc, line_items: allLineItems } },
+    { draft_order: { id: draftOrderId, tags: tagsWithoutRecalc, line_items: allLineItems, applied_discount: null } },
     { headers, timeout: 15000 }
   );
   console.log(`✅ Draft ${draftOrderId}: reprice PUT done — ${repricedMap.size} item(s) updated`);
@@ -1485,6 +1485,266 @@ app.post('/api/recalculate-price', async (req, res) => {
     return res.json({ success: true, draftOrderId });
   } catch (err) {
     return res.status(500).json({ success: false, error: err.message, detail: err.response?.data });
+  }
+});
+
+// Manually override per-unit prices for specific line items in a draft order.
+// Clears applied_discount and updates display properties (Gross Value, Taxable Value, GST, Discount Applied).
+// All other properties (Gold, Diamond, Making, hidden props) are preserved.
+// Body: { draftOrderId, lineItems: [{ id: <lineItemId>, price: <perUnitINR> }] }
+app.post('/api/set-line-prices', async (req, res) => {
+  const { draftOrderId, lineItems } = req.body;
+  if (!draftOrderId || !Array.isArray(lineItems) || lineItems.length === 0) {
+    return res.status(400).json({ success: false, error: 'draftOrderId and lineItems[] required' });
+  }
+
+  const FINANCIAL_PROPS = new Set(['Gross Value', 'Discount Applied', 'Taxable Value', 'GST']);
+
+  try {
+    const token = await getShopifyToken();
+    const headers = { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' };
+
+    const { data } = await axios.get(
+      `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}.json`,
+      { headers, timeout: 10000 }
+    );
+    const draft = data.draft_order;
+
+    const overrideMap = new Map(
+      lineItems.map(li => [Number(li.id), parseFloat(li.price)]).filter(([, p]) => !isNaN(p) && p >= 0)
+    );
+
+    const updatedLineItems = (draft.line_items || []).map(item => {
+      const newUnitPrice = overrideMap.get(item.id);
+      if (newUnitPrice === undefined) {
+        return { id: item.id, variant_id: item.variant_id || undefined, quantity: item.quantity, price: item.price, properties: item.properties || [] };
+      }
+      const qty       = item.quantity || 1;
+      const lineTotal = newUnitPrice * qty;
+      const taxable   = lineTotal / 1.03;
+      const gst       = taxable * 0.03;
+
+      const preserved = (item.properties || []).filter(p => !FINANCIAL_PROPS.has(p.name));
+      const newProps = [
+        { name: 'Gross Value',      value: `Rs${lineTotal.toFixed(2)}` },
+        { name: 'Discount Applied', value: 'Rs0' },
+        { name: 'Taxable Value',    value: `Rs${taxable.toFixed(2)}` },
+        { name: 'GST',              value: `Rs${gst.toFixed(2)}` },
+        ...preserved,
+      ];
+
+      const updatedItem = { id: item.id, variant_id: item.variant_id || undefined, quantity: qty, price: newUnitPrice.toFixed(2), properties: newProps };
+      if (!item.variant_id) updatedItem.title = item.title;
+      return updatedItem;
+    });
+
+    await axios.put(
+      `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}.json`,
+      { draft_order: { line_items: updatedLineItems, applied_discount: null } },
+      { headers, timeout: 15000 }
+    );
+
+    return res.json({ success: true, draftOrderId, updatedCount: overrideMap.size });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Unified form-driven reprice endpoint — called by the Google Form Apps Script.
+// All value fields are comma-separated strings positionally mapped to product line items.
+//
+// mode="manual": Gold+Diamond+Making drive price. All invoice fields settable.
+//   gold, diamond, making, discount, netWeights, grossWeights, diamondCarats, diamondPcs, gemstoneWeights
+//   Price = (Gold+Diamond+Making−Discount)/qty. GST auto-computed.
+//
+// mode="weights": gold-rate-driven reprice; price computed automatically from gold rate × net wt.
+//   netWeights, grossWeights, diamondCarats, diamondPcs, gemstoneWeights, force
+app.post('/api/form-reprice', async (req, res) => {
+  const { draftOrderId, mode, netWeights, grossWeights, diamondCarats, diamondPcs, gemstoneWeights, force = false } = req.body;
+  if (!draftOrderId || !mode) {
+    return res.status(400).json({ success: false, error: 'draftOrderId and mode required' });
+  }
+
+  const FINANCIAL_PROPS = new Set(['Gross Value', 'Discount Applied', 'Taxable Value', 'GST']);
+  const WEIGHT_PROPS    = new Set(['_net_wt', '_gross_wt', '_diamond_cts', '_gemstone_cts']);
+  const parseCsv = (val) => String(val || '').split(',').map(s => s.trim()).map(parseFloat);
+  const csvAt    = (arr, i) => (isNaN(arr[i]) ? 0 : arr[i]);
+
+  const writeJewelMfs = async (id, hdrs, mfMap) => {
+    const { data: mfData } = await axios.get(
+      `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${id}/metafields.json`,
+      { headers: hdrs, timeout: 10000 }
+    );
+    const existing = {};
+    for (const mf of (mfData.metafields || [])) if (mf.namespace === 'custom') existing[mf.key] = mf;
+    await Promise.all(Object.entries(mfMap).filter(([, v]) => v).map(async ([key, value]) => {
+      const payload = { metafield: { namespace: 'custom', key, value: String(value), type: 'single_line_text_field' } };
+      if (existing[key]) {
+        await axios.put(`${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${id}/metafields/${existing[key].id}.json`, payload, { headers: hdrs, timeout: 10000 });
+      } else {
+        await axios.post(`${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${id}/metafields.json`, payload, { headers: hdrs, timeout: 10000 });
+      }
+    }));
+  };
+
+  try {
+    const token   = await getShopifyToken();
+    const headers = { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' };
+
+    const { data } = await axios.get(
+      `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}.json`,
+      { headers, timeout: 10000 }
+    );
+    const draft = data.draft_order;
+
+    const productItems = (draft.line_items || []).filter(
+      item => !((item.title || '').toLowerCase().includes('discount') && parseFloat(item.price) < 0)
+    );
+
+    if (mode === 'manual') {
+      // Every invoice field as comma-separated input, positionally applied per product line item.
+      // Blank entry in a CSV position → fall back to the item's existing property value.
+      const goldArr   = parseCsv(req.body.gold);
+      const diaArr    = parseCsv(req.body.diamond);
+      const makingArr = parseCsv(req.body.making);
+      const discArr   = parseCsv(req.body.discount);   // Discount Applied per item
+      const netArr    = parseCsv(netWeights);
+      const grossArr  = parseCsv(grossWeights);
+      const diaCtsArr = parseCsv(diamondCarats);
+      const diaPcsArr = parseCsv(req.body.diamondPcs);
+      const gemArr    = parseCsv(gemstoneWeights);
+
+      // How many product items are being touched — driven by whichever array has the most valid entries
+      const allArrays     = [goldArr, diaArr, makingArr, discArr, netArr, grossArr, diaCtsArr, diaPcsArr, gemArr];
+      const overrideCount = Math.max(...allArrays.map(arr => arr.filter(v => !isNaN(v) && v !== null).length));
+      if (overrideCount === 0) {
+        return res.status(400).json({ success: false, error: 'At least one field required for manual mode' });
+      }
+
+      const existingPropNum = (item, name) => {
+        const p = (item.properties || []).find(p => p.name === name);
+        return p ? parseFloat((p.value || '0').replace('Rs', '').trim()) || 0 : 0;
+      };
+
+      const pick = (arr, idx, fallback) => (arr[idx] !== undefined && !isNaN(arr[idx])) ? arr[idx] : fallback;
+
+      const OVERWRITE_PROPS = new Set(['Gold', 'Diamond', 'Making', 'Gross Value', 'Discount Applied', 'Taxable Value', 'GST', '_net_wt', '_gross_wt', '_diamond_cts', '_diamond_pcs', '_gemstone_cts', '_jewel_data']);
+
+      const updatedLineItems = (draft.line_items || []).map(item => {
+        const idx = productItems.findIndex(pi => pi.id === item.id);
+        if (idx === -1 || idx >= overrideCount) {
+          return { id: item.id, variant_id: item.variant_id || undefined, quantity: item.quantity, price: item.price, properties: item.properties || [] };
+        }
+        const qty    = item.quantity || 1;
+
+        // Price breakdown — blank field falls back to current prop value
+        const gold   = pick(goldArr,   idx, existingPropNum(item, 'Gold'));
+        const dia    = pick(diaArr,    idx, existingPropNum(item, 'Diamond'));
+        const making = pick(makingArr, idx, existingPropNum(item, 'Making'));
+        const disc   = pick(discArr,   idx, existingPropNum(item, 'Discount Applied'));
+        const gross  = gold + dia + making;
+        const final  = gross - disc;           // tax-inclusive final per line
+        const taxable= final / 1.03;
+        const gst    = taxable * 0.03;
+
+        // Physical measurements — blank = omit (don't overwrite existing)
+        const netWt  = pick(netArr,    idx, null);
+        const grossWt= pick(grossArr,  idx, null);
+        const diaCts = pick(diaCtsArr, idx, null);
+        const diaPcs = pick(diaPcsArr, idx, null);
+        const gemWt  = pick(gemArr,    idx, null);
+
+        const preserved = (item.properties || []).filter(p => !OVERWRITE_PROPS.has(p.name));
+        const newProps  = [
+          { name: 'Gold',             value: `Rs${gold.toFixed(2)}`    },
+          { name: 'Diamond',          value: `Rs${dia.toFixed(2)}`     },
+          { name: 'Making',           value: `Rs${making.toFixed(2)}`  },
+          { name: 'Gross Value',      value: `Rs${gross.toFixed(2)}`   },
+          { name: 'Discount Applied', value: `Rs${disc.toFixed(2)}`    },
+          { name: 'Taxable Value',    value: `Rs${taxable.toFixed(2)}` },
+          { name: 'GST',              value: `Rs${gst.toFixed(2)}`     },
+          ...preserved,
+        ];
+        if (netWt  !== null) newProps.push({ name: '_net_wt',       value: netWt.toFixed(3)   });
+        if (grossWt!== null) newProps.push({ name: '_gross_wt',     value: grossWt.toFixed(3)  });
+        if (diaCts !== null) newProps.push({ name: '_diamond_cts',  value: diaCts.toFixed(2)   });
+        if (diaPcs !== null) newProps.push({ name: '_diamond_pcs',  value: String(Math.round(diaPcs)) });
+        if (gemWt  !== null) newProps.push({ name: '_gemstone_cts', value: gemWt.toFixed(2)    });
+
+        // Preserve _jewel_data metadata but mark repriced so pricing-engine uses Gross Value
+        const existingJd = (item.properties || []).find(p => p.name === '_jewel_data');
+        let jd = {};
+        try { jd = JSON.parse(existingJd?.value || '{}'); } catch (_) {}
+        newProps.push({ name: '_jewel_data', value: JSON.stringify({ ...jd, repriced: true }) });
+
+        const updatedItem = { id: item.id, variant_id: item.variant_id || undefined, quantity: qty, price: (final / qty).toFixed(2), properties: newProps };
+        if (!item.variant_id) updatedItem.title = item.title;
+        return updatedItem;
+      });
+
+      await writeJewelMfs(draftOrderId, headers, {
+        jewelcode_net_weight:      String(netWeights     || '').trim(),
+        jewelcode_gross_weight:    String(grossWeights   || '').trim(),
+        jewelcode_diamond_carats:  String(diamondCarats  || '').trim(),
+        jewelcode_gemstone_weight: String(gemstoneWeights|| '').trim(),
+      });
+
+      await axios.put(
+        `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}.json`,
+        { draft_order: { line_items: updatedLineItems, applied_discount: null } },
+        { headers, timeout: 15000 }
+      );
+      return res.json({ success: true, draftOrderId, mode: 'manual', updatedCount: overrideCount });
+
+    } else if (mode === 'weights') {
+      if (!String(netWeights || '').trim()) {
+        return res.status(400).json({ success: false, error: 'netWeights required for weights mode' });
+      }
+      await writeJewelMfs(draftOrderId, headers, {
+        jewelcode_net_weight:      String(netWeights     || '').trim(),
+        jewelcode_gross_weight:    String(grossWeights   || '').trim(),
+        jewelcode_diamond_carats:  String(diamondCarats  || '').trim(),
+        jewelcode_gemstone_weight: String(gemstoneWeights|| '').trim(),
+      });
+
+      const tagToInject   = force ? 'force-reprice' : 'recalculate-price';
+      const existingTags  = (draft.tags || '').split(',').map(t => t.trim()).filter(Boolean);
+      const injectedDraft = { ...draft, tags: [...existingTags, tagToInject].join(', ') };
+      await handleRecalculatePriceTag(injectedDraft, { force: !!force });
+
+      // Patch _diamond_pcs onto line items if provided (reprice handler doesn't set this)
+      const pcsStr = String(diamondPcs || '').trim();
+      if (pcsStr) {
+        const pcsArr = parseCsv(pcsStr);
+        const { data: refreshed } = await axios.get(
+          `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}.json`,
+          { headers, timeout: 10000 }
+        );
+        const refreshedProductItems = (refreshed.draft_order.line_items || []).filter(
+          item => !((item.title || '').toLowerCase().includes('discount') && parseFloat(item.price) < 0)
+        );
+        const patchedItems = (refreshed.draft_order.line_items || []).map(item => {
+          const idx = refreshedProductItems.findIndex(pi => pi.id === item.id);
+          if (idx === -1 || idx >= pcsArr.length || isNaN(pcsArr[idx])) {
+            return { id: item.id, variant_id: item.variant_id || undefined, quantity: item.quantity, price: item.price, properties: item.properties || [] };
+          }
+          const props = (item.properties || []).filter(p => p.name !== '_diamond_pcs');
+          props.push({ name: '_diamond_pcs', value: String(Math.round(pcsArr[idx])) });
+          return { id: item.id, variant_id: item.variant_id || undefined, quantity: item.quantity, price: item.price, properties: props };
+        });
+        await axios.put(
+          `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}.json`,
+          { draft_order: { line_items: patchedItems } },
+          { headers, timeout: 15000 }
+        );
+      }
+      return res.json({ success: true, draftOrderId, mode: 'weights', force: !!force });
+
+    } else {
+      return res.status(400).json({ success: false, error: `Unknown mode "${mode}". Use "manual" or "weights"` });
+    }
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
   }
 });
 
