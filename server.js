@@ -1657,7 +1657,9 @@ app.post('/api/form-reprice', async (req, res) => {
       const updatedLineItems = (draft.line_items || []).map(item => {
         const idx = productItems.findIndex(pi => pi.id === item.id);
         if (idx === -1 || idx >= overrideCount) {
-          return { id: item.id, variant_id: item.variant_id || undefined, quantity: item.quantity, price: item.price, properties: item.properties || [] };
+          const pass = { variant_id: item.variant_id || undefined, quantity: item.quantity, price: item.price, properties: item.properties || [] };
+          if (!item.variant_id) pass.title = item.title;
+          return pass;
         }
         const qty = item.quantity || 1;
 
@@ -1720,7 +1722,7 @@ app.post('/api/form-reprice', async (req, res) => {
         try { jd = JSON.parse(existingJd?.value || '{}'); } catch (_) {}
         newProps.push({ name: '_jewel_data', value: JSON.stringify({ ...jd, repriced: true }) });
 
-        const updatedItem = { id: item.id, variant_id: item.variant_id || undefined, quantity: qty, price: (grossValue / qty).toFixed(2), properties: newProps };
+        const updatedItem = { variant_id: item.variant_id || undefined, quantity: qty, price: (grossValue / qty).toFixed(2), properties: newProps };
         if (!item.variant_id) updatedItem.title = item.title;
         return updatedItem;
       });
