@@ -587,10 +587,10 @@ app.get('/api/draft-orders', async (req, res) => {
 // Query params (all optional):
 //   from=YYYY-MM-DD         created_at_min
 //   to=YYYY-MM-DD           created_at_max (inclusive — bumped to end of day)
-//   status=open|completed|any  default: any
 //   paymentStatus=partial|fully-paid|unpaid
 //   paymentMode=cash|upi|...  matches pmode-advance or pmode-final
 //   nameFrom=1038  nameTo=1053
+// Always fetches open + invoice_sent (active drafts only — completed = already an order)
 app.get('/api/draft-orders-report', async (req, res) => {
   try {
     const token   = await getShopifyToken();
@@ -601,15 +601,23 @@ app.get('/api/draft-orders-report', async (req, res) => {
     const filterNameFrom = req.query.nameFrom != null ? parseInt(req.query.nameFrom) : null;
     const filterNameTo   = req.query.nameTo   != null ? parseInt(req.query.nameTo)   : null;
 
-    const qp = new URLSearchParams({ limit: '250', status: req.query.status || 'any' });
-    if (req.query.from) qp.set('created_at_min', new Date(req.query.from).toISOString());
-    if (req.query.to)   qp.set('created_at_max', new Date(req.query.to + 'T23:59:59Z').toISOString());
+    const baseQp = new URLSearchParams({ limit: '250' });
+    if (req.query.from) baseQp.set('created_at_min', new Date(req.query.from).toISOString());
+    if (req.query.to)   baseQp.set('created_at_max', new Date(req.query.to + 'T23:59:59Z').toISOString());
+
+    // Fetch open and invoice_sent separately — Shopify has no multi-status param for draft orders
+    const startUrls = ['open', 'invoice_sent'].map(s => {
+      const qp = new URLSearchParams(baseQp);
+      qp.set('status', s);
+      return `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders.json?${qp}`;
+    });
 
     const rows = [];
-    let pageUrl = `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders.json?${qp}`;
 
-    while (pageUrl) {
-      const { data, headers: respHeaders } = await axios.get(pageUrl, { headers: hdrs, timeout: 30000 });
+    for (const startUrl of startUrls) {
+      let pageUrl = startUrl;
+      while (pageUrl) {
+        const { data, headers: respHeaders } = await axios.get(pageUrl, { headers: hdrs, timeout: 30000 });
 
       for (const d of (data.draft_orders || [])) {
         // Name range filter
@@ -682,9 +690,10 @@ app.get('/api/draft-orders-report', async (req, res) => {
         }
       }
 
-      const link = respHeaders['link'] || '';
-      const next = link.match(/<([^>]+)>;\s*rel="next"/);
-      pageUrl = next ? next[1] : null;
+        const link = respHeaders['link'] || '';
+        const next = link.match(/<([^>]+)>;\s*rel="next"/);
+        pageUrl = next ? next[1] : null;
+      }
     }
 
     const csvCols = ['Day','Order name','Product title','Product variant title','Customer name',
@@ -1585,15 +1594,19 @@ async function applyPaymentTagsToOrder(orderId, token) {
   return true;
 }
 
-// Called either via sync-payment tag (draft_orders/update) or metafields/update webhook.
-async function syncPaymentMetafieldsToTags(draftOrderId, existingTags) {
-  const token = await getShopifyToken();
+// Mirrors applyPaymentTagsToOrder exactly but writes to a draft order.
+// Same logic: 1-rupee rounding tolerance, both pmode tags for installment-complete, total: tag.
+async function applyPaymentTagsToDraftOrder(draftOrderId, token) {
   const headers = { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' };
 
-  const { data: mfData } = await axios.get(
-    `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}/metafields.json`,
-    { headers, timeout: 10000 }
-  );
+  const [{ data: draftData }, { data: mfData }] = await Promise.all([
+    axios.get(`${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}.json`, { headers, timeout: 10000 }),
+    axios.get(`${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}/metafields.json`, { headers, timeout: 10000 }),
+  ]);
+
+  const draft      = draftData.draft_order;
+  const totalPrice = Math.round(parseFloat(draft.total_price || 0));
+
   const mf = (key) => {
     const m = (mfData.metafields || []).find(m => m.namespace === 'custom' && m.key === key);
     return m ? m.value : null;
@@ -1603,45 +1616,45 @@ async function syncPaymentMetafieldsToTags(draftOrderId, existingTags) {
   const isFinalized   = mf('is_finalized') === 'true';
   const amountPaid    = parseFloat(mf('amount_paid')    || 0);
   const amountPending = parseFloat(mf('amount_pending') || 0);
-  const modeFinal     = mf('payment_mode_final');
   const modeAdvance   = mf('payment_mode_advance');
+  const modeFinal     = mf('payment_mode_final');
 
-  const isFull    = isFinalized || paymentStatus === 'full';
-  const isPartial = !isFull && paymentStatus === 'partial';
+  const paidCoversTotal = totalPrice > 0 && (totalPrice - amountPaid) <= 1 && amountPending < 1;
+  const isFull    = isFinalized || paymentStatus === 'full' || paidCoversTotal;
+  const isPartial = !isFull && amountPaid > 0;
+  if (!isFull && !isPartial) return false;
 
-  if ((!isFull && !isPartial) || !amountPaid) {
-    console.log(`Draft ${draftOrderId}: sync-payment — no actionable payment metafields, skipping`);
-    return;
-  }
-
-  const cleanedTags = existingTags.filter(t =>
-    t && t.toLowerCase() !== 'sync-payment' &&
+  const existingTags = (draft.tags || '').split(',').map(t => t.trim()).filter(Boolean);
+  const cleanedTags  = existingTags.filter(t =>
+    t.toLowerCase() !== 'sync-payment' &&
     !t.startsWith('deposit:') && !t.startsWith('paid:') &&
-    !t.startsWith('pending:') && !t.startsWith('pmode-')
+    !t.startsWith('pending:') && !t.startsWith('pmode-') && !t.startsWith('total:')
   );
 
-  const paymentTags = isFull
-    ? [`deposit:fully-paid`, `paid:Rs${Math.round(amountPaid)}`,
-       ...(modeFinal ? [`pmode-final:${modeFinal}`] : modeAdvance ? [`pmode-advance:${modeAdvance}`] : [])]
-    : [`deposit:partial`, `paid:Rs${Math.round(amountPaid)}`, `pending:Rs${Math.round(amountPending)}`,
-       ...(modeAdvance ? [`pmode-advance:${modeAdvance}`] : [])];
+  const paymentTags = [
+    isFull ? 'deposit:fully-paid' : 'deposit:partial',
+    `paid:Rs${Math.round(amountPaid)}`,
+    ...(isPartial && amountPending > 0 ? [`pending:Rs${Math.round(amountPending)}`] : []),
+    `total:Rs${totalPrice}`,
+    ...(modeAdvance ? [`pmode-advance:${modeAdvance}`] : []),
+    ...(modeFinal   ? [`pmode-final:${modeFinal}`]   : []),
+  ];
 
   await axios.put(
     `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}.json`,
     { draft_order: { id: parseInt(draftOrderId), tags: [...cleanedTags, ...paymentTags].join(', ') } },
     { headers, timeout: 10000 }
   );
-  console.log(`Draft ${draftOrderId}: payment metafields → tags [${paymentTags.join(', ')}]`);
+  console.log(`Draft ${draftOrderId}: tags [${paymentTags.join(', ')}]`);
+  return true;
 }
 
-// Runs on every draft_orders/update webhook.
-// If no payment tags exist yet but payment metafields are set, writes the tags automatically.
+// Runs on every draft_orders/update webhook — always rewrites payment tags from metafields.
 async function handlePaymentMetafieldSync(draft) {
   const draftOrderId = draft?.id?.toString();
   if (!draftOrderId) return;
-  const existingTags = (draft.tags || '').split(',').map(t => t.trim()).filter(Boolean);
-  if (existingTags.some(t => t.startsWith('deposit:') || t.startsWith('paid:'))) return;
-  await syncPaymentMetafieldsToTags(draftOrderId, existingTags);
+  const token = await getShopifyToken();
+  await applyPaymentTagsToDraftOrder(draftOrderId, token);
 }
 
 // ─────────────────────────────────────────
@@ -2478,6 +2491,67 @@ app.post('/api/trigger-price-update', async (req, res) => {
 // ─────────────────────────────────────────
 // Backfill endpoints
 // ─────────────────────────────────────────
+
+// POST /api/backfill-draft-tags
+// Reads metafields from draft orders and writes payment tags.
+// Body: { nameFrom: 1038, nameTo: 1053 } for a name range, or {} for all open+invoice_sent.
+app.post('/api/backfill-draft-tags', async (req, res) => {
+  try {
+    const token   = await getShopifyToken();
+    const headers = { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' };
+
+    if (req.body.nameFrom !== undefined || req.body.nameTo !== undefined) {
+      const from = parseInt(req.body.nameFrom);
+      const to   = parseInt(req.body.nameTo);
+      if (isNaN(from) || isNaN(to) || from > to) {
+        return res.status(400).json({ success: false, error: 'nameFrom and nameTo must be valid integers with nameFrom <= nameTo' });
+      }
+      let processed = 0, tagged = 0, errors = 0;
+      for (let n = from; n <= to; n++) {
+        try {
+          const { data } = await axios.get(
+            `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders.json?name=%23${n}&status=any`,
+            { headers, timeout: 10000 }
+          );
+          const draft = (data.draft_orders || [])[0];
+          if (!draft) { console.log(`backfill-draft-tags: draft #${n} not found`); continue; }
+          const ok = await applyPaymentTagsToDraftOrder(draft.id.toString(), token);
+          if (ok) tagged++;
+          processed++;
+        } catch (err) {
+          console.error(`backfill-draft-tags: #${n} failed:`, err.message);
+          errors++;
+        }
+      }
+      return res.json({ success: true, processed, tagged, errors });
+    }
+
+    // Batch — open + invoice_sent
+    let processed = 0, tagged = 0, errors = 0;
+    for (const status of ['open', 'invoice_sent']) {
+      let pageUrl = `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders.json?status=${status}&limit=250`;
+      while (pageUrl) {
+        const { data, headers: respHeaders } = await axios.get(pageUrl, { headers, timeout: 30000 });
+        for (const d of (data.draft_orders || [])) {
+          try {
+            const ok = await applyPaymentTagsToDraftOrder(d.id.toString(), token);
+            if (ok) tagged++;
+            processed++;
+          } catch (err) {
+            console.error(`backfill-draft-tags: draft ${d.id} failed:`, err.message);
+            errors++;
+          }
+        }
+        const link = respHeaders['link'] || '';
+        const next = link.match(/<([^>]+)>;\s*rel="next"/);
+        pageUrl = next ? next[1] : null;
+      }
+    }
+    return res.json({ success: true, processed, tagged, errors });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
 
 // POST /api/backfill-order-metafields
 // Fetches completed draft orders (paginated) and copies their custom metafields to the
