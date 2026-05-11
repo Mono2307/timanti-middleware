@@ -583,6 +583,130 @@ app.get('/api/draft-orders', async (req, res) => {
   }
 });
 
+// GET /api/draft-orders-report
+// Query params (all optional):
+//   from=YYYY-MM-DD         created_at_min
+//   to=YYYY-MM-DD           created_at_max (inclusive — bumped to end of day)
+//   status=open|completed|any  default: any
+//   paymentStatus=partial|fully-paid|unpaid
+//   paymentMode=cash|upi|...  matches pmode-advance or pmode-final
+//   nameFrom=1038  nameTo=1053
+app.get('/api/draft-orders-report', async (req, res) => {
+  try {
+    const token   = await getShopifyToken();
+    const hdrs    = { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' };
+
+    const filterPaymentStatus = (req.query.paymentStatus || '').toLowerCase();
+    const filterPaymentMode   = (req.query.paymentMode   || '').toLowerCase();
+    const filterNameFrom = req.query.nameFrom != null ? parseInt(req.query.nameFrom) : null;
+    const filterNameTo   = req.query.nameTo   != null ? parseInt(req.query.nameTo)   : null;
+
+    const qp = new URLSearchParams({ limit: '250', status: req.query.status || 'any' });
+    if (req.query.from) qp.set('created_at_min', new Date(req.query.from).toISOString());
+    if (req.query.to)   qp.set('created_at_max', new Date(req.query.to + 'T23:59:59Z').toISOString());
+
+    const rows = [];
+    let pageUrl = `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders.json?${qp}`;
+
+    while (pageUrl) {
+      const { data, headers: respHeaders } = await axios.get(pageUrl, { headers: hdrs, timeout: 30000 });
+
+      for (const d of (data.draft_orders || [])) {
+        // Name range filter
+        const nameNum = parseInt((d.name || '').replace(/\D/g, ''));
+        if (filterNameFrom !== null && nameNum < filterNameFrom) continue;
+        if (filterNameTo   !== null && nameNum > filterNameTo)   continue;
+
+        const tags = (d.tags || '').split(',').map(t => t.trim()).filter(Boolean);
+        const tag  = (prefix) => { const t = tags.find(t => t.startsWith(prefix)); return t ? t.slice(prefix.length) : ''; };
+
+        const depositTag   = tag('deposit:');
+        const pmodeAdvance = tag('pmode-advance:');
+        const pmodeFinal   = tag('pmode-final:');
+
+        const paymentStatus = depositTag === 'fully-paid' ? 'fully-paid'
+                            : depositTag === 'partial'    ? 'partial'
+                            : 'unpaid';
+
+        if (filterPaymentStatus && paymentStatus !== filterPaymentStatus) continue;
+        if (filterPaymentMode) {
+          const modes = [pmodeAdvance, pmodeFinal].map(m => m.toLowerCase());
+          if (!modes.some(m => m === filterPaymentMode)) continue;
+        }
+
+        // Only relevant payment tags in a comma-separated list
+        const paymentTags = tags
+          .filter(t => t.startsWith('deposit:') || t.startsWith('paid:') ||
+                       t.startsWith('pending:') || t.startsWith('pmode-'))
+          .join(', ');
+
+        const customer = d.customer
+          ? `${d.customer.first_name || ''} ${d.customer.last_name || ''}`.trim()
+          : (d.billing_address?.name || '');
+
+        const day = d.created_at ? new Date(d.created_at).toLocaleDateString('en-IN') : '';
+
+        // One row per non-discount line item
+        const productItems = (d.line_items || []).filter(
+          item => !((item.title || '').toLowerCase().includes('discount') && parseFloat(item.price) < 0)
+        );
+
+        for (const item of productItems) {
+          const prop = (name) => {
+            const p = (item.properties || []).find(p => p.name === name);
+            return p ? parseFloat((p.value || '0').replace('Rs', '').trim()) || 0 : 0;
+          };
+
+          const grossValue = prop('Gross Value') || parseFloat(item.price) * item.quantity;
+          const discount   = prop('Discount Applied');
+          const grossSales = parseFloat((grossValue + discount).toFixed(2));
+          const netSales   = parseFloat(grossValue.toFixed(2));
+          const discounts  = discount > 0 ? parseFloat((-discount).toFixed(2)) : 0;
+
+          rows.push({
+            'Day':                    day,
+            'Order name':             d.name || '',
+            'Product title':          item.title || '',
+            'Product variant title':  item.variant_title || '',
+            'Customer name':          customer,
+            'Gross sales':            grossSales,
+            'Discounts':              discounts,
+            'Returns':                0,
+            'Net sales':              netSales,
+            'Shipping charges':       0,
+            'Return fees':            0,
+            'Taxes':                  0,
+            'Total sales':            netSales,
+            'Payment Tags':           paymentTags,
+          });
+        }
+      }
+
+      const link = respHeaders['link'] || '';
+      const next = link.match(/<([^>]+)>;\s*rel="next"/);
+      pageUrl = next ? next[1] : null;
+    }
+
+    const csvCols = ['Day','Order name','Product title','Product variant title','Customer name',
+                     'Gross sales','Discounts','Returns','Net sales','Shipping charges',
+                     'Return fees','Taxes','Total sales','Payment Tags'];
+    const escape  = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+    const csvLines = [
+      csvCols.join(','),
+      ...rows.map(r => csvCols.map(c => escape(r[c])).join(',')),
+    ];
+
+    const filename = `draft-orders-report-${new Date().toISOString().slice(0,10)}.csv`;
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    return res.send(csvLines.join('\r\n'));
+
+  } catch (err) {
+    console.error('draft-orders-report error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 app.post('/api/push-to-terminal', async (req, res) => {
   const { draftOrderId, draftOrderName, amountInRupees, locationId, terminalTag,
     isPartial = false, totalAmountInRupees = null, customerName = '' } = req.body;
