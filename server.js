@@ -2403,15 +2403,43 @@ app.post('/api/backfill-order-metafields', async (req, res) => {
 // Body: { orderId } for one order, or {} to process all orders with payment metafields.
 app.post('/api/backfill-order-tags', async (req, res) => {
   try {
-    const token = await getShopifyToken();
+    const token   = await getShopifyToken();
+    const headers = { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' };
 
+    // Single numeric order ID
     if (req.body.orderId) {
       const tagged = await applyPaymentTagsToOrder(req.body.orderId.toString(), token);
       return res.json({ success: true, tagged });
     }
 
-    // Batch mode — walk orders, filter to those with payment metafields
-    const headers = { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' };
+    // Order name range: { nameFrom: 1038, nameTo: 1053 }
+    if (req.body.nameFrom !== undefined || req.body.nameTo !== undefined) {
+      const from = parseInt(req.body.nameFrom);
+      const to   = parseInt(req.body.nameTo);
+      if (isNaN(from) || isNaN(to) || from > to) {
+        return res.status(400).json({ success: false, error: 'nameFrom and nameTo must be valid integers with nameFrom <= nameTo' });
+      }
+      let processed = 0, tagged = 0, errors = 0;
+      for (let n = from; n <= to; n++) {
+        try {
+          const { data } = await axios.get(
+            `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/orders.json?name=%23${n}&status=any`,
+            { headers, timeout: 10000 }
+          );
+          const order = (data.orders || [])[0];
+          if (!order) { console.log(`backfill-order-tags: order #${n} not found`); continue; }
+          const ok = await applyPaymentTagsToOrder(order.id.toString(), token);
+          if (ok) tagged++;
+          processed++;
+        } catch (err) {
+          console.error(`backfill-order-tags: #${n} failed:`, err.message);
+          errors++;
+        }
+      }
+      return res.json({ success: true, processed, tagged, errors });
+    }
+
+    // Batch mode — walk all orders
     let pageUrl = `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/orders.json?status=any&limit=250`;
     let processed = 0, tagged = 0, errors = 0;
 
