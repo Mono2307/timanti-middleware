@@ -2509,11 +2509,16 @@ app.post('/api/backfill-draft-tags', async (req, res) => {
       let processed = 0, tagged = 0, errors = 0;
       for (let n = from; n <= to; n++) {
         try {
-          const { data } = await axios.get(
-            `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders.json?name=%23${n}&status=any`,
-            { headers, timeout: 10000 }
-          );
-          const draft = (data.draft_orders || [])[0];
+          // Shopify has no status=any for draft orders — search open then invoice_sent
+          let draft = null;
+          for (const s of ['open', 'invoice_sent']) {
+            const { data } = await axios.get(
+              `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders.json?name=%23${n}&status=${s}`,
+              { headers, timeout: 10000 }
+            );
+            draft = (data.draft_orders || [])[0];
+            if (draft) break;
+          }
           if (!draft) { console.log(`backfill-draft-tags: draft #${n} not found`); continue; }
           const ok = await applyPaymentTagsToDraftOrder(draft.id.toString(), token);
           if (ok) tagged++;
