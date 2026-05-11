@@ -1468,6 +1468,70 @@ app.post('/api/shopify-draft-updated', async (req, res) => {
   }
 });
 
+app.post('/api/shopify-draft-completed', async (req, res) => {
+  res.status(200).send('OK');
+  try {
+    const draft = req.body;
+    if (!draft?.id || !draft?.order_id) {
+      console.log('Draft completed webhook: missing id or order_id, skipping');
+      return;
+    }
+    const draftOrderId = draft.id.toString();
+    const orderId      = draft.order_id.toString();
+    console.log(`Draft completed: #${draft.name} → order ${orderId}`);
+
+    const token   = await getShopifyToken();
+    const headers = { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' };
+
+    // Read draft metafields
+    const { data: mfData } = await axios.get(
+      `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}/metafields.json`,
+      { headers, timeout: 10000 }
+    );
+    const draftMfs = (mfData.metafields || []).filter(mf => mf.namespace === 'custom');
+    if (!draftMfs.length) {
+      console.log(`Draft completed: no custom metafields to copy for #${draft.name}`);
+      return;
+    }
+
+    // Read existing order metafields to update-by-id rather than create duplicates
+    const { data: existingMfData } = await axios.get(
+      `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/orders/${orderId}/metafields.json`,
+      { headers, timeout: 10000 }
+    );
+    const existingByKey = {};
+    for (const mf of (existingMfData.metafields || [])) {
+      if (mf.namespace === 'custom') existingByKey[mf.key] = mf.id;
+    }
+
+    // Write each draft metafield to the order
+    let copied = 0;
+    for (const mf of draftMfs) {
+      const body = { metafield: { namespace: 'custom', key: mf.key, value: String(mf.value), type: mf.type } };
+      const existingId = existingByKey[mf.key];
+      try {
+        if (existingId) {
+          await axios.put(
+            `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/orders/${orderId}/metafields/${existingId}.json`,
+            body, { headers, timeout: 10000 }
+          );
+        } else {
+          await axios.post(
+            `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/orders/${orderId}/metafields.json`,
+            body, { headers, timeout: 10000 }
+          );
+        }
+        copied++;
+      } catch (mfErr) {
+        console.error(`Draft completed: failed to copy metafield ${mf.key}:`, mfErr.response?.data || mfErr.message);
+      }
+    }
+    console.log(`Draft completed: copied ${copied}/${draftMfs.length} metafields → order ${orderId}`);
+  } catch (err) {
+    console.error('Draft completed webhook error:', err.message);
+  }
+});
+
 app.post('/pricing/recalculate', async (req, res) => {
   const { draftOrderId } = req.body;
   if (!draftOrderId) {
@@ -1726,6 +1790,11 @@ app.post('/api/form-reprice', async (req, res) => {
         if (rateForItem > 0) {
           newProps.push({ name: '_gold_rate',       value: rateForItem.toFixed(2) });
           newProps.push({ name: '_gold_updated_at', value: lockedAt               });
+        } else {
+          const existingRate = (item.properties || []).find(p => p.name === '_gold_rate');
+          const existingTs   = (item.properties || []).find(p => p.name === '_gold_updated_at');
+          if (existingRate) newProps.push({ name: '_gold_rate',       value: existingRate.value });
+          if (existingTs)   newProps.push({ name: '_gold_updated_at', value: existingTs.value   });
         }
         const existingJd = (item.properties || []).find(p => p.name === '_jewel_data');
         let jd = {};

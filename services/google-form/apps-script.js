@@ -51,15 +51,23 @@
 const SERVER_URL = 'https://YOUR_SERVER_URL_HERE'; // ← replace
 
 function onFormSubmit(e) {
-  if (!e || !e.response) {
+  if (!e || (!e.response && !e.namedValues)) {
     Logger.log('onFormSubmit called without a valid event object. Run via trigger, not manually.');
     return;
   }
 
   try {
     const answers = {};
-    for (const r of e.response.getItemResponses()) {
-      answers[r.getItem().getTitle()] = r.getResponse();
+    if (e.response) {
+      // Form-bound trigger or testRow4() — e.response has getItemResponses()
+      for (const r of e.response.getItemResponses()) {
+        answers[r.getItem().getTitle()] = r.getResponse();
+      }
+    } else {
+      // Spreadsheet-bound trigger — e.namedValues keys are field titles, values are single-element arrays
+      for (const [key, val] of Object.entries(e.namedValues)) {
+        answers[key] = Array.isArray(val) ? val[0] : val;
+      }
     }
 
     const rawId        = String(answers['Draft Order ID'] || '').trim();
