@@ -1352,6 +1352,115 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
 }
 
 // Reads payment metafields and writes corresponding payment tags.
+// Copies all custom metafields from a completed draft order to its resulting order.
+async function copyDraftMetafieldsToOrder(draftOrderId, orderId, token) {
+  const headers = { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' };
+
+  const { data: mfData } = await axios.get(
+    `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}/metafields.json`,
+    { headers, timeout: 10000 }
+  );
+  const draftMfs = (mfData.metafields || []).filter(mf => mf.namespace === 'custom');
+  if (!draftMfs.length) return 0;
+
+  const { data: existingMfData } = await axios.get(
+    `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/orders/${orderId}/metafields.json`,
+    { headers, timeout: 10000 }
+  );
+  const existingByKey = {};
+  for (const mf of (existingMfData.metafields || [])) {
+    if (mf.namespace === 'custom') existingByKey[mf.key] = mf.id;
+  }
+
+  let copied = 0;
+  for (const mf of draftMfs) {
+    const body = { metafield: { namespace: 'custom', key: mf.key, value: String(mf.value), type: mf.type } };
+    try {
+      const existingId = existingByKey[mf.key];
+      if (existingId) {
+        await axios.put(
+          `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/orders/${orderId}/metafields/${existingId}.json`,
+          body, { headers, timeout: 10000 }
+        );
+      } else {
+        await axios.post(
+          `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/orders/${orderId}/metafields.json`,
+          body, { headers, timeout: 10000 }
+        );
+      }
+      copied++;
+    } catch (err) {
+      console.error(`copyDraftMetafieldsToOrder: failed ${mf.key}:`, err.response?.data || err.message);
+    }
+  }
+  return copied;
+}
+
+// Reads custom metafields from an order and writes payment tags to it.
+// Tags written: deposit:fully-paid/partial, paid:Rs{n}, pending:Rs{n},
+//               total:Rs{n}, pmode-advance:{mode}, pmode-final:{mode}
+//
+// Logic:
+//   amount_paid < total                                → advance-only (partial)
+//   amount_paid == total AND pending == 0 AND modeAdvance set → installment complete
+//     → keep pmode-advance AND add pmode-final; paid = total (backfill: one-payment view)
+//   amount_paid == total AND no modeAdvance            → single payment, full
+async function applyPaymentTagsToOrder(orderId, token) {
+  const headers = { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' };
+
+  const [{ data: orderData }, { data: mfData }] = await Promise.all([
+    axios.get(`${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/orders/${orderId}.json`, { headers, timeout: 10000 }),
+    axios.get(`${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/orders/${orderId}/metafields.json`, { headers, timeout: 10000 }),
+  ]);
+
+  const order      = orderData.order;
+  const totalPrice = Math.round(parseFloat(order.total_price || 0));
+
+  const mf = (key) => {
+    const m = (mfData.metafields || []).find(m => m.namespace === 'custom' && m.key === key);
+    return m ? m.value : null;
+  };
+
+  const paymentStatus = mf('payment_status');
+  const isFinalized   = mf('is_finalized') === 'true';
+  const amountPaid    = Math.round(parseFloat(mf('amount_paid')    || 0));
+  const amountPending = Math.round(parseFloat(mf('amount_pending') || 0));
+  const modeAdvance   = mf('payment_mode_advance');
+  const modeFinal     = mf('payment_mode_final');
+
+  // Full if explicitly flagged, or amount covers total with nothing pending
+  const isFull = isFinalized || paymentStatus === 'full' ||
+                 (totalPrice > 0 && amountPaid >= totalPrice && amountPending === 0);
+  const isPartial = !isFull && amountPaid > 0;
+  if (!isFull && !isPartial) return false;
+
+  const isInstallmentComplete = isFull && !!modeAdvance;
+
+  const existingTags = (order.tags || '').split(',').map(t => t.trim()).filter(Boolean);
+  const cleanedTags  = existingTags.filter(t =>
+    !t.startsWith('deposit:') && !t.startsWith('paid:') &&
+    !t.startsWith('pending:') && !t.startsWith('pmode-') && !t.startsWith('total:')
+  );
+
+  const paymentTags = [
+    isFull ? 'deposit:fully-paid' : 'deposit:partial',
+    `paid:Rs${amountPaid}`,
+    ...(isPartial && amountPending > 0 ? [`pending:Rs${amountPending}`] : []),
+    `total:Rs${totalPrice}`,
+    // For installment-complete orders include BOTH modes; partial only has advance
+    ...(modeAdvance ? [`pmode-advance:${modeAdvance}`] : []),
+    ...(modeFinal   ? [`pmode-final:${modeFinal}`]   : []),
+  ];
+
+  await axios.put(
+    `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/orders/${orderId}.json`,
+    { order: { id: parseInt(orderId), tags: [...cleanedTags, ...paymentTags].join(', ') } },
+    { headers, timeout: 10000 }
+  );
+  console.log(`Order ${orderId}: tags [${paymentTags.join(', ')}]${isInstallmentComplete ? ' (installment-complete)' : ''}`);
+  return true;
+}
+
 // Called either via sync-payment tag (draft_orders/update) or metafields/update webhook.
 async function syncPaymentMetafieldsToTags(draftOrderId, existingTags) {
   const token = await getShopifyToken();
@@ -1421,58 +1530,20 @@ app.post('/api/shopify-draft-updated', async (req, res) => {
     const draft = req.body;
     if (!draft?.id) return;
 
-    // When a draft is converted to an order, copy all custom metafields across
+    // When a draft is converted to an order, copy metafields and write payment tags
     if (draft.status === 'completed' && draft.order_id) {
       const draftOrderId = draft.id.toString();
       const orderId      = draft.order_id.toString();
-      console.log(`Draft completed: #${draft.name} → order ${orderId}, copying metafields`);
+      console.log(`Draft completed: #${draft.name} → order ${orderId}`);
       try {
-        const token   = await getShopifyToken();
-        const headers = { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' };
-
-        const { data: mfData } = await axios.get(
-          `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}/metafields.json`,
-          { headers, timeout: 10000 }
-        );
-        const draftMfs = (mfData.metafields || []).filter(mf => mf.namespace === 'custom');
-
-        if (draftMfs.length) {
-          const { data: existingMfData } = await axios.get(
-            `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/orders/${orderId}/metafields.json`,
-            { headers, timeout: 10000 }
-          );
-          const existingByKey = {};
-          for (const mf of (existingMfData.metafields || [])) {
-            if (mf.namespace === 'custom') existingByKey[mf.key] = mf.id;
-          }
-
-          let copied = 0;
-          for (const mf of draftMfs) {
-            const body = { metafield: { namespace: 'custom', key: mf.key, value: String(mf.value), type: mf.type } };
-            try {
-              const existingId = existingByKey[mf.key];
-              if (existingId) {
-                await axios.put(
-                  `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/orders/${orderId}/metafields/${existingId}.json`,
-                  body, { headers, timeout: 10000 }
-                );
-              } else {
-                await axios.post(
-                  `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/orders/${orderId}/metafields.json`,
-                  body, { headers, timeout: 10000 }
-                );
-              }
-              copied++;
-            } catch (mfErr) {
-              console.error(`Draft completed: failed to copy metafield ${mf.key}:`, mfErr.response?.data || mfErr.message);
-            }
-          }
-          console.log(`Draft completed: copied ${copied}/${draftMfs.length} metafields → order ${orderId}`);
-        }
+        const token  = await getShopifyToken();
+        const copied = await copyDraftMetafieldsToOrder(draftOrderId, orderId, token);
+        console.log(`Draft completed: copied ${copied} metafields → order ${orderId}`);
+        await applyPaymentTagsToOrder(orderId, token);
       } catch (err) {
-        console.error('Draft completed metafield copy error:', err.message);
+        console.error('Draft completed handler error:', err.message);
       }
-      return; // conversion webhooks carry no other actionable tags
+      return;
     }
 
     // Tag-based handlers (fire independently, each removes its own tag)
@@ -2278,6 +2349,93 @@ app.post('/api/trigger-price-update', async (req, res) => {
     set_at:    setAt,
     mode:      testGati ? `test:${testGati}` : 'full',
   });
+});
+
+// ─────────────────────────────────────────
+// Backfill endpoints
+// ─────────────────────────────────────────
+
+// POST /api/backfill-order-metafields
+// Fetches completed draft orders (paginated) and copies their custom metafields to the
+// resulting order. Body: { draftOrderId, orderId } for a single pair, or {} for all.
+app.post('/api/backfill-order-metafields', async (req, res) => {
+  try {
+    const token = await getShopifyToken();
+
+    if (req.body.draftOrderId && req.body.orderId) {
+      const copied = await copyDraftMetafieldsToOrder(
+        req.body.draftOrderId.toString(), req.body.orderId.toString(), token
+      );
+      return res.json({ success: true, processed: 1, copied });
+    }
+
+    // Batch mode — walk all completed draft orders
+    const headers = { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' };
+    let pageUrl = `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders.json?status=completed&limit=250`;
+    let processed = 0, totalCopied = 0, errors = 0;
+
+    while (pageUrl) {
+      const { data, headers: respHeaders } = await axios.get(pageUrl, { headers, timeout: 30000 });
+      for (const d of (data.draft_orders || [])) {
+        if (!d.order_id) continue;
+        try {
+          const copied = await copyDraftMetafieldsToOrder(d.id.toString(), d.order_id.toString(), token);
+          totalCopied += copied;
+          processed++;
+        } catch (err) {
+          console.error(`backfill-order-metafields: draft ${d.id} → order ${d.order_id} failed:`, err.message);
+          errors++;
+        }
+      }
+      const link = respHeaders['link'] || '';
+      const next = link.match(/<([^>]+)>;\s*rel="next"/);
+      pageUrl = next ? next[1] : null;
+    }
+
+    return res.json({ success: true, processed, totalCopied, errors });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST /api/backfill-order-tags
+// Reads custom payment metafields from an order (or recent orders) and writes payment tags.
+// Body: { orderId } for one order, or {} to process all orders with payment metafields.
+app.post('/api/backfill-order-tags', async (req, res) => {
+  try {
+    const token = await getShopifyToken();
+
+    if (req.body.orderId) {
+      const tagged = await applyPaymentTagsToOrder(req.body.orderId.toString(), token);
+      return res.json({ success: true, tagged });
+    }
+
+    // Batch mode — walk orders, filter to those with payment metafields
+    const headers = { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' };
+    let pageUrl = `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/orders.json?status=any&limit=250`;
+    let processed = 0, tagged = 0, errors = 0;
+
+    while (pageUrl) {
+      const { data, headers: respHeaders } = await axios.get(pageUrl, { headers, timeout: 30000 });
+      for (const order of (data.orders || [])) {
+        try {
+          const ok = await applyPaymentTagsToOrder(order.id.toString(), token);
+          if (ok) tagged++;
+          processed++;
+        } catch (err) {
+          console.error(`backfill-order-tags: order ${order.id} failed:`, err.message);
+          errors++;
+        }
+      }
+      const link = respHeaders['link'] || '';
+      const next = link.match(/<([^>]+)>;\s*rel="next"/);
+      pageUrl = next ? next[1] : null;
+    }
+
+    return res.json({ success: true, processed, tagged, errors });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
 });
 
 // ─────────────────────────────────────────
