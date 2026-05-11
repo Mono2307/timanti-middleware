@@ -1423,14 +1423,14 @@ async function applyPaymentTagsToOrder(orderId, token) {
 
   const paymentStatus = mf('payment_status');
   const isFinalized   = mf('is_finalized') === 'true';
-  const amountPaid    = Math.round(parseFloat(mf('amount_paid')    || 0));
-  const amountPending = Math.round(parseFloat(mf('amount_pending') || 0));
+  const amountPaid    = parseFloat(mf('amount_paid')    || 0);
+  const amountPending = parseFloat(mf('amount_pending') || 0);
   const modeAdvance   = mf('payment_mode_advance');
   const modeFinal     = mf('payment_mode_final');
 
-  // Full if explicitly flagged, or amount covers total with nothing pending
-  const isFull = isFinalized || paymentStatus === 'full' ||
-                 (totalPrice > 0 && amountPaid >= totalPrice && amountPending === 0);
+  // Allow up to 1 rupee rounding difference when comparing paid vs total
+  const paidCoversTotal = totalPrice > 0 && (totalPrice - amountPaid) <= 1 && amountPending < 1;
+  const isFull    = isFinalized || paymentStatus === 'full' || paidCoversTotal;
   const isPartial = !isFull && amountPaid > 0;
   if (!isFull && !isPartial) return false;
 
@@ -1444,8 +1444,8 @@ async function applyPaymentTagsToOrder(orderId, token) {
 
   const paymentTags = [
     isFull ? 'deposit:fully-paid' : 'deposit:partial',
-    `paid:Rs${amountPaid}`,
-    ...(isPartial && amountPending > 0 ? [`pending:Rs${amountPending}`] : []),
+    `paid:Rs${Math.round(amountPaid)}`,
+    ...(isPartial && amountPending > 0 ? [`pending:Rs${Math.round(amountPending)}`] : []),
     `total:Rs${totalPrice}`,
     // For installment-complete orders include BOTH modes; partial only has advance
     ...(modeAdvance ? [`pmode-advance:${modeAdvance}`] : []),
