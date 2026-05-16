@@ -1,4 +1,5 @@
 require('dotenv').config();
+const path    = require('path');
 const express = require('express');
 const cors    = require('cors');
 const axios   = require('axios');
@@ -1640,9 +1641,18 @@ async function applyPaymentTagsToDraftOrder(draftOrderId, token) {
     ...(modeFinal   ? [`pmode-final:${modeFinal}`]   : []),
   ];
 
+  const proposedTags = [...cleanedTags, ...paymentTags];
+  const proposedSet  = new Set(proposedTags.map(t => t.toLowerCase()));
+  const existingSet  = new Set(existingTags.map(t => t.toLowerCase()));
+  const unchanged = proposedSet.size === existingSet.size && [...proposedSet].every(t => existingSet.has(t));
+  if (unchanged) {
+    console.log(`Draft ${draftOrderId}: payment tags unchanged, skipping PUT`);
+    return true;
+  }
+
   await axios.put(
     `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}.json`,
-    { draft_order: { id: parseInt(draftOrderId), tags: [...cleanedTags, ...paymentTags].join(', ') } },
+    { draft_order: { id: parseInt(draftOrderId), tags: proposedTags.join(', ') } },
     { headers, timeout: 10000 }
   );
   console.log(`Draft ${draftOrderId}: tags [${paymentTags.join(', ')}]`);
@@ -2666,6 +2676,29 @@ app.post('/api/backfill-order-tags', async (req, res) => {
     return res.json({ success: true, processed, tagged, errors });
   } catch (err) {
     return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ─────────────────────────────────────────
+// Recon report
+// ─────────────────────────────────────────
+
+const { runRecon, toCSV: reconToCSV } = require('./services/recon/recon');
+
+app.get('/api/recon', async (req, res) => {
+  try {
+    const reconDir = path.join(__dirname, 'Recon Test');
+    const token    = await getShopifyToken();
+    const rows     = await runRecon({ dir: reconDir, storeUrl: process.env.SHOPIFY_STORE_URL, token });
+    if ((req.query.format || '').toLowerCase() === 'json') {
+      return res.json({ success: true, count: rows.length, rows });
+    }
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename="recon-${new Date().toISOString().slice(0,10)}.csv"`);
+    res.send(reconToCSV(rows));
+  } catch (err) {
+    console.error('Recon error:', err);
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
