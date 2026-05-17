@@ -5,7 +5,6 @@ const cors    = require('cors');
 const axios   = require('axios');
 const { createClient } = require('@supabase/supabase-js');
 const { sendEmail, sendDepositEmail } = require('./emailService');
-const { recalculate: recalculatePricing } = require('./services/pricing-engine');
 const { handlePoWebhook } = require('./services/po-ops/webhook');
 const { handlePoAction }  = require('./services/po-ops/action');
 const { createPaymentLink: createGokwikLink, cancelPaymentLink: cancelGokwikLink } = require('./services/gokwik');
@@ -209,8 +208,9 @@ async function tagShopifyDraftOrder(shopifyDraftId, amountPaid, amountPending, s
 }
 
 function getMetafieldType(key) {
-  if (key === 'amount_paid' || key === 'amount_pending') return 'number_decimal';
+  if (key === 'amount_paid' || key === 'amount_pending' || key === 'gold_rate') return 'number_decimal';
   if (key === 'is_finalized') return 'boolean';
+  if (key === 'gold_rate_date') return 'date_time';
   return 'single_line_text_field';
 }
 
@@ -748,17 +748,21 @@ app.post('/api/shopify-draft-created', async (req, res) => {
     const terminalTag       = parseTerminalTag(draft.tags);
     console.log(`Shopify draft created: ${draftOrderName} Rs${amountInRupees}`);
 
-    // Run recalculation on every draft creation to lock gold rate as line item properties
+    // Auto-hydrate line item properties (Gold, Diamond, Making, _gold_rate, weights) from variant metafields
     try {
       const token = await getShopifyToken();
-      await recalculatePricing({
-        draftOrderId:    draft.id,
-        shopifyToken:    token,
-        shopifyStoreUrl: process.env.SHOPIFY_STORE_URL
-      });
-      console.log(`Draft created: gold rate locked for ${draftOrderName}`);
-    } catch (recalcErr) {
-      console.error(`Draft created: recalculation failed for ${draftOrderName}:`, recalcErr.message);
+      const variantItems = (draft.line_items || []).filter(item => item.variant_id);
+      if (variantItems.length > 0) {
+        const hydrated = await Promise.all(variantItems.map(item => hydrateItemFromVariant(item, token)));
+        const allItems = (draft.line_items || []).map(item => {
+          const h = hydrated.find(u => u.id === item.id);
+          return h || { variant_id: item.variant_id || undefined, quantity: item.quantity, price: item.price, properties: item.properties || [], title: item.title };
+        });
+        await gqlSetDraftLineItems(draft.id.toString(), allItems, token, {});
+        console.log(`Draft created: properties hydrated for ${draftOrderName}`);
+      }
+    } catch (hydrateErr) {
+      console.error(`Draft created: hydration failed for ${draftOrderName}:`, hydrateErr.message);
     }
 
     if (!AUTO_PUSH_TO_TERMINAL) { console.log(`Auto-push OFF — cashier pushes manually`); return; }
@@ -1182,11 +1186,66 @@ async function gqlSetDraftLineItems(draftOrderId, lineItems, token, opts = {}) {
   return resp.data?.data?.draftOrderUpdate?.draftOrder?.lineItems?.nodes || [];
 }
 
-// Tags: recalculate-price (threshold — reprice only if delta > 5%) | force-reprice (blanket — always reprice)
+// Fetches variant + product metafields for a line item.
+async function fetchItemMeta(item, token) {
+  const headers = { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' };
+  const varMf  = {};
+  const prodMf = {};
+  if (item.variant_id) {
+    const { data: vData } = await axios.get(
+      `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/variants/${item.variant_id}/metafields.json`,
+      { headers, timeout: 10000 }
+    );
+    for (const m of (vData.metafields || [])) if (m.namespace === 'custom') varMf[m.key] = m.value;
+  }
+  if (item.product_id) {
+    const { data: pData } = await axios.get(
+      `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/products/${item.product_id}/metafields.json`,
+      { headers, timeout: 10000 }
+    );
+    for (const m of (pData.metafields || [])) if (m.namespace === 'custom') prodMf[m.key] = m.value;
+  }
+  return { varMf, prodMf };
+}
+
+// Stamps Gold/Diamond/Making/physical props from variant metafields onto a line item.
+// Bootstraps _gold_rate from variant if not already locked. Does NOT change price.
+async function hydrateItemFromVariant(item, token) {
+  const { varMf, prodMf } = await fetchItemMeta(item, token);
+  const grossWt    = parseFloat(varMf.gross_wt   || 0);
+  const netWt      = parseFloat(varMf.net_wt      || 0);
+  const diaCts     = parseFloat(prodMf.totaldiamondweight || 0);
+  const gemCts     = parseFloat(prodMf.gemstone_weight    || 0);
+  const goldVal    = parseFloat(varMf.price_breakup_gold    || 0) * item.quantity;
+  const diaVal     = parseFloat(varMf.price_breakup_diamond || 0) * item.quantity;
+  const makingVal  = parseFloat(varMf.price_breakup_making  || 0) * item.quantity;
+  const grossVal   = goldVal + diaVal + makingVal;
+  const jewel_code = varMf.jewel_code || '';
+  const goldRate   = varMf.gold_rate  || '';
+  const hydratedProps = { '_jewel_code': jewel_code };
+  if (grossWt > 0)   hydratedProps['_gross_wt']     = grossWt.toFixed(3);
+  if (netWt > 0)     hydratedProps['_net_wt']       = netWt.toFixed(3);
+  if (diaCts > 0)    hydratedProps['_diamond_cts']  = diaCts.toFixed(2);
+  if (gemCts > 0)    hydratedProps['_gemstone_cts'] = gemCts.toFixed(2);
+  if (goldVal > 0)   hydratedProps['Gold']          = `Rs${goldVal.toFixed(2)}`;
+  if (diaVal > 0)    hydratedProps['Diamond']       = `Rs${diaVal.toFixed(2)}`;
+  if (makingVal > 0) hydratedProps['Making']        = `Rs${makingVal.toFixed(2)}`;
+  if (grossVal > 0)  hydratedProps['Gross Value']   = `Rs${grossVal.toFixed(2)}`;
+  const updatedProps = (item.properties || [])
+    .filter(p => !(p.name in hydratedProps))
+    .concat(Object.entries(hydratedProps).map(([n, v]) => ({ name: n, value: v })));
+  // Bootstrap _gold_rate from variant only if not already locked on the line item
+  const hasLockedRate = (item.properties || []).some(p => p.name === '_gold_rate');
+  if (!hasLockedRate && goldRate) updatedProps.push({ name: '_gold_rate', value: goldRate });
+  return { id: item.id, variant_id: item.variant_id || undefined, quantity: item.quantity, price: item.price, properties: updatedProps, title: item.title };
+}
+
+// Tags: recalculate-price (threshold — reprice only if delta > 5%) | reprice (blanket — always reprices, or fixes discount/GST if no weights)
 // Both modes always write jewel hidden props (_net_wt, _gross_wt, _jewel_data, etc.) to the line item.
-// Tag is removed atomically in the same PUT (loop prevention).
+// Gold rate override: if custom.gold_rate is set on the draft order metafields, it overrides _gold_rate and bypasses the 5% threshold.
+// Tag is removed atomically in the same GraphQL call (loop prevention).
 async function handleRecalculatePriceTag(draft, { force = false } = {}) {
-  const tagToProcess = force ? 'force-reprice' : 'recalculate-price';
+  const tagToProcess = force ? 'reprice' : 'recalculate-price';
   console.log(`handleRecalculatePriceTag called — draft=${draft?.id}, force=${force}, tags="${draft?.tags}"`);
   const tags = (draft.tags || '').split(',').map(t => t.trim());
   if (!tags.some(t => t.toLowerCase() === tagToProcess)) {
@@ -1208,6 +1267,10 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
   for (const mf of (mfData.metafields || [])) {
     if (mf.namespace === 'custom') mfMap[mf.key] = mf.value;
   }
+
+  // Gold rate override: if custom.gold_rate is set on the draft, use it instead of the locked line item rate.
+  // This is the signal from the Google Form / staff manual entry path.
+  const mfGoldRate = mfMap['gold_rate'] ? parseFloat(mfMap['gold_rate']) : null;
 
   // Draft metafield values can be comma-separated for 2-item drafts: "5.2, 3.8" → item[0]=5.2, item[1]=3.8
   const csvF = (key) => (mfMap[key] || '').split(',').map(s => { const f = parseFloat(s.trim()); return isNaN(f) ? null : f; });
@@ -1246,53 +1309,8 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
     }
   };
 
-  // Fetch variant metafields (gold rate, price breakups, jewel_code) + product metafields (dia/gemstone cts)
-  const fetchItemMeta = async (item) => {
-    const varMf  = {};
-    const prodMf = {};
-    if (item.variant_id) {
-      const { data: vData } = await axios.get(
-        `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/variants/${item.variant_id}/metafields.json`,
-        { headers, timeout: 10000 }
-      );
-      for (const m of (vData.metafields || [])) if (m.namespace === 'custom') varMf[m.key] = m.value;
-    }
-    if (item.product_id) {
-      const { data: pData } = await axios.get(
-        `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/products/${item.product_id}/metafields.json`,
-        { headers, timeout: 10000 }
-      );
-      for (const m of (pData.metafields || [])) if (m.namespace === 'custom') prodMf[m.key] = m.value;
-    }
-    return { varMf, prodMf };
-  };
-
-  // force-reprice with no measured weight: stamp all line items from variant+product metafields
-  const hydrateFromVariant = async (item) => {
-    const { varMf, prodMf } = await fetchItemMeta(item);
-    const grossWt   = parseFloat(varMf.gross_wt   || 0);
-    const netWt     = parseFloat(varMf.net_wt      || 0);
-    const diaCts    = parseFloat(prodMf.totaldiamondweight || 0);
-    const gemCts    = parseFloat(prodMf.gemstone_weight    || 0);
-    const goldVal   = parseFloat(varMf.price_breakup_gold    || 0) * item.quantity;
-    const diaVal    = parseFloat(varMf.price_breakup_diamond || 0) * item.quantity;
-    const makingVal = parseFloat(varMf.price_breakup_making  || 0) * item.quantity;
-    const grossVal  = goldVal + diaVal + makingVal;
-    const jewel_code = varMf.jewel_code || '';
-    const hydratedProps = { '_jewel_code': jewel_code };
-    if (grossWt > 0)   hydratedProps['_gross_wt']     = grossWt.toFixed(3);
-    if (netWt > 0)     hydratedProps['_net_wt']       = netWt.toFixed(3);
-    if (diaCts > 0)    hydratedProps['_diamond_cts']  = diaCts.toFixed(2);
-    if (gemCts > 0)    hydratedProps['_gemstone_cts'] = gemCts.toFixed(2);
-    if (goldVal > 0)   hydratedProps['Gold']          = `Rs${goldVal.toFixed(2)}`;
-    if (diaVal > 0)    hydratedProps['Diamond']       = `Rs${diaVal.toFixed(2)}`;
-    if (makingVal > 0) hydratedProps['Making']        = `Rs${makingVal.toFixed(2)}`;
-    if (grossVal > 0)  hydratedProps['Gross Value']   = `Rs${grossVal.toFixed(2)}`;
-    const updatedProps = (item.properties || [])
-      .filter(p => !(p.name in hydratedProps))
-      .concat(Object.entries(hydratedProps).map(([n, v]) => ({ name: n, value: v })));
-    return { id: item.id, variant_id: item.variant_id || undefined, quantity: item.quantity, price: item.price, properties: updatedProps };
-  };
+  // Fetch variant/product metafields for each item using the extracted top-level helper
+  const fetchItemMetaLocal = (item) => fetchItemMeta(item, token);
 
   if (!hasAnyNetWt) {
     if (!force) {
@@ -1300,14 +1318,52 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
       await removeTagFromDraft(draftOrderId, tagToProcess);
       return;
     }
-    console.log(`Draft ${draftOrderId}: force-reprice — no jewelcode_net_weight, hydrating all line items from variant/product data`);
-    const hydratedItems   = await Promise.all(productItems.map(item => hydrateFromVariant(item)));
+    // reprice tag, no weight data: hydrate breakdown from variant + fix discount/GST math atomically
+    const r2 = (v) => Math.round(v * 100) / 100;
+    const pGross = productItems.reduce((sum, item) => sum + parseFloat(item.price) * item.quantity, 0);
+    const discObj = draft.applied_discount;
+    let discAmt = 0;
+    if (discObj) {
+      const ra = parseFloat(discObj.amount || 0);
+      const rv = parseFloat(discObj.value  || 0);
+      discAmt = ra > 0 ? ra : rv;
+    }
+    const intendedFinal    = r2(Math.max(0, pGross - discAmt));
+    const taxableTotal     = r2(intendedFinal / 1.03);
+    const correctDiscTotal = r2(pGross / 1.03 - taxableTotal);
+
+    const hydratedItems = await Promise.all(productItems.map(async (item) => {
+      const h = await hydrateItemFromVariant(item, token);
+      const proportion  = pGross > 0 ? (parseFloat(item.price) * item.quantity) / pGross : 1 / productItems.length;
+      const itemTaxable = r2(taxableTotal * proportion);
+      const itemGst     = r2(itemTaxable * 0.03);
+      const itemFinal   = r2(itemTaxable + itemGst);
+      const itemDisc    = r2(correctDiscTotal * proportion);
+      const grossValue  = r2(itemFinal + itemDisc);
+      const unitPrice   = r2(itemFinal / (item.quantity || 1));
+      const FINANCIAL   = new Set(['Taxable Value', 'GST', 'Gross Value', 'Discount Applied', '_gold_rate']);
+      const filteredProps = h.properties.filter(p => !FINANCIAL.has(p.name));
+      filteredProps.push(
+        { name: 'Taxable Value',    value: `Rs${itemTaxable.toFixed(2)}` },
+        { name: 'GST',             value: `Rs${itemGst.toFixed(2)}` },
+        { name: 'Gross Value',      value: `Rs${grossValue.toFixed(2)}` },
+        { name: 'Discount Applied', value: `Rs${itemDisc.toFixed(2)}` },
+      );
+      // Apply gold rate override if present, otherwise preserve locked rate
+      const existingRate = (item.properties || []).find(p => p.name === '_gold_rate');
+      const effectiveRate = mfGoldRate ? String(mfGoldRate) : (existingRate?.value || h.properties.find(p => p.name === '_gold_rate')?.value || '');
+      if (effectiveRate) filteredProps.push({ name: '_gold_rate', value: effectiveRate });
+      return { ...h, price: unitPrice.toFixed(2), properties: filteredProps };
+    }));
+
     const allUpdatedItems = (draft.line_items || []).map(item => {
       const h = hydratedItems.find(u => u.id === item.id);
-      return h || { variant_id: item.variant_id || undefined, quantity: item.quantity, price: item.price, properties: item.properties || [], title: item.title };
+      return h
+        ? { variant_id: h.variant_id, quantity: h.quantity, price: h.price, properties: h.properties, title: item.title }
+        : { variant_id: item.variant_id || undefined, quantity: item.quantity, price: item.price, properties: item.properties || [], title: item.title };
     });
-    await gqlSetDraftLineItems(draftOrderId, allUpdatedItems, token, { tags: tagsWithoutRecalc });
-    console.log(`Draft ${draftOrderId}: force-reprice hydration done — ${hydratedItems.length} items written`);
+    await gqlSetDraftLineItems(draftOrderId, allUpdatedItems, token, { tags: tagsWithoutRecalc, clearDiscount: true });
+    console.log(`Draft ${draftOrderId}: reprice (no weights) — ${hydratedItems.length} items updated`);
     return;
   }
 
@@ -1323,15 +1379,17 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
     const props = {};
     for (const p of (item.properties || [])) props[p.name] = p.value;
 
-    const { varMf, prodMf } = await fetchItemMeta(item);
+    const { varMf, prodMf } = await fetchItemMetaLocal(item);
 
-    let goldRate = parseFloat(props['_gold_rate']);
+    let goldRate = mfGoldRate || parseFloat(props['_gold_rate']);
+    let goldRateOverridden = !!(mfGoldRate && mfGoldRate > 0);
     let bootstrapGoldRate = false;
     if (!goldRate && varMf.gold_rate) {
       goldRate = parseFloat(varMf.gold_rate);
       bootstrapGoldRate = true;
       console.log(`Draft ${draftOrderId} item ${item.id}: bootstrapping _gold_rate=${goldRate} from variant`);
     }
+    if (goldRateOverridden) console.log(`Draft ${draftOrderId} item ${item.id}: gold rate override from draft metafield: ${goldRate}`);
 
     const goldPropValue = parseFloat((props['Gold'] || '0').replace('Rs', '').trim());
     const oldGold = goldPropValue || parseFloat(varMf.price_breakup_gold || 0) * (item.quantity || 1);
@@ -1396,7 +1454,7 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
     const { item, idx } = result;
 
     if (result.hydrate) {
-      repricedMap.set(item.id, await hydrateFromVariant(item));
+      repricedMap.set(item.id, await hydrateItemFromVariant(item, token));
       return;
     }
     if (result.skip) return;
@@ -1418,7 +1476,7 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
       '_jewel_code':   jewel_code,
     };
 
-    if (!force && delta <= 0.05) {
+    if (!force && delta <= 0.05 && !goldRateOverridden) {
       const jewel_data = JSON.stringify({
         jewel_code, gross_wt: newGrossWt, net_wt: newNetWt,
         diamond_cts: newDiaCts, gemstone_cts: newGemCts,
@@ -1458,7 +1516,7 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
       ...jewelHiddenProps,
       '_jewel_data':      jewel_data,
     };
-    if (bootstrapGoldRate) repricedProps['_gold_rate'] = goldRate.toString();
+    if (bootstrapGoldRate || goldRateOverridden) repricedProps['_gold_rate'] = goldRate.toString();
 
     const updatedProperties = (item.properties || []).filter(p => !(p.name in repricedProps));
     for (const [name, value] of Object.entries(repricedProps)) updatedProperties.push({ name, value });
@@ -1700,68 +1758,17 @@ app.post('/api/shopify-draft-updated', async (req, res) => {
     await handleRecalculatePriceTag(draft, { force: true });
     await handlePaymentMetafieldSync(draft);
 
-    // Existing: discount-driven recalculation
-    const discountObj = draft.applied_discount;
-    let discountAmount = 0;
-    if (discountObj) {
-      const rawAmount = parseFloat(discountObj.amount || 0);
-      const rawValue  = parseFloat(discountObj.value  || 0);
-      discountAmount  = rawAmount > 0 ? rawAmount : rawValue;
-    }
-
-    if (!discountAmount || discountAmount <= 0) {
-      console.log(`Draft updated webhook: #${draft.name} — no discount, skipping`);
-      return;
-    }
-
-    // Skip if properties already reflect this exact discount (loop prevention)
-    const productItems = (draft.line_items || []).filter(
-      item => !((item.title || '').toLowerCase().includes('discount') && parseFloat(item.price) < 0)
-    );
-    const existingRecalcDiscount = productItems.reduce((sum, item) => {
-      const prop = (item.properties || []).find(p => p.name === 'Discount Applied');
-      return sum + (prop ? parseFloat((prop.value || '0').replace('Rs', '')) : 0);
-    }, 0);
-    if (Math.abs(existingRecalcDiscount - discountAmount) < 0.01) {
-      console.log(`Draft updated webhook: #${draft.name} — already recalculated for Rs${discountAmount}, skipping`);
-      return;
-    }
-
-    console.log(`Draft updated webhook: #${draft.name} — discount Rs${discountAmount}, triggering recalculation`);
-    const token = await getShopifyToken();
-    const pricing = await recalculatePricing({
-      draftOrderId:    draft.id,
-      shopifyToken:    token,
-      shopifyStoreUrl: process.env.SHOPIFY_STORE_URL
-    });
-    console.log(`Draft updated webhook: #${draft.name} recalculated — finalTotal Rs${pricing.finalTotal}`);
+    console.log(`Draft updated webhook: #${draft.name} — tag handlers complete`);
   } catch (err) {
     console.error('Draft updated webhook error:', err.message);
   }
 });
 
-app.post('/pricing/recalculate', async (req, res) => {
-  const { draftOrderId } = req.body;
-  if (!draftOrderId) {
-    return res.status(400).json({ success: false, error: 'draftOrderId required' });
-  }
-  try {
-    const token  = await getShopifyToken();
-    const pricing = await recalculatePricing({
-      draftOrderId,
-      shopifyToken:    token,
-      shopifyStoreUrl: process.env.SHOPIFY_STORE_URL
-    });
-    return res.json({ success: true, pricing });
-  } catch (error) {
-    return res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// Manual trigger for jewel weight repricing (same logic as recalculate-price tag).
-// Requires jewel metafields (net_wt, gross_wt, diamond_cts, diamond_pcs, jewel_code) already set on the draft.
-app.post('/api/recalculate-price', async (req, res) => {
-  const { draftOrderId, force = false } = req.body;
+// Unified reprice endpoint — equivalent to adding the reprice or recalculate-price tag.
+// threshold=false (default): full reprice — fixes discount/GST and jewel reprices if jewelcode_net_weight is set.
+// threshold=true: guarded reprice — jewel reprice only if weight delta > 5% (requires jewelcode_net_weight).
+app.post('/api/reprice', async (req, res) => {
+  const { draftOrderId, threshold = false } = req.body;
   if (!draftOrderId) return res.status(400).json({ success: false, error: 'draftOrderId required' });
   try {
     const token = await getShopifyToken();
@@ -1769,13 +1776,13 @@ app.post('/api/recalculate-price', async (req, res) => {
       `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}.json`,
       { headers: { 'X-Shopify-Access-Token': token }, timeout: 10000 }
     );
-    const tagToInject = force ? 'force-reprice' : 'recalculate-price';
+    const tagToInject = threshold ? 'recalculate-price' : 'reprice';
     const draft = { ...draftData.draft_order };
     const existingTags = (draft.tags || '').split(',').map(t => t.trim()).filter(Boolean);
     if (!existingTags.some(t => t.toLowerCase() === tagToInject)) {
       draft.tags = [...existingTags, tagToInject].join(', ');
     }
-    await handleRecalculatePriceTag(draft, { force });
+    await handleRecalculatePriceTag(draft, { force: !threshold });
     return res.json({ success: true, draftOrderId });
   } catch (err) {
     return res.status(500).json({ success: false, error: err.message, detail: err.response?.data });
@@ -2078,7 +2085,7 @@ app.post('/api/form-reprice', async (req, res) => {
         jewelcode_gemstone_weight: String(gemstoneWeights|| '').trim(),
       });
 
-      const tagToInject   = force ? 'force-reprice' : 'recalculate-price';
+      const tagToInject   = force ? 'reprice' : 'recalculate-price';
       const existingTags  = (draft.tags || '').split(',').map(t => t.trim()).filter(Boolean);
       const injectedDraft = { ...draft, tags: [...existingTags, tagToInject].join(', ') };
       await handleRecalculatePriceTag(injectedDraft, { force: !!force });
@@ -2718,7 +2725,7 @@ app.listen(PORT, async () => {
   console.log('  POST /api/cancel-transaction');
   console.log('  POST /api/pine-postback');
   console.log('  POST /api/pine-webhook');
-  console.log('  POST /pricing/recalculate');
+  console.log('  POST /api/reprice');
   console.log('  POST /api/generate-payment-link');
   console.log('  POST /api/cancel-payment-link');
   console.log('  POST /api/gokwik-webhook');

@@ -47,6 +47,18 @@ async function recalculate({ draftOrderId, shopifyToken, shopifyStoreUrl }) {
   const draftOrder = fetchResponse.data.draft_order;
   const lineItems  = draftOrder.line_items || [];
 
+  // Check for gold rate override set via draft order metafields (staff / Google Form path)
+  let goldRateOverride = null;
+  try {
+    const mfRes = await axios.get(
+      `${shopifyStoreUrl}/admin/api/2024-01/draft_orders/${draftOrderId}/metafields.json`,
+      { headers: shopifyHeaders(shopifyToken), timeout: 10000 }
+    );
+    for (const mf of (mfRes.data.metafields || [])) {
+      if (mf.namespace === 'custom' && mf.key === 'gold_rate' && mf.value) goldRateOverride = mf.value;
+    }
+  } catch (_) {}
+
   const productItems = lineItems.filter(item => !isDiscountLineItem(item)).map(item => {
     // For force-repriced items, Shopify may reset item.price to catalog on discount apply —
     // the Gross Value property is the authoritative gross for repriced line items.
@@ -143,12 +155,13 @@ async function recalculate({ draftOrderId, shopifyToken, shopifyStoreUrl }) {
       { name: 'GST',              value: `Rs${itemGst}` },
       { name: 'Gross Value',      value: `Rs${grossValue}` },
     ];
-    // Preserve locked order-date rate — only write from variant on first-ever recalculation
+    // Preserve locked order-date rate — only write from variant on first-ever recalculation.
+    // Draft metafield custom.gold_rate overrides all: used for staff / Google Form manual entry.
     const existingGoldRate      = (item.properties || []).find(p => p.name === '_gold_rate');
     const existingGoldUpdatedAt = (item.properties || []).find(p => p.name === '_gold_updated_at');
-    const lockedRate      = existingGoldRate      ? existingGoldRate.value      : goldRate;
+    const lockedRate      = goldRateOverride || (existingGoldRate ? existingGoldRate.value : goldRate);
     const lockedUpdatedAt = existingGoldUpdatedAt ? existingGoldUpdatedAt.value : goldUpdatedAt;
-    if (lockedRate)      properties.push({ name: '_gold_rate',       value: lockedRate });
+    if (lockedRate)      properties.push({ name: '_gold_rate',       value: String(lockedRate) });
     if (lockedUpdatedAt) properties.push({ name: '_gold_updated_at', value: lockedUpdatedAt });
 
     const updatedItem = {
