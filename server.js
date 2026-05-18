@@ -9,6 +9,7 @@ const { handlePoWebhook } = require('./services/po-ops/webhook');
 const { handlePoAction }  = require('./services/po-ops/action');
 const { createPaymentLink: createGokwikLink, cancelPaymentLink: cancelGokwikLink } = require('./services/gokwik');
 const { sendSMS } = require('./services/sms');
+const { registerRepairRoutes, handleRepairPayment } = require('./services/repairs');
 
 const app = express();
 app.use(cors());
@@ -2221,6 +2222,28 @@ app.post('/api/gokwik-webhook', async (req, res) => {
     console.log(`GoKwik webhook: status=${status} oid=${gokwik_oid} draft=${draftOrderId} txn=${transaction_id}`);
 
     if (status === 'success') {
+      // Check if this is a repair draft before touching payment_links
+      try {
+        const repairToken  = await getShopifyToken();
+        const repairRes    = await fetch(
+          `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}.json`,
+          { headers: { 'X-Shopify-Access-Token': repairToken } }
+        );
+        if (repairRes.ok) {
+          const repairData = await repairRes.json();
+          const repairDraft = repairData.draft_order;
+          if (repairDraft) {
+            const repairTags = (repairDraft.tags || '').split(',').map(t => t.trim());
+            if (repairTags.includes('repair-estimate-sent') || repairTags.includes('repair-estimate-ready')) {
+              await handleRepairPayment(repairDraft, { transactionId: transaction_id, gatewayRef: gateway_reference_id }, getShopifyToken);
+              return;
+            }
+          }
+        }
+      } catch (repairErr) {
+        console.error('Repair branch check failed, falling through to deposit flow:', repairErr.message);
+      }
+
       const { data: link } = await supabase
         .from('payment_links').select('*')
         .eq('draft_order_id', draftOrderId)
@@ -2709,6 +2732,8 @@ app.get('/api/recon', async (req, res) => {
   }
 });
 
+registerRepairRoutes(app, getShopifyToken);
+
 // ─────────────────────────────────────────
 // Start
 // ─────────────────────────────────────────
@@ -2735,6 +2760,7 @@ app.listen(PORT, async () => {
   console.log('  POST /api/po-webhook');
   console.log('  GET  /api/po-action');
   console.log('  POST /api/trigger-price-update');
+  console.log('  POST /webhooks/shopify/draft-order-updated');
   // Clean up stale flag from a previous run killed by a deploy
   try {
     const fs = require('fs');

@@ -240,4 +240,232 @@ async function sendDepositEmail(shopifyDraftId, draftOrderName, newAmountPaid, n
     console.error('draftOrder at time of error:', JSON.stringify(draftOrder));
   }
 }
-module.exports = { sendEmail, sendDepositEmail, buildDepositEmailHtml };
+// ─────────────────────────────────────────
+// Repair email HTML builders
+// ─────────────────────────────────────────
+
+function buildRepairEstimateHtml({ customerName, draftRef, itemDescription, amount, paymentUrl }) {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+  <meta name="viewport" content="width=device-width">
+  <style>
+    body, p, td, span { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-weight: 300; margin: 0; padding: 0; }
+    h2, h3, h4 { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-weight: 500; margin: 0 0 10px 0; }
+    a { color: #fc7d27; text-decoration: none; }
+  </style>
+</head>
+<body style="background:#f4f4f4; padding:20px 0;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="max-width:600px; margin:0 auto; background:#ffffff; border-radius:8px; overflow:hidden;">
+    <tr><td>
+
+      <table width="100%" cellpadding="0" cellspacing="0" style="border-bottom:1px solid #eeeeee;">
+        <tr><td style="text-align:center; padding:24px 20px;">
+          <img src="https://cdn.shopify.com/s/files/1/0775/8322/0993/files/Timanti_Logo_Black.jpg?v=1766506323" alt="Timanti" width="150">
+        </td></tr>
+      </table>
+
+      <table width="100%" cellpadding="0" cellspacing="0">
+        <tr><td style="padding:28px 30px 10px 30px; text-align:center;">
+          <p style="font-size:13px; color:#999999; margin-bottom:8px;">${draftRef}</p>
+          <h2 style="font-size:22px; color:#000000; margin-bottom:16px;">Your Repair Estimate is Ready</h2>
+          <p style="font-size:14px; color:#444444; line-height:1.6;">Hi <strong>${customerName}</strong>, your jewellery has been assessed by our team.</p>
+        </td></tr>
+      </table>
+
+      <table width="100%" cellpadding="0" cellspacing="0" style="padding:10px 30px;">
+        <tr><td>
+          <table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e0e0e0; border-radius:8px; background:#f9f9f9;">
+            <tr><td style="padding:20px;">
+              <table width="100%" cellpadding="0" cellspacing="0">
+                <tr>
+                  <td style="font-size:13px; color:#666666; padding:5px 0;">Repair</td>
+                  <td style="font-size:13px; color:#444444; text-align:right; padding:5px 0;">${itemDescription}</td>
+                </tr>
+                <tr><td colspan="2" style="border-top:1px solid #dddddd; padding-top:4px;"></td></tr>
+                <tr>
+                  <td style="font-size:14px; color:#000000; font-weight:bold; padding:5px 0;">Estimated Cost</td>
+                  <td style="font-size:14px; color:#000000; font-weight:bold; text-align:right; padding:5px 0;">Rs.${amount}</td>
+                </tr>
+              </table>
+            </td></tr>
+          </table>
+        </td></tr>
+      </table>
+
+      <table width="100%" cellpadding="0" cellspacing="0" style="padding:20px 30px 10px 30px;">
+        <tr><td style="text-align:center;">
+          <p style="font-size:13px; color:#666666; margin-bottom:16px;">To proceed, complete payment using the secure link below. This link expires in <strong>7 days</strong>.</p>
+          <table cellpadding="0" cellspacing="0" style="margin:0 auto;">
+            <tr><td style="background:#000000; border-radius:4px; text-align:center;">
+              <a href="${paymentUrl}" target="_blank" style="color:#ffffff; text-decoration:none; font-weight:500; display:block; padding:14px 32px; font-size:15px;">Pay Rs.${amount} — Secure Checkout</a>
+            </td></tr>
+          </table>
+        </td></tr>
+      </table>
+
+      <table width="100%" cellpadding="0" cellspacing="0" style="padding:16px 30px 20px 30px;">
+        <tr><td style="background:#F6F6F6; border-left:4px solid #fc7d27; padding:16px 20px;">
+          <p style="font-size:13px; color:#444444; margin:0;">Once payment is received we will begin the repair and keep you updated on progress.</p>
+        </td></tr>
+      </table>
+
+      <table width="100%" cellpadding="0" cellspacing="0" style="padding:0 30px 20px 30px;">
+        <tr><td style="border:1px solid #e6d8cc; border-radius:8px; padding:20px; text-align:center;">
+          <h3 style="color:#000000; margin-bottom:12px; font-size:16px;">Need Help?</h3>
+          <table cellpadding="0" cellspacing="0" style="margin:0 auto;">
+            <tr>
+              <td style="padding:0 20px; font-size:13px;"><strong>Phone/WhatsApp</strong><br><a href="tel:+917710938305" style="color:#000000;">+91-7710938305</a></td>
+              <td style="padding:0 20px; font-size:13px;"><strong>Email</strong><br><a href="mailto:hello@timanti.in" style="color:#000000;">hello@timanti.in</a></td>
+            </tr>
+          </table>
+        </td></tr>
+      </table>
+
+      <table width="100%" cellpadding="0" cellspacing="0" style="border-top:1px solid #eeeeee; padding:20px 30px;">
+        <tr><td style="text-align:center; font-size:12px; color:#666666;">
+          <p>Mon–Sat, 10AM–6PM &nbsp;|&nbsp; <a href="mailto:hello@timanti.in" style="color:#fc7d27;">hello@timanti.in</a></p>
+        </td></tr>
+      </table>
+
+    </td></tr>
+  </table>
+</body>
+</html>`;
+}
+
+function buildRepairPaymentConfirmedHtml({ customerName, draftRef, amount, transactionId, paymentMethod }) {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+  <meta name="viewport" content="width=device-width">
+  <style>
+    body, p, td, span { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-weight: 300; margin: 0; padding: 0; }
+    h2, h3, h4 { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-weight: 500; margin: 0 0 10px 0; }
+    a { color: #fc7d27; text-decoration: none; }
+  </style>
+</head>
+<body style="background:#f4f4f4; padding:20px 0;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="max-width:600px; margin:0 auto; background:#ffffff; border-radius:8px; overflow:hidden;">
+    <tr><td>
+
+      <table width="100%" cellpadding="0" cellspacing="0" style="border-bottom:1px solid #eeeeee;">
+        <tr><td style="text-align:center; padding:24px 20px;">
+          <img src="https://cdn.shopify.com/s/files/1/0775/8322/0993/files/Timanti_Logo_Black.jpg?v=1766506323" alt="Timanti" width="150">
+        </td></tr>
+      </table>
+
+      <table width="100%" cellpadding="0" cellspacing="0">
+        <tr><td style="background:#d4edda; padding:12px 20px; text-align:center; font-weight:bold; font-size:13px; border-bottom:1px solid #c3e6cb;">
+          PAYMENT RECEIVED — Rs.${amount}
+        </td></tr>
+      </table>
+
+      <table width="100%" cellpadding="0" cellspacing="0">
+        <tr><td style="padding:28px 30px 10px 30px; text-align:center;">
+          <p style="font-size:13px; color:#999999; margin-bottom:8px;">${draftRef}</p>
+          <h2 style="font-size:22px; color:#000000; margin-bottom:16px;">Payment Confirmed — Repair in Progress</h2>
+          <p style="font-size:14px; color:#444444; line-height:1.6;">Hi <strong>${customerName}</strong>, we've received your payment of <strong>Rs.${amount}</strong>. Your jewellery is now with our repair team.</p>
+        </td></tr>
+      </table>
+
+      <table width="100%" cellpadding="0" cellspacing="0" style="padding:10px 30px;">
+        <tr><td>
+          <table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e0e0e0; border-radius:8px; background:#f9f9f9;">
+            <tr><td style="padding:20px;">
+              <table width="100%" cellpadding="0" cellspacing="0">
+                <tr>
+                  <td style="font-size:13px; color:#666666; padding:5px 0;">Reference</td>
+                  <td style="font-size:13px; color:#444444; text-align:right; padding:5px 0;">${draftRef}</td>
+                </tr>
+                <tr>
+                  <td style="font-size:13px; color:#666666; padding:5px 0;">Transaction ID</td>
+                  <td style="font-size:13px; color:#444444; text-align:right; padding:5px 0;">${transactionId}</td>
+                </tr>
+                <tr>
+                  <td style="font-size:13px; color:#666666; padding:5px 0;">Payment Method</td>
+                  <td style="font-size:13px; color:#444444; text-align:right; padding:5px 0;">${paymentMethod}</td>
+                </tr>
+                <tr><td colspan="2" style="border-top:1px solid #dddddd; padding-top:4px;"></td></tr>
+                <tr>
+                  <td style="font-size:14px; color:#006630; font-weight:bold; padding:5px 0;">Amount Received</td>
+                  <td style="font-size:14px; color:#006630; font-weight:bold; text-align:right; padding:5px 0;">Rs.${amount}</td>
+                </tr>
+              </table>
+            </td></tr>
+          </table>
+        </td></tr>
+      </table>
+
+      <table width="100%" cellpadding="0" cellspacing="0" style="padding:16px 30px 20px 30px;">
+        <tr><td style="background:#F6F6F6; border-left:4px solid #fc7d27; padding:16px 20px; text-align:center;">
+          <h4 style="color:#000000; margin-bottom:8px; font-size:14px;">What happens next</h4>
+          <p style="font-size:13px; color:#444444; margin:4px 0;">Our repair team will work on your jewellery and contact you once it is ready for pickup or delivery.</p>
+        </td></tr>
+      </table>
+
+      <table width="100%" cellpadding="0" cellspacing="0" style="border-top:1px solid #eeeeee; padding:20px 30px;">
+        <tr><td style="text-align:center; font-size:12px; color:#666666;">
+          <p>Questions? <a href="mailto:hello@timanti.in" style="color:#fc7d27;">hello@timanti.in</a> | <a href="tel:+917710938305" style="color:#fc7d27;">+91-7710938305</a></p>
+        </td></tr>
+      </table>
+
+    </td></tr>
+  </table>
+</body>
+</html>`;
+}
+
+function buildRepairCompleteHtml({ customerName, draftRef }) {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+  <meta name="viewport" content="width=device-width">
+  <style>
+    body, p, td, span { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-weight: 300; margin: 0; padding: 0; }
+    h2, h3, h4 { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-weight: 500; margin: 0 0 10px 0; }
+    a { color: #fc7d27; text-decoration: none; }
+  </style>
+</head>
+<body style="background:#f4f4f4; padding:20px 0;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="max-width:600px; margin:0 auto; background:#ffffff; border-radius:8px; overflow:hidden;">
+    <tr><td>
+
+      <table width="100%" cellpadding="0" cellspacing="0" style="border-bottom:1px solid #eeeeee;">
+        <tr><td style="text-align:center; padding:24px 20px;">
+          <img src="https://cdn.shopify.com/s/files/1/0775/8322/0993/files/Timanti_Logo_Black.jpg?v=1766506323" alt="Timanti" width="150">
+        </td></tr>
+      </table>
+
+      <table width="100%" cellpadding="0" cellspacing="0">
+        <tr><td style="padding:28px 30px 10px 30px; text-align:center;">
+          <p style="font-size:13px; color:#999999; margin-bottom:8px;">${draftRef}</p>
+          <h2 style="font-size:22px; color:#000000; margin-bottom:16px;">Your Repair is Ready</h2>
+          <p style="font-size:14px; color:#444444; line-height:1.6;">Hi <strong>${customerName}</strong>, your jewellery repair is complete and ready for collection.</p>
+        </td></tr>
+      </table>
+
+      <table width="100%" cellpadding="0" cellspacing="0" style="padding:16px 30px 20px 30px;">
+        <tr><td style="background:#F6F6F6; border-left:4px solid #fc7d27; padding:16px 20px; text-align:center;">
+          <h4 style="color:#000000; margin-bottom:8px; font-size:14px;">Next steps</h4>
+          <p style="font-size:13px; color:#444444; margin:4px 0;">Our team will be in touch shortly to arrange return delivery or in-store pickup.</p>
+          <p style="font-size:13px; color:#444444; margin:8px 0 0 0;">If you haven't heard from us in 24 hours, please call <strong>+91-7710938305</strong>.</p>
+        </td></tr>
+      </table>
+
+      <table width="100%" cellpadding="0" cellspacing="0" style="border-top:1px solid #eeeeee; padding:20px 30px;">
+        <tr><td style="text-align:center; font-size:12px; color:#666666;">
+          <p>Questions? <a href="mailto:hello@timanti.in" style="color:#fc7d27;">hello@timanti.in</a> | <a href="tel:+917710938305" style="color:#fc7d27;">+91-7710938305</a></p>
+        </td></tr>
+      </table>
+
+    </td></tr>
+  </table>
+</body>
+</html>`;
+}
+
+module.exports = { sendEmail, sendDepositEmail, buildDepositEmailHtml, buildRepairEstimateHtml, buildRepairPaymentConfirmedHtml, buildRepairCompleteHtml };
