@@ -104,104 +104,89 @@ async function handleRepairPayment(draft, { transactionId, gatewayRef }, getShop
   console.log(`✅ Repair payment recorded: ${draft.name} txn=${transactionId}`);
 }
 
-// ── Route factory — call once from server.js ──────────────────────────────────
-function registerRepairRoutes(app, getShopifyToken) {
+// ── Called directly from the existing /api/shopify-draft-updated handler ──────
+async function handleRepairDraftUpdate(draft, getShopifyToken) {
+  const tags = (draft.tags || '').split(',').map(t => t.trim()).filter(Boolean);
 
-  // Trigger 1 + Trigger 3 both arrive here
-  app.post('/webhooks/shopify/draft-order-updated', async (req, res) => {
-    res.status(200).send('OK');
+  // ── Trigger 1: estimate ready ──────────────────────────────────────────────
+  if (tags.includes('repair-estimate-ready') && !tags.includes('repair-estimate-sent')) {
+    console.log(`Repair estimate trigger: ${draft.name}`);
+    const token         = await getShopifyToken();
+    const customerEmail = draft.email;
+    const customerName  = draft.billing_address?.name || customerEmail;
+    const customerPhone = draft.billing_address?.phone || draft.phone || '';
+    const amount        = parseFloat(draft.total_price);
+    const itemDesc      = draft.line_items?.[0]?.title || 'Repair service';
 
-    const hmac = req.headers['x-shopify-hmac-sha256'];
-    if (hmac && !verifyShopifyHmac(req.rawBody, hmac)) {
-      console.warn('Repair webhook: invalid Shopify HMAC — rejected');
+    let shortUrl;
+    try {
+      const link = await createPaymentLink({
+        draftOrderId: draft.id.toString(),
+        amount,
+        customerPhone,
+        customerName,
+        customerEmail
+      });
+      shortUrl = link.shortUrl;
+    } catch (err) {
+      console.error(`❌ GoKwik link failed for ${draft.name}:`, err.message);
       return;
     }
 
     try {
-      const draft = req.body;
-      const tags  = (draft.tags || '').split(',').map(t => t.trim()).filter(Boolean);
-
-      // ── Trigger 1: estimate ready ──────────────────────────────────────
-      if (tags.includes('repair-estimate-ready') && !tags.includes('repair-estimate-sent')) {
-        console.log(`Repair estimate trigger: ${draft.name}`);
-        const token         = await getShopifyToken();
-        const customerEmail = draft.email;
-        const customerName  = draft.billing_address?.name || customerEmail;
-        const customerPhone = draft.billing_address?.phone || draft.phone || '';
-        const amount        = parseFloat(draft.total_price);
-        const itemDesc      = draft.line_items?.[0]?.title || 'Repair service';
-
-        let shortUrl;
-        try {
-          const link = await createPaymentLink({
-            draftOrderId: draft.id.toString(),
-            amount,
-            customerPhone,
-            customerName,
-            customerEmail
-          });
-          shortUrl = link.shortUrl;
-        } catch (err) {
-          console.error(`❌ GoKwik link failed for ${draft.name}:`, err.message);
-          return; // don't add tag — allows retry by re-saving draft
-        }
-
-        try {
-          await sendEmail({
-            to:      customerEmail,
-            subject: `Your Timanti Repair Estimate — ${draft.name}`,
-            html:    buildRepairEstimateHtml({
-              customerName,
-              draftRef:        draft.name,
-              itemDescription: itemDesc,
-              amount:          Math.round(amount).toString(),
-              paymentUrl:      shortUrl
-            })
-          });
-        } catch (err) {
-          console.error(`❌ Resend failed for ${draft.name}:`, err.message);
-          return; // don't add tag — allows retry
-        }
-
-        await updateDraftOrderTags(draft.id, [...tags, 'repair-estimate-sent'], token);
-        await writeDraftOrderMetafields(draft.id, {
-          repair_estimate_sent_at: new Date().toISOString()
-        }, token);
-
-        console.log(`✅ Repair estimate sent: ${draft.name}`);
-        return;
-      }
-
-      // ── Trigger 3: repair complete ─────────────────────────────────────
-      if (tags.includes('repair-complete') && !tags.includes('repair-completion-notified')) {
-        console.log(`Repair complete trigger: ${draft.name}`);
-        const token         = await getShopifyToken();
-        const customerEmail = draft.email;
-        const customerName  = draft.billing_address?.name || customerEmail;
-
-        try {
-          await sendEmail({
-            to:      customerEmail,
-            subject: `Your Repair is Ready — ${draft.name}`,
-            html:    buildRepairCompleteHtml({ customerName, draftRef: draft.name })
-          });
-        } catch (err) {
-          console.error(`❌ Resend failed (complete) for ${draft.name}:`, err.message);
-          return;
-        }
-
-        await updateDraftOrderTags(draft.id, [...tags, 'repair-completion-notified'], token);
-        await writeDraftOrderMetafields(draft.id, {
-          repair_completed_at: new Date().toISOString()
-        }, token);
-
-        console.log(`✅ Repair completion notified: ${draft.name}`);
-      }
-
+      await sendEmail({
+        to:      customerEmail,
+        subject: `Your Timanti Repair Estimate — ${draft.name}`,
+        html:    buildRepairEstimateHtml({
+          customerName,
+          draftRef:        draft.name,
+          itemDescription: itemDesc,
+          amount:          Math.round(amount).toString(),
+          paymentUrl:      shortUrl
+        })
+      });
     } catch (err) {
-      console.error('Repair draft-order webhook error:', err.response?.data || err.message);
+      console.error(`❌ Resend failed for ${draft.name}:`, err.message);
+      return;
     }
-  });
+
+    await updateDraftOrderTags(draft.id, [...tags, 'repair-estimate-sent'], token);
+    await writeDraftOrderMetafields(draft.id, {
+      repair_estimate_sent_at: new Date().toISOString()
+    }, token);
+
+    console.log(`✅ Repair estimate sent: ${draft.name}`);
+    return;
+  }
+
+  // ── Trigger 3: repair complete ─────────────────────────────────────────────
+  if (tags.includes('repair-complete') && !tags.includes('repair-completion-notified')) {
+    console.log(`Repair complete trigger: ${draft.name}`);
+    const token         = await getShopifyToken();
+    const customerEmail = draft.email;
+    const customerName  = draft.billing_address?.name || customerEmail;
+
+    try {
+      await sendEmail({
+        to:      customerEmail,
+        subject: `Your Repair is Ready — ${draft.name}`,
+        html:    buildRepairCompleteHtml({ customerName, draftRef: draft.name })
+      });
+    } catch (err) {
+      console.error(`❌ Resend failed (complete) for ${draft.name}:`, err.message);
+      return;
+    }
+
+    await updateDraftOrderTags(draft.id, [...tags, 'repair-completion-notified'], token);
+    await writeDraftOrderMetafields(draft.id, {
+      repair_completed_at: new Date().toISOString()
+    }, token);
+
+    console.log(`✅ Repair completion notified: ${draft.name}`);
+  }
+}
+
+function registerRepairRoutes(app, getShopifyToken) {
 
   // ── CN issued email — flag-gated ──────────────────────────────────────────
   app.post('/webhooks/shopify/order-updated', async (req, res) => {
@@ -264,4 +249,4 @@ function registerRepairRoutes(app, getShopifyToken) {
   });
 }
 
-module.exports = { registerRepairRoutes, handleRepairPayment };
+module.exports = { registerRepairRoutes, handleRepairPayment, handleRepairDraftUpdate };

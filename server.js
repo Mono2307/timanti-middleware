@@ -9,7 +9,7 @@ const { handlePoWebhook } = require('./services/po-ops/webhook');
 const { handlePoAction }  = require('./services/po-ops/action');
 const { createPaymentLink: createGokwikLink, cancelPaymentLink: cancelGokwikLink } = require('./services/gokwik');
 const { sendSMS } = require('./services/sms');
-const { registerRepairRoutes, handleRepairPayment } = require('./services/repairs');
+const { registerRepairRoutes, handleRepairPayment, handleRepairDraftUpdate } = require('./services/repairs');
 
 const app = express();
 app.use(cors());
@@ -1758,6 +1758,7 @@ app.post('/api/shopify-draft-updated', async (req, res) => {
     await handleRecalculatePriceTag(draft, { force: false });
     await handleRecalculatePriceTag(draft, { force: true });
     await handlePaymentMetafieldSync(draft);
+    await handleRepairDraftUpdate(draft, getShopifyToken);
 
     console.log(`Draft updated webhook: #${draft.name} — tag handlers complete`);
   } catch (err) {
