@@ -75,22 +75,34 @@ function createCreditNote() {
   const serial = String(log.getLastRow()).padStart(4, '0');
   const cnNum  = `CNTM-${year}-${serial}`;
 
+  // date strings needed by metafields, log, and done alert
+  const issued    = Utilities.formatDate(today, 'Asia/Kolkata', 'dd-MM-yyyy');
+  const expiryFmt = Utilities.formatDate(validUntil, 'Asia/Kolkata', 'dd-MM-yyyy');
+
+  // ── 3b. Look up Shopify order + customer ID ────────────────────────────────
+  const cleanOrderNum = orderNumber.replace('#', '');
+  const orderData     = getOrderData(cleanOrderNum);
+  const orderId       = orderData ? orderData.id       : null;
+  const customerId    = orderData ? orderData.customerId : null;
+  Logger.log(`Order lookup: orderId=${orderId}, customerId=${customerId}`);
+
   // ── 4. Create Shopify price rule ───────────────────────────────────────────
-  const expiryIso  = validUntil.toISOString();
-  const priceRule  = shopifyPost('price_rules.json', {
-    price_rule: {
-      title:              cnNum,
-      target_type:        'line_item',
-      target_selection:   'all',
-      allocation_method:  'across',
-      value_type:         'fixed_amount',
-      value:              `-${netCredit.toFixed(2)}`,
-      customer_selection: 'all',
-      starts_at:          today.toISOString(),
-      ends_at:            expiryIso,
-      usage_limit:        1
-    }
-  });
+  const expiryIso        = validUntil.toISOString();
+  const priceRulePayload = {
+    title:              cnNum,
+    target_type:        'line_item',
+    target_selection:   'all',
+    allocation_method:  'across',
+    value_type:         'fixed_amount',
+    value:              `-${netCredit.toFixed(2)}`,
+    customer_selection: customerId ? 'prerequisite' : 'all',
+    starts_at:          today.toISOString(),
+    ends_at:            expiryIso,
+    usage_limit:        1
+  };
+  if (customerId) priceRulePayload.prerequisite_customer_ids = [customerId];
+
+  const priceRule = shopifyPost('price_rules.json', { price_rule: priceRulePayload });
 
   if (!priceRule || !priceRule.price_rule) {
     ui.alert('Failed to create price rule in Shopify. Check Supabase credentials and token scopes.');
@@ -112,9 +124,6 @@ function createCreditNote() {
   calc.getRange('B43').setValue(cnNum);
 
   // ── 7. Write CN metafields + tag order ───────────────────────────────────
-  const cleanOrderNum = orderNumber.replace('#', '');
-  const orderId       = getOrderId(cleanOrderNum);
-
   if (orderId) {
     Logger.log(`Order found: id=${orderId}`);
     const mf1 = shopifyPost(`orders/${orderId}/metafields.json`, { metafield: { namespace: 'timanti', key: 'cn_number', value: cnNum, type: 'single_line_text_field' } });
@@ -131,9 +140,6 @@ function createCreditNote() {
   }
 
   // ── 8. Append to CN Log ────────────────────────────────────────────────────
-  const issued    = Utilities.formatDate(today, 'Asia/Kolkata', 'dd-MM-yyyy');
-  const expiryFmt = Utilities.formatDate(validUntil, 'Asia/Kolkata', 'dd-MM-yyyy');
-
   log.appendRow([
     issued,
     cnNum,
@@ -236,9 +242,12 @@ function shopifyPut(endpoint, payload) {
   return JSON.parse(res.getContentText());
 }
 
-function getOrderId(orderName) {
-  const data = shopifyGet(`orders.json?name=%23${orderName}&fields=id,tags&status=any`);
-  if (data && data.orders && data.orders.length > 0) return data.orders[0].id;
+function getOrderData(orderName) {
+  const data = shopifyGet(`orders.json?name=%23${orderName}&fields=id,tags,customer&status=any`);
+  if (data && data.orders && data.orders.length > 0) {
+    const order = data.orders[0];
+    return { id: order.id, customerId: order.customer ? order.customer.id : null };
+  }
   return null;
 }
 
