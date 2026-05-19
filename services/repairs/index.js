@@ -135,6 +135,7 @@ async function handleRepairDraftUpdate(draft, getShopifyToken) {
     try {
       await sendEmail({
         to:      hqEmail,
+        cc:      process.env.HQ_CC_EMAIL,
         subject: `New Repair Intake — ${draft.name} — ${customerName}`,
         html:    buildRepairIntakeHtml({ customerName, customerEmail, customerPhone, draftRef: draft.name, itemDesc, notes, approveUrl })
       });
