@@ -243,19 +243,30 @@ function setupSupabase() {
 }
 
 function testConnection() {
-  const ui   = SpreadsheetApp.getUi();
+  const ui = SpreadsheetApp.getUi();
   try {
     const token = getToken();
-    const url   = `https://${SHOPIFY_SHOP}/admin/api/2024-01/shop.json`;
-    const res   = UrlFetchApp.fetch(url, {
+    ui.alert('Token fetched: ' + token.substring(0, 10) + '...\nNow testing Shopify...');
+
+    const url = `https://${SHOPIFY_SHOP}/admin/api/2024-01/shop.json`;
+    const res = UrlFetchApp.fetch(url, {
       headers: { 'X-Shopify-Access-Token': token },
       muteHttpExceptions: true
     });
-    const data = JSON.parse(res.getContentText());
+
+    const statusCode = res.getResponseCode();
+    const body = res.getContentText();
+
+    if (statusCode >= 400) {
+      ui.alert(`❌ Shopify returned ${statusCode}:\n${body.substring(0, 300)}`);
+      return;
+    }
+
+    const data = JSON.parse(body);
     if (data && data.shop) {
       ui.alert(`✅ Connected to: ${data.shop.name}\nDomain: ${data.shop.domain}`);
     } else {
-      ui.alert('❌ Connection failed. Check Supabase credentials and token.');
+      ui.alert(`❌ Unexpected response:\n${body.substring(0, 300)}`);
     }
   } catch (err) {
     ui.alert(`❌ Error: ${err.message}`);
