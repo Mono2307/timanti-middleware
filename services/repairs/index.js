@@ -7,7 +7,8 @@ const {
   sendEmail,
   buildRepairEstimateHtml,
   buildRepairPaymentConfirmedHtml,
-  buildRepairCompleteHtml
+  buildRepairCompleteHtml,
+  buildCreditNoteHtml
 } = require('../../emailService');
 
 function verifyShopifyHmac(rawBody, hmacHeader) {
@@ -199,6 +200,57 @@ function registerRepairRoutes(app, getShopifyToken) {
 
     } catch (err) {
       console.error('Repair draft-order webhook error:', err.response?.data || err.message);
+    }
+  });
+
+  // ── CN issued email — flag-gated ──────────────────────────────────────────
+  app.post('/webhooks/shopify/order-updated', async (req, res) => {
+    res.status(200).send('OK');
+
+    if (process.env.CN_EMAIL_ENABLED !== 'true') return;
+
+    const hmac = req.headers['x-shopify-hmac-sha256'];
+    if (hmac && !verifyShopifyHmac(req.rawBody, hmac)) {
+      console.warn('CN webhook: invalid Shopify HMAC — rejected');
+      return;
+    }
+
+    try {
+      const order = req.body;
+      const tags  = (order.tags || '').split(',').map(t => t.trim());
+      if (!tags.includes('cn-issued')) return;
+
+      const token = await getShopifyToken();
+      const { data: mfData } = await axios.get(
+        `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/orders/${order.id}/metafields.json`,
+        { headers: { 'X-Shopify-Access-Token': token }, timeout: 10000 }
+      );
+
+      const mf = {};
+      for (const m of (mfData.metafields || [])) {
+        if (m.namespace === 'timanti') mf[m.key] = m.value;
+      }
+
+      if (!mf.cn_number) {
+        console.error(`CN email: no cn_number metafield on order ${order.name} — Apps Script may not have written it yet`);
+        return;
+      }
+
+      await sendEmail({
+        to:      order.email,
+        subject: `Your Timanti Credit Note — ${mf.cn_number}`,
+        html:    buildCreditNoteHtml({
+          customerName:  order.billing_address?.name || order.email,
+          cnNumber:      mf.cn_number,
+          creditValue:   mf.cn_value,
+          validUntil:    mf.cn_expiry,
+          originalOrder: order.name
+        })
+      });
+
+      console.log(`✅ CN email sent: ${mf.cn_number} → ${order.email}`);
+    } catch (err) {
+      console.error('CN order webhook error:', err.response?.data || err.message);
     }
   });
 }

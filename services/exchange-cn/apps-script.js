@@ -45,9 +45,9 @@ function createCreditNote() {
   const orderNumber   = String(calc.getRange('B7').getValue()).trim();
   const netWt         = toNum(calc.getRange('B15').getValue());
   const diaWt         = toNum(calc.getRange('B16').getValue());
-  const goldVal       = toNum(calc.getRange('B29').getValue());
-  const diaVal        = toNum(calc.getRange('B30').getValue());
-  const netCredit     = toNum(calc.getRange('B40').getValue());
+  const goldVal       = toNum(calc.getRange('B27').getValue());
+  const diaVal        = toNum(calc.getRange('B28').getValue());
+  const netCredit     = toNum(calc.getRange('B36').getValue());
 
   const today      = new Date();
   const validUntil = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 90);
@@ -99,14 +99,23 @@ function createCreditNote() {
   // ── 6. Write CN number back to sheet ──────────────────────────────────────
   calc.getRange('B43').setValue(cnNum);
 
-  // ── 7. Tag Shopify order with cn-issued ───────────────────────────────────
+  // ── 7. Write CN metafields + tag order ───────────────────────────────────
   const cleanOrderNum = orderNumber.replace('#', '');
   const orderId       = getOrderId(cleanOrderNum);
 
   if (orderId) {
+    shopifyPost(`orders/${orderId}/metafields.json`, {
+      metafield: { namespace: 'timanti', key: 'cn_number', value: cnNum, type: 'single_line_text_field' }
+    });
+    shopifyPost(`orders/${orderId}/metafields.json`, {
+      metafield: { namespace: 'timanti', key: 'cn_value', value: String(netCredit.toFixed(2)), type: 'single_line_text_field' }
+    });
+    shopifyPost(`orders/${orderId}/metafields.json`, {
+      metafield: { namespace: 'timanti', key: 'cn_expiry', value: expiryFmt, type: 'single_line_text_field' }
+    });
     addOrderTag(orderId, 'cn-issued');
   } else {
-    Logger.log(`Order ${orderNumber} not found in Shopify — tag not added`);
+    Logger.log(`Order ${orderNumber} not found in Shopify — metafields and tag not added`);
   }
 
   // ── 8. Append to CN Log ────────────────────────────────────────────────────

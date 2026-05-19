@@ -2758,6 +2758,7 @@ app.listen(PORT, async () => {
   console.log('  GET  /api/po-action');
   console.log('  POST /api/trigger-price-update');
   console.log('  POST /webhooks/shopify/draft-order-updated');
+  console.log('  POST /webhooks/shopify/order-updated');
   // Clean up stale flag from a previous run killed by a deploy
   try {
     const fs = require('fs');

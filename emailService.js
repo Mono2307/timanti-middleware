@@ -468,4 +468,88 @@ function buildRepairCompleteHtml({ customerName, draftRef }) {
 </html>`;
 }
 
-module.exports = { sendEmail, sendDepositEmail, buildDepositEmailHtml, buildRepairEstimateHtml, buildRepairPaymentConfirmedHtml, buildRepairCompleteHtml };
+function buildCreditNoteHtml({ customerName, cnNumber, creditValue, validUntil, originalOrder }) {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+  <meta name="viewport" content="width=device-width">
+  <style>
+    body, p, td, span { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-weight: 300; margin: 0; padding: 0; }
+    h2, h3, h4 { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-weight: 500; margin: 0 0 10px 0; }
+    a { color: #fc7d27; text-decoration: none; }
+  </style>
+</head>
+<body style="background:#f4f4f4; padding:20px 0;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="max-width:600px; margin:0 auto; background:#ffffff; border-radius:8px; overflow:hidden;">
+    <tr><td>
+
+      <table width="100%" cellpadding="0" cellspacing="0" style="border-bottom:1px solid #eeeeee;">
+        <tr><td style="text-align:center; padding:24px 20px;">
+          <img src="https://cdn.shopify.com/s/files/1/0775/8322/0993/files/Timanti_Logo_Black.jpg?v=1766506323" alt="Timanti" width="150">
+        </td></tr>
+      </table>
+
+      <table width="100%" cellpadding="0" cellspacing="0">
+        <tr><td style="padding:28px 30px 10px 30px; text-align:center;">
+          <p style="font-size:13px; color:#999999; margin-bottom:8px;">Original Order ${originalOrder}</p>
+          <h2 style="font-size:22px; color:#000000; margin-bottom:16px;">Your Exchange Credit Note</h2>
+          <p style="font-size:14px; color:#444444; line-height:1.6;">Hi <strong>${customerName}</strong>, your exchange has been processed. Here are your credit details.</p>
+        </td></tr>
+      </table>
+
+      <table width="100%" cellpadding="0" cellspacing="0" style="padding:10px 30px;">
+        <tr><td>
+          <table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e0e0e0; border-radius:8px; background:#f9f9f9;">
+            <tr><td style="padding:20px;">
+              <table width="100%" cellpadding="0" cellspacing="0">
+                <tr>
+                  <td style="font-size:13px; color:#666666; padding:5px 0;">Credit Note</td>
+                  <td style="font-size:14px; color:#000000; font-weight:bold; text-align:right; padding:5px 0; letter-spacing:1px;">${cnNumber}</td>
+                </tr>
+                <tr>
+                  <td style="font-size:13px; color:#666666; padding:5px 0;">Discount Code</td>
+                  <td style="font-size:14px; color:#000000; font-weight:bold; text-align:right; padding:5px 0; letter-spacing:1px;">${cnNumber}</td>
+                </tr>
+                <tr><td colspan="2" style="border-top:1px solid #dddddd; padding-top:4px;"></td></tr>
+                <tr>
+                  <td style="font-size:14px; color:#006630; font-weight:bold; padding:5px 0;">Credit Value</td>
+                  <td style="font-size:14px; color:#006630; font-weight:bold; text-align:right; padding:5px 0;">Rs.${creditValue}</td>
+                </tr>
+                <tr>
+                  <td style="font-size:13px; color:#666666; padding:5px 0;">Valid Until</td>
+                  <td style="font-size:13px; color:#444444; text-align:right; padding:5px 0;">${validUntil}</td>
+                </tr>
+              </table>
+            </td></tr>
+          </table>
+        </td></tr>
+      </table>
+
+      <table width="100%" cellpadding="0" cellspacing="0" style="padding:16px 30px 10px 30px;">
+        <tr><td style="background:#F6F6F6; border-left:4px solid #fc7d27; padding:16px 20px;">
+          <h4 style="color:#000000; margin-bottom:10px; font-size:14px;">How to use</h4>
+          <p style="font-size:13px; color:#444444; margin:4px 0;"><strong>Online:</strong> enter <strong>${cnNumber}</strong> in the discount field at checkout on timanti.in</p>
+          <p style="font-size:13px; color:#444444; margin:8px 0 0 0;"><strong>In-store:</strong> show this email and quote the code to our consultant</p>
+        </td></tr>
+      </table>
+
+      <table width="100%" cellpadding="0" cellspacing="0" style="padding:10px 30px 20px 30px;">
+        <tr><td style="background:#fff8f0; border:1px solid #f5d9b8; border-radius:6px; padding:14px 18px; font-size:12px; color:#666666; text-align:center;">
+          Your new purchase must equal or exceed Rs.${creditValue}. &nbsp;·&nbsp; Single use &nbsp;·&nbsp; Non-transferable &nbsp;·&nbsp; Cannot be extended
+        </td></tr>
+      </table>
+
+      <table width="100%" cellpadding="0" cellspacing="0" style="border-top:1px solid #eeeeee; padding:20px 30px;">
+        <tr><td style="text-align:center; font-size:12px; color:#666666;">
+          <p>Questions? <a href="mailto:hello@timanti.in" style="color:#fc7d27;">hello@timanti.in</a> | <a href="tel:+917710938305" style="color:#fc7d27;">+91-7710938305</a></p>
+        </td></tr>
+      </table>
+
+    </td></tr>
+  </table>
+</body>
+</html>`;
+}
+
+module.exports = { sendEmail, sendDepositEmail, buildDepositEmailHtml, buildRepairEstimateHtml, buildRepairPaymentConfirmedHtml, buildRepairCompleteHtml, buildCreditNoteHtml };
