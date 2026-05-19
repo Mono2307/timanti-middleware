@@ -23,6 +23,7 @@ function onOpen() {
     .addSeparator()
     .addItem('🔑  Setup Supabase Credentials', 'setupSupabase')
     .addItem('🔍  Test API Connection', 'testConnection')
+    .addItem('🐛  Debug Cell Values', 'debugCells')
     .addToUi();
 }
 
@@ -30,6 +31,17 @@ function onOpen() {
 function toNum(val) {
   if (typeof val === 'number') return val;
   return parseFloat(String(val).replace(/[^0-9.-]/g, '')) || 0;
+}
+
+// ── DEBUG: run this first to verify cell references ──────────────────────────
+function debugCells() {
+  const calc = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Exchange Calculator');
+  const cells = ['B4','B5','B7','B15','B16','B19','B20','B27','B28','B29','B36','B40','B43'];
+  const lines = cells.map(ref => {
+    const raw = calc.getRange(ref).getValue();
+    return `${ref}: [${typeof raw}] ${raw}`;
+  });
+  SpreadsheetApp.getUi().alert(lines.join('\n'));
 }
 
 // ── MAIN FUNCTION ─────────────────────────────────────────────────────────────
