@@ -13,7 +13,7 @@
 // SHOPIFY SCOPES NEEDED: read_orders, write_orders, write_discounts
 // ─────────────────────────────────────────────────────────────────────────────
 
-const SHOPIFY_SHOP = 'timanti.myshopify.com';
+const SHOPIFY_SHOP = 'auracarat.myshopify.com';
 
 // ── MENU ─────────────────────────────────────────────────────────────────────
 function onOpen() {
