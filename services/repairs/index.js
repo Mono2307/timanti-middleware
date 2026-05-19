@@ -1,6 +1,7 @@
 'use strict';
 
 const crypto = require('crypto');
+const axios  = require('axios');
 const { createPaymentLink } = require('../gokwik');
 const {
   sendEmail,
@@ -17,53 +18,69 @@ function verifyShopifyHmac(rawBody, hmacHeader) {
   } catch (_) { return false; }
 }
 
-async function shopifyGet(path, token) {
-  const res = await fetch(
-    `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/${path}`,
-    { headers: { 'X-Shopify-Access-Token': token } }
-  );
-  if (!res.ok) return null;
-  return res.json();
+function shopifyHeaders(token) {
+  return { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' };
 }
 
-async function shopifyPut(path, body, token) {
-  const res = await fetch(
-    `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/${path}`,
-    {
-      method: 'PUT',
-      headers: { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
+// GET /draft_orders/${id}/metafields.json → update by ID if exists, else POST
+async function writeDraftOrderMetafields(draftOrderId, fields, token) {
+  const hdrs = shopifyHeaders(token);
+  const base = `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01`;
+
+  const { data: existing } = await axios.get(
+    `${base}/draft_orders/${draftOrderId}/metafields.json`,
+    { headers: hdrs, timeout: 10000 }
+  );
+
+  const byKey = {};
+  for (const mf of (existing.metafields || [])) {
+    if (mf.namespace === 'timanti') byKey[mf.key] = mf.id;
+  }
+
+  for (const [key, value] of Object.entries(fields)) {
+    if (value === null || value === undefined) continue;
+    const existingId = byKey[key];
+    if (existingId) {
+      await axios.put(
+        `${base}/metafields/${existingId}.json`,
+        { metafield: { id: existingId, value: String(value), type: 'single_line_text_field' } },
+        { headers: hdrs, timeout: 10000 }
+      );
+    } else {
+      await axios.post(
+        `${base}/draft_orders/${draftOrderId}/metafields.json`,
+        { metafield: { namespace: 'timanti', key, value: String(value), type: 'single_line_text_field' } },
+        { headers: hdrs, timeout: 10000 }
+      );
     }
+  }
+}
+
+// GET current draft tags then PUT with new set
+async function updateDraftOrderTags(draftOrderId, newTags, token) {
+  await axios.put(
+    `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}.json`,
+    { draft_order: { id: draftOrderId, tags: newTags.join(', ') } },
+    { headers: shopifyHeaders(token), timeout: 10000 }
   );
-  return res.ok;
 }
 
-async function updateDraftOrder(draftOrderId, { tags, metafields }, token) {
-  const payload = { draft_order: { id: draftOrderId } };
-  if (tags)       payload.draft_order.tags = tags.join(', ');
-  if (metafields) payload.draft_order.metafields = metafields.map(m => ({
-    namespace: 'timanti', type: 'single_line_text_field', ...m
-  }));
-  return shopifyPut(`draft_orders/${draftOrderId}.json`, payload, token);
-}
-
-// Called from server.js GoKwik webhook when draft has repair tags
+// ── Called from server.js GoKwik webhook when draft has repair tags ─────────
 async function handleRepairPayment(draft, { transactionId, gatewayRef }, getShopifyToken) {
-  const token     = await getShopifyToken();
+  const token      = await getShopifyToken();
   const existingTags = (draft.tags || '').split(',').map(t => t.trim()).filter(Boolean);
-  const newTags   = existingTags
+  const newTags    = existingTags
     .filter(t => t !== 'repair-estimate-ready' && t !== 'repair-estimate-sent')
     .concat(['repair-paid']);
 
-  await updateDraftOrder(draft.id, {
-    tags: newTags,
-    metafields: [
-      { key: 'payment_status',        value: 'paid' },
-      { key: 'gokwik_transaction_id', value: transactionId || '' },
-      { key: 'payment_amount',        value: draft.total_price },
-      { key: 'payment_method',        value: 'gokwik_link' },
-      { key: 'payment_date',          value: new Date().toISOString() }
-    ]
+  await updateDraftOrderTags(draft.id, newTags, token);
+
+  await writeDraftOrderMetafields(draft.id, {
+    payment_status:        'paid',
+    gokwik_transaction_id: transactionId || '',
+    payment_amount:        draft.total_price,
+    payment_method:        'gokwik_link',
+    payment_date:          new Date().toISOString()
   }, token);
 
   const customerEmail = draft.email;
@@ -83,12 +100,13 @@ async function handleRepairPayment(draft, { transactionId, gatewayRef }, getShop
     });
   }
 
-  console.log(`Repair payment recorded: ${draft.name} txn=${transactionId}`);
+  console.log(`✅ Repair payment recorded: ${draft.name} txn=${transactionId}`);
 }
 
+// ── Route factory — call once from server.js ──────────────────────────────────
 function registerRepairRoutes(app, getShopifyToken) {
 
-  // Trigger 1 + Trigger 3 — both fire on draft_orders/update
+  // Trigger 1 + Trigger 3 both arrive here
   app.post('/webhooks/shopify/draft-order-updated', async (req, res) => {
     res.status(200).send('OK');
 
@@ -102,7 +120,7 @@ function registerRepairRoutes(app, getShopifyToken) {
       const draft = req.body;
       const tags  = (draft.tags || '').split(',').map(t => t.trim()).filter(Boolean);
 
-      // ── Trigger 1: estimate ready ────────────────────────────────────────
+      // ── Trigger 1: estimate ready ──────────────────────────────────────
       if (tags.includes('repair-estimate-ready') && !tags.includes('repair-estimate-sent')) {
         console.log(`Repair estimate trigger: ${draft.name}`);
         const token         = await getShopifyToken();
@@ -123,8 +141,8 @@ function registerRepairRoutes(app, getShopifyToken) {
           });
           shortUrl = link.shortUrl;
         } catch (err) {
-          console.error(`GoKwik link failed for ${draft.name}:`, err.message);
-          return; // no tag added — staff can retry by re-saving draft
+          console.error(`❌ GoKwik link failed for ${draft.name}:`, err.message);
+          return; // don't add tag — allows retry by re-saving draft
         }
 
         try {
@@ -140,20 +158,20 @@ function registerRepairRoutes(app, getShopifyToken) {
             })
           });
         } catch (err) {
-          console.error(`Resend failed for ${draft.name}:`, err.message);
-          return; // no tag added — allows retry
+          console.error(`❌ Resend failed for ${draft.name}:`, err.message);
+          return; // don't add tag — allows retry
         }
 
-        await updateDraftOrder(draft.id, {
-          tags: [...tags, 'repair-estimate-sent'],
-          metafields: [{ key: 'repair_estimate_sent_at', value: new Date().toISOString() }]
+        await updateDraftOrderTags(draft.id, [...tags, 'repair-estimate-sent'], token);
+        await writeDraftOrderMetafields(draft.id, {
+          repair_estimate_sent_at: new Date().toISOString()
         }, token);
 
-        console.log(`Repair estimate sent: ${draft.name}`);
+        console.log(`✅ Repair estimate sent: ${draft.name}`);
         return;
       }
 
-      // ── Trigger 3: repair complete ───────────────────────────────────────
+      // ── Trigger 3: repair complete ─────────────────────────────────────
       if (tags.includes('repair-complete') && !tags.includes('repair-completion-notified')) {
         console.log(`Repair complete trigger: ${draft.name}`);
         const token         = await getShopifyToken();
@@ -167,20 +185,20 @@ function registerRepairRoutes(app, getShopifyToken) {
             html:    buildRepairCompleteHtml({ customerName, draftRef: draft.name })
           });
         } catch (err) {
-          console.error(`Resend failed (complete) for ${draft.name}:`, err.message);
+          console.error(`❌ Resend failed (complete) for ${draft.name}:`, err.message);
           return;
         }
 
-        await updateDraftOrder(draft.id, {
-          tags: [...tags, 'repair-completion-notified'],
-          metafields: [{ key: 'repair_completed_at', value: new Date().toISOString() }]
+        await updateDraftOrderTags(draft.id, [...tags, 'repair-completion-notified'], token);
+        await writeDraftOrderMetafields(draft.id, {
+          repair_completed_at: new Date().toISOString()
         }, token);
 
-        console.log(`Repair completion notified: ${draft.name}`);
+        console.log(`✅ Repair completion notified: ${draft.name}`);
       }
 
     } catch (err) {
-      console.error('Repair draft-order webhook error:', err.message);
+      console.error('Repair draft-order webhook error:', err.response?.data || err.message);
     }
   });
 }

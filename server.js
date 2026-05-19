@@ -2224,20 +2224,17 @@ app.post('/api/gokwik-webhook', async (req, res) => {
     if (status === 'success') {
       // Check if this is a repair draft before touching payment_links
       try {
-        const repairToken  = await getShopifyToken();
-        const repairRes    = await fetch(
+        const repairToken = await getShopifyToken();
+        const { data: repairData } = await axios.get(
           `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}.json`,
-          { headers: { 'X-Shopify-Access-Token': repairToken } }
+          { headers: { 'X-Shopify-Access-Token': repairToken }, timeout: 10000 }
         );
-        if (repairRes.ok) {
-          const repairData = await repairRes.json();
-          const repairDraft = repairData.draft_order;
-          if (repairDraft) {
-            const repairTags = (repairDraft.tags || '').split(',').map(t => t.trim());
-            if (repairTags.includes('repair-estimate-sent') || repairTags.includes('repair-estimate-ready')) {
-              await handleRepairPayment(repairDraft, { transactionId: transaction_id, gatewayRef: gateway_reference_id }, getShopifyToken);
-              return;
-            }
+        const repairDraft = repairData?.draft_order;
+        if (repairDraft) {
+          const repairTags = (repairDraft.tags || '').split(',').map(t => t.trim());
+          if (repairTags.includes('repair-estimate-sent') || repairTags.includes('repair-estimate-ready')) {
+            await handleRepairPayment(repairDraft, { transactionId: transaction_id, gatewayRef: gateway_reference_id }, getShopifyToken);
+            return;
           }
         }
       } catch (repairErr) {
