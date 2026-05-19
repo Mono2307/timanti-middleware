@@ -552,4 +552,95 @@ function buildCreditNoteHtml({ customerName, cnNumber, creditValue, validUntil, 
 </html>`;
 }
 
-module.exports = { sendEmail, sendDepositEmail, buildDepositEmailHtml, buildRepairEstimateHtml, buildRepairPaymentConfirmedHtml, buildRepairCompleteHtml, buildCreditNoteHtml };
+function buildRepairIntakeHtml({ customerName, customerEmail, customerPhone, draftRef, itemDesc, notes, approveUrl }) {
+  const notesRow = notes
+    ? `<tr><td style="font-size:13px; color:#666666; padding:5px 0; vertical-align:top;">Notes</td><td style="font-size:13px; color:#444444; text-align:right; padding:5px 0;">${notes.replace(/\n/g, '<br>')}</td></tr>`
+    : '';
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+  <meta name="viewport" content="width=device-width">
+  <style>
+    body, p, td, span { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-weight: 300; margin: 0; padding: 0; }
+    h2, h3, h4 { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-weight: 500; margin: 0 0 10px 0; }
+    a { color: #fc7d27; text-decoration: none; }
+  </style>
+</head>
+<body style="background:#f4f4f4; padding:20px 0;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="max-width:600px; margin:0 auto; background:#ffffff; border-radius:8px; overflow:hidden;">
+    <tr><td>
+
+      <table width="100%" cellpadding="0" cellspacing="0" style="border-bottom:1px solid #eeeeee;">
+        <tr><td style="text-align:center; padding:24px 20px;">
+          <img src="https://cdn.shopify.com/s/files/1/0775/8322/0993/files/Timanti_Logo_Black.jpg?v=1766506323" alt="Timanti" width="150">
+        </td></tr>
+      </table>
+
+      <table width="100%" cellpadding="0" cellspacing="0">
+        <tr><td style="background:#fff3cd; padding:12px 20px; text-align:center; font-weight:bold; font-size:13px; border-bottom:1px solid #ffc107;">
+          NEW REPAIR INTAKE — ${draftRef}
+        </td></tr>
+      </table>
+
+      <table width="100%" cellpadding="0" cellspacing="0">
+        <tr><td style="padding:28px 30px 10px 30px; text-align:center;">
+          <h2 style="font-size:20px; color:#000000; margin-bottom:16px;">Repair received — estimate required</h2>
+          <p style="font-size:14px; color:#444444; line-height:1.6;">The item has been logged. Review the details below and set the estimate to send the customer their payment link.</p>
+        </td></tr>
+      </table>
+
+      <table width="100%" cellpadding="0" cellspacing="0" style="padding:10px 30px;">
+        <tr><td>
+          <table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e0e0e0; border-radius:8px; background:#f9f9f9;">
+            <tr><td style="padding:20px;">
+              <table width="100%" cellpadding="0" cellspacing="0">
+                <tr>
+                  <td style="font-size:13px; color:#666666; padding:5px 0;">Reference</td>
+                  <td style="font-size:13px; color:#000000; font-weight:bold; text-align:right; padding:5px 0;">${draftRef}</td>
+                </tr>
+                <tr>
+                  <td style="font-size:13px; color:#666666; padding:5px 0;">Customer</td>
+                  <td style="font-size:13px; color:#444444; text-align:right; padding:5px 0;">${customerName}</td>
+                </tr>
+                <tr>
+                  <td style="font-size:13px; color:#666666; padding:5px 0;">Email</td>
+                  <td style="font-size:13px; color:#444444; text-align:right; padding:5px 0;">${customerEmail}</td>
+                </tr>
+                ${customerPhone ? `<tr><td style="font-size:13px; color:#666666; padding:5px 0;">Phone</td><td style="font-size:13px; color:#444444; text-align:right; padding:5px 0;">${customerPhone}</td></tr>` : ''}
+                <tr><td colspan="2" style="border-top:1px solid #dddddd; padding-top:4px;"></td></tr>
+                <tr>
+                  <td style="font-size:13px; color:#666666; padding:5px 0;">Item</td>
+                  <td style="font-size:13px; color:#444444; text-align:right; padding:5px 0;">${itemDesc}</td>
+                </tr>
+                ${notesRow}
+              </table>
+            </td></tr>
+          </table>
+        </td></tr>
+      </table>
+
+      <table width="100%" cellpadding="0" cellspacing="0" style="padding:20px 30px 24px 30px;">
+        <tr><td style="text-align:center;">
+          <p style="font-size:13px; color:#666666; margin-bottom:16px;">Click below to set the estimate amount. The customer will receive their payment link automatically.</p>
+          <table cellpadding="0" cellspacing="0" style="margin:0 auto;">
+            <tr><td style="background:#000000; border-radius:4px; text-align:center;">
+              <a href="${approveUrl}" target="_blank" style="color:#ffffff; text-decoration:none; font-weight:500; display:block; padding:14px 32px; font-size:15px;">Set Estimate &amp; Send to Customer</a>
+            </td></tr>
+          </table>
+        </td></tr>
+      </table>
+
+      <table width="100%" cellpadding="0" cellspacing="0" style="border-top:1px solid #eeeeee; padding:20px 30px;">
+        <tr><td style="text-align:center; font-size:12px; color:#999999;">
+          <p>Timanti internal — do not forward this email</p>
+        </td></tr>
+      </table>
+
+    </td></tr>
+  </table>
+</body>
+</html>`;
+}
+
+module.exports = { sendEmail, sendDepositEmail, buildDepositEmailHtml, buildRepairEstimateHtml, buildRepairPaymentConfirmedHtml, buildRepairCompleteHtml, buildCreditNoteHtml, buildRepairIntakeHtml };
