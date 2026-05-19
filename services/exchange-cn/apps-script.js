@@ -26,6 +26,12 @@ function onOpen() {
     .addToUi();
 }
 
+// Strips ₹, commas, spaces — handles both number values and formatted strings
+function toNum(val) {
+  if (typeof val === 'number') return val;
+  return parseFloat(String(val).replace(/[^0-9.-]/g, '')) || 0;
+}
+
 // ── MAIN FUNCTION ─────────────────────────────────────────────────────────────
 function createCreditNote() {
   const ss   = SpreadsheetApp.getActiveSpreadsheet();
@@ -33,15 +39,15 @@ function createCreditNote() {
   const log  = ss.getSheetByName('CN Log');
   const ui   = SpreadsheetApp.getUi();
 
-  // ── 1. Read inputs — parseFloat strips currency formatting ────────────────
+  // ── 1. Read inputs ────────────────────────────────────────────────────────
   const customerName  = calc.getRange('B4').getValue();
   const customerEmail = calc.getRange('B5').getValue();
   const orderNumber   = String(calc.getRange('B7').getValue()).trim();
-  const netWt         = parseFloat(calc.getRange('B15').getValue()) || 0;
-  const diaWt         = parseFloat(calc.getRange('B16').getValue()) || 0;
-  const goldVal       = parseFloat(calc.getRange('B29').getValue()) || 0;
-  const diaVal        = parseFloat(calc.getRange('B30').getValue()) || 0;
-  const netCredit     = parseFloat(calc.getRange('B40').getValue()) || 0;
+  const netWt         = toNum(calc.getRange('B15').getValue());
+  const diaWt         = toNum(calc.getRange('B16').getValue());
+  const goldVal       = toNum(calc.getRange('B29').getValue());
+  const diaVal        = toNum(calc.getRange('B30').getValue());
+  const netCredit     = toNum(calc.getRange('B40').getValue());
 
   const today      = new Date();
   const validUntil = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 90);
