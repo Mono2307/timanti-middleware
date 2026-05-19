@@ -218,7 +218,8 @@ function registerRepairRoutes(app, getShopifyToken) {
     try {
       const order = req.body;
       const tags  = (order.tags || '').split(',').map(t => t.trim());
-      if (!tags.includes('cn-issued')) return;
+      if (!tags.includes('cn-issued'))       return;
+      if (tags.includes('cn-email-sent'))    return;
 
       const token = await getShopifyToken();
       const { data: mfData } = await axios.get(
@@ -247,6 +248,14 @@ function registerRepairRoutes(app, getShopifyToken) {
           originalOrder: order.name
         })
       });
+
+      // Tag order so this handler never fires twice for same CN
+      const allTags = [...tags, 'cn-email-sent'].join(', ');
+      await axios.put(
+        `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/orders/${order.id}.json`,
+        { order: { id: order.id, tags: allTags } },
+        { headers: shopifyHeaders(token), timeout: 10000 }
+      );
 
       console.log(`✅ CN email sent: ${mf.cn_number} → ${order.email}`);
     } catch (err) {

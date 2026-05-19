@@ -116,18 +116,18 @@ function createCreditNote() {
   const orderId       = getOrderId(cleanOrderNum);
 
   if (orderId) {
-    shopifyPost(`orders/${orderId}/metafields.json`, {
-      metafield: { namespace: 'timanti', key: 'cn_number', value: cnNum, type: 'single_line_text_field' }
-    });
-    shopifyPost(`orders/${orderId}/metafields.json`, {
-      metafield: { namespace: 'timanti', key: 'cn_value', value: String(netCredit.toFixed(2)), type: 'single_line_text_field' }
-    });
-    shopifyPost(`orders/${orderId}/metafields.json`, {
-      metafield: { namespace: 'timanti', key: 'cn_expiry', value: expiryFmt, type: 'single_line_text_field' }
-    });
+    Logger.log(`Order found: id=${orderId}`);
+    const mf1 = shopifyPost(`orders/${orderId}/metafields.json`, { metafield: { namespace: 'timanti', key: 'cn_number', value: cnNum, type: 'single_line_text_field' } });
+    Logger.log(`cn_number metafield: ${JSON.stringify(mf1)}`);
+    const mf2 = shopifyPost(`orders/${orderId}/metafields.json`, { metafield: { namespace: 'timanti', key: 'cn_value', value: String(netCredit.toFixed(2)), type: 'single_line_text_field' } });
+    Logger.log(`cn_value metafield: ${JSON.stringify(mf2)}`);
+    const mf3 = shopifyPost(`orders/${orderId}/metafields.json`, { metafield: { namespace: 'timanti', key: 'cn_expiry', value: expiryFmt, type: 'single_line_text_field' } });
+    Logger.log(`cn_expiry metafield: ${JSON.stringify(mf3)}`);
     addOrderTag(orderId, 'cn-issued');
+    Logger.log(`Tag cn-issued added to order ${orderId}`);
   } else {
     Logger.log(`Order ${orderNumber} not found in Shopify — metafields and tag not added`);
+    ui.alert(`⚠️ Order ${orderNumber} not found in Shopify. CN created but order not tagged.`);
   }
 
   // ── 8. Append to CN Log ────────────────────────────────────────────────────
