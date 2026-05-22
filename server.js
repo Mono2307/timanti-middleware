@@ -1321,9 +1321,42 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
       await removeTagFromDraft(draftOrderId, tagToProcess);
       return;
     }
-    // reprice tag, no weight data: hydrate breakdown from variant + fix discount/GST math atomically
+    // reprice tag, no weight data: recalculate gold component if mfGoldRate is set, then fix discount/GST math
     const r2 = (v) => Math.round(v * 100) / 100;
-    const pGross = productItems.reduce((sum, item) => sum + parseFloat(item.price) * item.quantity, 0);
+
+    // Hydrate all items first — this bootstraps _gold_rate and Gold from variant metafields
+    // for fresh items that have never been repriced (no locked props yet)
+    const hydratedBase = await Promise.all(productItems.map(item => hydrateItemFromVariant(item, token)));
+
+    // When mfGoldRate is set: read _gold_rate and Gold from locked item props if present,
+    // fall back to variant-sourced hydrated props (consistent pair written at same time as rate update)
+    const itemRecalc = mfGoldRate
+      ? productItems.map((item, idx) => {
+          const hProps = {};
+          for (const p of (hydratedBase[idx].properties || [])) hProps[p.name] = p.value;
+          const iProps = {};
+          for (const p of (item.properties || [])) iProps[p.name] = p.value;
+          const getRaw  = (name) => iProps[name] || hProps[name] || '';
+          const lockedRate = parseFloat(getRaw('_gold_rate').trim()) || 0;
+          const goldVal    = parseFloat(getRaw('Gold').replace('Rs', '').trim()) || 0;
+          const diaVal     = parseFloat((getRaw('Diamond')).replace('Rs', '').trim()) || 0;
+          const mkgVal     = parseFloat((getRaw('Making') || getRaw('Making Charges')).replace('Rs', '').trim()) || 0;
+          if (lockedRate > 0 && goldVal > 0) {
+            const newGold = r2((goldVal / lockedRate) * mfGoldRate);
+            return { newPreTaxGross: r2(newGold + diaVal + mkgVal), newGold };
+          }
+          return null;
+        })
+      : productItems.map(() => null);
+    const hasGoldRecalc = mfGoldRate && itemRecalc.every(r => r !== null);
+
+    // Pre-tax gross per item: use recalculated value if available, else back-calculate from current price
+    const preTaxArr = hasGoldRecalc
+      ? productItems.map((_, i) => itemRecalc[i].newPreTaxGross)
+      : productItems.map(item => r2(parseFloat(item.price) * item.quantity / 1.03));
+    const preTaxGrossTotal = preTaxArr.reduce((s, v) => s + v, 0);
+    const pGross = r2(preTaxGrossTotal * 1.03);
+
     const discObj = draft.applied_discount;
     let discAmt = 0;
     if (discObj) {
@@ -1333,31 +1366,33 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
     }
     const intendedFinal    = r2(Math.max(0, pGross - discAmt));
     const taxableTotal     = r2(intendedFinal / 1.03);
-    const correctDiscTotal = r2(pGross / 1.03 - taxableTotal);
+    const correctDiscTotal = r2(preTaxGrossTotal - taxableTotal);
 
-    const hydratedItems = await Promise.all(productItems.map(async (item) => {
-      const h = await hydrateItemFromVariant(item, token);
-      const proportion  = pGross > 0 ? (parseFloat(item.price) * item.quantity) / pGross : 1 / productItems.length;
+    const hydratedItems = productItems.map((item, idx) => {
+      const h = hydratedBase[idx];
+      const proportion  = preTaxGrossTotal > 0 ? preTaxArr[idx] / preTaxGrossTotal : 1 / productItems.length;
       const itemTaxable = r2(taxableTotal * proportion);
       const itemGst     = r2(itemTaxable * 0.03);
       const itemFinal   = r2(itemTaxable + itemGst);
       const itemDisc    = r2(correctDiscTotal * proportion);
       const grossValue  = r2(itemFinal + itemDisc);
       const unitPrice   = r2(itemFinal / (item.quantity || 1));
-      const FINANCIAL   = new Set(['Taxable Value', 'GST', 'Gross Value', 'Discount Applied', '_gold_rate']);
+      // Strip financial fields; also strip Gold when recalculating so we can replace it
+      const FINANCIAL   = new Set(['Taxable Value', 'GST', 'Gross Value', 'Discount Applied', '_gold_rate', ...(hasGoldRecalc ? ['Gold'] : [])]);
       const filteredProps = h.properties.filter(p => !FINANCIAL.has(p.name));
+      if (hasGoldRecalc && itemRecalc[idx]) {
+        filteredProps.push({ name: 'Gold', value: `Rs${itemRecalc[idx].newGold.toFixed(2)}` });
+      }
       filteredProps.push(
         { name: 'Taxable Value',    value: `Rs${itemTaxable.toFixed(2)}` },
         { name: 'GST',             value: `Rs${itemGst.toFixed(2)}` },
         { name: 'Gross Value',      value: `Rs${grossValue.toFixed(2)}` },
         { name: 'Discount Applied', value: `Rs${itemDisc.toFixed(2)}` },
       );
-      // Apply gold rate override if present, otherwise preserve locked rate
-      const existingRate = (item.properties || []).find(p => p.name === '_gold_rate');
-      const effectiveRate = mfGoldRate ? String(mfGoldRate) : (existingRate?.value || h.properties.find(p => p.name === '_gold_rate')?.value || '');
+      const effectiveRate = mfGoldRate ? String(mfGoldRate) : ((item.properties || []).find(p => p.name === '_gold_rate')?.value || h.properties.find(p => p.name === '_gold_rate')?.value || '');
       if (effectiveRate) filteredProps.push({ name: '_gold_rate', value: effectiveRate });
       return { ...h, price: unitPrice.toFixed(2), properties: filteredProps };
-    }));
+    });
 
     const allUpdatedItems = (draft.line_items || []).map(item => {
       const h = hydratedItems.find(u => u.id === item.id);
@@ -1366,7 +1401,7 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
         : { variant_id: item.variant_id || undefined, quantity: item.quantity, price: item.price, properties: item.properties || [], title: item.title };
     });
     await gqlSetDraftLineItems(draftOrderId, allUpdatedItems, token, { tags: tagsWithoutRecalc, clearDiscount: true });
-    console.log(`Draft ${draftOrderId}: reprice (no weights) — ${hydratedItems.length} items updated`);
+    console.log(`Draft ${draftOrderId}: reprice (no weights${hasGoldRecalc ? ', gold rate recalc' : ''}) — ${hydratedItems.length} items updated`);
     return;
   }
 
