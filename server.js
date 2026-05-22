@@ -1328,6 +1328,13 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
     // for fresh items that have never been repriced (no locked props yet)
     const hydratedBase = await Promise.all(productItems.map(item => hydrateItemFromVariant(item, token)));
 
+    // Diagnostic: log what hydrate produced for each item
+    productItems.forEach((item, idx) => {
+      const hProps = {};
+      for (const p of (hydratedBase[idx].properties || [])) hProps[p.name] = p.value;
+      console.log(`[reprice-diag] item ${item.id} (variant ${item.variant_id}): _gold_rate=${hProps['_gold_rate'] || 'none'} Gold=${hProps['Gold'] || 'none'} _net_wt=${hProps['_net_wt'] || 'none'} mfGoldRate=${mfGoldRate || 'none'}`);
+    });
+
     // When mfGoldRate is set: read _gold_rate and Gold from locked item props if present,
     // fall back to variant-sourced hydrated props (consistent pair written at same time as rate update)
     const itemRecalc = mfGoldRate
@@ -1341,6 +1348,7 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
           const goldVal    = parseFloat(getRaw('Gold').replace('Rs', '').trim()) || 0;
           const diaVal     = parseFloat((getRaw('Diamond')).replace('Rs', '').trim()) || 0;
           const mkgVal     = parseFloat((getRaw('Making') || getRaw('Making Charges')).replace('Rs', '').trim()) || 0;
+          console.log(`[reprice-diag] item ${item.id}: lockedRate=${lockedRate} goldVal=${goldVal} diaVal=${diaVal} mkgVal=${mkgVal} → recalc=${lockedRate > 0 && goldVal > 0 ? 'yes' : 'NO (missing data)'}`);
           if (lockedRate > 0 && goldVal > 0) {
             const newGold = r2((goldVal / lockedRate) * mfGoldRate);
             return { newPreTaxGross: r2(newGold + diaVal + mkgVal), newGold };
