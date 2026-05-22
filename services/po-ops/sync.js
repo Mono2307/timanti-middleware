@@ -30,9 +30,10 @@ async function fetchMetafields(resource, id, token, shopifyStoreUrl) {
 async function postToPoQueue(payload) {
   if (!PO_QUEUE_SCRIPT_URL) { console.warn('[SYNC] PO_QUEUE_SCRIPT_URL not set — skipping sheet sync'); return; }
   try {
-    await axios.post(PO_QUEUE_SCRIPT_URL, payload, {
+    const res = await axios.post(PO_QUEUE_SCRIPT_URL, payload, {
       headers: { 'Content-Type': 'application/json' }, timeout: 15000
     });
+    if (!res.data?.ok) console.warn('[SYNC] Apps Script returned error:', JSON.stringify(res.data));
   } catch (e) {
     console.error('[SYNC] Apps Script error:', e.message);
   }
