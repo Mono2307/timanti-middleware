@@ -35,7 +35,7 @@ from config import (
     GOLD_RATE_FILE, IMPORT_SCRIPT,
     SUPABASE_URL, SUPABASE_KEY, SUPABASE_TOKEN_KEY,
     STORE_DOMAIN, GOLD_RATE_MAX_AGE_HOURS,
-    RATIO_18K, RATIO_14K, RATIO_22K,
+    RATIO_18K, RATIO_14K, RATIO_22K, RATIO_24K,
 )
 
 
@@ -151,8 +151,9 @@ def _load_gold_rate(log: logging.Logger) -> dict:
     rate_18k = round(pure * RATIO_18K, 2)
     rate_14k = round(pure * RATIO_14K, 2)
     rate_22k = round(pure * RATIO_22K, 2)
+    rate_24k = round(pure * RATIO_24K, 2)
 
-    log.info(f'Gold rate ({source}) — pure: Rs {pure:,.0f}/g | 22K: Rs {rate_22k:,.2f}/g | 18K: Rs {rate_18k:,.2f}/g | 14K: Rs {rate_14k:,.2f}/g')
+    log.info(f'Gold rate ({source}) — pure: Rs {pure:,.0f}/g | 24K: Rs {rate_24k:,.2f}/g | 22K: Rs {rate_22k:,.2f}/g | 18K: Rs {rate_18k:,.2f}/g | 14K: Rs {rate_14k:,.2f}/g')
     log.info(f'Rate age  — {age_h:.1f}h (set {set_at})')
 
     return {
@@ -160,11 +161,13 @@ def _load_gold_rate(log: logging.Logger) -> dict:
         '18k':       rate_18k,
         '14k':       rate_14k,
         '22k':       rate_22k,
+        '24k':       rate_24k,
         'set_at':    set_at,
         'age_hours': age_h,
         'ratio_18k': RATIO_18K,
         'ratio_14k': RATIO_14K,
         'ratio_22k': RATIO_22K,
+        'ratio_24k': RATIO_24K,
     }
 
 
@@ -283,6 +286,7 @@ def run(test_gati: str = None):
         log.info('-' * 70)
         log.info(f'  GOLD RATES FOR THIS RUN')
         log.info(f'  Pure gold : Rs {gold_rate["pure"]:>10,.0f} / gram')
+        log.info(f'  24K rate  : Rs {gold_rate["24k"]:>10,.2f} / gram')
         log.info(f'  22K rate  : Rs {gold_rate["22k"]:>10,.2f} / gram')
         log.info(f'  18K rate  : Rs {gold_rate["18k"]:>10,.2f} / gram')
         log.info(f'  14K rate  : Rs {gold_rate["14k"]:>10,.2f} / gram')

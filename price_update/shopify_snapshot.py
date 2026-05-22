@@ -105,6 +105,7 @@ def build_snapshot(token: str, gold_rate: dict, output_csv: Path, log: logging.L
     rate_18k  = gold_rate['18k']
     rate_14k  = gold_rate['14k']
     rate_22k  = gold_rate['22k']
+    rate_24k  = gold_rate['24k']
     p         = DECIMAL_PRECISION
     # Normalise set_at to seconds precision for Shopify date_time metafield
     raw_set_at      = gold_rate.get('set_at', '')
@@ -167,9 +168,11 @@ def build_snapshot(token: str, gold_rate: dict, output_csv: Path, log: logging.L
             excluded.append(sku)
             continue
 
-        # Determine karat from SKU position 3 (e.g. "22", "18", or "14")
+        # Determine karat from SKU position 3 (e.g. "24", "22", "18", or "14")
         karat_part = parts[2].strip() if len(parts) > 2 else ''
-        if '22' in karat_part:
+        if '24' in karat_part:
+            gold_rate_used = rate_24k
+        elif '22' in karat_part:
             gold_rate_used = rate_22k
         elif '14' in karat_part:
             gold_rate_used = rate_14k

@@ -35,6 +35,7 @@ EMAIL_RATES_CC      = ['shweta@timanti.in', 'monodeep.dutta@timanti.in']
 RATIO_18K         = 0.771
 RATIO_14K         = 0.604
 RATIO_22K         = 0.9167   # 22/24 pure gold ratio
+RATIO_24K         = 1.0      # 24/24 pure gold ratio
 GST_RATE          = 0.03
 DECIMAL_PRECISION = 2
 
