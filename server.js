@@ -1199,7 +1199,6 @@ async function fetchItemMeta(item, token) {
       `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/variants/${item.variant_id}/metafields.json`,
       { headers, timeout: 10000 }
     );
-    console.log(`[fetchItemMeta] variant ${item.variant_id} — all metafields: ${JSON.stringify((vData.metafields || []).map(m => `${m.namespace}.${m.key}=${m.value}`))}`);
     for (const m of (vData.metafields || [])) if (m.namespace === 'custom') varMf[m.key] = m.value;
   }
   if (item.product_id) {
@@ -1241,7 +1240,36 @@ async function hydrateItemFromVariant(item, token) {
   // Bootstrap _gold_rate from variant only if not already locked on the line item
   const hasLockedRate = (item.properties || []).some(p => p.name === '_gold_rate');
   if (!hasLockedRate && goldRate) updatedProps.push({ name: '_gold_rate', value: goldRate });
-  return { id: item.id, variant_id: item.variant_id || undefined, quantity: item.quantity, price: item.price, properties: updatedProps, title: item.title };
+  return { id: item.id, variant_id: item.variant_id || undefined, quantity: item.quantity, price: item.price, properties: updatedProps, title: item.title, varMf };
+}
+
+// Hydrates Gold/Diamond/Making/_gold_rate properties from variant metafields on a freshly created draft.
+// Fires on draft_orders/create webhook — never changes price, only populates breakdown properties.
+async function handleDraftCreated(draft) {
+  const draftOrderId = draft.id?.toString();
+  if (!draftOrderId) return;
+
+  const productItems = (draft.line_items || []).filter(item =>
+    item.variant_id &&
+    !((item.title || '').toLowerCase().includes('discount') && parseFloat(item.price) < 0)
+  );
+  if (productItems.length === 0) return;
+
+  const token    = await getShopifyToken();
+  const hydrated = await Promise.all(productItems.map(item => hydrateItemFromVariant(item, token)));
+
+  const anyUseful = hydrated.some(h => (h.properties || []).some(p => p.name === 'Gold'));
+  if (!anyUseful) return;
+
+  const allUpdatedItems = (draft.line_items || []).map(item => {
+    const h = hydrated.find(u => u.id === item.id);
+    return h
+      ? { variant_id: h.variant_id, quantity: h.quantity, price: h.price, properties: h.properties, title: item.title }
+      : { variant_id: item.variant_id || undefined, quantity: item.quantity, price: item.price, properties: item.properties || [], title: item.title };
+  });
+
+  await gqlSetDraftLineItems(draftOrderId, allUpdatedItems, token, {});
+  console.log(`Draft ${draftOrderId}: created — hydrated ${hydrated.filter(h => (h.properties || []).some(p => p.name === 'Gold')).length}/${productItems.length} items`);
 }
 
 // Tags: recalculate-price (threshold — reprice only if delta > 5%) | reprice (blanket — always reprices, or fixes discount/GST if no weights)
@@ -1329,33 +1357,34 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
     // for fresh items that have never been repriced (no locked props yet)
     const hydratedBase = await Promise.all(productItems.map(item => hydrateItemFromVariant(item, token)));
 
-    // Diagnostic: log what hydrate produced for each item
-    productItems.forEach((item, idx) => {
-      const hProps = {};
-      for (const p of (hydratedBase[idx].properties || [])) hProps[p.name] = p.value;
-      console.log(`[reprice-diag] item ${item.id} (variant ${item.variant_id}): _gold_rate=${hProps['_gold_rate'] || 'none'} Gold=${hProps['Gold'] || 'none'} _net_wt=${hProps['_net_wt'] || 'none'} mfGoldRate=${mfGoldRate || 'none'}`);
-    });
-
-    // When mfGoldRate is set: read _gold_rate and Gold from locked item props if present,
-    // fall back to variant-sourced hydrated props (consistent pair written at same time as rate update)
+    // When mfGoldRate is set, derive net weight per item using best available source:
+    // 1. variant net_wt metafield (most reliable)
+    // 2. variant price_breakup_gold / gold_rate (both written together by price-update service)
+    // 3. locked item Gold / _gold_rate (written by a previous reprice)
     const itemRecalc = mfGoldRate
       ? productItems.map((item, idx) => {
-          const hProps = {};
-          for (const p of (hydratedBase[idx].properties || [])) hProps[p.name] = p.value;
+          const vMf    = hydratedBase[idx].varMf || {};
           const iProps = {};
           for (const p of (item.properties || [])) iProps[p.name] = p.value;
-          const getRaw  = (name) => iProps[name] || hProps[name] || '';
-          const lockedRate = parseFloat(getRaw('_gold_rate').trim()) || 0;
-          const goldVal    = parseFloat(getRaw('Gold').replace('Rs', '').trim()) || 0;
-          const diaVal     = parseFloat((getRaw('Diamond')).replace('Rs', '').trim()) || 0;
-          const mkgVal     = parseFloat((getRaw('Making') || getRaw('Making Charges')).replace('Rs', '').trim()) || 0;
-          if (lockedRate > 0 && goldVal > 0) {
-            const newGold = r2((goldVal / lockedRate) * mfGoldRate);
-            console.log(`[reprice-diag] item ${item.id}: lockedRate=${lockedRate} → newGold=${newGold} (was ${goldVal})`);
-            return { newPreTaxGross: r2(newGold + diaVal + mkgVal), newGold };
-          }
-          console.warn(`[reprice-diag] item ${item.id}: skipping gold recalc — lockedRate=${lockedRate} goldVal=${goldVal}`);
-          return null;
+
+          const varNetWt   = parseFloat(vMf.net_wt || 0);
+          const varGoldPbp = parseFloat(vMf.price_breakup_gold || 0) * item.quantity;
+          const varRate    = parseFloat(vMf.gold_rate || 0);
+          const lockedGold = parseFloat((iProps['Gold'] || '').replace('Rs', '').trim()) || 0;
+          const lockedRate = parseFloat((iProps['_gold_rate'] || '').trim()) || 0;
+
+          let netWt = 0;
+          if (varNetWt > 0)                       netWt = varNetWt * item.quantity;
+          else if (varGoldPbp > 0 && varRate > 0) netWt = varGoldPbp / varRate;
+          else if (lockedGold > 0 && lockedRate > 0) netWt = lockedGold / lockedRate;
+
+          if (netWt <= 0) return null;
+
+          const diaVal = parseFloat((iProps['Diamond'] || '').replace('Rs', '').trim()) || parseFloat(vMf.price_breakup_diamond || 0) * item.quantity;
+          const mkgVal = parseFloat((iProps['Making'] || iProps['Making Charges'] || '').replace('Rs', '').trim()) || parseFloat(vMf.price_breakup_making || 0) * item.quantity;
+
+          const newGold = r2(netWt * mfGoldRate);
+          return { newPreTaxGross: r2(newGold + diaVal + mkgVal), newGold };
         })
       : productItems.map(() => null);
     const anyGoldRecalc = mfGoldRate && itemRecalc.some(r => r !== null);
@@ -1413,7 +1442,7 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
         : { variant_id: item.variant_id || undefined, quantity: item.quantity, price: item.price, properties: item.properties || [], title: item.title };
     });
     await gqlSetDraftLineItems(draftOrderId, allUpdatedItems, token, { tags: tagsWithoutRecalc, clearDiscount: true });
-    console.log(`Draft ${draftOrderId}: reprice (no weights${hasGoldRecalc ? ', gold rate recalc' : ''}) — ${hydratedItems.length} items updated`);
+    console.log(`Draft ${draftOrderId}: reprice (no weights${anyGoldRecalc ? ', gold rate recalc' : ''}) — ${hydratedItems.length} items updated`);
     return;
   }
 
@@ -1784,6 +1813,12 @@ app.post('/api/shopify-draft-updated', async (req, res) => {
   try {
     const draft = req.body;
     if (!draft?.id) return;
+
+    // Auto-hydrate line item properties from variant metafields on creation
+    if ((req.headers['x-shopify-topic'] || '') === 'draft_orders/create') {
+      await handleDraftCreated(draft);
+      return;
+    }
 
     // When a draft is converted to an order, copy metafields and write payment tags
     if (draft.status === 'completed' && draft.order_id) {
