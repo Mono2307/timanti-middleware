@@ -43,7 +43,7 @@ DECIMAL_PRECISION = 2
 # entirely — the importer will not touch their price.
 # Use this for silver coins, fixed-price items, etc.
 # Example: STATIC_PRICE_GATI_IDS = ['SC00001', 'SC00002']
-STATIC_PRICE_GATI_IDS: list[str] = []
+STATIC_PRICE_GATI_IDS: list[str] = ['SCOIN']
 
 # ── Gold rate staleness guard ─────────────────────────────────────────────────
 GOLD_RATE_MAX_AGE_HOURS = 20
