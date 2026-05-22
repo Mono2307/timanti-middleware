@@ -34,8 +34,16 @@ EMAIL_RATES_CC      = ['shweta@timanti.in', 'monodeep.dutta@timanti.in']
 # ── Price constants ───────────────────────────────────────────────────────────
 RATIO_18K         = 0.771
 RATIO_14K         = 0.604
+RATIO_22K         = 0.9167   # 22/24 pure gold ratio
 GST_RATE          = 0.03
 DECIMAL_PRECISION = 2
+
+# ── Static-price exclusion list ───────────────────────────────────────────────
+# Variants whose GATI ID (first SKU segment) is in this list are skipped
+# entirely — the importer will not touch their price.
+# Use this for silver coins, fixed-price items, etc.
+# Example: STATIC_PRICE_GATI_IDS = ['SC00001', 'SC00002']
+STATIC_PRICE_GATI_IDS: list[str] = []
 
 # ── Gold rate staleness guard ─────────────────────────────────────────────────
 GOLD_RATE_MAX_AGE_HOURS = 20

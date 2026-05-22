@@ -17,7 +17,7 @@ from pathlib import Path
 
 import sys
 sys.path.insert(0, str(Path(__file__).parent))
-from config import STORE_DOMAIN, API_VERSION, GST_RATE, DECIMAL_PRECISION
+from config import STORE_DOMAIN, API_VERSION, GST_RATE, DECIMAL_PRECISION, STATIC_PRICE_GATI_IDS
 
 # ── GraphQL query — fetches 250 variants per page with all needed metafields ──
 
@@ -104,6 +104,7 @@ def build_snapshot(token: str, gold_rate: dict, output_csv: Path, log: logging.L
 
     rate_18k  = gold_rate['18k']
     rate_14k  = gold_rate['14k']
+    rate_22k  = gold_rate['22k']
     p         = DECIMAL_PRECISION
     # Normalise set_at to seconds precision for Shopify date_time metafield
     raw_set_at      = gold_rate.get('set_at', '')
@@ -150,15 +151,30 @@ def build_snapshot(token: str, gold_rate: dict, output_csv: Path, log: logging.L
     # ── Phase 2: recalculate prices ───────────────────────────────────────────
     rows          = []
     no_weight     = []
+    excluded      = []
     products_seen = set()
+
+    # Normalise exclusion list once (uppercase, stripped)
+    _excluded_ids = {g.upper().strip() for g in STATIC_PRICE_GATI_IDS}
 
     for v in all_variants:
         sku   = (v.get('sku') or '').strip()
         parts = sku.split('|')
 
-        # Determine karat from SKU position 3 (e.g. "18" or "14")
-        karat_part     = parts[2].strip() if len(parts) > 2 else ''
-        gold_rate_used = rate_14k if '14' in karat_part else rate_18k
+        # Skip static-price items (silver coins, fixed-rate products, etc.)
+        gati_id = parts[0].strip().upper() if parts else ''
+        if gati_id in _excluded_ids:
+            excluded.append(sku)
+            continue
+
+        # Determine karat from SKU position 3 (e.g. "22", "18", or "14")
+        karat_part = parts[2].strip() if len(parts) > 2 else ''
+        if '22' in karat_part:
+            gold_rate_used = rate_22k
+        elif '14' in karat_part:
+            gold_rate_used = rate_14k
+        else:
+            gold_rate_used = rate_18k
 
         net_wt   = _mf_float(v, 'wt')
         gross_wt = _mf_float(v, 'gross') or net_wt   # fall back to net if not stored
@@ -205,16 +221,20 @@ def build_snapshot(token: str, gold_rate: dict, output_csv: Path, log: logging.L
 
     log.info(f'Preview CSV written — {len(rows)} rows → {output_csv.name}')
 
+    if excluded:
+        log.info(f'  {len(excluded)} variants excluded (static-price list): {excluded[:5]}{"..." if len(excluded) > 5 else ""}')
+
     if no_weight:
         sample = no_weight[:5]
         more   = f' ... +{len(no_weight) - 5} more' if len(no_weight) > 5 else ''
         log.warning(f'  {len(no_weight)} variants skipped (no net_metal_weight_g stored): {sample}{more}')
 
     return {
-        'variants_in_snapshot': len(all_variants),
-        'variants_priced':      len(rows),
-        'variants_no_weight':   len(no_weight),
-        'archived_skipped':     archived_count,
-        'products_covered':     len(products_seen),
-        'preview_csv':          str(output_csv),
+        'variants_in_snapshot':  len(all_variants),
+        'variants_priced':       len(rows),
+        'variants_no_weight':    len(no_weight),
+        'variants_excluded':     len(excluded),
+        'archived_skipped':      archived_count,
+        'products_covered':      len(products_seen),
+        'preview_csv':           str(output_csv),
     }
