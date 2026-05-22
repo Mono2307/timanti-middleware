@@ -1199,6 +1199,7 @@ async function fetchItemMeta(item, token) {
       `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/variants/${item.variant_id}/metafields.json`,
       { headers, timeout: 10000 }
     );
+    console.log(`[fetchItemMeta] variant ${item.variant_id} — all metafields: ${JSON.stringify((vData.metafields || []).map(m => `${m.namespace}.${m.key}=${m.value}`))}`);
     for (const m of (vData.metafields || [])) if (m.namespace === 'custom') varMf[m.key] = m.value;
   }
   if (item.product_id) {
@@ -1348,20 +1349,22 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
           const goldVal    = parseFloat(getRaw('Gold').replace('Rs', '').trim()) || 0;
           const diaVal     = parseFloat((getRaw('Diamond')).replace('Rs', '').trim()) || 0;
           const mkgVal     = parseFloat((getRaw('Making') || getRaw('Making Charges')).replace('Rs', '').trim()) || 0;
-          console.log(`[reprice-diag] item ${item.id}: lockedRate=${lockedRate} goldVal=${goldVal} diaVal=${diaVal} mkgVal=${mkgVal} → recalc=${lockedRate > 0 && goldVal > 0 ? 'yes' : 'NO (missing data)'}`);
           if (lockedRate > 0 && goldVal > 0) {
             const newGold = r2((goldVal / lockedRate) * mfGoldRate);
+            console.log(`[reprice-diag] item ${item.id}: lockedRate=${lockedRate} → newGold=${newGold} (was ${goldVal})`);
             return { newPreTaxGross: r2(newGold + diaVal + mkgVal), newGold };
           }
+          console.warn(`[reprice-diag] item ${item.id}: skipping gold recalc — lockedRate=${lockedRate} goldVal=${goldVal}`);
           return null;
         })
       : productItems.map(() => null);
-    const hasGoldRecalc = mfGoldRate && itemRecalc.every(r => r !== null);
+    const anyGoldRecalc = mfGoldRate && itemRecalc.some(r => r !== null);
 
-    // Pre-tax gross per item: use recalculated value if available, else back-calculate from current price
-    const preTaxArr = hasGoldRecalc
-      ? productItems.map((_, i) => itemRecalc[i].newPreTaxGross)
-      : productItems.map(item => r2(parseFloat(item.price) * item.quantity / 1.03));
+    // Pre-tax gross per item: use recalculated value when available, else back-calculate from current price
+    // (items missing _gold_rate keep their existing price; items with it get repriced)
+    const preTaxArr = productItems.map((item, i) =>
+      itemRecalc[i] !== null ? itemRecalc[i].newPreTaxGross : r2(parseFloat(item.price) * item.quantity / 1.03)
+    );
     const preTaxGrossTotal = preTaxArr.reduce((s, v) => s + v, 0);
     const pGross = r2(preTaxGrossTotal * 1.03);
 
@@ -1385,11 +1388,12 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
       const itemDisc    = r2(correctDiscTotal * proportion);
       const grossValue  = r2(itemFinal + itemDisc);
       const unitPrice   = r2(itemFinal / (item.quantity || 1));
-      // Strip financial fields; also strip Gold when recalculating so we can replace it
-      const FINANCIAL   = new Set(['Taxable Value', 'GST', 'Gross Value', 'Discount Applied', '_gold_rate', ...(hasGoldRecalc ? ['Gold'] : [])]);
+      // Strip financial fields; also strip Gold for this item when we have new gold data to replace it
+      const thisItemRecalc = itemRecalc[idx];
+      const FINANCIAL   = new Set(['Taxable Value', 'GST', 'Gross Value', 'Discount Applied', '_gold_rate', ...(thisItemRecalc ? ['Gold'] : [])]);
       const filteredProps = h.properties.filter(p => !FINANCIAL.has(p.name));
-      if (hasGoldRecalc && itemRecalc[idx]) {
-        filteredProps.push({ name: 'Gold', value: `Rs${itemRecalc[idx].newGold.toFixed(2)}` });
+      if (thisItemRecalc) {
+        filteredProps.push({ name: 'Gold', value: `Rs${thisItemRecalc.newGold.toFixed(2)}` });
       }
       filteredProps.push(
         { name: 'Taxable Value',    value: `Rs${itemTaxable.toFixed(2)}` },
