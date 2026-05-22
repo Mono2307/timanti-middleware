@@ -6,19 +6,19 @@
 //   MIDDLEWARE_URL = https://timanti-middleware.fly.dev
 //
 // Deploy as Web App:
-//   Execute as: Me | Who has access: Anyone with Google Account
+//   Execute as: Me | Who has access: Anyone
 //   Copy the Web App URL → set as PO_QUEUE_SCRIPT_URL in Fly.dev secrets
 // =================================================================
 
 const SS = SpreadsheetApp.getActiveSpreadsheet();
 const MIDDLEWARE_URL = PropertiesService.getScriptProperties().getProperty('MIDDLEWARE_URL');
 
-const TAB = { MTO: 'MTO', INSTOCK: 'InStock' };
+const TAB = { MTO: 'MTO', INSTOCK: 'InStock', UNCLASSIFIED: 'Unclassified' };
 
 // ── MTO tab columns (1-based, A=1) — 23 cols A–W ────────────────
 const C_MTO = {
-  DRAFT_ORDER_ID: 1,    // A hidden
-  DRAFT_ORDER_NAME: 2,  // B
+  SOURCE_ID: 1,         // A hidden
+  ORDER_NAME: 2,        // B
   CUSTOMER_NAME: 3,     // C
   LINE_ITEM_ID: 4,      // D hidden
   VARIANT_ID: 5,        // E hidden
@@ -32,7 +32,7 @@ const C_MTO = {
   STATUS: 13,           // M ← staff editable: pending/raised-po/skip/po-created
   PO_BATCH_ID: 14,      // N
   PO_RAISED_AT: 15,     // O
-  NET_WT: 16,           // P ← reprice fields below
+  NET_WT: 16,           // P ← reprice fields
   GROSS_WT: 17,         // Q
   DIA_CTS: 18,          // R
   GEMSTONE_CTS: 19,     // S
@@ -44,8 +44,8 @@ const C_MTO = {
 
 // ── InStock tab columns (1-based) — 15 cols A–O ─────────────────
 const C_IS = {
-  DRAFT_ORDER_ID: 1,
-  DRAFT_ORDER_NAME: 2,
+  SOURCE_ID: 1,
+  ORDER_NAME: 2,
   CUSTOMER_NAME: 3,
   LINE_ITEM_ID: 4,
   VARIANT_ID: 5,
@@ -61,8 +61,51 @@ const C_IS = {
   PO_RAISED_AT: 15
 };
 
+// ── Unclassified tab columns (1-based) — 24 cols A–X ────────────
+// Staff fills PO_TYPE (col P) with 'mto' or 'in-stock' before approving
+const C_UC = {
+  SOURCE_ID: 1,         // A hidden
+  ORDER_NAME: 2,        // B
+  CUSTOMER_NAME: 3,     // C
+  LINE_ITEM_ID: 4,      // D hidden
+  VARIANT_ID: 5,        // E hidden
+  PRODUCT_TITLE: 6,     // F
+  SKU: 7,               // G
+  ORIGINAL_QTY: 8,      // H
+  QTY_TO_RAISE: 9,      // I ← staff editable
+  JEWEL_CODE: 10,       // J
+  LINE_ITEM_PROPS: 11,  // K
+  SYNCED_AT: 12,        // L
+  STATUS: 13,           // M ← staff editable: pending/raised-po/skip/po-created
+  PO_BATCH_ID: 14,      // N
+  PO_RAISED_AT: 15,     // O
+  PO_TYPE: 16,          // P ← staff fills: mto / in-stock
+  NET_WT: 17,           // Q ← reprice fields
+  GROSS_WT: 18,         // R
+  DIA_CTS: 19,          // S
+  GEMSTONE_CTS: 20,     // T
+  GOLD_RATE: 21,        // U
+  GOLD_RATE_DATE: 22,   // V
+  REPRICE_STATUS: 23,   // W
+  REPRICED_AT: 24       // X
+};
+
+function getColumnMap(tabName) {
+  if (tabName === TAB.MTO)           return C_MTO;
+  if (tabName === TAB.INSTOCK)       return C_IS;
+  if (tabName === TAB.UNCLASSIFIED)  return C_UC;
+  throw new Error('Unknown tab: ' + tabName);
+}
+
+function tabWidth(tabName) {
+  if (tabName === TAB.MTO)           return 23;
+  if (tabName === TAB.INSTOCK)       return 15;
+  if (tabName === TAB.UNCLASSIFIED)  return 24;
+  return 15;
+}
+
 // =================================================================
-// Custom menu — replaces drawn button
+// Custom menu
 // =================================================================
 
 function onOpen() {
@@ -105,14 +148,20 @@ function jsonResponse(obj) {
 function upsertRows(tabName, rows) {
   const sheet = SS.getSheetByName(tabName);
   if (!sheet) throw new Error('Tab not found: ' + tabName);
-  const C = tabName === TAB.MTO ? C_MTO : C_IS;
+  const C = getColumnMap(tabName);
 
-  const existingMap = buildLineItemIndex(sheet, C.LINE_ITEM_ID);
+  const lineItemIndex = buildIndex(sheet, C.LINE_ITEM_ID);
+  const orderNameIndex = buildIndex(sheet, C.ORDER_NAME);
   let inserted = 0, refreshed = 0;
 
   rows.forEach(row => {
-    const id = String(row.line_item_id);
-    const existRow = existingMap[id];
+    const lineItemId = String(row.line_item_id);
+    let existRow = lineItemIndex[lineItemId];
+
+    // Dedup: order converted from a draft — find the existing draft row by its order name
+    if (!existRow && row.source_draft_name) {
+      existRow = orderNameIndex[String(row.source_draft_name)];
+    }
 
     if (existRow) {
       const status = sheet.getRange(existRow, C.STATUS).getValue();
@@ -120,13 +169,17 @@ function upsertRows(tabName, rows) {
         writeRow(sheet, existRow, row, C, false);
         refreshed++;
       } else {
-        // Staff has made decisions — only refresh sync timestamp
+        // Staff has made decisions — only refresh sync timestamp and source_id
         sheet.getRange(existRow, C.SYNCED_AT).setValue(row.synced_at);
+        if (row.source_draft_name) {
+          // Draft was converted to order — update the source_id to the order id
+          sheet.getRange(existRow, C.SOURCE_ID).setValue(row.source_id);
+        }
       }
     } else {
       const newRow = sheet.getLastRow() + 1;
       writeRow(sheet, newRow, row, C, true);
-      existingMap[id] = newRow;
+      lineItemIndex[lineItemId] = newRow;
       inserted++;
     }
   });
@@ -136,41 +189,40 @@ function upsertRows(tabName, rows) {
 
 function writeRow(sheet, rowIdx, row, C, isNew) {
   const s = (col, val) => sheet.getRange(rowIdx, col).setValue(val);
-  s(C.DRAFT_ORDER_ID,   row.draft_order_id);
-  s(C.DRAFT_ORDER_NAME, row.draft_order_name);
-  s(C.CUSTOMER_NAME,    row.customer_name);
-  s(C.LINE_ITEM_ID,     row.line_item_id);
-  s(C.VARIANT_ID,       row.variant_id || '');
-  s(C.PRODUCT_TITLE,    row.product_title);
-  s(C.SKU,              row.sku);
-  s(C.ORIGINAL_QTY,     row.original_qty);
-  s(C.JEWEL_CODE,       row.jewel_code || '');
-  s(C.LINE_ITEM_PROPS,  row.line_item_properties || '');
-  s(C.SYNCED_AT,        row.synced_at);
+  s(C.SOURCE_ID,       row.source_id);
+  s(C.ORDER_NAME,      row.order_name);
+  s(C.CUSTOMER_NAME,   row.customer_name);
+  s(C.LINE_ITEM_ID,    row.line_item_id);
+  s(C.VARIANT_ID,      row.variant_id || '');
+  s(C.PRODUCT_TITLE,   row.product_title);
+  s(C.SKU,             row.sku);
+  s(C.ORIGINAL_QTY,    row.original_qty);
+  s(C.JEWEL_CODE,      row.jewel_code || '');
+  s(C.LINE_ITEM_PROPS, row.line_item_properties || '');
+  s(C.SYNCED_AT,       row.synced_at);
   if (isNew) {
     s(C.QTY_TO_RAISE, row.original_qty);
     s(C.STATUS, 'pending');
   }
-  // qty_to_raise and status are never overwritten — staff owns those columns
 }
 
-function buildLineItemIndex(sheet, lineItemIdCol) {
+function buildIndex(sheet, col) {
   const last = sheet.getLastRow();
   if (last < 2) return {};
-  const vals = sheet.getRange(2, lineItemIdCol, last - 1, 1).getValues();
+  const vals = sheet.getRange(2, col, last - 1, 1).getValues();
   const map = {};
   vals.forEach((r, i) => { if (r[0]) map[String(r[0])] = i + 2; });
   return map;
 }
 
 // =================================================================
-// Mark rows as PO raised — called after batchRaisePoDailyTrigger
+// Mark rows as PO raised
 // =================================================================
 
 function markRaised(tabName, lineItemIds, batchId, raisedAt) {
   const sheet = SS.getSheetByName(tabName);
   if (!sheet) throw new Error('Tab not found: ' + tabName);
-  const C = tabName === TAB.MTO ? C_MTO : C_IS;
+  const C = getColumnMap(tabName);
   const idSet = new Set(lineItemIds.map(String));
   const last = sheet.getLastRow();
   if (last < 2) return;
@@ -185,24 +237,25 @@ function markRaised(tabName, lineItemIds, batchId, raisedAt) {
 }
 
 // =================================================================
-// Get approved rows — reads MTO or InStock tab for raised-po rows
+// Get approved rows — reads tab for raised-po rows
 // =================================================================
 
 function getApprovedRows(tabName) {
   const sheet = SS.getSheetByName(tabName);
   if (!sheet) return [];
-  const C = tabName === TAB.MTO ? C_MTO : C_IS;
+  const C    = getColumnMap(tabName);
+  const cols = tabWidth(tabName);
   const last = sheet.getLastRow();
   if (last < 2) return [];
 
-  const numCols = tabName === TAB.MTO ? 23 : 15;
-  const data = sheet.getRange(2, 1, last - 1, numCols).getValues();
+  const data = sheet.getRange(2, 1, last - 1, cols).getValues();
 
   return data
     .filter(r => r[C.STATUS - 1] === 'raised-po')
+    .filter(r => tabName !== TAB.UNCLASSIFIED || r[C.PO_TYPE - 1]) // Unclassified must have po_type filled
     .map(r => ({
-      draft_order_id:       String(r[C.DRAFT_ORDER_ID - 1]),
-      draft_order_name:     r[C.DRAFT_ORDER_NAME - 1],
+      source_id:            String(r[C.SOURCE_ID - 1]),
+      draft_order_name:     r[C.ORDER_NAME - 1],       // kept as draft_order_name for batch.js compat
       customer_name:        r[C.CUSTOMER_NAME - 1],
       line_item_id:         String(r[C.LINE_ITEM_ID - 1]),
       variant_id:           String(r[C.VARIANT_ID - 1] || ''),
@@ -210,81 +263,111 @@ function getApprovedRows(tabName) {
       sku:                  r[C.SKU - 1],
       qty_to_raise:         Number(r[C.QTY_TO_RAISE - 1]) || Number(r[C.ORIGINAL_QTY - 1]),
       jewel_code:           r[C.JEWEL_CODE - 1] || '',
-      line_item_properties: r[C.LINE_ITEM_PROPS - 1] || ''
+      line_item_properties: r[C.LINE_ITEM_PROPS - 1] || '',
+      ...(tabName === TAB.UNCLASSIFIED ? { po_type: r[C.PO_TYPE - 1] } : {})
     }));
 }
 
 // =================================================================
-// Daily batch trigger — reads sheet, calls middleware, marks rows
+// Daily batch trigger
 // =================================================================
 
 function batchRaisePoDailyTrigger() {
+  // MTO and InStock: po_type comes from the tab
   [{ type: 'mto', tab: TAB.MTO }, { type: 'in-stock', tab: TAB.INSTOCK }]
     .forEach(({ type, tab }) => {
       const rows = getApprovedRows(tab);
       if (!rows.length) { Logger.log('No raised-po rows for ' + type); return; }
-
-      const resp = UrlFetchApp.fetch(MIDDLEWARE_URL + '/api/po-ops/batch-raise-po', {
-        method: 'post',
-        contentType: 'application/json',
-        payload: JSON.stringify({ po_type: type, rows }),
-        muteHttpExceptions: true
-      });
-
-      const result = JSON.parse(resp.getContentText());
-      if (result.ok) {
-        markRaised(tab, rows.map(r => r.line_item_id), result.batch_id, result.raised_at);
-        Logger.log('Batch raised ' + type + ' — batch_id: ' + result.batch_id);
-      } else {
-        Logger.log('Batch FAILED ' + type + ': ' + (result.error || resp.getResponseCode()));
-      }
+      callBatchRaise(type, tab, rows);
     });
+
+  // Unclassified: group by the po_type column value staff filled in
+  const ucRows = getApprovedRows(TAB.UNCLASSIFIED);
+  if (ucRows.length) {
+    const byType = {};
+    ucRows.forEach(r => {
+      if (!byType[r.po_type]) byType[r.po_type] = [];
+      byType[r.po_type].push(r);
+    });
+    Object.entries(byType).forEach(([type, rows]) => callBatchRaise(type, TAB.UNCLASSIFIED, rows));
+  } else {
+    Logger.log('No raised-po rows for Unclassified');
+  }
+}
+
+function callBatchRaise(poType, tabName, rows) {
+  const resp = UrlFetchApp.fetch(MIDDLEWARE_URL + '/api/po-ops/batch-raise-po', {
+    method: 'post',
+    contentType: 'application/json',
+    payload: JSON.stringify({ po_type: poType, rows }),
+    muteHttpExceptions: true
+  });
+
+  const result = JSON.parse(resp.getContentText());
+  if (result.ok) {
+    markRaised(tabName, rows.map(r => r.line_item_id), result.batch_id, result.raised_at);
+    Logger.log('Batch raised ' + poType + ' (' + tabName + ') — batch_id: ' + result.batch_id);
+  } else {
+    Logger.log('Batch FAILED ' + poType + ' (' + tabName + '): ' + (result.error || resp.getResponseCode()));
+  }
 }
 
 // =================================================================
 // Reprice — PO Ops menu > "Reprice Selected Row"
-// Reads jewel measurements + gold rate from the selected MTO row,
-// calls middleware, marks row as repriced.
+// Works on MTO tab and Unclassified tab (MTO rows only).
+// Reads jewel measurements + gold rate, calls middleware.
 // =================================================================
 
 function repriceTrigger() {
-  const ui = SpreadsheetApp.getUi();
+  const ui    = SpreadsheetApp.getUi();
   const sheet = SS.getActiveSheet();
+  const name  = sheet.getName();
 
-  if (sheet.getName() !== TAB.MTO) {
-    ui.alert('Switch to the MTO tab and select the row you want to reprice.');
+  const isMto = name === TAB.MTO;
+  const isUc  = name === TAB.UNCLASSIFIED;
+
+  if (!isMto && !isUc) {
+    ui.alert('Switch to the MTO or Unclassified tab and select the row you want to reprice.');
     return;
   }
+
   const row = sheet.getActiveCell().getRow();
   if (row < 2) { ui.alert('Select a data row first.'); return; }
 
+  const C = getColumnMap(name);
   const g = col => sheet.getRange(row, col).getValue();
-  const draftOrderId = g(C_MTO.DRAFT_ORDER_ID);
-  const lineItemId   = g(C_MTO.LINE_ITEM_ID);
-  const netWt        = g(C_MTO.NET_WT);
-  const grossWt      = g(C_MTO.GROSS_WT);
 
-  if (!draftOrderId || !lineItemId) {
-    ui.alert('Row is missing draft order ID or line item ID.'); return;
+  if (isUc && g(C.PO_TYPE) !== 'mto') {
+    ui.alert('Reprice is only available for MTO rows. Fill in PO Type = mto first.');
+    return;
+  }
+
+  const sourceId   = g(C.SOURCE_ID);
+  const lineItemId = g(C.LINE_ITEM_ID);
+  const netWt      = g(C.NET_WT);
+  const grossWt    = g(C.GROSS_WT);
+
+  if (!sourceId || !lineItemId) {
+    ui.alert('Row is missing source ID or line item ID.'); return;
   }
   if (!netWt || !grossWt) {
     ui.alert('Enter Net Wt and Gross Wt before repricing.'); return;
   }
 
-  const rawDate = g(C_MTO.GOLD_RATE_DATE);
+  const rawDate = g(C.GOLD_RATE_DATE);
   const goldRateDate = rawDate
     ? Utilities.formatDate(new Date(rawDate), Session.getScriptTimeZone(), 'yyyy-MM-dd')
     : null;
 
   const payload = {
-    draft_order_id: String(draftOrderId),
+    draft_order_id: String(sourceId),
     line_item_id:   String(lineItemId),
-    jewel_code:     String(g(C_MTO.JEWEL_CODE) || ''),
+    jewel_code:     String(g(C.JEWEL_CODE) || ''),
     net_wt:         Number(netWt),
     gross_wt:       Number(grossWt),
-    dia_cts:        Number(g(C_MTO.DIA_CTS) || 0),
-    gemstone_cts:   Number(g(C_MTO.GEMSTONE_CTS) || 0),
-    gold_rate:      g(C_MTO.GOLD_RATE) ? Number(g(C_MTO.GOLD_RATE)) : null,
+    dia_cts:        Number(g(C.DIA_CTS) || 0),
+    gemstone_cts:   Number(g(C.GEMSTONE_CTS) || 0),
+    gold_rate:      g(C.GOLD_RATE) ? Number(g(C.GOLD_RATE)) : null,
     gold_rate_date: goldRateDate
   };
 
@@ -297,8 +380,8 @@ function repriceTrigger() {
 
   const result = JSON.parse(resp.getContentText());
   if (result.ok) {
-    sheet.getRange(row, C_MTO.REPRICE_STATUS).setValue('repriced');
-    sheet.getRange(row, C_MTO.REPRICED_AT).setValue(new Date().toISOString());
+    sheet.getRange(row, C.REPRICE_STATUS).setValue('repriced');
+    sheet.getRange(row, C.REPRICED_AT).setValue(new Date().toISOString());
     ui.alert('Repriced successfully.');
   } else {
     ui.alert('Reprice failed: ' + (result.error || 'HTTP ' + resp.getResponseCode()));

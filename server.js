@@ -7,7 +7,7 @@ const { createClient } = require('@supabase/supabase-js');
 const { sendEmail, sendDepositEmail } = require('./emailService');
 const { handlePoWebhook } = require('./services/po-ops/webhook');
 const { handlePoAction }  = require('./services/po-ops/action');
-const { syncDraftOrderToSheet, syncAllDraftOrders } = require('./services/po-ops/sync');
+const { syncDraftOrderToSheet, syncOrderToSheet, syncAllDraftOrders, syncAllOrders } = require('./services/po-ops/sync');
 const { batchRaisePo } = require('./services/po-ops/batch');
 const { createPaymentLink: createGokwikLink, cancelPaymentLink: cancelGokwikLink } = require('./services/gokwik');
 const { sendSMS } = require('./services/sms');
@@ -2419,11 +2419,16 @@ app.get('/api/payment-links', async (req, res) => {
 const PO_DEPS = () => ({ supabase, getShopifyToken, shopifyStoreUrl: process.env.SHOPIFY_STORE_URL });
 
 app.post('/api/po-webhook', async (req, res) => {
-  const deps = PO_DEPS();
-  if ((req.headers['x-shopify-topic'] || '').startsWith('draft_orders') && req.body?.id) {
+  const deps  = PO_DEPS();
+  const topic = req.headers['x-shopify-topic'] || '';
+  if (topic.startsWith('draft_orders') && req.body?.id) {
     getShopifyToken()
       .then(token => syncDraftOrderToSheet(req.body, token, deps.shopifyStoreUrl))
-      .catch(e => console.error('[SYNC] webhook error:', e.message));
+      .catch(e => console.error('[SYNC] draft webhook error:', e.message));
+  } else if (topic.startsWith('orders/') && req.body?.id) {
+    getShopifyToken()
+      .then(token => syncOrderToSheet(req.body, token, deps.shopifyStoreUrl))
+      .catch(e => console.error('[SYNC] order webhook error:', e.message));
   }
   return handlePoWebhook(req, res, deps);
 });
@@ -2434,9 +2439,11 @@ app.get('/api/po-action',   (req, res) => handlePoAction(req, res, PO_DEPS()));
 app.post('/api/po-ops/sync-all', async (req, res) => {
   try {
     const token = await getShopifyToken();
-    res.json({ ok: true, message: 'Sync started' });
-    syncAllDraftOrders(token, process.env.SHOPIFY_STORE_URL)
-      .catch(e => console.error('[SYNC-ALL]', e.message));
+    res.json({ ok: true, message: 'Sync Started' });
+    Promise.all([
+      syncAllDraftOrders(token, process.env.SHOPIFY_STORE_URL),
+      syncAllOrders(token, process.env.SHOPIFY_STORE_URL)
+    ]).catch(e => console.error('[SYNC-ALL]', e.message));
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }

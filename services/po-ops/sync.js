@@ -8,9 +8,9 @@ function shopifyHeaders(token) {
   return { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' };
 }
 
-function getCustomerName(order) {
-  const first = order.customer?.first_name || order.billing_address?.first_name || order.shipping_address?.first_name || '';
-  const last  = order.customer?.last_name  || order.billing_address?.last_name  || order.shipping_address?.last_name  || '';
+function getCustomerName(record) {
+  const first = record.customer?.first_name || record.billing_address?.first_name || record.shipping_address?.first_name || '';
+  const last  = record.customer?.last_name  || record.billing_address?.last_name  || record.shipping_address?.last_name  || '';
   return `${first} ${last}`.trim();
 }
 
@@ -38,19 +38,13 @@ async function postToPoQueue(payload) {
   }
 }
 
-async function syncDraftOrderToSheet(draftOrder, shopifyToken, shopifyStoreUrl) {
-  const metas     = await fetchMetafields('draft_orders', draftOrder.id, shopifyToken, shopifyStoreUrl);
-  const orderType = metas.find(m => m.namespace === 'custom' && m.key === 'order_type')?.value;
+function orderTypeToTab(orderType) {
+  if (orderType === 'mto')       return 'MTO';
+  if (orderType === 'in-stock')  return 'InStock';
+  return 'Unclassified';
+}
 
-  if (!orderType || !['mto', 'in-stock'].includes(orderType)) {
-    console.log(`[SYNC] ${draftOrder.name}: custom.order_type="${orderType || 'unset'}" — skipping`);
-    return;
-  }
-
-  const tab       = orderType === 'mto' ? 'MTO' : 'InStock';
-  const lineItems = draftOrder.line_items || [];
-  if (!lineItems.length) return;
-
+async function buildRows(sourceId, orderName, sourceType, customerName, lineItems, shopifyToken, shopifyStoreUrl, extra) {
   const rows = [];
   for (const item of lineItems) {
     let jewelCode = '';
@@ -58,11 +52,11 @@ async function syncDraftOrderToSheet(draftOrder, shopifyToken, shopifyStoreUrl) 
       const varMetas = await fetchMetafields('variants', item.variant_id, shopifyToken, shopifyStoreUrl);
       jewelCode = varMetas.find(m => m.namespace === 'custom' && m.key === 'jewel_code')?.value || '';
     }
-
     rows.push({
-      draft_order_id:       String(draftOrder.id),
-      draft_order_name:     draftOrder.name,
-      customer_name:        getCustomerName(draftOrder),
+      source_id:            sourceId,
+      source_type:          sourceType,
+      order_name:           orderName,
+      customer_name:        customerName,
       line_item_id:         String(item.id),
       variant_id:           String(item.variant_id || ''),
       product_title:        item.title || '',
@@ -70,34 +64,92 @@ async function syncDraftOrderToSheet(draftOrder, shopifyToken, shopifyStoreUrl) 
       original_qty:         item.quantity,
       jewel_code:           jewelCode,
       line_item_properties: JSON.stringify((item.properties || []).filter(p => !p.name.startsWith('_'))),
-      synced_at:            new Date().toISOString()
+      synced_at:            new Date().toISOString(),
+      ...extra
     });
   }
+  return rows;
+}
+
+async function syncDraftOrderToSheet(draftOrder, shopifyToken, shopifyStoreUrl) {
+  // Skip vendor PO draft orders created by the batch raise
+  const tags = (draftOrder.tags || '').toLowerCase().split(',').map(t => t.trim());
+  if (tags.some(t => t.startsWith('po-') || t === 'po-draft')) return;
+
+  const lineItems = draftOrder.line_items || [];
+  if (!lineItems.length) return;
+
+  const metas     = await fetchMetafields('draft_orders', draftOrder.id, shopifyToken, shopifyStoreUrl);
+  const orderType = metas.find(m => m.namespace === 'custom' && m.key === 'order_type')?.value;
+  const tab       = orderTypeToTab(orderType);
+
+  const rows = await buildRows(
+    String(draftOrder.id), draftOrder.name, 'draft_order',
+    getCustomerName(draftOrder), lineItems, shopifyToken, shopifyStoreUrl, {}
+  );
 
   await postToPoQueue({ action: 'upsertRows', tab, rows });
   console.log(`[SYNC] ${draftOrder.name} → ${tab} (${rows.length} rows)`);
 }
 
+async function syncOrderToSheet(order, shopifyToken, shopifyStoreUrl) {
+  const lineItems = order.line_items || [];
+  if (!lineItems.length) return;
+
+  const metas     = await fetchMetafields('orders', order.id, shopifyToken, shopifyStoreUrl);
+  const orderType = metas.find(m => m.namespace === 'custom' && m.key === 'order_type')?.value;
+  const tab       = orderTypeToTab(orderType);
+
+  // If this order was converted from a draft, pass the draft name for deduplication in the sheet
+  const extra = (order.source_name === 'draft_orders' && order.source_identifier)
+    ? { source_draft_name: order.source_identifier }
+    : {};
+
+  const rows = await buildRows(
+    String(order.id), order.name, 'order',
+    getCustomerName(order), lineItems, shopifyToken, shopifyStoreUrl, extra
+  );
+
+  await postToPoQueue({ action: 'upsertRows', tab, rows });
+  console.log(`[SYNC] ${order.name} → ${tab} (${rows.length} rows)`);
+}
+
 async function syncAllDraftOrders(shopifyToken, shopifyStoreUrl) {
-  console.log('[SYNC] starting full draft order sync');
+  console.log('[SYNC] starting draft order sync');
   let url   = `${shopifyStoreUrl}/admin/api/2024-01/draft_orders.json?limit=250&status=open`;
   let count = 0;
 
   while (url) {
     const res    = await axios.get(url, { headers: shopifyHeaders(shopifyToken), timeout: 30000 });
     const orders = res.data.draft_orders || [];
-
     for (const order of orders) {
       await syncDraftOrderToSheet(order, shopifyToken, shopifyStoreUrl);
       count++;
     }
-
-    // Follow Shopify's Link header for cursor pagination
     const link = res.headers['link'] || '';
     url = link.match(/<([^>]+)>;\s*rel="next"/)?.[1] || null;
   }
 
-  console.log(`[SYNC] complete — ${count} draft orders processed`);
+  console.log(`[SYNC] draft orders complete — ${count} processed`);
 }
 
-module.exports = { syncDraftOrderToSheet, syncAllDraftOrders };
+async function syncAllOrders(shopifyToken, shopifyStoreUrl) {
+  console.log('[SYNC] starting order sync');
+  let url   = `${shopifyStoreUrl}/admin/api/2024-01/orders.json?limit=250&status=open`;
+  let count = 0;
+
+  while (url) {
+    const res    = await axios.get(url, { headers: shopifyHeaders(shopifyToken), timeout: 30000 });
+    const orders = res.data.orders || [];
+    for (const order of orders) {
+      await syncOrderToSheet(order, shopifyToken, shopifyStoreUrl);
+      count++;
+    }
+    const link = res.headers['link'] || '';
+    url = link.match(/<([^>]+)>;\s*rel="next"/)?.[1] || null;
+  }
+
+  console.log(`[SYNC] orders complete — ${count} processed`);
+}
+
+module.exports = { syncDraftOrderToSheet, syncOrderToSheet, syncAllDraftOrders, syncAllOrders };
