@@ -150,6 +150,16 @@ function upsertRows(tabName, rows) {
   if (!sheet) throw new Error('Tab not found: ' + tabName);
   const C = getColumnMap(tabName);
 
+  // For each source_id in the payload, delete stale pending rows whose
+  // line_item_id is no longer present (handles re-added line items on drafts)
+  const incoming = {};
+  rows.forEach(r => {
+    const sid = String(r.source_id);
+    if (!incoming[sid]) incoming[sid] = new Set();
+    incoming[sid].add(String(r.line_item_id));
+  });
+  Object.entries(incoming).forEach(([sid, currentIds]) => removeStaleRows(sheet, C, sid, currentIds));
+
   const lineItemIndex = buildIndex(sheet, C.LINE_ITEM_ID);
   const orderNameIndex = buildIndex(sheet, C.ORDER_NAME);
   let inserted = 0, refreshed = 0;
@@ -204,6 +214,23 @@ function writeRow(sheet, rowIdx, row, C, isNew) {
     s(C.QTY_TO_RAISE, row.original_qty);
     s(C.STATUS, 'pending');
   }
+}
+
+function removeStaleRows(sheet, C, sourceId, currentLineItemIds) {
+  const last = sheet.getLastRow();
+  if (last < 2) return;
+  const sourceVals = sheet.getRange(2, C.SOURCE_ID, last - 1, 1).getValues();
+  const liVals     = sheet.getRange(2, C.LINE_ITEM_ID, last - 1, 1).getValues();
+  const statusVals = sheet.getRange(2, C.STATUS, last - 1, 1).getValues();
+
+  // Collect stale rows bottom-to-top so deleteRow doesn't shift indices
+  const toDelete = [];
+  for (let i = last - 2; i >= 0; i--) {
+    if (String(sourceVals[i][0]) !== String(sourceId)) continue;
+    if (currentLineItemIds.has(String(liVals[i][0]))) continue;
+    if (statusVals[i][0] === 'pending') toDelete.push(i + 2);
+  }
+  toDelete.forEach(r => sheet.deleteRow(r));
 }
 
 function buildIndex(sheet, col) {
