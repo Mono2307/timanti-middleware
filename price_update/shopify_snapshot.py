@@ -227,10 +227,16 @@ def build_snapshot(token: str, gold_rate: dict, output_csv: Path, log: logging.L
     if excluded:
         log.info(f'  {len(excluded)} variants excluded (static-price list): {excluded[:5]}{"..." if len(excluded) > 5 else ""}')
 
+    # Write full no-weight list to a dated CSV so it can be reviewed after the run
+    no_weight_csv = None
     if no_weight:
-        sample = no_weight[:5]
-        more   = f' ... +{len(no_weight) - 5} more' if len(no_weight) > 5 else ''
-        log.warning(f'  {len(no_weight)} variants skipped (no net_metal_weight_g stored): {sample}{more}')
+        stem = output_csv.stem.replace('PREVIEW_VARIANT_IMPORT_', '').replace('_v2', '')
+        no_weight_csv = output_csv.parent / f'SKIPPED_NO_WEIGHT_{stem}.csv'
+        with open(no_weight_csv, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            writer.writerow(['sku'])
+            writer.writerows([[s] for s in no_weight])
+        log.warning(f'  {len(no_weight)} variants skipped (no net_metal_weight_g): full list → {no_weight_csv.name}')
 
     return {
         'variants_in_snapshot':  len(all_variants),
@@ -240,4 +246,5 @@ def build_snapshot(token: str, gold_rate: dict, output_csv: Path, log: logging.L
         'archived_skipped':      archived_count,
         'products_covered':      len(products_seen),
         'preview_csv':           str(output_csv),
+        'no_weight_csv':         str(no_weight_csv) if no_weight_csv else '',
     }

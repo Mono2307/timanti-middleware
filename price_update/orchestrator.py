@@ -328,7 +328,8 @@ def run(test_gati: str = None):
         from notifier import send_run_report, send_rates_confirmation
         log.info('Sending emails...')
         send_run_report(gold_rate, snapshot_stats, import_stats, run_id, log_path,
-                        is_test=bool(test_gati), test_gati=test_gati or '')
+                        is_test=bool(test_gati), test_gati=test_gati or '',
+                        no_weight_csv=snapshot_stats.get('no_weight_csv', ''))
         if not test_gati:
             send_rates_confirmation(gold_rate, snapshot_stats, import_stats)
         log.info('Emails sent')

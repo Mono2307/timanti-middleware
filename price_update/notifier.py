@@ -39,7 +39,8 @@ def _init():
 
 def send_run_report(gold_rate: dict, snapshot_stats: dict, import_stats: dict,
                     run_id: str, log_path: Path,
-                    is_test: bool = False, test_gati: str = ''):
+                    is_test: bool = False, test_gati: str = '',
+                    no_weight_csv: str = ''):
     _init()
 
     date_str    = _fmt_date()
@@ -72,6 +73,14 @@ def send_run_report(gold_rate: dict, snapshot_stats: dict, import_stats: dict,
       <td style="padding:9px 14px;">Rs {gold_rate['pure']:,.0f} / gram</td>
     </tr>
     <tr>
+      <td style="padding:9px 14px;font-weight:600;">24K Rate</td>
+      <td style="padding:9px 14px;">Rs {gold_rate['24k']:,.2f} / gram</td>
+    </tr>
+    <tr style="background:#fffbf0;">
+      <td style="padding:9px 14px;font-weight:600;">22K Rate</td>
+      <td style="padding:9px 14px;">Rs {gold_rate['22k']:,.2f} / gram</td>
+    </tr>
+    <tr>
       <td style="padding:9px 14px;font-weight:600;">18K Rate</td>
       <td style="padding:9px 14px;">Rs {gold_rate['18k']:,.2f} / gram</td>
     </tr>
@@ -99,7 +108,7 @@ def send_run_report(gold_rate: dict, snapshot_stats: dict, import_stats: dict,
     </tr>
     <tr>
       <td style="padding:9px 14px;">Missing weight (skipped)</td>
-      <td style="padding:9px 14px;">{snapshot_stats.get('variants_no_weight', 0)}</td>
+      <td style="padding:9px 14px;">{snapshot_stats.get('variants_no_weight', 0)}{"&nbsp; <span style='font-size:11px;color:#888;'>→ " + Path(no_weight_csv).name + "</span>" if no_weight_csv else ""}</td>
     </tr>
     <tr style="background:#f8f9fa;">
       <td style="padding:9px 14px;">Errors</td>
@@ -147,6 +156,14 @@ def send_rates_confirmation(gold_rate: dict, snapshot_stats: dict, import_stats:
       <td style="padding:14px 18px;font-size:22px;font-weight:700;color:#b8860b;">
         Rs {gold_rate['pure']:,.0f} / gram
       </td>
+    </tr>
+    <tr>
+      <td style="padding:14px 18px;font-weight:600;">24K Rate</td>
+      <td style="padding:14px 18px;">Rs {gold_rate['24k']:,.2f} / gram</td>
+    </tr>
+    <tr style="background:#f8f9fa;">
+      <td style="padding:14px 18px;font-weight:600;">22K Rate</td>
+      <td style="padding:14px 18px;">Rs {gold_rate['22k']:,.2f} / gram</td>
     </tr>
     <tr>
       <td style="padding:14px 18px;font-weight:600;">18K Rate</td>
