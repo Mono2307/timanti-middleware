@@ -1372,11 +1372,17 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
           const varRate    = parseFloat(vMf.gold_rate || 0);
           const lockedGold = parseFloat((iProps['Gold'] || '').replace('Rs', '').trim()) || 0;
           const lockedRate = parseFloat((iProps['_gold_rate'] || '').trim()) || 0;
+          // Fallback: use the variant-bootstrapped _gold_rate from hydratedBase when item has no locked rate.
+          // This restores the pre-7a3556b behaviour where hProps was checked as a fallback.
+          const hItemProps = {};
+          for (const p of (hydratedBase[idx].properties || [])) hItemProps[p.name] = p.value;
+          const bootstrappedRate = parseFloat((hItemProps['_gold_rate'] || '').trim()) || 0;
+          const effectiveRate    = lockedRate || bootstrappedRate;
 
           let netWt = 0;
-          if (varNetWt > 0)                       netWt = varNetWt * item.quantity;
-          else if (varGoldPbp > 0 && varRate > 0) netWt = varGoldPbp / varRate;
-          else if (lockedGold > 0 && lockedRate > 0) netWt = lockedGold / lockedRate;
+          if (varNetWt > 0)                         netWt = varNetWt * item.quantity;
+          else if (varGoldPbp > 0 && varRate > 0)   netWt = varGoldPbp / varRate;
+          else if (lockedGold > 0 && effectiveRate > 0) netWt = lockedGold / effectiveRate;
 
           if (netWt <= 0) return null;
 
@@ -1835,6 +1841,14 @@ app.post('/api/shopify-draft-updated', async (req, res) => {
       }
       return;
     }
+
+    // Auto-hydrate if any product line items are missing the Gold property (option 2: on update, not just create)
+    const needsHydration = (draft.line_items || []).some(item =>
+      item.variant_id &&
+      !((item.title || '').toLowerCase().includes('discount') && parseFloat(item.price) < 0) &&
+      !(item.properties || []).some(p => p.name === 'Gold')
+    );
+    if (needsHydration) await handleDraftCreated(draft);
 
     // Tag-based handlers (fire independently, each removes its own tag)
     await handleSendLinkTag(draft);
