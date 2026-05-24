@@ -1512,7 +1512,7 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
     return {
       item, idx, skip: false, hydrate: false,
       newNetWt, newGrossWt, newGoldValue, newDiamondValue, newMakingValue, newGrossValue,
-      goldRate, bootstrapGoldRate, oldNetWt, delta,
+      goldRate, bootstrapGoldRate, goldRateOverridden, oldNetWt, delta,
       newDiaCts: newDiaCts || 0, newGemCts: newGemCts || 0,
       metal: (item.variant_title || '').split(' / ')[0] || '',
       category: item.title || '',
@@ -1540,7 +1540,7 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
 
     const {
       newNetWt, newGrossWt, newGoldValue, newDiamondValue, newMakingValue, newGrossValue,
-      goldRate, bootstrapGoldRate, delta, newDiaCts, newGemCts,
+      goldRate, bootstrapGoldRate, goldRateOverridden, delta, newDiaCts, newGemCts,
       metal, category, jewel_code, props,
     } = result;
 
