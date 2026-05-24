@@ -2644,7 +2644,7 @@ app.get('/api/price-update-diag', (req, res) => {
 // ─────────────────────────────────────────
 
 let _priceUpdateRunning = false;
-const PRICE_UPDATE_FLAG = '/data/price_update.running';
+const PRICE_UPDATE_FLAG = '/app/Outputs/price_update.running';
 
 function _spawnPriceUpdate(extraArgs = []) {
   const { spawn } = require('child_process');
