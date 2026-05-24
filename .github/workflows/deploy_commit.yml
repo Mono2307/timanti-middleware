@@ -16,12 +16,23 @@ jobs:
       - name: Checkout specific commit
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.inputs.commit_sha }} # Use the provided commit SHA
-          
+          ref: ${{ github.event.inputs.commit_sha }}
+
+      - name: Overlay fly.toml from main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          sparse-checkout: fly.toml
+          sparse-checkout-cone-mode: false
+          path: _main_fly
+
+      - name: Use fly.toml from main
+        run: cp _main_fly/fly.toml fly.toml
+
       - name: Setup flyctl
         uses: superfly/flyctl-actions/setup-flyctl@master
-        
+
       - name: Deploy app
-        run: flyctl deploy --remote-only
+        run: flyctl deploy --remote-only --strategy immediate
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
