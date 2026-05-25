@@ -418,7 +418,32 @@ function buildRepairPaymentConfirmedHtml({ customerName, draftRef, amount, trans
 </html>`;
 }
 
-function buildRepairCompleteHtml({ customerName, draftRef }) {
+function buildRepairCompleteHtml({ customerName, draftRef, sequelId, trackingUrl }) {
+  const trackingSection = sequelId && trackingUrl ? `
+      <table width="100%" cellpadding="0" cellspacing="0" style="padding:10px 30px 20px 30px;">
+        <tr><td>
+          <table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e0e0e0; border-radius:8px; background:#f9f9f9;">
+            <tr><td style="padding:20px; text-align:center;">
+              <h4 style="color:#000000; margin-bottom:8px; font-size:14px;">Track Your Shipment</h4>
+              <p style="font-size:13px; color:#666666; margin:0 0 10px 0;">Your repaired jewellery is on its way. Use the ID below to follow it.</p>
+              <p style="font-size:20px; font-weight:bold; letter-spacing:2px; color:#000000; margin:0 0 14px 0;">${sequelId}</p>
+              <table cellpadding="0" cellspacing="0" style="margin:0 auto;">
+                <tr><td style="background:#000000; border-radius:4px; text-align:center;">
+                  <a href="${trackingUrl}" target="_blank" style="color:#ffffff; text-decoration:none; font-weight:500; display:block; padding:12px 28px; font-size:14px;">Track Shipment</a>
+                </td></tr>
+              </table>
+            </td></tr>
+          </table>
+        </td></tr>
+      </table>` : `
+      <table width="100%" cellpadding="0" cellspacing="0" style="padding:16px 30px 20px 30px;">
+        <tr><td style="background:#F6F6F6; border-left:4px solid #fc7d27; padding:16px 20px; text-align:center;">
+          <h4 style="color:#000000; margin-bottom:8px; font-size:14px;">Next steps</h4>
+          <p style="font-size:13px; color:#444444; margin:4px 0;">Our team will be in touch shortly to arrange return delivery or in-store pickup.</p>
+          <p style="font-size:13px; color:#444444; margin:8px 0 0 0;">If you haven't heard from us in 24 hours, please call <strong>+91-7710938305</strong>.</p>
+        </td></tr>
+      </table>`;
+
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -448,13 +473,7 @@ function buildRepairCompleteHtml({ customerName, draftRef }) {
         </td></tr>
       </table>
 
-      <table width="100%" cellpadding="0" cellspacing="0" style="padding:16px 30px 20px 30px;">
-        <tr><td style="background:#F6F6F6; border-left:4px solid #fc7d27; padding:16px 20px; text-align:center;">
-          <h4 style="color:#000000; margin-bottom:8px; font-size:14px;">Next steps</h4>
-          <p style="font-size:13px; color:#444444; margin:4px 0;">Our team will be in touch shortly to arrange return delivery or in-store pickup.</p>
-          <p style="font-size:13px; color:#444444; margin:8px 0 0 0;">If you haven't heard from us in 24 hours, please call <strong>+91-7710938305</strong>.</p>
-        </td></tr>
-      </table>
+      ${trackingSection}
 
       <table width="100%" cellpadding="0" cellspacing="0" style="border-top:1px solid #eeeeee; padding:20px 30px;">
         <tr><td style="text-align:center; font-size:12px; color:#666666;">
@@ -643,4 +662,202 @@ function buildRepairIntakeHtml({ customerName, customerEmail, customerPhone, dra
 </html>`;
 }
 
-module.exports = { sendEmail, sendDepositEmail, buildDepositEmailHtml, buildRepairEstimateHtml, buildRepairPaymentConfirmedHtml, buildRepairCompleteHtml, buildCreditNoteHtml, buildRepairIntakeHtml };
+function buildRepairAcknowledgementHtml({ customerName, draftRef, itemDesc }) {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+  <meta name="viewport" content="width=device-width">
+  <style>
+    body, p, td, span { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-weight: 300; margin: 0; padding: 0; }
+    h2, h3, h4 { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-weight: 500; margin: 0 0 10px 0; }
+    a { color: #fc7d27; text-decoration: none; }
+  </style>
+</head>
+<body style="background:#f4f4f4; padding:20px 0;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="max-width:600px; margin:0 auto; background:#ffffff; border-radius:8px; overflow:hidden;">
+    <tr><td>
+
+      <table width="100%" cellpadding="0" cellspacing="0" style="border-bottom:1px solid #eeeeee;">
+        <tr><td style="text-align:center; padding:24px 20px;">
+          <img src="https://cdn.shopify.com/s/files/1/0775/8322/0993/files/Timanti_Logo_Black.jpg?v=1766506323" alt="Timanti" width="150">
+        </td></tr>
+      </table>
+
+      <table width="100%" cellpadding="0" cellspacing="0">
+        <tr><td style="padding:28px 30px 10px 30px; text-align:center;">
+          <p style="font-size:13px; color:#999999; margin-bottom:8px;">${draftRef}</p>
+          <h2 style="font-size:22px; color:#000000; margin-bottom:16px;">We've Received Your Item</h2>
+          <p style="font-size:14px; color:#444444; line-height:1.6;">Hi <strong>${customerName}</strong>, we've received your <strong>${itemDesc}</strong>. Our team will review it and send you an estimate within 1–2 business days.</p>
+        </td></tr>
+      </table>
+
+      <table width="100%" cellpadding="0" cellspacing="0" style="padding:16px 30px 20px 30px;">
+        <tr><td style="background:#F6F6F6; border-left:4px solid #fc7d27; padding:16px 20px; text-align:center;">
+          <p style="font-size:13px; color:#444444; margin:0;">You'll receive a separate email once our team has assessed your jewellery and your estimate is ready.</p>
+        </td></tr>
+      </table>
+
+      <table width="100%" cellpadding="0" cellspacing="0" style="padding:0 30px 20px 30px;">
+        <tr><td style="border:1px solid #e6d8cc; border-radius:8px; padding:20px; text-align:center;">
+          <h3 style="color:#000000; margin-bottom:12px; font-size:16px;">Need Help?</h3>
+          <table cellpadding="0" cellspacing="0" style="margin:0 auto;">
+            <tr>
+              <td style="padding:0 20px; font-size:13px;"><strong>Phone/WhatsApp</strong><br><a href="tel:+917710938305" style="color:#000000;">+91-7710938305</a></td>
+              <td style="padding:0 20px; font-size:13px;"><strong>Email</strong><br><a href="mailto:hello@timanti.in" style="color:#000000;">hello@timanti.in</a></td>
+            </tr>
+          </table>
+        </td></tr>
+      </table>
+
+      <table width="100%" cellpadding="0" cellspacing="0" style="border-top:1px solid #eeeeee; padding:20px 30px;">
+        <tr><td style="text-align:center; font-size:12px; color:#666666;">
+          <p>Mon–Sat, 10AM–6PM &nbsp;|&nbsp; <a href="mailto:hello@timanti.in" style="color:#fc7d27;">hello@timanti.in</a></p>
+        </td></tr>
+      </table>
+
+    </td></tr>
+  </table>
+</body>
+</html>`;
+}
+
+function buildRepairFreeHtml({ customerName, draftRef, itemDesc }) {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+  <meta name="viewport" content="width=device-width">
+  <style>
+    body, p, td, span { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-weight: 300; margin: 0; padding: 0; }
+    h2, h3, h4 { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-weight: 500; margin: 0 0 10px 0; }
+    a { color: #fc7d27; text-decoration: none; }
+  </style>
+</head>
+<body style="background:#f4f4f4; padding:20px 0;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="max-width:600px; margin:0 auto; background:#ffffff; border-radius:8px; overflow:hidden;">
+    <tr><td>
+
+      <table width="100%" cellpadding="0" cellspacing="0" style="border-bottom:1px solid #eeeeee;">
+        <tr><td style="text-align:center; padding:24px 20px;">
+          <img src="https://cdn.shopify.com/s/files/1/0775/8322/0993/files/Timanti_Logo_Black.jpg?v=1766506323" alt="Timanti" width="150">
+        </td></tr>
+      </table>
+
+      <table width="100%" cellpadding="0" cellspacing="0">
+        <tr><td style="background:#d4edda; padding:12px 20px; text-align:center; font-weight:bold; font-size:13px; border-bottom:1px solid #c3e6cb;">
+          COMPLIMENTARY REPAIR — NO CHARGE
+        </td></tr>
+      </table>
+
+      <table width="100%" cellpadding="0" cellspacing="0">
+        <tr><td style="padding:28px 30px 10px 30px; text-align:center;">
+          <p style="font-size:13px; color:#999999; margin-bottom:8px;">${draftRef}</p>
+          <h2 style="font-size:22px; color:#000000; margin-bottom:16px;">Great News — No Charge for This Repair</h2>
+          <p style="font-size:14px; color:#444444; line-height:1.6;">Hi <strong>${customerName}</strong>, we'll be repairing your <strong>${itemDesc}</strong> at no charge. No payment is needed from your side.</p>
+        </td></tr>
+      </table>
+
+      <table width="100%" cellpadding="0" cellspacing="0" style="padding:16px 30px 20px 30px;">
+        <tr><td style="background:#F6F6F6; border-left:4px solid #fc7d27; padding:16px 20px; text-align:center;">
+          <h4 style="color:#000000; margin-bottom:8px; font-size:14px;">What happens next</h4>
+          <p style="font-size:13px; color:#444444; margin:4px 0;">Our repair team will begin work on your jewellery and you'll hear from us as soon as it's ready.</p>
+        </td></tr>
+      </table>
+
+      <table width="100%" cellpadding="0" cellspacing="0" style="padding:0 30px 20px 30px;">
+        <tr><td style="border:1px solid #e6d8cc; border-radius:8px; padding:20px; text-align:center;">
+          <h3 style="color:#000000; margin-bottom:12px; font-size:16px;">Questions?</h3>
+          <table cellpadding="0" cellspacing="0" style="margin:0 auto;">
+            <tr>
+              <td style="padding:0 20px; font-size:13px;"><strong>Phone/WhatsApp</strong><br><a href="tel:+917710938305" style="color:#000000;">+91-7710938305</a></td>
+              <td style="padding:0 20px; font-size:13px;"><strong>Email</strong><br><a href="mailto:hello@timanti.in" style="color:#000000;">hello@timanti.in</a></td>
+            </tr>
+          </table>
+        </td></tr>
+      </table>
+
+      <table width="100%" cellpadding="0" cellspacing="0" style="border-top:1px solid #eeeeee; padding:20px 30px;">
+        <tr><td style="text-align:center; font-size:12px; color:#666666;">
+          <p>Mon–Sat, 10AM–6PM &nbsp;|&nbsp; <a href="mailto:hello@timanti.in" style="color:#fc7d27;">hello@timanti.in</a></p>
+        </td></tr>
+      </table>
+
+    </td></tr>
+  </table>
+</body>
+</html>`;
+}
+
+function buildRepairHqCompleteReadyHtml({ customerName, draftRef, amount, completeUrl }) {
+  const paymentBanner = amount
+    ? `<table width="100%" cellpadding="0" cellspacing="0">
+        <tr><td style="background:#d4edda; padding:12px 20px; text-align:center; font-weight:bold; font-size:13px; border-bottom:1px solid #c3e6cb;">
+          PAYMENT RECEIVED — Rs.${amount} &nbsp;·&nbsp; ${draftRef}
+        </td></tr>
+      </table>`
+    : `<table width="100%" cellpadding="0" cellspacing="0">
+        <tr><td style="background:#d4edda; padding:12px 20px; text-align:center; font-weight:bold; font-size:13px; border-bottom:1px solid #c3e6cb;">
+          COMPLIMENTARY REPAIR CONFIRMED &nbsp;·&nbsp; ${draftRef}
+        </td></tr>
+      </table>`;
+
+  const bodyText = amount
+    ? `Payment of <strong>Rs.${amount}</strong> has been received for <strong>${customerName}</strong>. The repair can now proceed.`
+    : `The repair for <strong>${customerName}</strong> has been confirmed as complimentary. Proceed with the repair when ready.`;
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+  <meta name="viewport" content="width=device-width">
+  <style>
+    body, p, td, span { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-weight: 300; margin: 0; padding: 0; }
+    h2, h3, h4 { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-weight: 500; margin: 0 0 10px 0; }
+    a { color: #fc7d27; text-decoration: none; }
+  </style>
+</head>
+<body style="background:#f4f4f4; padding:20px 0;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="max-width:600px; margin:0 auto; background:#ffffff; border-radius:8px; overflow:hidden;">
+    <tr><td>
+
+      <table width="100%" cellpadding="0" cellspacing="0" style="border-bottom:1px solid #eeeeee;">
+        <tr><td style="text-align:center; padding:24px 20px;">
+          <img src="https://cdn.shopify.com/s/files/1/0775/8322/0993/files/Timanti_Logo_Black.jpg?v=1766506323" alt="Timanti" width="150">
+        </td></tr>
+      </table>
+
+      ${paymentBanner}
+
+      <table width="100%" cellpadding="0" cellspacing="0">
+        <tr><td style="padding:28px 30px 10px 30px; text-align:center;">
+          <p style="font-size:13px; color:#999999; margin-bottom:8px;">${draftRef}</p>
+          <h2 style="font-size:20px; color:#000000; margin-bottom:16px;">Repair in Progress — Mark Complete When Done</h2>
+          <p style="font-size:14px; color:#444444; line-height:1.6;">${bodyText}</p>
+        </td></tr>
+      </table>
+
+      <table width="100%" cellpadding="0" cellspacing="0" style="padding:20px 30px 24px 30px;">
+        <tr><td style="text-align:center;">
+          <p style="font-size:13px; color:#666666; margin-bottom:16px;">When the repair is ready, click below to notify the customer. You can optionally add a Sequel tracking ID.</p>
+          <table cellpadding="0" cellspacing="0" style="margin:0 auto;">
+            <tr><td style="background:#000000; border-radius:4px; text-align:center;">
+              <a href="${completeUrl}" target="_blank" style="color:#ffffff; text-decoration:none; font-weight:500; display:block; padding:14px 32px; font-size:15px;">Mark Repair Complete &amp; Notify Customer</a>
+            </td></tr>
+          </table>
+        </td></tr>
+      </table>
+
+      <table width="100%" cellpadding="0" cellspacing="0" style="border-top:1px solid #eeeeee; padding:20px 30px;">
+        <tr><td style="text-align:center; font-size:12px; color:#999999;">
+          <p>Timanti internal — do not forward this email</p>
+        </td></tr>
+      </table>
+
+    </td></tr>
+  </table>
+</body>
+</html>`;
+}
+
+module.exports = { sendEmail, sendDepositEmail, buildDepositEmailHtml, buildRepairEstimateHtml, buildRepairPaymentConfirmedHtml, buildRepairCompleteHtml, buildCreditNoteHtml, buildRepairIntakeHtml, buildRepairAcknowledgementHtml, buildRepairFreeHtml, buildRepairHqCompleteReadyHtml };
