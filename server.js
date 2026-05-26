@@ -1230,10 +1230,16 @@ async function hydrateItemFromVariant(item, token) {
   if (netWt > 0)     hydratedProps['_net_wt']       = netWt.toFixed(3);
   if (diaCts > 0)    hydratedProps['_diamond_cts']  = diaCts.toFixed(2);
   if (gemCts > 0)    hydratedProps['_gemstone_cts'] = gemCts.toFixed(2);
-  if (goldVal > 0)   hydratedProps['Gold']          = `Rs${goldVal.toFixed(2)}`;
-  if (diaVal > 0)    hydratedProps['Diamond']       = `Rs${diaVal.toFixed(2)}`;
-  if (makingVal > 0) hydratedProps['Making']        = `Rs${makingVal.toFixed(2)}`;
-  if (grossVal > 0)  hydratedProps['Gross Value']   = `Rs${grossVal.toFixed(2)}`;
+  // Taxable Value is written only by reprice/recalculate — its presence means the item has
+  // already been through the pricing engine. Don't overwrite the computed Gold/Making/Gross Value
+  // with the stale catalog values from the variant metafield (price_breakup_*).
+  const alreadyPriced = (item.properties || []).some(p => p.name === 'Taxable Value');
+  if (!alreadyPriced) {
+    if (goldVal > 0)   hydratedProps['Gold']         = `Rs${goldVal.toFixed(2)}`;
+    if (diaVal > 0)    hydratedProps['Diamond']      = `Rs${diaVal.toFixed(2)}`;
+    if (makingVal > 0) hydratedProps['Making']       = `Rs${makingVal.toFixed(2)}`;
+    if (grossVal > 0)  hydratedProps['Gross Value']  = `Rs${grossVal.toFixed(2)}`;
+  }
   const updatedProps = (item.properties || [])
     .filter(p => !(p.name in hydratedProps))
     .concat(Object.entries(hydratedProps).map(([n, v]) => ({ name: n, value: v })));
@@ -1842,11 +1848,14 @@ app.post('/api/shopify-draft-updated', async (req, res) => {
       return;
     }
 
-    // Auto-hydrate if any product line items are missing the Gold property (option 2: on update, not just create)
+    // Auto-hydrate if any product line items are missing the Gold property (option 2: on update, not just create).
+    // Exclude items that have _gold_rate — that property is written by reprice and preserved by hydrate,
+    // so its presence with Gold absent means the item was repriced but the payload was truncated.
     const needsHydration = (draft.line_items || []).some(item =>
       item.variant_id &&
       !((item.title || '').toLowerCase().includes('discount') && parseFloat(item.price) < 0) &&
-      !(item.properties || []).some(p => p.name === 'Gold')
+      !(item.properties || []).some(p => p.name === 'Gold') &&
+      !(item.properties || []).some(p => p.name === '_gold_rate')
     );
     if (needsHydration) await handleDraftCreated(draft);
 

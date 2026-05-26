@@ -110,7 +110,11 @@
           <strong>Order Number</strong>{{ order.name }}
         </div>
         <div class="invoice-detail-cell">
-          <strong>Invoice Date</strong>{{ order.created_at | date: "%d-%m-%Y" }}
+          {% assign invoice_date_display = order.created_at | date: "%d-%m-%Y" %}
+          {% for attr in order.note_attributes %}
+            {% if attr.name == "invoice_date" and attr.value != "" %}{% assign invoice_date_display = attr.value %}{% endif %}
+          {% endfor %}
+          <strong>Invoice Date</strong>{{ invoice_date_display }}
         </div>
       </div>
 
@@ -286,7 +290,7 @@
         <td class="text-center">
           {% if prop_dia_cts != "" %}{{ prop_dia_cts }}
           {% elsif jc_meta.diamond_wt_carats %}{{ jc_meta.diamond_wt_carats }}
-          {% elsif line_item.product.metafields.custom.totaldiamondweight %}{{ line_item.product.metafields.custom.totaldiamondweight }}
+          {% elsif line_item.product.metafields.custom.totaldiamondweight %}{{ line_item.product.metafields.custom.totaldiamondweight %}
           {% else %}–{% endif %}
         </td>
 
@@ -308,10 +312,8 @@
         </td>
 
         <td class="text-center">
-          {% if jc_meta.metal %}
-            {{ jc_meta.metal }}
-          {% elsif line_item.variant.option1 or line_item.variant.option2 %}
-            {{ line_item.variant.option1 }}{% if line_item.variant.option2 %} {{ line_item.variant.option2 }}{% endif %}
+          {% if jc_meta.metal %}{{ jc_meta.metal }}
+          {% elsif line_item.variant.option1 or line_item.variant.option2 %}{{ line_item.variant.option1 }}{% if line_item.variant.option2 %} {{ line_item.variant.option2 }}{% endif %}
           {% else %}–{% endif %}
         </td>
 
@@ -344,6 +346,11 @@
       {% endif %}
       {% assign taxable_value = taxable_base | divided_by: 1.03 %}
       {% assign total_tax = taxable_value | times: 0.03 %}
+
+      <tr class="totals-row">
+        <td colspan="12" class="text-right"><strong>Taxable Value</strong></td>
+        <td class="text-right"><strong>₹{{ taxable_value | money_without_currency | remove: ',' }}</strong></td>
+      </tr>
 
       {% if is_same_state %}
         {% assign cgst_amount = taxable_value | times: 0.015 %}
@@ -399,7 +406,6 @@
       {% assign pending_amount = "" %}
       {% assign pm_advance     = "" %}
       {% assign pm_final       = "" %}
-      {% comment %}Primary: metafields set directly in Shopify Admin{% endcomment %}
       {% if order.metafields.custom.payment_status %}
         {% assign _mf_status = order.metafields.custom.payment_status | downcase %}
         {% if _mf_status == "full"    %}{% assign is_fully_paid = true %}{% endif %}
@@ -411,14 +417,14 @@
       {% if order.metafields.custom.payment_mode_final   %}{% assign pm_final   = order.metafields.custom.payment_mode_final   %}{% endif %}
       {% if order.metafields.custom.payment_mode_advance %}{% assign pm_advance = order.metafields.custom.payment_mode_advance %}{% endif %}
       {% if pm_final != "" %}{% assign is_fully_paid = true %}{% assign is_partial = false %}{% endif %}
-      {% comment %}Fallback: tags written by middleware payment flows{% endcomment %}
       {% for tag in order.tags %}
         {% assign t = tag | strip | downcase %}
         {% if t == "deposit:partial"    and is_partial == false and is_fully_paid == false %}{% assign is_partial    = true %}{% endif %}
         {% if t == "deposit:fully-paid" and is_partial == false and is_fully_paid == false %}{% assign is_fully_paid = true %}{% endif %}
-        {% if t contains "paid:rs"        and paid_amount    == "" %}{% assign paid_amount    = t | remove: "paid:rs"        %}{% endif %}
-        {% if t contains "pending:rs"     and pending_amount == "" %}{% assign pending_amount = t | remove: "pending:rs"     %}{% endif %}
+        {% if t contains "paid:rs"    and paid_amount    == "" %}{% assign paid_amount    = t | remove: "paid:rs"    %}{% endif %}
+        {% if t contains "pending:rs" and pending_amount == "" %}{% assign pending_amount = t | remove: "pending:rs" %}{% endif %}
       {% endfor %}
+
       {% if is_partial and paid_amount != "" %}
         <tr class="totals-row">
           <td colspan="12" class="text-right" style="border-top: 1px solid #ccc;">
@@ -464,7 +470,6 @@
 
   <div class="amount-words">
     <span>
-      {% assign total_rounded = final_payable | divided_by: 100 | floor %}
       {% assign ones = "Zero,One,Two,Three,Four,Five,Six,Seven,Eight,Nine,Ten,Eleven,Twelve,Thirteen,Fourteen,Fifteen,Sixteen,Seventeen,Eighteen,Nineteen" | split: "," %}
       {% assign tens = "Zero,Ten,Twenty,Thirty,Forty,Fifty,Sixty,Seventy,Eighty,Ninety" | split: "," %}
       {% assign total_int = final_payable | divided_by: 100 | floor %}{% assign words = "" %}
