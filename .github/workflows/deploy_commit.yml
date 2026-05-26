@@ -8,6 +8,10 @@ on:
         required: true
         type: string
 
+concurrency:
+  group: fly-deploy
+  cancel-in-progress: true
+
 jobs:
   deploy:
     name: Deploy app

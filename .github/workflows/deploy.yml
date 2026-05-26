@@ -3,6 +3,10 @@ name: Deploy to Fly.io
 on:
   workflow_dispatch:
 
+concurrency:
+  group: fly-deploy
+  cancel-in-progress: true
+
 jobs:
   deploy:
     name: Deploy app
