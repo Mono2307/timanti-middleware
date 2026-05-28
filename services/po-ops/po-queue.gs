@@ -111,10 +111,12 @@ function tabWidth(tabName) {
 function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu('PO Ops')
-    .addItem('Reprice Selected Row',  'repriceTrigger')
+    .addItem('Reprice Selected Row',       'repriceTrigger')
     .addSeparator()
-    .addItem('Sync All Now',          'syncAllTrigger')
-    .addItem('Run Batch Raise Now',   'batchRaisePoDailyTrigger')
+    .addItem('Sync All Now',               'syncAllTrigger')
+    .addItem('Run Batch Raise Now',        'batchRaisePoDailyTrigger')
+    .addSeparator()
+    .addItem('Fix Duplicate Rows',         'dedupAllTabs')
     .addToUi();
 }
 
@@ -135,6 +137,10 @@ function requireMiddlewareUrl() {
 // =================================================================
 
 function doPost(e) {
+  // Serialize concurrent requests — Shopify fires create+update simultaneously,
+  // without a lock both read the same empty index and both insert duplicate rows.
+  const lock = LockService.getScriptLock();
+  try { lock.waitLock(15000); } catch (_) { return jsonResponse({ ok: false, error: 'Lock timeout' }); }
   try {
     const body = JSON.parse(e.postData.contents);
     let result;
@@ -148,6 +154,8 @@ function doPost(e) {
     return jsonResponse({ ok: true, data: result });
   } catch (err) {
     return jsonResponse({ ok: false, error: err.message });
+  } finally {
+    lock.releaseLock();
   }
 }
 
@@ -250,6 +258,56 @@ function removeStaleRows(sheet, C, sourceId, currentLineItemIds) {
     if (statusVals[i][0] === 'pending') toDelete.push(i + 2);
   }
   toDelete.forEach(r => sheet.deleteRow(r));
+}
+
+// =================================================================
+// One-time dedup — removes duplicate pending rows sharing the same
+// line_item_id, keeping the most recently synced one.
+// Run from PO Ops → Fix Duplicate Rows after the race-condition bug.
+// =================================================================
+
+function dedupAllTabs() {
+  var removed = 0;
+  [TAB.MTO, TAB.INSTOCK, TAB.UNCLASSIFIED].forEach(function(name) {
+    const sheet = SS.getSheetByName(name);
+    if (!sheet) return;
+    const C    = getColumnMap(name);
+    const last = sheet.getLastRow();
+    if (last < 2) return;
+
+    const liVals     = sheet.getRange(2, C.LINE_ITEM_ID, last - 1, 1).getValues();
+    const statusVals = sheet.getRange(2, C.STATUS,       last - 1, 1).getValues();
+    const syncedVals = sheet.getRange(2, C.SYNCED_AT,    last - 1, 1).getValues();
+
+    // For each line_item_id seen multiple times, keep only the row with latest synced_at
+    const seen = {}; // line_item_id -> { rowIdx (1-based), syncedAt }
+    const toDelete = [];
+
+    for (let i = 0; i < last - 1; i++) {
+      const lid    = String(liVals[i][0]);
+      const status = statusVals[i][0];
+      if (!lid || status !== 'pending') continue; // only dedup pending rows
+
+      const syncedAt = new Date(syncedVals[i][0] || 0).getTime();
+      const rowIdx   = i + 2;
+
+      if (!seen[lid]) {
+        seen[lid] = { rowIdx, syncedAt };
+      } else if (syncedAt >= seen[lid].syncedAt) {
+        toDelete.push(seen[lid].rowIdx); // current winner is older — drop it
+        seen[lid] = { rowIdx, syncedAt };
+      } else {
+        toDelete.push(rowIdx); // this row is older — drop it
+      }
+    }
+
+    // Delete bottom-to-top so row indices stay valid
+    toDelete.sort(function(a, b) { return b - a; });
+    toDelete.forEach(function(r) { sheet.deleteRow(r); });
+    removed += toDelete.length;
+  });
+
+  SpreadsheetApp.getUi().alert('Done — removed ' + removed + ' duplicate row(s).');
 }
 
 // =================================================================
@@ -423,7 +481,7 @@ function repriceTrigger() {
   const isUc  = name === TAB.UNCLASSIFIED;
 
   if (!isMto && !isUc) {
-    ui.alert('Switch to the MTO or Unclassified tab and select the row you want to reprice.');
+    ui.alert('Reprice only works on the MTO or Unclassified tab.\n\nDetected tab: "' + name + '"\n\nIf you are already on MTO, use the custom menu (PO Ops → Reprice Selected Row), not the Run button in the Apps Script editor.');
     return;
   }
 
