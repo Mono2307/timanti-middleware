@@ -431,8 +431,9 @@ function registerRepairRoutes(app, getShopifyToken) {
     }
   });
 
-  app.post('/repairs/set-estimate', require('express').urlencoded({ extended: false }), async (req, res) => {
-    const { draftId, token: hmacToken, amount, free } = req.body;
+  app.post('/repairs/set-estimate', async (req, res) => {
+    const body = typeof req.body === 'string' ? Object.fromEntries(new URLSearchParams(req.body)) : (req.body || {});
+    const { draftId, token: hmacToken, amount, free } = body;
     if (!draftId || hmacToken !== generateEstimateToken(draftId)) {
       return res.status(400).send('<h2 style="font-family:sans-serif;padding:40px;">Invalid or expired link.</h2>');
     }
@@ -602,8 +603,9 @@ function registerRepairRoutes(app, getShopifyToken) {
     }
   });
 
-  app.post('/repairs/set-complete', require('express').urlencoded({ extended: false }), async (req, res) => {
-    const { draftId, token: hmacToken, sequelId } = req.body;
+  app.post('/repairs/set-complete', async (req, res) => {
+    const body = typeof req.body === 'string' ? Object.fromEntries(new URLSearchParams(req.body)) : (req.body || {});
+    const { draftId, token: hmacToken, sequelId } = body;
     if (!draftId || hmacToken !== generateCompleteToken(draftId)) {
       return res.status(400).send('<h2 style="font-family:sans-serif;padding:40px;">Invalid or expired link.</h2>');
     }
