@@ -108,7 +108,7 @@ async function batchRaisePo({ po_type, rows, shopifyToken, shopifyStoreUrl, supa
 
   // Store in batch_po_records for batch-level tracking
   await supabase.from('batch_po_records').insert({
-    batch_id,
+    batch_id:             batchId,
     batch_date:           batchDate,
     po_type,
     draft_order_id:       String(draftOrder.id),
