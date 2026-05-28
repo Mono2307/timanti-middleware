@@ -373,9 +373,9 @@ function registerRepairRoutes(app, getShopifyToken) {
     .info-table td:last-child { color: #222; }
     .divider { border: none; border-top: 1px solid #eee; margin: 16px 0; }
     label { display: block; font-size: 13px; font-weight: 500; margin-bottom: 6px; }
-    .prefix-input { display: flex; border: 1px solid #ccc; border-radius: 6px; overflow: hidden; }
-    .prefix-input span { background: #f0f0f0; padding: 10px 12px; font-size: 15px; color: #555; border-right: 1px solid #ccc; }
-    .prefix-input input { border: none; outline: none; padding: 10px 12px; font-size: 15px; width: 100%; }
+    .prefix-input { display: flex; border: 1px solid #ccc; border-radius: 6px; }
+    .prefix-input span { background: #f0f0f0; padding: 10px 12px; font-size: 15px; color: #555; border-right: 1px solid #ccc; border-radius: 6px 0 0 6px; flex-shrink: 0; }
+    .prefix-input input { border: none; outline: none; padding: 10px 12px; font-size: 15px; width: 100%; border-radius: 0 6px 6px 0; min-width: 0; }
     button { margin-top: 20px; width: 100%; background: #000; color: #fff; border: none; border-radius: 6px; padding: 14px; font-size: 15px; font-weight: 500; cursor: pointer; }
     button:hover { background: #222; }
     .notes-box { background: #f9f9f9; border-left: 3px solid #fc7d27; padding: 10px 14px; font-size: 13px; color: #444; margin-bottom: 0; white-space: pre-wrap; }
@@ -400,7 +400,7 @@ function registerRepairRoutes(app, getShopifyToken) {
         <label for="amount">Estimate Amount (₹)</label>
         <div class="prefix-input">
           <span>₹</span>
-          <input id="amount" name="amount" type="number" min="1" step="0.01" placeholder="e.g. 1500" required>
+          <input id="amount" name="amount" type="text" inputmode="decimal" placeholder="e.g. 1500" required>
         </div>
       </div>
       <div style="margin-top:16px; padding:12px 16px; background:#fff3cd; border-radius:6px; border:1px solid #ffc107;">
@@ -437,7 +437,7 @@ function registerRepairRoutes(app, getShopifyToken) {
       return res.status(400).send('<h2 style="font-family:sans-serif;padding:40px;">Invalid or expired link.</h2>');
     }
     const isFree = free === 'true';
-    const parsedAmount = isFree ? 0 : parseFloat(amount);
+    const parsedAmount = isFree ? 0 : parseFloat(String(amount || '').replace(/,/g, ''));
     if (!isFree && (!parsedAmount || parsedAmount <= 0)) {
       return res.status(400).send('<h2 style="font-family:sans-serif;padding:40px;">Invalid amount.</h2>');
     }
