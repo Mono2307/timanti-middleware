@@ -15,6 +15,14 @@ const {
   buildRepairHqCompleteReadyHtml
 } = require('../../emailService');
 
+const REPAIR_TEST_EMAIL = 'monodeep.dutta@timanti.in'; // revert after testing
+
+// When REPAIR_TEST_EMAIL is set, all repair emails (HQ + customer) go to that address only
+function repairSendEmail(opts) {
+  if (!REPAIR_TEST_EMAIL) return sendEmail(opts);
+  return sendEmail({ ...opts, to: REPAIR_TEST_EMAIL, cc: undefined });
+}
+
 function generateEstimateToken(draftId) {
   return crypto.createHmac('sha256', process.env.SHOPIFY_WEBHOOK_SECRET)
     .update(String(draftId)).digest('hex').slice(0, 32);
@@ -106,7 +114,7 @@ async function handleRepairPayment(draft, { transactionId, gatewayRef }, getShop
   const amount        = Math.round(parseFloat(draft.total_price)).toString();
 
   if (customerEmail) {
-    await sendEmail({
+    await repairSendEmail({
       to:      customerEmail,
       subject: `Payment Confirmed — Repair in Progress (${draft.name})`,
       html:    buildRepairPaymentConfirmedHtml({
@@ -124,7 +132,7 @@ async function handleRepairPayment(draft, { transactionId, gatewayRef }, getShop
     const serverUrl     = process.env.SERVER_URL || 'https://timanti-middleware.fly.dev';
     const completeToken = generateCompleteToken(draft.id);
     const completeUrl   = `${serverUrl}/repairs/set-complete?d=${draft.id}&t=${completeToken}`;
-    await sendEmail({
+    await repairSendEmail({
       to:      hqEmail,
       cc:      process.env.HQ_CC_EMAIL,
       subject: `Payment Received — ${draft.name} — ${customerName}`,
@@ -158,7 +166,7 @@ async function handleRepairDraftUpdate(draft, getShopifyToken) {
     const approveUrl      = `${serverUrl}/repairs/set-estimate?d=${draft.id}&t=${hmacToken}`;
 
     try {
-      await sendEmail({
+      await repairSendEmail({
         to:      hqEmail,
         cc:      process.env.HQ_CC_EMAIL,
         subject: `New Repair Intake — ${draft.name} — ${customerName}`,
@@ -171,7 +179,7 @@ async function handleRepairDraftUpdate(draft, getShopifyToken) {
 
     if (customerEmail) {
       try {
-        await sendEmail({
+        await repairSendEmail({
           to:      customerEmail,
           subject: `We've Received Your Item — ${draft.name}`,
           html:    buildRepairAcknowledgementHtml({ customerName, draftRef: draft.name, itemDesc })
@@ -201,7 +209,7 @@ async function handleRepairDraftUpdate(draft, getShopifyToken) {
 
     if (customerEmail) {
       try {
-        await sendEmail({
+        await repairSendEmail({
           to:      customerEmail,
           subject: `Great News — Complimentary Repair Confirmed (${draft.name})`,
           html:    buildRepairFreeHtml({ customerName, draftRef: draft.name, itemDesc })
@@ -213,7 +221,7 @@ async function handleRepairDraftUpdate(draft, getShopifyToken) {
 
     if (hqEmail) {
       try {
-        await sendEmail({
+        await repairSendEmail({
           to:      hqEmail,
           cc:      process.env.HQ_CC_EMAIL,
           subject: `Complimentary Repair — ${draft.name} — ${customerName}`,
@@ -255,7 +263,7 @@ async function handleRepairDraftUpdate(draft, getShopifyToken) {
     }
 
     try {
-      await sendEmail({
+      await repairSendEmail({
         to:      customerEmail,
         subject: `Your Timanti Repair Estimate — ${draft.name}`,
         html:    buildRepairEstimateHtml({
@@ -305,7 +313,7 @@ async function handleRepairDraftUpdate(draft, getShopifyToken) {
     }
 
     try {
-      await sendEmail({
+      await repairSendEmail({
         to:      customerEmail,
         subject: `Your Repair is Ready — ${draft.name}`,
         html:    buildRepairCompleteHtml({ customerName, draftRef: draft.name, sequelId, trackingUrl })
