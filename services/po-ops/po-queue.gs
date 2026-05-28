@@ -457,10 +457,17 @@ function callBatchRaise(poType, tabName, rows) {
 
   const result = JSON.parse(resp.getContentText());
   if (result.ok) {
-    markRaised(tabName, rows.map(r => r.line_item_id), result.batch_id, result.raised_at);
-    Logger.log('Batch raised ' + poType + ' (' + tabName + ') — batch_id: ' + result.batch_id);
+    try {
+      markRaised(tabName, rows.map(r => r.line_item_id), result.batch_id, result.raised_at);
+      Logger.log('Batch raised ' + poType + ' (' + tabName + ') — batch_id: ' + result.batch_id);
+    } catch (markErr) {
+      Logger.log('markRaised FAILED: ' + markErr.message);
+      SpreadsheetApp.getUi().alert('⚠️ PO was created in Shopify (' + result.batch_id + ') but sheet update failed:\n' + markErr.message + '\n\nManually set those rows to po-created.');
+    }
   } else {
-    Logger.log('Batch FAILED ' + poType + ' (' + tabName + '): ' + (result.error || resp.getResponseCode()));
+    const msg = result.error || ('HTTP ' + resp.getResponseCode());
+    Logger.log('Batch FAILED ' + poType + ' (' + tabName + '): ' + msg);
+    SpreadsheetApp.getUi().alert('❌ Batch raise failed for ' + poType + ':\n' + msg);
   }
 }
 
