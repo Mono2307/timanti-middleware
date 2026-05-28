@@ -111,10 +111,23 @@ function tabWidth(tabName) {
 function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu('PO Ops')
-    .addItem('Reprice Selected Row', 'repriceTrigger')
+    .addItem('Reprice Selected Row',  'repriceTrigger')
     .addSeparator()
-    .addItem('Run Batch Raise Now', 'batchRaisePoDailyTrigger')
+    .addItem('Sync All Now',          'syncAllTrigger')
+    .addItem('Run Batch Raise Now',   'batchRaisePoDailyTrigger')
     .addToUi();
+}
+
+function requireMiddlewareUrl() {
+  if (!MIDDLEWARE_URL) {
+    SpreadsheetApp.getUi().alert(
+      '❌ MIDDLEWARE_URL not set.\n\n' +
+      'Go to Extensions → Apps Script → Project Settings → Script Properties\n' +
+      'and add:\n\n  MIDDLEWARE_URL = https://timanti-middleware.fly.dev'
+    );
+    return false;
+  }
+  return true;
 }
 
 // =================================================================
@@ -126,8 +139,10 @@ function doPost(e) {
     const body = JSON.parse(e.postData.contents);
     let result;
     switch (body.action) {
-      case 'upsertRows': result = upsertRows(body.tab, body.rows); break;
-      case 'markRaised': result = markRaised(body.tab, body.lineItemIds, body.batchId, body.raisedAt); break;
+      case 'upsertRows':    result = upsertRows(body.tab, body.rows); break;
+      case 'markRaised':    result = markRaised(body.tab, body.lineItemIds, body.batchId, body.raisedAt); break;
+      case 'removeSource':  result = removeSourceRows(body.sourceId); break;
+      case 'pruneOrphans':  result = pruneOrphanRows(body.validSourceIds); break;
       default: result = { error: 'Unknown action: ' + body.action };
     }
     return jsonResponse({ ok: true, data: result });
@@ -237,6 +252,53 @@ function removeStaleRows(sheet, C, sourceId, currentLineItemIds) {
   toDelete.forEach(r => sheet.deleteRow(r));
 }
 
+// =================================================================
+// Remove all pending rows for a deleted draft order (real-time webhook)
+// =================================================================
+
+function removeSourceRows(sourceId) {
+  let removed = 0;
+  [TAB.MTO, TAB.INSTOCK, TAB.UNCLASSIFIED].forEach(function(name) {
+    const sheet = SS.getSheetByName(name);
+    if (!sheet) return;
+    const C = getColumnMap(name);
+    const before = sheet.getLastRow();
+    removeStaleRows(sheet, C, String(sourceId), new Set()); // empty set = remove all pending for this source
+    removed += Math.max(0, before - sheet.getLastRow());
+  });
+  return { removed };
+}
+
+// =================================================================
+// Prune pending rows whose source_id is no longer in the live set
+// Called after nightly sync-all. Preserves raised-po / po-created rows.
+// =================================================================
+
+function pruneOrphanRows(validSourceIds) {
+  const validSet = new Set(validSourceIds.map(String));
+  let removed = 0;
+  [TAB.MTO, TAB.INSTOCK, TAB.UNCLASSIFIED].forEach(function(name) {
+    const sheet = SS.getSheetByName(name);
+    if (!sheet) return;
+    const C    = getColumnMap(name);
+    const last = sheet.getLastRow();
+    if (last < 2) return;
+    const sourceVals = sheet.getRange(2, C.SOURCE_ID, last - 1, 1).getValues();
+    const statusVals = sheet.getRange(2, C.STATUS,    last - 1, 1).getValues();
+    const toDelete = [];
+    for (let i = last - 2; i >= 0; i--) {
+      const sid = String(sourceVals[i][0]);
+      if (!sid)               continue;
+      if (validSet.has(sid))  continue;
+      if (statusVals[i][0] !== 'pending') continue; // keep raised-po / po-created / skip
+      toDelete.push(i + 2);
+    }
+    toDelete.forEach(function(r) { sheet.deleteRow(r); }); // already bottom-to-top
+    removed += toDelete.length;
+  });
+  return { removed };
+}
+
 function buildIndex(sheet, col) {
   const last = sheet.getLastRow();
   if (last < 2) return {};
@@ -304,6 +366,7 @@ function getApprovedRows(tabName) {
 // =================================================================
 
 function batchRaisePoDailyTrigger() {
+  if (!requireMiddlewareUrl()) return;
   // MTO and InStock: po_type comes from the tab
   [{ type: 'mto', tab: TAB.MTO }, { type: 'in-stock', tab: TAB.INSTOCK }]
     .forEach(({ type, tab }) => {
@@ -350,9 +413,11 @@ function callBatchRaise(poType, tabName, rows) {
 // =================================================================
 
 function repriceTrigger() {
+  if (!requireMiddlewareUrl()) return;
   const ui    = SpreadsheetApp.getUi();
   const sheet = SS.getActiveSheet();
   const name  = sheet.getName();
+  Logger.log('[REPRICE] active sheet: ' + name + ', row: ' + sheet.getActiveCell().getRow());
 
   const isMto = name === TAB.MTO;
   const isUc  = name === TAB.UNCLASSIFIED;
@@ -425,6 +490,8 @@ function repriceTrigger() {
 // =================================================================
 
 function syncAllTrigger() {
+  if (!requireMiddlewareUrl()) return;
+  const ui   = SpreadsheetApp.getUi();
   const resp = UrlFetchApp.fetch(MIDDLEWARE_URL + '/api/po-ops/sync-all', {
     method: 'post',
     contentType: 'application/json',
@@ -433,6 +500,11 @@ function syncAllTrigger() {
   });
   const result = JSON.parse(resp.getContentText());
   Logger.log('[SYNC-ALL] ' + JSON.stringify(result));
+  if (result.ok) {
+    ui.alert('✅ Sync started — all drafts and orders are being pulled into the sheet. Check back in ~30 seconds.');
+  } else {
+    ui.alert('❌ Sync failed: ' + (result.error || resp.getResponseCode()));
+  }
 }
 
 // =================================================================

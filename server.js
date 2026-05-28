@@ -7,7 +7,7 @@ const { createClient } = require('@supabase/supabase-js');
 const { sendEmail, sendDepositEmail } = require('./emailService');
 const { handlePoWebhook } = require('./services/po-ops/webhook');
 const { handlePoAction }  = require('./services/po-ops/action');
-const { syncDraftOrderToSheet, syncOrderToSheet, syncAllDraftOrders, syncAllOrders } = require('./services/po-ops/sync');
+const { syncDraftOrderToSheet, syncOrderToSheet, syncAllDraftOrders, syncAllOrders, removeDraftFromSheet, pruneOrphans } = require('./services/po-ops/sync');
 const { batchRaisePo } = require('./services/po-ops/batch');
 const { createPaymentLink: createGokwikLink, cancelPaymentLink: cancelGokwikLink } = require('./services/gokwik');
 const { sendSMS } = require('./services/sms');
@@ -2534,6 +2534,9 @@ app.post('/api/po-webhook', async (req, res) => {
     getShopifyToken()
       .then(token => syncOrderToSheet(req.body, token, deps.shopifyStoreUrl))
       .catch(e => console.error('[SYNC] order webhook error:', e.message));
+  } else if (topic === 'draft_orders/delete' && req.body?.id) {
+    removeDraftFromSheet(req.body.id)
+      .catch(e => console.error('[SYNC] delete webhook error:', e.message));
   }
   return handlePoWebhook(req, res, deps);
 });
@@ -2548,7 +2551,8 @@ app.post('/api/po-ops/sync-all', async (req, res) => {
     Promise.all([
       syncAllDraftOrders(token, process.env.SHOPIFY_STORE_URL),
       syncAllOrders(token, process.env.SHOPIFY_STORE_URL)
-    ]).catch(e => console.error('[SYNC-ALL]', e.message));
+    ]).then(([draftIds, orderIds]) => pruneOrphans([...draftIds, ...orderIds]))
+      .catch(e => console.error('[SYNC-ALL]', e.message));
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }

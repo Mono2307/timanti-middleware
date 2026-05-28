@@ -115,16 +115,28 @@ async function syncOrderToSheet(order, shopifyToken, shopifyStoreUrl) {
   console.log(`[SYNC] ${order.name} → ${tab} (${rows.length} rows)`);
 }
 
+async function removeDraftFromSheet(draftId) {
+  await postToPoQueue({ action: 'removeSource', sourceId: String(draftId) });
+  console.log(`[SYNC] removed draft ${draftId} from sheet`);
+}
+
+async function pruneOrphans(validSourceIds) {
+  await postToPoQueue({ action: 'pruneOrphans', validSourceIds });
+  console.log(`[SYNC] pruned orphans — ${validSourceIds.length} valid source IDs`);
+}
+
 async function syncAllDraftOrders(shopifyToken, shopifyStoreUrl) {
   console.log('[SYNC] starting draft order sync');
   let url   = `${shopifyStoreUrl}/admin/api/2024-01/draft_orders.json?limit=250&status=open`;
   let count = 0;
+  const syncedIds = [];
 
   while (url) {
     const res    = await axios.get(url, { headers: shopifyHeaders(shopifyToken), timeout: 30000 });
     const orders = res.data.draft_orders || [];
     for (const order of orders) {
       await syncDraftOrderToSheet(order, shopifyToken, shopifyStoreUrl);
+      syncedIds.push(String(order.id));
       count++;
     }
     const link = res.headers['link'] || '';
@@ -132,18 +144,21 @@ async function syncAllDraftOrders(shopifyToken, shopifyStoreUrl) {
   }
 
   console.log(`[SYNC] draft orders complete — ${count} processed`);
+  return syncedIds;
 }
 
 async function syncAllOrders(shopifyToken, shopifyStoreUrl) {
   console.log('[SYNC] starting order sync');
   let url   = `${shopifyStoreUrl}/admin/api/2024-01/orders.json?limit=250&status=open`;
   let count = 0;
+  const syncedIds = [];
 
   while (url) {
     const res    = await axios.get(url, { headers: shopifyHeaders(shopifyToken), timeout: 30000 });
     const orders = res.data.orders || [];
     for (const order of orders) {
       await syncOrderToSheet(order, shopifyToken, shopifyStoreUrl);
+      syncedIds.push(String(order.id));
       count++;
     }
     const link = res.headers['link'] || '';
@@ -151,6 +166,7 @@ async function syncAllOrders(shopifyToken, shopifyStoreUrl) {
   }
 
   console.log(`[SYNC] orders complete — ${count} processed`);
+  return syncedIds;
 }
 
-module.exports = { syncDraftOrderToSheet, syncOrderToSheet, syncAllDraftOrders, syncAllOrders };
+module.exports = { syncDraftOrderToSheet, syncOrderToSheet, syncAllDraftOrders, syncAllOrders, removeDraftFromSheet, pruneOrphans };
