@@ -13,7 +13,7 @@
 const SS = SpreadsheetApp.getActiveSpreadsheet();
 const MIDDLEWARE_URL = PropertiesService.getScriptProperties().getProperty('MIDDLEWARE_URL');
 
-const TAB = { MTO: 'MTO', INSTOCK: 'InStock', UNCLASSIFIED: 'Unclassified' };
+const TAB = { MTO: 'mto', INSTOCK: 'InStock', UNCLASSIFIED: 'unclassified' };
 
 // ── MTO tab columns (1-based, A=1) — 23 cols A–W ────────────────
 const C_MTO = {

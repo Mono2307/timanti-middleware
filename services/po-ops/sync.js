@@ -40,9 +40,9 @@ async function postToPoQueue(payload) {
 }
 
 function orderTypeToTab(orderType) {
-  if (orderType === 'mto')       return 'MTO';
+  if (orderType === 'mto')       return 'mto';
   if (orderType === 'in-stock')  return 'InStock';
-  return 'Unclassified';
+  return 'unclassified';
 }
 
 async function buildRows(sourceId, orderName, sourceType, customerName, lineItems, shopifyToken, shopifyStoreUrl, extra) {
