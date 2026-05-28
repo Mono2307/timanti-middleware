@@ -161,28 +161,32 @@ function upsertRows(tabName, rows) {
   Object.entries(incoming).forEach(([sid, currentIds]) => removeStaleRows(sheet, C, sid, currentIds));
 
   const lineItemIndex = buildIndex(sheet, C.LINE_ITEM_ID);
-  const orderNameIndex = buildIndex(sheet, C.ORDER_NAME);
+  const sourceIdIndex = buildIndex(sheet, C.SOURCE_ID);  // for draft→order dedup: source_draft_name is the numeric draft ID
   let inserted = 0, refreshed = 0;
 
   rows.forEach(row => {
     const lineItemId = String(row.line_item_id);
     let existRow = lineItemIndex[lineItemId];
 
-    // Dedup: order converted from a draft — find the existing draft row by its order name
+    // Dedup: order converted from a draft — source_draft_name is the numeric draft order ID (source_identifier),
+    // so look it up against SOURCE_ID (col A), not ORDER_NAME (col B which stores "#D83" not the numeric ID)
     if (!existRow && row.source_draft_name) {
-      existRow = orderNameIndex[String(row.source_draft_name)];
+      existRow = sourceIdIndex[String(row.source_draft_name)];
     }
 
     if (existRow) {
       const status = sheet.getRange(existRow, C.STATUS).getValue();
       if (status === 'pending') {
         writeRow(sheet, existRow, row, C, false);
+        // After converting draft→order, writeRow updates SOURCE_ID to the order's ID,
+        // so any remaining pending rows still holding the old draft source_id are now stale — delete them
+        if (row.source_draft_name) {
+          removeStaleRows(sheet, C, String(row.source_draft_name), new Set());
+        }
         refreshed++;
       } else {
-        // Staff has made decisions — only refresh sync timestamp and source_id
         sheet.getRange(existRow, C.SYNCED_AT).setValue(row.synced_at);
         if (row.source_draft_name) {
-          // Draft was converted to order — update the source_id to the order id
           sheet.getRange(existRow, C.SOURCE_ID).setValue(row.source_id);
         }
       }
@@ -416,13 +420,39 @@ function repriceTrigger() {
 }
 
 // =================================================================
-// One-time setup: install daily trigger at 8 PM IST (14:30 UTC)
+// Scheduled sync — called by daily trigger at 7 AM IST (01:30 UTC)
+// Catches any draft/order changes missed by webhooks
+// =================================================================
+
+function syncAllTrigger() {
+  const resp = UrlFetchApp.fetch(MIDDLEWARE_URL + '/api/po-ops/sync-all', {
+    method: 'post',
+    contentType: 'application/json',
+    payload: JSON.stringify({}),
+    muteHttpExceptions: true
+  });
+  const result = JSON.parse(resp.getContentText());
+  Logger.log('[SYNC-ALL] ' + JSON.stringify(result));
+}
+
+// =================================================================
+// One-time setup: install daily triggers
+//   7 AM IST  (01:30 UTC) — full sync (catch missed webhooks)
+//   8 PM IST  (14:30 UTC) — batch PO raise
+// Run this once from the Apps Script editor to install both triggers.
 // =================================================================
 
 function setupDailyTrigger() {
   ScriptApp.getProjectTriggers()
-    .filter(t => t.getHandlerFunction() === 'batchRaisePoDailyTrigger')
+    .filter(t => ['batchRaisePoDailyTrigger', 'syncAllTrigger'].includes(t.getHandlerFunction()))
     .forEach(t => ScriptApp.deleteTrigger(t));
+
+  ScriptApp.newTrigger('syncAllTrigger')
+    .timeBased()
+    .atHour(1)
+    .nearMinute(30)
+    .everyDays(1)
+    .create();
 
   ScriptApp.newTrigger('batchRaisePoDailyTrigger')
     .timeBased()
@@ -431,5 +461,5 @@ function setupDailyTrigger() {
     .everyDays(1)
     .create();
 
-  Logger.log('Daily trigger set: 8:00 PM IST');
+  Logger.log('Daily triggers set: sync at 7:00 AM IST, batch raise at 8:00 PM IST');
 }
