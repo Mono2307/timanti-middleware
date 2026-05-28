@@ -73,6 +73,10 @@ async function buildRows(sourceId, orderName, sourceType, customerName, lineItem
 }
 
 async function syncDraftOrderToSheet(draftOrder, shopifyToken, shopifyStoreUrl) {
+  // Skip completed drafts (converted to orders) — Shopify fires draft_orders/update
+  // with status=completed when a draft is converted; without this guard the webhook
+  // re-inserts stale rows that the orders/create handler just cleaned up.
+  if (draftOrder.status === 'completed') return;
   // Skip vendor PO draft orders created by the batch raise
   const tags = (draftOrder.tags || '').toLowerCase().split(',').map(t => t.trim());
   if (tags.some(t => t.startsWith('po-') || t === 'po-draft')) return;

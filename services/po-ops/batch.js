@@ -116,7 +116,7 @@ async function batchRaisePo({ po_type, rows, shopifyToken, shopifyStoreUrl, supa
     source_line_item_ids: rows.map(r => String(r.line_item_id))
   });
 
-  await sendBatchPoEmail({ draftOrder, po_type, batchDate, rows });
+  await sendBatchPoEmail({ draftOrder, po_type, batchDate, batchId, rows });
   await writeToPoTracker({ draftOrder, po_type, batchDate, rows });
 
   const raised_at = new Date().toISOString();
@@ -124,7 +124,7 @@ async function batchRaisePo({ po_type, rows, shopifyToken, shopifyStoreUrl, supa
   return { ok: true, batch_id: batchId, raised_at, draft_order_name: draftOrder.name };
 }
 
-async function sendBatchPoEmail({ draftOrder, po_type, batchDate, rows }) {
+async function sendBatchPoEmail({ draftOrder, po_type, batchDate, batchId, rows }) {
   const attrs     = Object.fromEntries((draftOrder.note_attributes || []).map(na => [na.name, na.value]));
   const itemsHtml = rows.map(r => `${r.product_title} × ${r.qty_to_raise} (${r.sku || '—'})`).join('<br>');
   const pdfUrl    = `https://timanti.in/apps/download-pdf/drafts/291a11815ae190ec88fb/${draftOrder.id * 8108}/${handleize(draftOrder.name)}.pdf`;
