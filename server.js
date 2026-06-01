@@ -4,7 +4,7 @@ const express = require('express');
 const cors    = require('cors');
 const axios   = require('axios');
 const { createClient } = require('@supabase/supabase-js');
-const { sendEmail, sendDepositEmail } = require('./emailService');
+const { sendEmail, sendDepositEmail, buildCreditNoteHtml } = require('./emailService');
 const { handlePoWebhook } = require('./services/po-ops/webhook');
 const { handlePoAction }  = require('./services/po-ops/action');
 const { syncDraftOrderToSheet, syncOrderToSheet, syncAllDraftOrders, syncAllOrders, removeDraftFromSheet, pruneOrphans } = require('./services/po-ops/sync');
@@ -2943,6 +2943,30 @@ app.get('/api/recon', async (req, res) => {
   } catch (err) {
     console.error('Recon error:', err);
     res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ─────────────────────────────────────────
+// POST /api/cn-email
+// Called by Apps Script after CN creation.
+// Sends credit note email via Resend using the shared emailService template.
+// ─────────────────────────────────────────
+app.post('/api/cn-email', async (req, res) => {
+  const { customerName, customerEmail, cnNumber, creditValue, validUntil, originalOrder } = req.body;
+  if (!customerEmail || !cnNumber) {
+    return res.status(400).json({ error: 'customerEmail and cnNumber are required' });
+  }
+  try {
+    await sendEmail({
+      to:      customerEmail,
+      subject: `Your Timanti Credit Note — Rs.${creditValue} | Code: ${cnNumber}`,
+      html:    buildCreditNoteHtml({ customerName, cnNumber, creditValue, validUntil, originalOrder })
+    });
+    console.log(`CN email sent → ${customerEmail} | ${cnNumber}`);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('CN email error:', err.message);
+    res.status(500).json({ error: err.message });
   }
 });
 
