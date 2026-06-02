@@ -12,7 +12,8 @@ const {
   buildRepairIntakeHtml,
   buildRepairAcknowledgementHtml,
   buildRepairFreeHtml,
-  buildRepairHqCompleteReadyHtml
+  buildRepairHqCompleteReadyHtml,
+  buildRepairStoreApprovedCustomerHtml
 } = require('../../emailService');
 
 const REPAIR_TEST_EMAIL = 'monodeep.dutta@timanti.in'; // revert after testing
@@ -31,6 +32,11 @@ function generateEstimateToken(draftId) {
 function generateCompleteToken(draftId) {
   return crypto.createHmac('sha256', process.env.SHOPIFY_WEBHOOK_SECRET)
     .update(`complete:${draftId}`).digest('hex').slice(0, 32);
+}
+
+function generateStoreApproveToken(draftId) {
+  return crypto.createHmac('sha256', process.env.SHOPIFY_WEBHOOK_SECRET)
+    .update(`store-approve:${draftId}`).digest('hex').slice(0, 32);
 }
 
 // Verify and update SEQUEL_TRACKING_BASE in Fly.io secrets if the URL format changes
@@ -195,8 +201,9 @@ async function handleRepairDraftUpdate(draft, getShopifyToken) {
     return;
   }
 
-  // ── Trigger 0b: free repair confirmed → customer email + HQ complete link ─
-  if (tags.includes('repair-free') && !tags.includes('repair-free-notified')) {
+  // ── Trigger 0b: free repair — repair-free (set by form) or free-repair (set by staff directly) ─
+  const hasFreeTag = tags.includes('repair-free') || tags.includes('free-repair');
+  if (hasFreeTag && !tags.includes('repair-free-notified')) {
     console.log(`Repair free trigger: ${draft.name}`);
     const token         = await getShopifyToken();
     const customerEmail = draft.email;
@@ -237,6 +244,48 @@ async function handleRepairDraftUpdate(draft, getShopifyToken) {
     return;
   }
 
+  // ── Trigger 0c: customer approved store payment ────────────────────────────
+  if (tags.includes('repair-store-approved') && !tags.includes('repair-store-hq-notified')) {
+    console.log(`Repair store-approve trigger: ${draft.name}`);
+    const token         = await getShopifyToken();
+    const customerEmail = draft.email;
+    const customerName  = draft.billing_address?.name || customerEmail;
+    const amount        = Math.round(parseFloat(draft.total_price)).toString();
+    const serverUrl     = process.env.SERVER_URL || 'https://timanti-middleware.fly.dev';
+    const completeToken = generateCompleteToken(draft.id);
+    const completeUrl   = `${serverUrl}/repairs/set-complete?d=${draft.id}&t=${completeToken}`;
+    const hqEmail       = process.env.HQ_EMAIL;
+
+    if (customerEmail) {
+      try {
+        await repairSendEmail({
+          to:      customerEmail,
+          subject: `Repair Confirmed — We'll Be in Touch (${draft.name})`,
+          html:    buildRepairStoreApprovedCustomerHtml({ customerName, draftRef: draft.name, amount })
+        });
+      } catch (err) {
+        console.error(`❌ Store-approve customer email failed for ${draft.name}:`, err.message);
+      }
+    }
+
+    if (hqEmail) {
+      try {
+        await repairSendEmail({
+          to:      hqEmail,
+          cc:      process.env.HQ_CC_EMAIL,
+          subject: `Store Payment Approved — ${draft.name} — ${customerName} — Rs.${amount}`,
+          html:    buildRepairHqCompleteReadyHtml({ customerName, draftRef: draft.name, amount, completeUrl })
+        });
+      } catch (err) {
+        console.error(`❌ Store-approve HQ email failed for ${draft.name}:`, err.message);
+      }
+    }
+
+    await updateDraftOrderTags(draft.id, [...tags, 'repair-store-hq-notified'], token);
+    console.log(`✅ Store payment approved: ${draft.name}`);
+    return;
+  }
+
   // ── Trigger 1: estimate ready ──────────────────────────────────────────────
   if (tags.includes('repair-estimate-ready') && !tags.includes('repair-estimate-sent')) {
     console.log(`Repair estimate trigger: ${draft.name}`);
@@ -262,6 +311,11 @@ async function handleRepairDraftUpdate(draft, getShopifyToken) {
       return;
     }
 
+    const serverUrl        = process.env.SERVER_URL || 'https://timanti-middleware.fly.dev';
+    const storeApproveToken = generateStoreApproveToken(draft.id);
+    const approveStoreUrl  = `${serverUrl}/repairs/approve-store?d=${draft.id}&t=${storeApproveToken}`;
+    const whatsappUrl      = `https://wa.me/917710938305?text=${encodeURIComponent(`Hi, I have a question about my repair (${draft.name})`)}`;
+
     try {
       await repairSendEmail({
         to:      customerEmail,
@@ -271,7 +325,9 @@ async function handleRepairDraftUpdate(draft, getShopifyToken) {
           draftRef:        draft.name,
           itemDescription: itemDesc,
           amount:          Math.round(amount).toString(),
-          paymentUrl:      shortUrl
+          paymentUrl:      shortUrl,
+          approveStoreUrl,
+          whatsappUrl
         })
       });
     } catch (err) {
@@ -295,28 +351,36 @@ async function handleRepairDraftUpdate(draft, getShopifyToken) {
     const customerEmail = draft.email;
     const customerName  = draft.billing_address?.name || customerEmail;
 
-    // Read tracking metafield written by set-complete form
-    let sequelId = null;
+    // Read metafields written by set-complete form
+    let sequelId    = null;
     let trackingUrl = null;
+    let storePickup = false;
     try {
       const { data: mfData } = await axios.get(
         `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draft.id}/metafields.json`,
         { headers: shopifyHeaders(token), timeout: 10000 }
       );
-      const mf = (mfData.metafields || []).find(m => m.namespace === 'timanti' && m.key === 'repair_tracking_id');
-      if (mf?.value) {
-        sequelId = mf.value;
-        trackingUrl = `${SEQUEL_TRACKING_BASE}${sequelId}`;
+      for (const mf of (mfData.metafields || [])) {
+        if (mf.namespace !== 'timanti') continue;
+        if (mf.key === 'repair_tracking_id' && mf.value) {
+          sequelId    = mf.value;
+          trackingUrl = `${SEQUEL_TRACKING_BASE}${sequelId}`;
+        }
+        if (mf.key === 'repair_store_pickup' && mf.value === 'true') storePickup = true;
       }
     } catch (err) {
       console.warn(`⚠️  Could not fetch metafields for ${draft.name}:`, err.message);
     }
 
+    const completionSubject = storePickup
+      ? `Your Repair is Ready — Please Collect at Our Store (${draft.name})`
+      : `Your Repair is Ready — ${draft.name}`;
+
     try {
       await repairSendEmail({
         to:      customerEmail,
-        subject: `Your Repair is Ready — ${draft.name}`,
-        html:    buildRepairCompleteHtml({ customerName, draftRef: draft.name, sequelId, trackingUrl })
+        subject: completionSubject,
+        html:    buildRepairCompleteHtml({ customerName, draftRef: draft.name, sequelId, trackingUrl, storePickup })
       });
     } catch (err) {
       console.error(`❌ Resend failed (complete) for ${draft.name}:`, err.message);
@@ -499,7 +563,6 @@ function registerRepairRoutes(app, getShopifyToken) {
         { draft_order: { id: Number(draftId), line_items: lineItems, tags: newTags.join(', ') } },
         { headers: shopifyHeaders(shopifyToken), timeout: 10000 }
       );
-
       console.log(`✅ Estimate set for ${draft.name}: ₹${parsedAmount} — repair-estimate-ready added`);
 
       res.send(`<!DOCTYPE html>
@@ -589,11 +652,41 @@ function registerRepairRoutes(app, getShopifyToken) {
     <form method="POST" action="/repairs/set-complete">
       <input type="hidden" name="draftId" value="${draftId}">
       <input type="hidden" name="token" value="${hmacToken}">
-      <label for="sequelId">Sequel Shipment ID <span class="opt-label">(optional)</span></label>
-      <input id="sequelId" name="sequelId" type="text" placeholder="e.g. SQ123456789IN">
-      <p class="hint">Leave blank if the customer is collecting in-store.</p>
+      <div style="margin-bottom:16px; padding:12px 16px; background:#f0f7ff; border-radius:6px; border:1px solid #b8d4f5;">
+        <label style="display:flex; align-items:center; gap:10px; cursor:pointer; font-size:13px; font-weight:500; margin:0;">
+          <input type="checkbox" name="storePickup" value="true" id="storePickup" onchange="togglePickup(this)" style="width:16px; height:16px; cursor:pointer;">
+          Customer will collect in-store (no shipping required)
+        </label>
+      </div>
+      <div id="shippingSection">
+        <label for="sequelId">Sequel Shipment ID <span class="opt-label">(optional)</span></label>
+        <input id="sequelId" name="sequelId" type="text" placeholder="e.g. SQ123456789IN">
+        <p class="hint">Leave blank if no tracking needed.</p>
+      </div>
+      <hr style="border:none; border-top:1px solid #eee; margin:20px 0;">
+      <label>Item Weights <span class="opt-label">(optional)</span></label>
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:4px;">
+        <div>
+          <label for="postNetWt" style="font-size:12px; color:#666; margin-bottom:4px;">Net Weight (g)</label>
+          <input id="postNetWt" name="postNetWt" type="text" inputmode="decimal" placeholder="e.g. 2.10">
+        </div>
+        <div>
+          <label for="postGrossWt" style="font-size:12px; color:#666; margin-bottom:4px;">Gross Weight (g)</label>
+          <input id="postGrossWt" name="postGrossWt" type="text" inputmode="decimal" placeholder="e.g. 2.45">
+        </div>
+      </div>
+      <p class="hint">Appears on the repair note — can also be set directly on the draft order in Shopify admin.</p>
       <button type="submit">Notify Customer &amp; Mark Complete</button>
     </form>
+    <script>
+    function togglePickup(cb) {
+      var sec = document.getElementById('shippingSection');
+      var inp = document.getElementById('sequelId');
+      sec.style.opacity = cb.checked ? '0.35' : '1';
+      inp.disabled = cb.checked;
+      if (cb.checked) inp.value = '';
+    }
+    </script>
   </div>
 </body>
 </html>`);
@@ -605,10 +698,11 @@ function registerRepairRoutes(app, getShopifyToken) {
 
   app.post('/repairs/set-complete', async (req, res) => {
     const body = typeof req.body === 'string' ? Object.fromEntries(new URLSearchParams(req.body)) : (req.body || {});
-    const { draftId, token: hmacToken, sequelId } = body;
+    const { draftId, token: hmacToken, sequelId, storePickup, postNetWt, postGrossWt } = body;
     if (!draftId || hmacToken !== generateCompleteToken(draftId)) {
       return res.status(400).send('<h2 style="font-family:sans-serif;padding:40px;">Invalid or expired link.</h2>');
     }
+    const isStorePickup = storePickup === 'true';
     try {
       const shopifyToken = await getShopifyToken();
 
@@ -619,23 +713,42 @@ function registerRepairRoutes(app, getShopifyToken) {
       const draft       = fetchData.draft_order;
       const currentTags = (draft.tags || '').split(',').map(t => t.trim()).filter(Boolean);
 
-      // Write tracking ID metafield before adding repair-complete tag so webhook sees it
-      if (sequelId && sequelId.trim()) {
-        await writeDraftOrderMetafields(draft.id, { repair_tracking_id: sequelId.trim() }, shopifyToken);
+      // Write process metafields (tracking, store pickup) before adding repair-complete tag so webhook sees them
+      const completeMf = {};
+      if (!isStorePickup && sequelId && sequelId.trim()) completeMf.repair_tracking_id  = sequelId.trim();
+      if (isStorePickup)                                  completeMf.repair_store_pickup = 'true';
+      if (Object.keys(completeMf).length > 0) {
+        await writeDraftOrderMetafields(draft.id, completeMf, shopifyToken);
       }
 
-      const newTags = currentTags.filter(t => t !== 'repair-complete').concat(['repair-complete']);
+      // Build draft update payload — weights go into line item properties (_net_wt, _gross_wt)
+      const newTags    = currentTags.filter(t => t !== 'repair-complete').concat(['repair-complete']);
+      const draftPayload = { id: Number(draftId), tags: newTags.join(', ') };
+      const firstItem  = draft.line_items?.[0];
+      if (firstItem && (postNetWt?.trim() || postGrossWt?.trim())) {
+        const existingProps = (firstItem.properties || [])
+          .filter(p => p.name !== '_net_wt' && p.name !== '_gross_wt');
+        if (postNetWt?.trim())   existingProps.push({ name: '_net_wt',   value: postNetWt.trim() });
+        if (postGrossWt?.trim()) existingProps.push({ name: '_gross_wt', value: postGrossWt.trim() });
+        draftPayload.line_items = [
+          { id: firstItem.id, title: firstItem.title, quantity: firstItem.quantity, price: firstItem.price, properties: existingProps },
+          ...draft.line_items.slice(1).map(li => ({ id: li.id }))
+        ];
+      }
+
       await axios.put(
         `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftId}.json`,
-        { draft_order: { id: Number(draftId), tags: newTags.join(', ') } },
+        { draft_order: draftPayload },
         { headers: shopifyHeaders(shopifyToken), timeout: 10000 }
       );
 
-      console.log(`✅ Repair complete marked: ${draft.name}${sequelId ? ` Sequel: ${sequelId.trim()}` : ''}`);
+      console.log(`✅ Repair complete marked: ${draft.name}${isStorePickup ? ' [store pickup]' : sequelId ? ` Sequel: ${sequelId.trim()}` : ''}`);
 
-      const trackingLine = sequelId && sequelId.trim()
-        ? `<p>Sequel shipment ID <strong>${sequelId.trim()}</strong> has been saved — the customer will receive a tracking link in their email.</p>`
-        : `<p>The customer will receive a "repair is ready" email for <strong>${draft.name}</strong>.</p>`;
+      const trackingLine = isStorePickup
+        ? `<p>The customer will receive a "please collect at store" email for <strong>${draft.name}</strong>.</p>`
+        : (sequelId && sequelId.trim()
+          ? `<p>Sequel shipment ID <strong>${sequelId.trim()}</strong> has been saved — the customer will receive a tracking link.</p>`
+          : `<p>The customer will receive a "repair is ready" email for <strong>${draft.name}</strong>.</p>`);
 
       res.send(`<!DOCTYPE html>
 <html lang="en">
@@ -661,6 +774,135 @@ function registerRepairRoutes(app, getShopifyToken) {
 </html>`);
     } catch (err) {
       console.error('set-complete POST error:', err.response?.data || err.message);
+      res.status(500).send('<h2 style="font-family:sans-serif;padding:40px;">Server error — try again.</h2>');
+    }
+  });
+
+  // ── Approve and pay at store ──────────────────────────────────────────────
+  app.get('/repairs/approve-store', async (req, res) => {
+    const { d: draftId, t: hmacToken } = req.query;
+    if (!draftId || hmacToken !== generateStoreApproveToken(draftId)) {
+      return res.status(400).send('<h2 style="font-family:sans-serif;padding:40px;">Invalid or expired link.</h2>');
+    }
+    try {
+      const shopifyToken = await getShopifyToken();
+      const { data } = await axios.get(
+        `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftId}.json`,
+        { headers: shopifyHeaders(shopifyToken), timeout: 10000 }
+      );
+      const d = data.draft_order;
+      const existingTags = (d.tags || '').split(',').map(t => t.trim()).filter(Boolean);
+      const amount = Math.round(parseFloat(d.total_price)).toLocaleString('en-IN');
+
+      if (existingTags.includes('repair-store-approved')) {
+        return res.send(`<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>Already Confirmed</title>
+<style>body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f4f4f4;margin:0;padding:40px 20px;}
+.card{background:#fff;border-radius:8px;max-width:420px;margin:0 auto;padding:40px 32px;text-align:center;box-shadow:0 2px 8px rgba(0,0,0,0.08);}
+h2{margin:0 0 12px;font-size:20px;}p{color:#555;font-size:14px;line-height:1.6;}</style>
+</head><body><div class="card">
+  <div style="font-size:48px;margin-bottom:16px;">✅</div>
+  <h2>Already confirmed</h2>
+  <p>Your repair <strong>${d.name}</strong> has already been approved. Our team is on it.</p>
+  <p style="margin-top:16px;font-size:12px;color:#999;">You can close this tab.</p>
+</div></body></html>`);
+      }
+
+      res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width">
+  <title>Approve Repair — ${d.name}</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f4f4f4; margin: 0; padding: 40px 20px; }
+    .card { background: #fff; border-radius: 8px; max-width: 480px; margin: 0 auto; padding: 32px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+    .logo { text-align: center; margin-bottom: 24px; }
+    .logo img { width: 120px; }
+    h2 { font-size: 20px; margin: 0 0 8px 0; }
+    p { color: #555; font-size: 14px; line-height: 1.6; margin: 0 0 16px 0; }
+    .amount-box { background: #f9f9f9; border: 1px solid #e0e0e0; border-radius: 8px; padding: 20px; text-align: center; margin: 20px 0; }
+    .amount-box .label { font-size: 12px; color: #999; margin-bottom: 4px; }
+    .amount-box .amount { font-size: 28px; font-weight: 600; color: #000; }
+    .note { background: #f0f7ff; border-left: 4px solid #007bff; padding: 12px 16px; font-size: 13px; color: #444; margin: 16px 0; border-radius: 0 6px 6px 0; }
+    button { width: 100%; background: #000; color: #fff; border: none; border-radius: 6px; padding: 14px; font-size: 15px; font-weight: 500; cursor: pointer; }
+    button:hover { background: #222; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo"><img src="https://cdn.shopify.com/s/files/1/0775/8322/0993/files/Timanti_Logo_Black.jpg?v=1766506323" alt="Timanti"></div>
+    <h2>Approve Repair — Pay at Store</h2>
+    <p>By confirming below, you agree to proceed with the repair for <strong>${d.name}</strong> and settle payment when you collect your jewellery.</p>
+    <div class="amount-box">
+      <div class="label">Amount due at collection</div>
+      <div class="amount">&#x20B9;${amount}</div>
+    </div>
+    <div class="note">Our team will begin the repair immediately. You'll receive a notification when your piece is ready.</div>
+    <form method="POST" action="/repairs/approve-store">
+      <input type="hidden" name="draftId" value="${draftId}">
+      <input type="hidden" name="token" value="${hmacToken}">
+      <button type="submit">Confirm — I'll Pay at the Store</button>
+    </form>
+  </div>
+</body>
+</html>`);
+    } catch (err) {
+      console.error('approve-store GET error:', err.response?.data || err.message);
+      res.status(500).send('<h2 style="font-family:sans-serif;padding:40px;">Server error — try again.</h2>');
+    }
+  });
+
+  app.post('/repairs/approve-store', async (req, res) => {
+    const body = typeof req.body === 'string' ? Object.fromEntries(new URLSearchParams(req.body)) : (req.body || {});
+    const { draftId, token: hmacToken } = body;
+    if (!draftId || hmacToken !== generateStoreApproveToken(draftId)) {
+      return res.status(400).send('<h2 style="font-family:sans-serif;padding:40px;">Invalid or expired link.</h2>');
+    }
+    try {
+      const shopifyToken = await getShopifyToken();
+      const { data: fetchData } = await axios.get(
+        `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftId}.json`,
+        { headers: shopifyHeaders(shopifyToken), timeout: 10000 }
+      );
+      const draft       = fetchData.draft_order;
+      const currentTags = (draft.tags || '').split(',').map(t => t.trim()).filter(Boolean);
+
+      if (!currentTags.includes('repair-store-approved')) {
+        await axios.put(
+          `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftId}.json`,
+          { draft_order: { id: Number(draftId), tags: [...currentTags, 'repair-store-approved'].join(', ') } },
+          { headers: shopifyHeaders(shopifyToken), timeout: 10000 }
+        );
+      }
+
+      console.log(`✅ Repair store-approval confirmed by customer: ${draft.name}`);
+
+      res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Approved</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f4f4f4; margin: 0; padding: 40px 20px; }
+    .card { background: #fff; border-radius: 8px; max-width: 420px; margin: 0 auto; padding: 40px 32px; text-align: center; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+    .check { font-size: 48px; margin-bottom: 16px; }
+    h2 { margin: 0 0 12px 0; font-size: 20px; }
+    p { color: #555; font-size: 14px; line-height: 1.6; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="check">✅</div>
+    <h2>Repair confirmed</h2>
+    <p>We've noted that you'll pay at the store. Our team will begin the repair on <strong>${draft.name}</strong> and you'll receive an email when it's ready to collect.</p>
+    <p style="margin-top:16px; font-size:12px; color:#999;">You can close this tab.</p>
+  </div>
+</body>
+</html>`);
+    } catch (err) {
+      console.error('approve-store POST error:', err.response?.data || err.message);
       res.status(500).send('<h2 style="font-family:sans-serif;padding:40px;">Server error — try again.</h2>');
     }
   });
