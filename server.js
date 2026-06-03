@@ -3,7 +3,6 @@ const path    = require('path');
 const express = require('express');
 const cors    = require('cors');
 const axios   = require('axios');
-axios.defaults.headers.common['Accept'] = 'application/json';
 const { createClient } = require('@supabase/supabase-js');
 const { sendEmail, sendDepositEmail, buildCreditNoteHtml } = require('./emailService');
 const { handlePoWebhook } = require('./services/po-ops/webhook');
@@ -599,7 +598,7 @@ app.get('/api/draft-orders', async (req, res) => {
 app.get('/api/draft-orders-report', async (req, res) => {
   try {
     const token   = await getShopifyToken();
-    const hdrs    = { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' };
+    const hdrs    = { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json', 'Accept': 'application/json' };
 
     const filterPaymentStatus = (req.query.paymentStatus || '').toLowerCase();
     const filterPaymentMode   = (req.query.paymentMode   || '').toLowerCase();
