@@ -639,8 +639,13 @@ function registerRepairRoutes(app, getShopifyToken) {
       const currentTags = (draft.tags || '').split(',').map(t => t.trim()).filter(Boolean);
 
       const firstItem = draft.line_items?.[0];
+      let baseProps = firstItem ? (firstItem.properties || []) : [];
+      if (skuId && skuId.trim()) {
+        baseProps = baseProps.filter(p => p.name !== '_sku_id');
+        baseProps.push({ name: '_sku_id', value: skuId.trim() });
+      }
       const lineItems = firstItem
-        ? [{ id: firstItem.id, title: firstItem.title, quantity: firstItem.quantity, price: parsedAmount.toFixed(2), properties: firstItem.properties || [] },
+        ? [{ id: firstItem.id, title: firstItem.title, quantity: firstItem.quantity, price: parsedAmount.toFixed(2), properties: baseProps },
            ...draft.line_items.slice(1).map(li => ({ id: li.id }))]
         : draft.line_items;
 
@@ -652,7 +657,6 @@ function registerRepairRoutes(app, getShopifyToken) {
           { draft_order: { id: Number(draftId), line_items: lineItems, tags: newTags.join(', ') } },
           { headers: shopifyHeaders(shopifyToken), timeout: 10000 }
         );
-        if (skuId && skuId.trim()) await writeDraftOrderMetafields(draft.id, { sku_id: skuId.trim() }, shopifyToken);
         console.log(`✅ Free repair marked: ${draft.name} — repair-free added`);
 
         return res.send(`<!DOCTYPE html>
@@ -686,7 +690,6 @@ function registerRepairRoutes(app, getShopifyToken) {
         { draft_order: { id: Number(draftId), line_items: lineItems, tags: newTags.join(', ') } },
         { headers: shopifyHeaders(shopifyToken), timeout: 10000 }
       );
-      if (skuId && skuId.trim()) await writeDraftOrderMetafields(draft.id, { sku_id: skuId.trim() }, shopifyToken);
       console.log(`✅ Estimate set for ${draft.name}: ₹${parsedAmount} — repair-estimate-ready added`);
 
       res.send(`<!DOCTYPE html>
@@ -853,12 +856,12 @@ function registerRepairRoutes(app, getShopifyToken) {
         await writeDraftOrderMetafields(draft.id, completeMf, shopifyToken);
       }
 
-      // Post-repair specs → custom namespace (pre-repair specs stay in line item properties untouched)
+      // Post-repair specs → existing custom.* metafield definitions on draft order
       const postSpecs = {};
-      if (postGrossWt?.trim()) postSpecs.gross_wt     = postGrossWt.trim();
-      if (postNetWt?.trim())   postSpecs.net_wt       = postNetWt.trim();
-      if (postDiaCts?.trim())  postSpecs.diamond_cts  = postDiaCts.trim();
-      if (postGemCts?.trim())  postSpecs.gemstone_cts = postGemCts.trim();
+      if (postGrossWt?.trim()) postSpecs.gross_weight_g     = postGrossWt.trim();
+      if (postNetWt?.trim())   postSpecs.net_metal_weight_g = postNetWt.trim();
+      if (postDiaCts?.trim())  postSpecs.totaldiamondweight = postDiaCts.trim();
+      if (postGemCts?.trim())  postSpecs.gemstone_weight    = postGemCts.trim();
       if (Object.keys(postSpecs).length > 0) {
         await writeDraftOrderMetafields(draft.id, postSpecs, shopifyToken, 'custom');
       }

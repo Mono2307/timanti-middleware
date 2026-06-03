@@ -8,10 +8,10 @@
   order.metafields.custom.repair_order_reference   → Original order name (e.g. #1051) — staff enter this
   order.metafields.custom.original_invoice_reference → Original invoice ref (e.g. AURA/KA/1051)
   order.metafields.custom.metal                    → Metal/karat override (e.g. "14K / YG")
-  order.metafields.custom.gross_wt                 → Post-repair gross weight
-  order.metafields.custom.net_wt                   → Post-repair net weight
-  order.metafields.custom.diamond_cts              → Post-repair diamond cts
-  order.metafields.custom.diamond_pcs              → Post-repair diamond pcs
+  order.metafields.custom.gross_weight_g            → Post-repair gross weight
+  order.metafields.custom.net_metal_weight_g       → Post-repair net weight
+  order.metafields.custom.totaldiamondweight       → Post-repair diamond cts
+  order.metafields.custom.gemstone_weight          → Post-repair gemstone cts
   order.metafields.timanti.sku_id                  → SKU / Design ID (from estimate form)
   order.metafields.timanti.repair_intake_at        → Date received (ISO)
   order.metafields.timanti.repair_completed_at     → Date completed (ISO)
@@ -67,13 +67,14 @@
   {% if p.first == "_diamond_cts"   %}{% assign recv_dia_cts    = p.last %}{% endif %}
   {% if p.first == "_diamond_pcs"   %}{% assign recv_dia_pcs    = p.last %}{% endif %}
   {% if p.first == "_gemstone_cts"  %}{% assign recv_gem_cts    = p.last %}{% endif %}
+  {% if p.first == "_sku_id"        %}{% assign sku_display     = p.last %}{% endif %}
 {% endfor %}
 
-{% comment %}── Post-repair specs from order metafields ──{% endcomment %}
-{% assign post_gross_wt = order.metafields.custom.gross_wt %}
-{% assign post_net_wt   = order.metafields.custom.net_wt %}
-{% assign post_dia_cts  = order.metafields.custom.diamond_cts %}
-{% assign post_dia_pcs  = order.metafields.custom.diamond_pcs %}
+{% comment %}── Post-repair specs from existing custom.* metafield definitions ──{% endcomment %}
+{% assign post_gross_wt = order.metafields.custom.gross_weight_g %}
+{% assign post_net_wt   = order.metafields.custom.net_metal_weight_g %}
+{% assign post_dia_cts  = order.metafields.custom.totaldiamondweight %}
+{% assign post_gem_cts  = order.metafields.custom.gemstone_weight %}
 
 {% comment %}── Metal: custom metafield override → variant_title from original order ──{% endcomment %}
 {% assign metal_str = order.metafields.custom.metal %}
@@ -84,7 +85,6 @@
 {% if note_number == blank %}{% assign note_number = order.name %}{% endif %}
 {% assign orig_order_ref  = order.metafields.custom.repair_order_reference %}
 {% assign orig_inv_ref    = order.metafields.custom.original_invoice_reference %}
-{% assign sku_display     = order.metafields.timanti.sku_id %}
 {% if sku_display == blank %}{% assign sku_display = recv_sku %}{% endif %}
 
 {% comment %}── Repair cost ──{% endcomment %}
@@ -303,8 +303,8 @@
         <td class="text-center">{% if post_gross_wt != blank %}{{ post_gross_wt }}{% else %}–{% endif %}</td>
         <td class="text-center">{% if post_net_wt   != blank %}{{ post_net_wt   }}{% else %}–{% endif %}</td>
         <td class="text-center">{% if post_dia_cts  != blank %}{{ post_dia_cts  }}{% else %}–{% endif %}</td>
-        <td class="text-center">{% if post_dia_pcs  != blank %}{{ post_dia_pcs  }}{% else %}–{% endif %}</td>
         <td class="text-center">–</td>
+        <td class="text-center">{% if post_gem_cts  != blank %}{{ post_gem_cts  }}{% else %}–{% endif %}</td>
         <td class="text-center">{% if metal_str != blank %}{{ metal_str }}{% else %}–{% endif %}</td>
         <td class="text-right">–</td>
         <td class="text-right">–</td>
