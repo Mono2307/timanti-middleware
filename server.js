@@ -3,6 +3,7 @@ const path    = require('path');
 const express = require('express');
 const cors    = require('cors');
 const axios   = require('axios');
+axios.defaults.headers.common['Accept'] = 'application/json';
 const { createClient } = require('@supabase/supabase-js');
 const { sendEmail, sendDepositEmail, buildCreditNoteHtml } = require('./emailService');
 const { handlePoWebhook } = require('./services/po-ops/webhook');
