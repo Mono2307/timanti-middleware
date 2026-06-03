@@ -296,7 +296,7 @@ function buildRepairEstimateHtml({ customerName, draftRef, itemDescription, amou
 
       <table width="100%" cellpadding="0" cellspacing="0" style="padding:20px 30px 6px 30px;">
         <tr><td style="text-align:center;">
-          <p style="font-size:13px; color:#666666; margin-bottom:14px;">To approve and pay online now, click below. This link expires in <strong>7 days</strong>.</p>
+          <p style="font-size:13px; color:#666666; margin-bottom:14px;">To approve and pay online now, click below. This link expires in <strong>30 days</strong>.</p>
           <table cellpadding="0" cellspacing="0" style="margin:0 auto;">
             <tr><td style="background:#000000; border-radius:4px; text-align:center;">
               <a href="${paymentUrl}" target="_blank" style="color:#ffffff; text-decoration:none; font-weight:500; display:block; padding:14px 32px; font-size:15px;">Approve &amp; Pay Rs.${amount} Now</a>
@@ -338,7 +338,7 @@ function buildRepairEstimateHtml({ customerName, draftRef, itemDescription, amou
           <h3 style="color:#000000; margin-bottom:12px; font-size:16px;">Need Help?</h3>
           <table cellpadding="0" cellspacing="0" style="margin:0 auto;">
             <tr>
-              <td style="padding:0 20px; font-size:13px;"><strong>Phone/WhatsApp</strong><br><a href="tel:+917710938305" style="color:#000000;">+91-7710938305</a></td>
+              <td style="padding:0 20px; font-size:13px;"><strong>Phone/WhatsApp</strong><br><a href="tel:+917710968305" style="color:#000000;">+91-7710968305</a></td>
               <td style="padding:0 20px; font-size:13px;"><strong>Email</strong><br><a href="mailto:hello@timanti.in" style="color:#000000;">hello@timanti.in</a></td>
             </tr>
           </table>
@@ -347,7 +347,7 @@ function buildRepairEstimateHtml({ customerName, draftRef, itemDescription, amou
 
       <table width="100%" cellpadding="0" cellspacing="0" style="border-top:1px solid #eeeeee; padding:20px 30px;">
         <tr><td style="text-align:center; font-size:12px; color:#666666;">
-          <p>Mon–Sat, 10AM–6PM &nbsp;|&nbsp; <a href="mailto:hello@timanti.in" style="color:#fc7d27;">hello@timanti.in</a></p>
+          <p>Mon–Sun, 10AM–9PM &nbsp;|&nbsp; <a href="mailto:hello@timanti.in" style="color:#fc7d27;">hello@timanti.in</a></p>
         </td></tr>
       </table>
 
@@ -430,7 +430,7 @@ function buildRepairPaymentConfirmedHtml({ customerName, draftRef, amount, trans
 
       <table width="100%" cellpadding="0" cellspacing="0" style="border-top:1px solid #eeeeee; padding:20px 30px;">
         <tr><td style="text-align:center; font-size:12px; color:#666666;">
-          <p>Questions? <a href="mailto:hello@timanti.in" style="color:#fc7d27;">hello@timanti.in</a> | <a href="tel:+917710938305" style="color:#fc7d27;">+91-7710938305</a></p>
+          <p>Questions? <a href="mailto:hello@timanti.in" style="color:#fc7d27;">hello@timanti.in</a> | <a href="tel:+917710968305" style="color:#fc7d27;">+91-7710968305</a></p>
         </td></tr>
       </table>
 
@@ -440,9 +440,17 @@ function buildRepairPaymentConfirmedHtml({ customerName, draftRef, amount, trans
 </html>`;
 }
 
-function buildRepairCompleteHtml({ customerName, draftRef, sequelId, trackingUrl, storePickup }) {
+function buildRepairCompleteHtml({ customerName, draftRef, sequelId, trackingUrl, storePickup, pickupPayContext, pickupAmount }) {
   let contentSection;
   if (storePickup) {
+    let paymentLine = '';
+    if (pickupPayContext === 'paid') {
+      paymentLine = `<p style="font-size:13px; color:#006630; font-weight:500; margin:10px 0 0 0;">All charges have been settled — nothing to pay at collection.</p>`;
+    } else if (pickupPayContext === 'pay_at_store') {
+      paymentLine = `<p style="font-size:13px; color:#444444; margin:10px 0 0 0;">Please bring <strong>Rs.${pickupAmount}</strong> to settle at collection.</p>`;
+    } else if (pickupPayContext === 'free') {
+      paymentLine = `<p style="font-size:13px; color:#006630; font-weight:500; margin:10px 0 0 0;">This is a complimentary repair — no payment required.</p>`;
+    }
     contentSection = `
       <table width="100%" cellpadding="0" cellspacing="0" style="padding:10px 30px 20px 30px;">
         <tr><td>
@@ -450,8 +458,9 @@ function buildRepairCompleteHtml({ customerName, draftRef, sequelId, trackingUrl
             <tr><td style="padding:24px; text-align:center;">
               <h4 style="color:#000000; margin-bottom:10px; font-size:16px;">Please Collect at Our Store</h4>
               <p style="font-size:13px; color:#666666; margin:0 0 8px 0;">Your repaired jewellery is ready and waiting for you at our HSR Layout store.</p>
-              <p style="font-size:12px; color:#999999; margin:0 0 12px 0;">17th Cross, 19th Main Rd, HSR Layout Sec 2, Bengaluru – 560102</p>
-              <p style="font-size:13px; color:#444444; margin:0;">Please quote <strong>${draftRef}</strong> when you arrive. &nbsp;Mon–Sat, 10AM–6PM.</p>
+              <p style="font-size:12px; color:#999999; margin:0 0 6px 0;">17th Cross, 19th Main Rd, HSR Layout Sec 2, Bengaluru – 560102</p>
+              <p style="font-size:13px; color:#444444; margin:0;">Please quote <strong>${draftRef}</strong> when you arrive. &nbsp;Mon–Sun, 10AM–9PM.</p>
+              ${paymentLine}
             </td></tr>
           </table>
         </td></tr>
@@ -480,7 +489,7 @@ function buildRepairCompleteHtml({ customerName, draftRef, sequelId, trackingUrl
         <tr><td style="background:#F6F6F6; border-left:4px solid #fc7d27; padding:16px 20px; text-align:center;">
           <h4 style="color:#000000; margin-bottom:8px; font-size:14px;">Next steps</h4>
           <p style="font-size:13px; color:#444444; margin:4px 0;">Our team will be in touch shortly to arrange return delivery or in-store pickup.</p>
-          <p style="font-size:13px; color:#444444; margin:8px 0 0 0;">If you haven't heard from us in 24 hours, please call <strong>+91-7710938305</strong>.</p>
+          <p style="font-size:13px; color:#444444; margin:8px 0 0 0;">If you haven't heard from us in 24 hours, please call <strong>+91-7710968305</strong>.</p>
         </td></tr>
       </table>`;
   }
@@ -523,7 +532,7 @@ function buildRepairCompleteHtml({ customerName, draftRef, sequelId, trackingUrl
 
       <table width="100%" cellpadding="0" cellspacing="0" style="border-top:1px solid #eeeeee; padding:20px 30px;">
         <tr><td style="text-align:center; font-size:12px; color:#666666;">
-          <p>Questions? <a href="mailto:hello@timanti.in" style="color:#fc7d27;">hello@timanti.in</a> | <a href="tel:+917710938305" style="color:#fc7d27;">+91-7710938305</a></p>
+          <p>Questions? <a href="mailto:hello@timanti.in" style="color:#fc7d27;">hello@timanti.in</a> | <a href="tel:+917710968305" style="color:#fc7d27;">+91-7710968305</a></p>
         </td></tr>
       </table>
 
@@ -607,7 +616,7 @@ function buildCreditNoteHtml({ customerName, cnNumber, creditValue, validUntil, 
 
       <table width="100%" cellpadding="0" cellspacing="0" style="border-top:1px solid #eeeeee; padding:20px 30px;">
         <tr><td style="text-align:center; font-size:12px; color:#666666;">
-          <p>Questions? <a href="mailto:hello@timanti.in" style="color:#fc7d27;">hello@timanti.in</a> | <a href="tel:+917710938305" style="color:#fc7d27;">+91-7710938305</a></p>
+          <p>Questions? <a href="mailto:hello@timanti.in" style="color:#fc7d27;">hello@timanti.in</a> | <a href="tel:+917710968305" style="color:#fc7d27;">+91-7710968305</a></p>
         </td></tr>
       </table>
 
@@ -749,7 +758,7 @@ function buildRepairAcknowledgementHtml({ customerName, draftRef, itemDesc }) {
           <h3 style="color:#000000; margin-bottom:12px; font-size:16px;">Need Help?</h3>
           <table cellpadding="0" cellspacing="0" style="margin:0 auto;">
             <tr>
-              <td style="padding:0 20px; font-size:13px;"><strong>Phone/WhatsApp</strong><br><a href="tel:+917710938305" style="color:#000000;">+91-7710938305</a></td>
+              <td style="padding:0 20px; font-size:13px;"><strong>Phone/WhatsApp</strong><br><a href="tel:+917710968305" style="color:#000000;">+91-7710968305</a></td>
               <td style="padding:0 20px; font-size:13px;"><strong>Email</strong><br><a href="mailto:hello@timanti.in" style="color:#000000;">hello@timanti.in</a></td>
             </tr>
           </table>
@@ -758,7 +767,7 @@ function buildRepairAcknowledgementHtml({ customerName, draftRef, itemDesc }) {
 
       <table width="100%" cellpadding="0" cellspacing="0" style="border-top:1px solid #eeeeee; padding:20px 30px;">
         <tr><td style="text-align:center; font-size:12px; color:#666666;">
-          <p>Mon–Sat, 10AM–6PM &nbsp;|&nbsp; <a href="mailto:hello@timanti.in" style="color:#fc7d27;">hello@timanti.in</a></p>
+          <p>Mon–Sun, 10AM–9PM &nbsp;|&nbsp; <a href="mailto:hello@timanti.in" style="color:#fc7d27;">hello@timanti.in</a></p>
         </td></tr>
       </table>
 
@@ -816,7 +825,7 @@ function buildRepairFreeHtml({ customerName, draftRef, itemDesc }) {
           <h3 style="color:#000000; margin-bottom:12px; font-size:16px;">Questions?</h3>
           <table cellpadding="0" cellspacing="0" style="margin:0 auto;">
             <tr>
-              <td style="padding:0 20px; font-size:13px;"><strong>Phone/WhatsApp</strong><br><a href="tel:+917710938305" style="color:#000000;">+91-7710938305</a></td>
+              <td style="padding:0 20px; font-size:13px;"><strong>Phone/WhatsApp</strong><br><a href="tel:+917710968305" style="color:#000000;">+91-7710968305</a></td>
               <td style="padding:0 20px; font-size:13px;"><strong>Email</strong><br><a href="mailto:hello@timanti.in" style="color:#000000;">hello@timanti.in</a></td>
             </tr>
           </table>
@@ -825,7 +834,7 @@ function buildRepairFreeHtml({ customerName, draftRef, itemDesc }) {
 
       <table width="100%" cellpadding="0" cellspacing="0" style="border-top:1px solid #eeeeee; padding:20px 30px;">
         <tr><td style="text-align:center; font-size:12px; color:#666666;">
-          <p>Mon–Sat, 10AM–6PM &nbsp;|&nbsp; <a href="mailto:hello@timanti.in" style="color:#fc7d27;">hello@timanti.in</a></p>
+          <p>Mon–Sun, 10AM–9PM &nbsp;|&nbsp; <a href="mailto:hello@timanti.in" style="color:#fc7d27;">hello@timanti.in</a></p>
         </td></tr>
       </table>
 
@@ -955,7 +964,7 @@ function buildRepairStoreApprovedCustomerHtml({ customerName, draftRef, amount }
           <h3 style="color:#000000; margin-bottom:12px; font-size:16px;">Questions?</h3>
           <table cellpadding="0" cellspacing="0" style="margin:0 auto;">
             <tr>
-              <td style="padding:0 20px; font-size:13px;"><strong>Phone/WhatsApp</strong><br><a href="tel:+917710938305" style="color:#000000;">+91-7710938305</a></td>
+              <td style="padding:0 20px; font-size:13px;"><strong>Phone/WhatsApp</strong><br><a href="tel:+917710968305" style="color:#000000;">+91-7710968305</a></td>
               <td style="padding:0 20px; font-size:13px;"><strong>Email</strong><br><a href="mailto:hello@timanti.in" style="color:#000000;">hello@timanti.in</a></td>
             </tr>
           </table>
@@ -964,7 +973,7 @@ function buildRepairStoreApprovedCustomerHtml({ customerName, draftRef, amount }
 
       <table width="100%" cellpadding="0" cellspacing="0" style="border-top:1px solid #eeeeee; padding:20px 30px;">
         <tr><td style="text-align:center; font-size:12px; color:#666666;">
-          <p>Mon–Sat, 10AM–6PM &nbsp;|&nbsp; <a href="mailto:hello@timanti.in" style="color:#fc7d27;">hello@timanti.in</a></p>
+          <p>Mon–Sun, 10AM–9PM &nbsp;|&nbsp; <a href="mailto:hello@timanti.in" style="color:#fc7d27;">hello@timanti.in</a></p>
         </td></tr>
       </table>
 

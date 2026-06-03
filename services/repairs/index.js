@@ -18,6 +18,9 @@ const {
 
 const REPAIR_TEST_EMAIL = 'monodeep.dutta@timanti.in'; // revert after testing
 
+// In-process lock — prevents burst of secondary webhooks (from our own API calls) re-triggering emails
+const processingDrafts = new Set();
+
 // When REPAIR_TEST_EMAIL is set, all repair emails (HQ + customer) go to that address only
 function repairSendEmail(opts) {
   if (!REPAIR_TEST_EMAIL) return sendEmail(opts);
@@ -55,7 +58,7 @@ function shopifyHeaders(token) {
 }
 
 // GET /draft_orders/${id}/metafields.json → update by ID if exists, else POST
-async function writeDraftOrderMetafields(draftOrderId, fields, token) {
+async function writeDraftOrderMetafields(draftOrderId, fields, token, namespace = 'timanti') {
   const hdrs = shopifyHeaders(token);
   const base = `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01`;
 
@@ -66,7 +69,7 @@ async function writeDraftOrderMetafields(draftOrderId, fields, token) {
 
   const byKey = {};
   for (const mf of (existing.metafields || [])) {
-    if (mf.namespace === 'timanti') byKey[mf.key] = mf.id;
+    if (mf.namespace === namespace) byKey[mf.key] = mf.id;
   }
 
   for (const [key, value] of Object.entries(fields)) {
@@ -81,7 +84,7 @@ async function writeDraftOrderMetafields(draftOrderId, fields, token) {
     } else {
       await axios.post(
         `${base}/draft_orders/${draftOrderId}/metafields.json`,
-        { metafield: { namespace: 'timanti', key, value: String(value), type: 'single_line_text_field' } },
+        { metafield: { namespace, key, value: String(value), type: 'single_line_text_field' } },
         { headers: hdrs, timeout: 10000 }
       );
     }
@@ -231,7 +234,30 @@ async function handleRepairPayment(draft, { transactionId, gatewayRef }, getShop
 }
 
 // ── Called directly from the existing /api/shopify-draft-updated handler ──────
-async function handleRepairDraftUpdate(draft, getShopifyToken) {
+async function handleRepairDraftUpdate(incomingDraft, getShopifyToken) {
+  // In-process lock: each of our API calls (updateTags, writeMetafields, specCopy)
+  // triggers another draft_orders/update webhook. The lock absorbs the burst so only
+  // the first invocation per draft processes; the rest are dropped for 15 seconds.
+  if (processingDrafts.has(incomingDraft.id)) {
+    console.log(`⏭️  Skipping duplicate webhook for draft ${incomingDraft.id}`);
+    return;
+  }
+  processingDrafts.add(incomingDraft.id);
+  setTimeout(() => processingDrafts.delete(incomingDraft.id), 15000);
+
+  // Re-fetch draft to get current live tags — avoids stale webhook payload causing duplicates
+  let draft = incomingDraft;
+  try {
+    const tok = await getShopifyToken();
+    const { data } = await axios.get(
+      `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${incomingDraft.id}.json`,
+      { headers: shopifyHeaders(tok), timeout: 10000 }
+    );
+    draft = data.draft_order;
+  } catch (err) {
+    console.warn(`handleRepairDraftUpdate: re-fetch failed for ${incomingDraft.id}, using payload:`, err.message);
+  }
+
   const tags = (draft.tags || '').split(',').map(t => t.trim()).filter(Boolean);
 
   // ── Trigger 0: intake → HQ notification + customer acknowledgement ────────
@@ -397,7 +423,7 @@ async function handleRepairDraftUpdate(draft, getShopifyToken) {
     const serverUrl        = process.env.SERVER_URL || 'https://timanti-middleware.fly.dev';
     const storeApproveToken = generateStoreApproveToken(draft.id);
     const approveStoreUrl  = `${serverUrl}/repairs/approve-store?d=${draft.id}&t=${storeApproveToken}`;
-    const whatsappUrl      = `https://wa.me/917710938305?text=${encodeURIComponent(`Hi, I have a question about my repair (${draft.name})`)}`;
+    const whatsappUrl      = `https://wa.me/917710968305?text=${encodeURIComponent(`Hi, I have a question about my repair (${draft.name})`)}`;
 
     try {
       await repairSendEmail({
@@ -455,6 +481,15 @@ async function handleRepairDraftUpdate(draft, getShopifyToken) {
       console.warn(`⚠️  Could not fetch metafields for ${draft.name}:`, err.message);
     }
 
+    // Determine payment context for store-pickup email
+    let pickupPayContext = null;
+    const pickupAmount  = Math.round(parseFloat(draft.total_price)).toString();
+    if (storePickup) {
+      if (tags.includes('repair-paid'))            pickupPayContext = 'paid';
+      else if (tags.includes('repair-store-approved')) pickupPayContext = 'pay_at_store';
+      else if (tags.includes('repair-free') || tags.includes('free-repair')) pickupPayContext = 'free';
+    }
+
     const completionSubject = storePickup
       ? `Your Repair is Ready — Please Collect at Our Store (${draft.name})`
       : `Your Repair is Ready — ${draft.name}`;
@@ -463,7 +498,7 @@ async function handleRepairDraftUpdate(draft, getShopifyToken) {
       await repairSendEmail({
         to:      customerEmail,
         subject: completionSubject,
-        html:    buildRepairCompleteHtml({ customerName, draftRef: draft.name, sequelId, trackingUrl, storePickup })
+        html:    buildRepairCompleteHtml({ customerName, draftRef: draft.name, sequelId, trackingUrl, storePickup, pickupPayContext, pickupAmount })
       });
     } catch (err) {
       console.error(`❌ Resend failed (complete) for ${draft.name}:`, err.message);
@@ -605,7 +640,7 @@ function registerRepairRoutes(app, getShopifyToken) {
 
       const firstItem = draft.line_items?.[0];
       const lineItems = firstItem
-        ? [{ id: firstItem.id, title: firstItem.title, quantity: firstItem.quantity, price: parsedAmount.toFixed(2) },
+        ? [{ id: firstItem.id, title: firstItem.title, quantity: firstItem.quantity, price: parsedAmount.toFixed(2), properties: firstItem.properties || [] },
            ...draft.line_items.slice(1).map(li => ({ id: li.id }))]
         : draft.line_items;
 
@@ -753,8 +788,8 @@ function registerRepairRoutes(app, getShopifyToken) {
         <p class="hint">Leave blank if no tracking needed.</p>
       </div>
       <hr style="border:none; border-top:1px solid #eee; margin:20px 0;">
-      <label>Item Weights <span class="opt-label">(optional)</span></label>
-      <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:4px;">
+      <label>Post-Repair Specs <span class="opt-label">(optional — written to order metafields; pre-repair specs are unchanged)</span></label>
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:8px;">
         <div>
           <label for="postNetWt" style="font-size:12px; color:#666; margin-bottom:4px;">Net Weight (g)</label>
           <input id="postNetWt" name="postNetWt" type="text" inputmode="decimal" placeholder="e.g. 2.10">
@@ -763,8 +798,16 @@ function registerRepairRoutes(app, getShopifyToken) {
           <label for="postGrossWt" style="font-size:12px; color:#666; margin-bottom:4px;">Gross Weight (g)</label>
           <input id="postGrossWt" name="postGrossWt" type="text" inputmode="decimal" placeholder="e.g. 2.45">
         </div>
+        <div>
+          <label for="postDiaCts" style="font-size:12px; color:#666; margin-bottom:4px;">Diamond (cts)</label>
+          <input id="postDiaCts" name="postDiaCts" type="text" inputmode="decimal" placeholder="e.g. 0.50">
+        </div>
+        <div>
+          <label for="postGemCts" style="font-size:12px; color:#666; margin-bottom:4px;">Gemstone (cts)</label>
+          <input id="postGemCts" name="postGemCts" type="text" inputmode="decimal" placeholder="e.g. 1.20">
+        </div>
       </div>
-      <p class="hint">Appears on the repair note — can also be set directly on the draft order in Shopify admin.</p>
+      <p class="hint">Saved as order metafields (custom.gross_wt / net_wt / diamond_cts / gemstone_cts) — shows as "After repair" on the repair note.</p>
       <button type="submit">Notify Customer &amp; Mark Complete</button>
     </form>
     <script>
@@ -787,7 +830,7 @@ function registerRepairRoutes(app, getShopifyToken) {
 
   app.post('/repairs/set-complete', async (req, res) => {
     const body = typeof req.body === 'string' ? Object.fromEntries(new URLSearchParams(req.body)) : (req.body || {});
-    const { draftId, token: hmacToken, sequelId, storePickup, postNetWt, postGrossWt } = body;
+    const { draftId, token: hmacToken, sequelId, storePickup, postNetWt, postGrossWt, postDiaCts, postGemCts } = body;
     if (!draftId || hmacToken !== generateCompleteToken(draftId)) {
       return res.status(400).send('<h2 style="font-family:sans-serif;padding:40px;">Invalid or expired link.</h2>');
     }
@@ -802,7 +845,7 @@ function registerRepairRoutes(app, getShopifyToken) {
       const draft       = fetchData.draft_order;
       const currentTags = (draft.tags || '').split(',').map(t => t.trim()).filter(Boolean);
 
-      // Write process metafields (tracking, store pickup) before adding repair-complete tag so webhook sees them
+      // Process metafields (timanti namespace) — written before repair-complete tag so webhook sees them
       const completeMf = {};
       if (!isStorePickup && sequelId && sequelId.trim()) completeMf.repair_tracking_id  = sequelId.trim();
       if (isStorePickup)                                  completeMf.repair_store_pickup = 'true';
@@ -810,28 +853,25 @@ function registerRepairRoutes(app, getShopifyToken) {
         await writeDraftOrderMetafields(draft.id, completeMf, shopifyToken);
       }
 
-      // Build draft update payload — weights go into line item properties (_net_wt, _gross_wt)
-      const newTags    = currentTags.filter(t => t !== 'repair-complete').concat(['repair-complete']);
-      const draftPayload = { id: Number(draftId), tags: newTags.join(', ') };
-      const firstItem  = draft.line_items?.[0];
-      if (firstItem && (postNetWt?.trim() || postGrossWt?.trim())) {
-        const existingProps = (firstItem.properties || [])
-          .filter(p => p.name !== '_net_wt' && p.name !== '_gross_wt');
-        if (postNetWt?.trim())   existingProps.push({ name: '_net_wt',   value: postNetWt.trim() });
-        if (postGrossWt?.trim()) existingProps.push({ name: '_gross_wt', value: postGrossWt.trim() });
-        draftPayload.line_items = [
-          { id: firstItem.id, title: firstItem.title, quantity: firstItem.quantity, price: firstItem.price, properties: existingProps },
-          ...draft.line_items.slice(1).map(li => ({ id: li.id }))
-        ];
+      // Post-repair specs → custom namespace (pre-repair specs stay in line item properties untouched)
+      const postSpecs = {};
+      if (postGrossWt?.trim()) postSpecs.gross_wt     = postGrossWt.trim();
+      if (postNetWt?.trim())   postSpecs.net_wt       = postNetWt.trim();
+      if (postDiaCts?.trim())  postSpecs.diamond_cts  = postDiaCts.trim();
+      if (postGemCts?.trim())  postSpecs.gemstone_cts = postGemCts.trim();
+      if (Object.keys(postSpecs).length > 0) {
+        await writeDraftOrderMetafields(draft.id, postSpecs, shopifyToken, 'custom');
       }
 
+      const newTags    = currentTags.filter(t => t !== 'repair-complete').concat(['repair-complete']);
       await axios.put(
         `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftId}.json`,
-        { draft_order: draftPayload },
+        { draft_order: { id: Number(draftId), tags: newTags.join(', ') } },
         { headers: shopifyHeaders(shopifyToken), timeout: 10000 }
       );
 
-      console.log(`✅ Repair complete marked: ${draft.name}${isStorePickup ? ' [store pickup]' : sequelId ? ` Sequel: ${sequelId.trim()}` : ''}`);
+      const specLog = Object.keys(postSpecs).length ? ` specs: ${Object.keys(postSpecs).join(', ')}` : '';
+      console.log(`✅ Repair complete marked: ${draft.name}${isStorePickup ? ' [store pickup]' : sequelId ? ` Sequel: ${sequelId.trim()}` : ''}${specLog}`);
 
       const trackingLine = isStorePickup
         ? `<p>The customer will receive a "please collect at store" email for <strong>${draft.name}</strong>.</p>`

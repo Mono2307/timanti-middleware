@@ -1,0 +1,425 @@
+{% comment %}
+  Timanti — Repair Note (Order Printer Pro)
+  Root object : order  (OPP uses 'order' for all draft orders)
+
+  Metafield sources
+  ─────────────────
+  order.metafields.custom.note_number              → Repair note serial (e.g. AURA/KA/001); falls back to order.name
+  order.metafields.custom.repair_order_reference   → Original order name (e.g. #1051) — staff enter this
+  order.metafields.custom.original_invoice_reference → Original invoice ref (e.g. AURA/KA/1051)
+  order.metafields.custom.metal                    → Metal/karat override (e.g. "14K / YG")
+  order.metafields.custom.gross_wt                 → Post-repair gross weight
+  order.metafields.custom.net_wt                   → Post-repair net weight
+  order.metafields.custom.diamond_cts              → Post-repair diamond cts
+  order.metafields.custom.diamond_pcs              → Post-repair diamond pcs
+  order.metafields.timanti.sku_id                  → SKU / Design ID (from estimate form)
+  order.metafields.timanti.repair_intake_at        → Date received (ISO)
+  order.metafields.timanti.repair_completed_at     → Date completed (ISO)
+  order.metafields.timanti.repair_tracking_id      → Sequel tracking ID
+  order.metafields.timanti.repair_store_pickup     → 'true' = in-store collection
+
+  Line item properties (auto-copied from original order by middleware at intake)
+  ──────────────────────────────────────────────────────────────────────────────
+  _item_title    → original item name  (e.g. "Weave hoop earring - 14K / YG")
+  _sku           → original item SKU
+  _variant_title → variant string      (e.g. "14K / YG") — used as Metal value
+  _gross_wt      → gross weight at receipt
+  _net_wt        → net weight at receipt
+  _diamond_cts   → diamond cts at receipt
+  _diamond_pcs   → diamond pcs at receipt
+  _gemstone_cts  → gemstone cts at receipt
+{% endcomment %}
+
+{% comment %}── Tags ──{% endcomment %}
+{% assign tags_str = order.tags | downcase %}
+{% assign is_free      = false %}
+{% assign is_paid      = false %}
+{% assign is_store_pay = false %}
+{% assign is_complete  = false %}
+{% if tags_str contains 'repair-free'           %}{% assign is_free      = true %}{% endif %}
+{% if tags_str contains 'free-repair'           %}{% assign is_free      = true %}{% endif %}
+{% if tags_str contains 'repair-paid'           %}{% assign is_paid      = true %}{% endif %}
+{% if tags_str contains 'repair-store-approved' %}{% assign is_store_pay = true %}{% endif %}
+{% if tags_str contains 'repair-complete'       %}{% assign is_complete  = true %}{% endif %}
+
+{% comment %}── Dates ──{% endcomment %}
+{% assign note_date     = order.metafields.timanti.repair_intake_at   | date: "%d-%m-%Y" %}
+{% assign complete_date = order.metafields.timanti.repair_completed_at | date: "%d-%m-%Y" %}
+{% if note_date == "" %}{% assign note_date = order.created_at | date: "%d-%m-%Y" %}{% endif %}
+{% assign due_date = complete_date %}
+{% if due_date == "" %}{% assign due_date = note_date %}{% endif %}
+
+{% comment %}── Line item properties (copied from original order by middleware) ──{% endcomment %}
+{% assign recv_item_title  = "" %}
+{% assign recv_sku         = "" %}
+{% assign recv_variant     = "" %}
+{% assign recv_gross_wt    = "" %}
+{% assign recv_net_wt      = "" %}
+{% assign recv_dia_cts     = "" %}
+{% assign recv_dia_pcs     = "" %}
+{% assign recv_gem_cts     = "" %}
+{% for p in order.line_items.first.properties %}
+  {% if p.first == "_item_title"    %}{% assign recv_item_title = p.last %}{% endif %}
+  {% if p.first == "_sku"           %}{% assign recv_sku        = p.last %}{% endif %}
+  {% if p.first == "_variant_title" %}{% assign recv_variant    = p.last %}{% endif %}
+  {% if p.first == "_gross_wt"      %}{% assign recv_gross_wt   = p.last %}{% endif %}
+  {% if p.first == "_net_wt"        %}{% assign recv_net_wt     = p.last %}{% endif %}
+  {% if p.first == "_diamond_cts"   %}{% assign recv_dia_cts    = p.last %}{% endif %}
+  {% if p.first == "_diamond_pcs"   %}{% assign recv_dia_pcs    = p.last %}{% endif %}
+  {% if p.first == "_gemstone_cts"  %}{% assign recv_gem_cts    = p.last %}{% endif %}
+{% endfor %}
+
+{% comment %}── Post-repair specs from order metafields ──{% endcomment %}
+{% assign post_gross_wt = order.metafields.custom.gross_wt %}
+{% assign post_net_wt   = order.metafields.custom.net_wt %}
+{% assign post_dia_cts  = order.metafields.custom.diamond_cts %}
+{% assign post_dia_pcs  = order.metafields.custom.diamond_pcs %}
+
+{% comment %}── Metal: custom metafield override → variant_title from original order ──{% endcomment %}
+{% assign metal_str = order.metafields.custom.metal %}
+{% if metal_str == blank %}{% assign metal_str = recv_variant %}{% endif %}
+
+{% comment %}── Note / reference fields ──{% endcomment %}
+{% assign note_number   = order.metafields.custom.note_number %}
+{% if note_number == blank %}{% assign note_number = order.name %}{% endif %}
+{% assign orig_order_ref  = order.metafields.custom.repair_order_reference %}
+{% assign orig_inv_ref    = order.metafields.custom.original_invoice_reference %}
+{% assign sku_display     = order.metafields.timanti.sku_id %}
+{% if sku_display == blank %}{% assign sku_display = recv_sku %}{% endif %}
+
+{% comment %}── Repair cost ──{% endcomment %}
+{% assign repair_cost_paise = order.total_price | times: 100 | round %}
+{% if is_free %}{% assign repair_cost_paise = 0 %}{% endif %}
+
+<style>
+  @page { size: A4; margin: 0.5cm; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  @media print {
+    body { padding: 5px !important; margin: 0; }
+    .container { page-break-inside: avoid !important; page-break-after: avoid !important; page-break-before: avoid !important; }
+    a { display: none !important; visibility: hidden !important; }
+  }
+  body { font-family: Arial, sans-serif; font-size: 9.5px; line-height: 1.35; padding: 10px; }
+  .container { max-width: 800px; margin: 0 auto; border: 2px solid #000; padding: 0; }
+  .header-text { text-align: right; padding: 4px 10px; font-size: 8px; font-style: italic; border-bottom: 1px solid #000; }
+  .title-header { text-align: center; padding: 10px 14px; border-bottom: 2px solid #000; min-height: 75px; display: flex; flex-direction: column; justify-content: center; align-items: center; }
+  .logo { max-width: 140px; height: auto; margin-bottom: 4px; }
+  .title-center h1 { font-size: 17px; font-weight: bold; margin: 0; }
+  .company-invoice-grid { display: grid; grid-template-columns: 1.5fr 1fr; border-bottom: 2px solid #000; }
+  .company-section { padding: 8px 10px; border-right: 2px solid #000; font-size: 8px; line-height: 1.45; }
+  .company-section strong { font-size: 9px; }
+  .invoice-details-grid { display: grid; grid-template-rows: auto; }
+  .invoice-detail-row { display: grid; grid-template-columns: 1fr 1fr 1fr; border-bottom: 1px solid #000; }
+  .invoice-detail-row:last-child { border-bottom: none; }
+  .invoice-detail-cell { padding: 6px 8px; font-size: 8px; border-right: 1px solid #000; }
+  .invoice-detail-cell:last-child { border-right: none; }
+  .invoice-detail-cell strong { display: block; font-size: 8px; font-weight: bold; margin-bottom: 2px; }
+  .addresses-section { display: grid; grid-template-columns: 1fr 1fr; border-bottom: 2px solid #000; }
+  .address-block { padding: 8px 10px; font-size: 8px; line-height: 1.45; }
+  .address-block:first-child { border-right: 2px solid #000; }
+  .address-block strong { display: block; margin-bottom: 2px; font-size: 8px; }
+  .address-field { margin-bottom: 4px; }
+  table { width: 100%; border-collapse: collapse; }
+  .items-table { font-size: 8px; }
+  .items-table th { background-color: #f0f0f0; padding: 6px 4px; text-align: left; font-weight: bold; border: 1px solid #000; font-size: 8px; }
+  .items-table td { padding: 6px 4px; border: 1px solid #000; vertical-align: top; }
+  .items-table .text-right { text-align: right; }
+  .items-table .text-center { text-align: center; }
+  .totals-row td { font-weight: normal; padding: 5px 6px; font-size: 8px; }
+  .total-row td { font-weight: bold; font-size: 9px; }
+  .amount-words { padding: 6px 10px; font-size: 8px; font-weight: bold; border-top: 2px solid #000; display: flex; justify-content: space-between; }
+  .footer-section { display: grid; grid-template-columns: 1fr 1fr; border-top: 2px solid #000; font-size: 7.5px; line-height: 1.4; }
+  .footer-left { padding: 10px 12px; border-right: 2px solid #000; }
+  .footer-right { padding: 10px 12px; }
+  .footer-left h3, .footer-right h3 { font-size: 8px; margin-bottom: 4px; font-weight: bold; }
+  .footer-left p, .footer-right p { margin-bottom: 3px; }
+  .signature-section { display: grid; grid-template-columns: 1fr 1fr; border-top: 2px solid #000; min-height: 90px; }
+  .signature-block { padding: 10px 12px; font-size: 8px; }
+  .signature-block:first-child { border-right: 2px solid #000; }
+  .signature-block strong { display: block; margin-bottom: 12px; }
+  .signature-block p { font-size: 7.5px; line-height: 1.35; }
+  .watermark { position: relative; }
+  .watermark-image { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); opacity: 0.1; width: 200px; height: auto; z-index: 0; pointer-events: none; }
+  .section-label-row td { font-style: italic; color: #555; font-size: 7px; padding: 2px 4px; background: #fafafa; }
+  .tbd { color: #999; font-style: italic; }
+</style>
+
+<div class="container">
+
+  <div class="header-text">Original Copy</div>
+
+  <div class="title-header">
+    <img src="https://cdn.shopify.com/s/files/1/0775/8322/0993/files/Timanti_Logo_Black.jpg?v=1766506323" alt="Timanti Logo" class="logo">
+    <div class="title-center"><h1>Repair Note</h1></div>
+  </div>
+
+  <div class="company-invoice-grid">
+    <div class="company-section">
+      <strong>AURACARAT PRIVATE LIMITED</strong><br>
+      <strong>Address:</strong> C207 Crystal Plaza, New Link Road, Andheri (W), Mumbai-400053 Maharashtra<br>
+      <strong>Store Address:</strong> 17th Cross, 19th Main Rd, HSR Layout Sec 2, Opp. Gnan Srishti School, Bengaluru – 560102<br>
+      <strong>Tel:</strong> +91-7710938305 &nbsp;|&nbsp; <strong>Website:</strong> www.timanti.in<br>
+      <strong>GSTIN</strong> – 29ABBCA3309B1Z7 &nbsp;|&nbsp; <strong>PAN</strong> – ABBCA3309B<br>
+      <strong>Dispatched From:</strong> 17th Cross, 19th Main Rd, HSR Layout Sec 2, Opp. Gnan Srishti School, Bengaluru – 560102
+    </div>
+
+    <div class="invoice-details-grid">
+      <div class="invoice-detail-row">
+        <div class="invoice-detail-cell">
+          <strong>Note Number</strong>{{ note_number }}
+        </div>
+        <div class="invoice-detail-cell">
+          <strong>Order Number</strong>{% if orig_order_ref != blank %}{{ orig_order_ref | remove: '#' }}{% else %}<span class="tbd">—</span>{% endif %}
+        </div>
+        <div class="invoice-detail-cell">
+          <strong>Note Date</strong>{{ note_date }}
+        </div>
+      </div>
+
+      <div class="invoice-detail-row">
+        <div class="invoice-detail-cell">
+          <strong>Place of Supply</strong>29 – Karnataka
+        </div>
+        <div class="invoice-detail-cell">
+          <strong>Supply Type</strong>B2C
+        </div>
+        <div class="invoice-detail-cell">
+          <strong>Original Invoice Reference</strong>{% if orig_inv_ref != blank %}{{ orig_inv_ref }}{% elsif orig_order_ref != blank %}{{ orig_order_ref }}{% else %}<span class="tbd">—</span>{% endif %}
+        </div>
+      </div>
+
+      <div class="invoice-detail-row">
+        <div class="invoice-detail-cell" style="grid-column: 1 / -1; word-break: break-all;">
+          <strong>Item ID</strong>{% if sku_display != blank %}{{ sku_display }}{% else %}<span class="tbd">—</span>{% endif %}
+        </div>
+      </div>
+
+      <div class="invoice-detail-row">
+        <div class="invoice-detail-cell" style="grid-column: 1 / -1;">
+          <strong>Due Date</strong>{{ due_date }}
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="addresses-section">
+    <div class="address-block">
+      <strong>Billing Details:</strong>
+      {% if order.billing_address %}
+        <div class="address-field"><strong>Customer Name:</strong> {{ order.billing_address.name | upcase }}</div>
+        <div class="address-field"><strong>Address:</strong>
+          {{ order.billing_address.address1 }}{% if order.billing_address.address2 %}, {{ order.billing_address.address2 }}{% endif %},
+          {{ order.billing_address.city }}{% if order.billing_address.province %}, {{ order.billing_address.province }}{% endif %}{% if order.billing_address.zip %} – {{ order.billing_address.zip }}{% endif %}.
+        </div>
+        <div><strong>Mobile:</strong> {{ order.billing_address.phone | default: "—" }} &nbsp;|&nbsp; <strong>Email:</strong> {{ order.email | default: "—" }}</div>
+        <div style="margin-top:3px;"><strong>GSTIN:</strong> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</div>
+        <div><strong>PAN:</strong> {% if order.customer.metafields.custom.pan_number %}{{ order.customer.metafields.custom.pan_number }}{% endif %}</div>
+      {% endif %}
+    </div>
+    <div class="address-block">
+      <strong>Shipping Details:</strong>
+      {% if order.shipping_address %}
+        <div class="address-field"><strong>Customer Name:</strong> {{ order.shipping_address.name | upcase }}</div>
+        <div class="address-field"><strong>Address:</strong>
+          {{ order.shipping_address.address1 }}{% if order.shipping_address.address2 %}, {{ order.shipping_address.address2 }}{% endif %},
+          {{ order.shipping_address.city }}{% if order.shipping_address.province %}, {{ order.shipping_address.province }}{% endif %}{% if order.shipping_address.zip %} – {{ order.shipping_address.zip }}{% endif %}.
+        </div>
+        <div><strong>Mobile:</strong> {{ order.shipping_address.phone | default: "—" }} &nbsp;|&nbsp; <strong>Email:</strong> {{ order.email | default: "—" }}</div>
+        <div style="margin-top:3px;"><strong>GSTIN:</strong></div>
+      {% endif %}
+    </div>
+  </div>
+
+  <table class="items-table">
+    <thead>
+      <tr>
+        <th style="width:16%;">Item Description</th>
+        <th class="text-center" style="width:6%;">HSN Code</th>
+        <th class="text-center" style="width:3%;">Qty</th>
+        <th class="text-center" style="width:6%;">Gross Wt (g)</th>
+        <th class="text-center" style="width:6%;">Net Wt (g)</th>
+        <th class="text-center" style="width:6%;">Dia Wt (cts)</th>
+        <th class="text-center" style="width:5%;">Dia Pcs</th>
+        <th class="text-center" style="width:5%;">Col. Stone (Pcs)</th>
+        <th class="text-center" style="width:6%;">Metal</th>
+        <th class="text-right"  style="width:9%;">Taxable Val. (Before Disc.)</th>
+        <th class="text-right"  style="width:9%;">Discount on taxable</th>
+        <th class="text-right"  style="width:9%;">Taxable Val. (after Disc.)</th>
+      </tr>
+    </thead>
+    <tbody class="watermark">
+      <img src="https://cdn.shopify.com/s/files/1/0775/8322/0993/files/Timanti_Logo_Black.jpg?v=1766506323" alt="Watermark" class="watermark-image">
+
+      {% comment %}── Row 1: Repair service line ──{% endcomment %}
+      <tr>
+        <td>Repair of Jewellery</td>
+        <td class="text-center">998722</td>
+        <td class="text-center">–</td>
+        <td class="text-center">–</td>
+        <td class="text-center">–</td>
+        <td class="text-center">–</td>
+        <td class="text-center">–</td>
+        <td class="text-center">–</td>
+        <td class="text-center">–</td>
+        {% if is_free %}
+          <td class="text-right">₹1,000.00</td>
+          <td class="text-right">100%</td>
+          <td class="text-right">₹ 0.00</td>
+        {% else %}
+          {% assign taxable_val = order.total_price | divided_by: 1.03 %}
+          <td class="text-right">₹{{ taxable_val | money_without_currency | remove: ',' }}</td>
+          <td class="text-right">–</td>
+          <td class="text-right">₹{{ taxable_val | money_without_currency | remove: ',' }}</td>
+        {% endif %}
+      </tr>
+
+      {% comment %}── Row 2: Before repair specs ──{% endcomment %}
+      <tr class="section-label-row">
+        <td colspan="12">Jewellery Description (Before repair)</td>
+      </tr>
+      <tr>
+        <td>{% if recv_item_title != "" %}{{ recv_item_title }}{% else %}<span class="tbd">—</span>{% endif %}</td>
+        <td class="text-center">71131914</td>
+        <td class="text-center">{{ order.line_items.first.quantity | default: 1 }}</td>
+        <td class="text-center">{% if recv_gross_wt != "" %}{{ recv_gross_wt }}{% else %}–{% endif %}</td>
+        <td class="text-center">{% if recv_net_wt   != "" %}{{ recv_net_wt   }}{% else %}–{% endif %}</td>
+        <td class="text-center">{% if recv_dia_cts  != "" %}{{ recv_dia_cts  }}{% else %}–{% endif %}</td>
+        <td class="text-center">{% if recv_dia_pcs  != "" %}{{ recv_dia_pcs  }}{% else %}–{% endif %}</td>
+        <td class="text-center">{% if recv_gem_cts  != "" %}{{ recv_gem_cts  }}{% else %}–{% endif %}</td>
+        <td class="text-center">{% if metal_str != blank %}{{ metal_str }}{% else %}–{% endif %}</td>
+        <td class="text-right">–</td>
+        <td class="text-right">–</td>
+        <td class="text-right">–</td>
+      </tr>
+
+      {% comment %}── Row 3: After repair specs ──{% endcomment %}
+      <tr class="section-label-row">
+        <td colspan="12">Jewellery Description (After repair)</td>
+      </tr>
+      <tr>
+        <td>{% if recv_item_title != "" %}{{ recv_item_title }}{% else %}<span class="tbd">—</span>{% endif %}</td>
+        <td class="text-center">71131914</td>
+        <td class="text-center">{{ order.line_items.first.quantity | default: 1 }}</td>
+        <td class="text-center">{% if post_gross_wt != blank %}{{ post_gross_wt }}{% else %}–{% endif %}</td>
+        <td class="text-center">{% if post_net_wt   != blank %}{{ post_net_wt   }}{% else %}–{% endif %}</td>
+        <td class="text-center">{% if post_dia_cts  != blank %}{{ post_dia_cts  }}{% else %}–{% endif %}</td>
+        <td class="text-center">{% if post_dia_pcs  != blank %}{{ post_dia_pcs  }}{% else %}–{% endif %}</td>
+        <td class="text-center">–</td>
+        <td class="text-center">{% if metal_str != blank %}{{ metal_str }}{% else %}–{% endif %}</td>
+        <td class="text-right">–</td>
+        <td class="text-right">–</td>
+        <td class="text-right">–</td>
+      </tr>
+
+      {% comment %}── Totals ──{% endcomment %}
+      {% assign total_val = order.total_price | money_without_currency | remove: ',' %}
+      {% if is_free %}{% assign total_val = "0.00" %}{% endif %}
+
+      <tr class="total-row">
+        <td colspan="11" class="text-right"><strong>Total Value</strong></td>
+        <td class="text-right"><strong>&#x20B9; {{ total_val }}</strong></td>
+      </tr>
+
+      {% comment %}── Amount Paid ──{% endcomment %}
+      {% if is_paid %}
+        <tr class="totals-row">
+          <td colspan="11" class="text-right">Amount Paid</td>
+          <td class="text-right">&#x20B9; {{ total_val }}</td>
+        </tr>
+        <tr class="totals-row">
+          <td colspan="11" class="text-right"><strong>Amount Due</strong></td>
+          <td class="text-right"><strong>&#x20B9; 0.00</strong></td>
+        </tr>
+      {% elsif is_free %}
+        <tr class="totals-row">
+          <td colspan="11" class="text-right">Amount Paid</td>
+          <td class="text-right">&#x20B9; 0.00</td>
+        </tr>
+        <tr class="totals-row">
+          <td colspan="11" class="text-right"><strong>Amount Due</strong></td>
+          <td class="text-right"><strong>&#x20B9; 0.00</strong></td>
+        </tr>
+      {% elsif is_store_pay %}
+        <tr class="totals-row">
+          <td colspan="11" class="text-right">Amount Paid</td>
+          <td class="text-right">&#x20B9; 0.00</td>
+        </tr>
+        <tr class="totals-row">
+          <td colspan="11" class="text-right"><strong>Amount Due (at store)</strong></td>
+          <td class="text-right"><strong>&#x20B9; {{ total_val }}</strong></td>
+        </tr>
+      {% else %}
+        <tr class="totals-row">
+          <td colspan="11" class="text-right">Amount Paid</td>
+          <td class="text-right">&#x20B9; 0.00</td>
+        </tr>
+        <tr class="totals-row">
+          <td colspan="11" class="text-right"><strong>Amount Due</strong></td>
+          <td class="text-right"><strong>&#x20B9; {{ total_val }}</strong></td>
+        </tr>
+      {% endif %}
+
+    </tbody>
+  </table>
+
+  <div class="amount-words">
+    <span>Amount in Words: {% if is_free or repair_cost_paise == 0 %}–{% else %}
+      {% assign ones = "Zero,One,Two,Three,Four,Five,Six,Seven,Eight,Nine,Ten,Eleven,Twelve,Thirteen,Fourteen,Fifteen,Sixteen,Seventeen,Eighteen,Nineteen" | split: "," %}
+      {% assign tens = "Zero,Ten,Twenty,Thirty,Forty,Fifty,Sixty,Seventy,Eighty,Ninety" | split: "," %}
+      {% assign total_int = order.total_price | times: 100 | round | divided_by: 100 | floor %}
+      {% assign words = "" %}
+      {% assign thousands = total_int | divided_by: 1000 %}
+      {% if thousands > 0 %}{% assign temp = thousands | modulo: 100 %}{% if temp < 20 %}{% assign words = words | append: ones[temp] | append: " " %}{% else %}{% assign td = temp | divided_by: 10 %}{% assign od = temp | modulo: 10 %}{% assign words = words | append: tens[td] %}{% if od > 0 %}{% assign words = words | append: "-" | append: ones[od] %}{% endif %}{% assign words = words | append: " " %}{% endif %}{% assign words = words | append: "Thousand " %}{% assign total_int = total_int | modulo: 1000 %}{% endif %}
+      {% assign hundreds = total_int | divided_by: 100 %}{% if hundreds > 0 %}{% assign words = words | append: ones[hundreds] | append: " Hundred " %}{% assign total_int = total_int | modulo: 100 %}{% endif %}
+      {% if total_int > 0 %}{% if total_int < 20 %}{% assign words = words | append: ones[total_int] %}{% else %}{% assign td = total_int | divided_by: 10 %}{% assign od = total_int | modulo: 10 %}{% assign words = words | append: tens[td] %}{% if od > 0 %}{% assign words = words | append: "-" | append: ones[od] %}{% endif %}{% endif %}{% endif %}
+      Rs. {{ words }} – Only
+    {% endif %}</span>
+    <span>E. &amp; O. E.</span>
+  </div>
+
+  <div style="padding: 4px 8px; font-size: 7px; color: #555; border-top: 1px solid #ccc; text-align: right;">
+    {% assign gold_rate_18 = order.metafields.custom.gold_rate_18k %}
+    {% assign gold_rate_14 = order.metafields.custom.gold_rate_14k %}
+    {% assign gold_rate_22 = order.metafields.custom.gold_rate_22k %}
+    {% if gold_rate_18 != blank or gold_rate_14 != blank or gold_rate_22 != blank %}
+      Gold rate = {% if gold_rate_22 != blank %}22kt: Rs {{ gold_rate_22 }}{% endif %}{% if gold_rate_18 != blank %} | 18kt: Rs {{ gold_rate_18 }}{% endif %}{% if gold_rate_14 != blank %} | 14kt: Rs {{ gold_rate_14 }}{% endif %} (as of {{ note_date }})
+    {% else %}
+      &nbsp;
+    {% endif %}
+  </div>
+
+  <div class="footer-section">
+    <div class="footer-left">
+      <h3>Terms and Conditions</h3>
+      <p><strong>1.</strong> Any disputes subject to Mumbai jurisdiction.</p>
+      <p><strong>2.</strong> Refer company's website for other terms and conditions.</p>
+      <p><strong>3.</strong> All weights recorded at intake are mutually verified. Post-repair weights reflect the item after completion of work.</p>
+      <p><strong>4.</strong> The consumer can get the purity of hallmarked jewelry/artefacts verified from any of the BIS recognised A&amp;H centers. The list of centers is available on www.bis.gov.in</p>
+    </div>
+    <div class="footer-right">
+      <h3>Bank Details –</h3>
+      <p><strong>1. ACCOUNT NAME:</strong> AURACARAT PVT LTD</p>
+      <p><strong>2. BANK ACC NO:</strong> 924020062754092</p>
+      <p><strong>3. IFSC:</strong> UTIB0000186</p>
+      <p><strong>4. BANK:</strong> AXIS BANK, MATRU SMRITI, LINKING ROAD, KHAR WEST, MUMBAI 400052</p>
+      <br>
+      <p style="text-align:right;"><strong>For – Auracarat Private Limited</strong></p>
+    </div>
+  </div>
+
+  <div class="signature-section">
+    <div class="signature-block">
+      <strong>Customer Acknowledgement</strong>
+      <p>Signature: ___________________________</p>
+    </div>
+    <div class="signature-block" style="text-align:right;">
+      <strong>For – Auracarat Private Limited</strong>
+      <p>Authorized Signatory</p>
+    </div>
+  </div>
+
+  <div style="border-top: 2px solid #000; padding: 10px 14px; font-size: 7.5px; color: #444; text-align: center; line-height: 1.5;">
+    <strong>COMPUTER GENERATED DOCUMENT</strong> — This Document has been electronically generated and is legally valid without a physical signature or stamp, in accordance with the Information Technology Act, 2000 and applicable GST rules. No E-way Bill is required as the goods are exempted under serial no. 4/5 to the annexure to Rule 138(14) of the CGST Rules, 2017.
+  </div>
+
+</div>
