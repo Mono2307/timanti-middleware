@@ -112,10 +112,14 @@ async function fetchAndCopyOriginalOrderSpecs(draft, token) {
 
     // Start with specs already in original line item properties
     const specs = {};
-    const SPEC_KEYS = ['_gross_wt', '_net_wt', '_diamond_cts', '_diamond_pcs', '_gemstone_cts'];
+    const SPEC_KEYS = ['_gross_wt', '_net_wt', '_diamond_cts', '_diamond_pcs', '_gemstone_cts', '_item_title', '_sku', '_variant_title'];
     for (const p of (origItem.properties || [])) {
       if (SPEC_KEYS.includes(p.name)) specs[p.name] = p.value;
     }
+    // Always copy item identity fields from the original line item
+    if (origItem.title)         specs['_item_title']    = origItem.title;
+    if (origItem.sku)           specs['_sku']           = origItem.sku;
+    if (origItem.variant_title) specs['_variant_title'] = origItem.variant_title;
 
     // Fetch variant metafields for weights if not found in properties
     if ((!specs._gross_wt || !specs._net_wt) && origItem.variant_id) {
