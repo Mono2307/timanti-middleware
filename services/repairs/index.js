@@ -88,6 +88,83 @@ async function writeDraftOrderMetafields(draftOrderId, fields, token) {
   }
 }
 
+// Fetch original order by name ref stored in custom.repair_order_reference,
+// then copy weight/diamond specs onto the repair draft's first line item properties.
+async function fetchAndCopyOriginalOrderSpecs(draft, token) {
+  try {
+    const { data: mfData } = await axios.get(
+      `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draft.id}/metafields.json`,
+      { headers: shopifyHeaders(token), timeout: 10000 }
+    );
+    const refMf = (mfData.metafields || []).find(m => m.namespace === 'custom' && m.key === 'repair_order_reference');
+    if (!refMf?.value) return;
+
+    const orderRef = refMf.value.trim();
+    const { data: ordersData } = await axios.get(
+      `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/orders.json?name=${encodeURIComponent(orderRef)}&status=any&limit=1`,
+      { headers: shopifyHeaders(token), timeout: 10000 }
+    );
+    const origOrder = ordersData.orders?.[0];
+    if (!origOrder) { console.warn(`fetchAndCopyOriginalOrderSpecs: order ${orderRef} not found`); return; }
+
+    const origItem = origOrder.line_items?.[0];
+    if (!origItem) return;
+
+    // Start with specs already in original line item properties
+    const specs = {};
+    const SPEC_KEYS = ['_gross_wt', '_net_wt', '_diamond_cts', '_diamond_pcs', '_gemstone_cts'];
+    for (const p of (origItem.properties || [])) {
+      if (SPEC_KEYS.includes(p.name)) specs[p.name] = p.value;
+    }
+
+    // Fetch variant metafields for weights if not found in properties
+    if ((!specs._gross_wt || !specs._net_wt) && origItem.variant_id) {
+      const { data: vmf } = await axios.get(
+        `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/variants/${origItem.variant_id}/metafields.json`,
+        { headers: shopifyHeaders(token), timeout: 10000 }
+      );
+      for (const m of (vmf.metafields || [])) {
+        if (m.namespace !== 'custom') continue;
+        if ((m.key === 'total_metal_weight_g' || m.key === 'gross_weight_g') && !specs._gross_wt) specs._gross_wt = m.value;
+        if (m.key === 'net_metal_weight_g' && !specs._net_wt) specs._net_wt = m.value;
+      }
+    }
+
+    // Fetch product metafields for diamond specs if not found
+    if ((!specs._diamond_cts || !specs._diamond_pcs) && origItem.product_id) {
+      const { data: pmf } = await axios.get(
+        `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/products/${origItem.product_id}/metafields.json`,
+        { headers: shopifyHeaders(token), timeout: 10000 }
+      );
+      for (const m of (pmf.metafields || [])) {
+        if (m.namespace !== 'custom') continue;
+        if (m.key === 'totaldiamondweight' && !specs._diamond_cts) specs._diamond_cts = m.value;
+        if (m.key === 'totaldiamondcount'  && !specs._diamond_pcs) specs._diamond_pcs = m.value;
+      }
+    }
+
+    if (Object.keys(specs).length === 0) { console.log(`fetchAndCopyOriginalOrderSpecs: no specs found on ${orderRef}`); return; }
+
+    // Write specs to repair draft line item properties (preserve any already set)
+    const firstItem = draft.line_items?.[0];
+    if (!firstItem) return;
+    const existingProps = (firstItem.properties || []).filter(p => !SPEC_KEYS.includes(p.name));
+    const newProps = [...existingProps, ...Object.entries(specs).map(([name, value]) => ({ name, value }))];
+
+    await axios.put(
+      `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draft.id}.json`,
+      { draft_order: { id: draft.id, line_items: [
+        { id: firstItem.id, title: firstItem.title, quantity: firstItem.quantity, price: firstItem.price, properties: newProps },
+        ...draft.line_items.slice(1).map(li => ({ id: li.id }))
+      ]}},
+      { headers: shopifyHeaders(token), timeout: 10000 }
+    );
+    console.log(`✅ Copied ${Object.keys(specs).length} spec(s) from ${orderRef} → ${draft.name}: ${Object.keys(specs).join(', ')}`);
+  } catch (err) {
+    console.warn(`⚠️  fetchAndCopyOriginalOrderSpecs failed for ${draft.name}:`, err.message);
+  }
+}
+
 // GET current draft tags then PUT with new set
 async function updateDraftOrderTags(draftOrderId, newTags, token) {
   await axios.put(
@@ -197,6 +274,7 @@ async function handleRepairDraftUpdate(draft, getShopifyToken) {
 
     await updateDraftOrderTags(draft.id, [...tags, 'repair-hq-notified'], shopifyToken);
     await writeDraftOrderMetafields(draft.id, { repair_intake_at: new Date().toISOString() }, shopifyToken);
+    await fetchAndCopyOriginalOrderSpecs(draft, shopifyToken);
     console.log(`✅ Repair intake: HQ notified + customer ack sent: ${draft.name}`);
     return;
   }
@@ -240,6 +318,7 @@ async function handleRepairDraftUpdate(draft, getShopifyToken) {
     }
 
     await updateDraftOrderTags(draft.id, [...tags, 'repair-free-notified'], token);
+    await fetchAndCopyOriginalOrderSpecs(draft, token);
     console.log(`✅ Free repair confirmed: ${draft.name}`);
     return;
   }
@@ -467,6 +546,10 @@ function registerRepairRoutes(app, getShopifyToken) {
           <input id="amount" name="amount" type="text" inputmode="decimal" placeholder="e.g. 1500" required>
         </div>
       </div>
+      <div style="margin-top:16px;">
+        <label for="skuId">SKU / Design ID <span class="opt-label">(optional — appears on repair note)</span></label>
+        <input id="skuId" name="skuId" type="text" placeholder="e.g. TM-RG-001">
+      </div>
       <div style="margin-top:16px; padding:12px 16px; background:#fff3cd; border-radius:6px; border:1px solid #ffc107;">
         <label style="display:flex; align-items:center; gap:10px; cursor:pointer; font-size:13px; font-weight:500; margin:0;">
           <input type="checkbox" name="free" value="true" id="freeCheck" onchange="toggleFree(this)" style="width:16px; height:16px; cursor:pointer;">
@@ -497,7 +580,7 @@ function registerRepairRoutes(app, getShopifyToken) {
 
   app.post('/repairs/set-estimate', async (req, res) => {
     const body = typeof req.body === 'string' ? Object.fromEntries(new URLSearchParams(req.body)) : (req.body || {});
-    const { draftId, token: hmacToken, amount, free } = body;
+    const { draftId, token: hmacToken, amount, free, skuId } = body;
     if (!draftId || hmacToken !== generateEstimateToken(draftId)) {
       return res.status(400).send('<h2 style="font-family:sans-serif;padding:40px;">Invalid or expired link.</h2>');
     }
@@ -530,6 +613,7 @@ function registerRepairRoutes(app, getShopifyToken) {
           { draft_order: { id: Number(draftId), line_items: lineItems, tags: newTags.join(', ') } },
           { headers: shopifyHeaders(shopifyToken), timeout: 10000 }
         );
+        if (skuId && skuId.trim()) await writeDraftOrderMetafields(draft.id, { sku_id: skuId.trim() }, shopifyToken);
         console.log(`✅ Free repair marked: ${draft.name} — repair-free added`);
 
         return res.send(`<!DOCTYPE html>
@@ -563,6 +647,7 @@ function registerRepairRoutes(app, getShopifyToken) {
         { draft_order: { id: Number(draftId), line_items: lineItems, tags: newTags.join(', ') } },
         { headers: shopifyHeaders(shopifyToken), timeout: 10000 }
       );
+      if (skuId && skuId.trim()) await writeDraftOrderMetafields(draft.id, { sku_id: skuId.trim() }, shopifyToken);
       console.log(`✅ Estimate set for ${draft.name}: ₹${parsedAmount} — repair-estimate-ready added`);
 
       res.send(`<!DOCTYPE html>
