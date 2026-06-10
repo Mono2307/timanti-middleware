@@ -2912,7 +2912,9 @@ async function runSerialClear(req, res) {
     const token = await getShopifyToken();
     const hdrs  = { 'X-Shopify-Access-Token': token, 'Accept': 'application/json' };
     const withState = (p.withState === 'true' || p.withState === true);
-    const keys  = ['document_type', 'serial_no', 'serial_code', 'serial_display'].concat(withState ? ['state_code'] : []);
+    // Order matters: remove state_code FIRST and serial_code LAST. While serial_code exists the
+    // live webhook idempotent-skips; once it's gone, state_code is already gone too → no re-stamp.
+    const keys  = (withState ? ['state_code'] : []).concat(['document_type', 'serial_no', 'serial_display', 'serial_code']);
     const cleared = [];
 
     async function clearOne(resource, id, name) {
