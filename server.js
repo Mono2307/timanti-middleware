@@ -2830,10 +2830,14 @@ app.get('/api/serial/peek', async (req, res) => {
 //   from/to         : created_at range (YYYY-MM-DD) — alternative to name range
 //   dryRun=true     : preview only (predicts numbers, allocates nothing)
 //   dryRun=false    : actually allocate + stamp
-app.post('/api/serial/backfill', async (req, res) => {
+async function runSerialBackfill(req, res) {
   try {
     if (!SERIAL_CUSTOMER_ORDER) return res.status(400).json({ success: false, error: 'SERIAL_CUSTOMER_ORDER flag is off' });
-    const { nameFrom, nameTo, from, to, docType = 'customer_order', skipTag = 'skip-serial', dryRun = true } = req.body || {};
+    const p = { ...(req.query || {}), ...(req.body || {}) };
+    const { nameFrom, nameTo, from, to } = p;
+    const docType = p.docType || 'customer_order';
+    const skipTag = p.skipTag != null ? p.skipTag : 'skip-serial';
+    const dryRun  = !(p.dryRun === false || p.dryRun === 'false'); // default true; execute only on explicit ?dryRun=false
     const token = await getShopifyToken();
     const hdrs  = { 'X-Shopify-Access-Token': token, 'Accept': 'application/json' };
     const deps  = SERIAL_DEPS();
@@ -2888,7 +2892,9 @@ app.post('/api/serial/backfill', async (req, res) => {
     console.error('[serial] backfill failed:', err.message);
     return res.status(500).json({ success: false, error: err.message });
   }
-});
+}
+app.get('/api/serial/backfill', runSerialBackfill);   // browser-clickable
+app.post('/api/serial/backfill', runSerialBackfill);
 
 // ── PO Queue routes ───────────────────────────────────────────────
 
