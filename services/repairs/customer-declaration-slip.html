@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Timanti — Customer Declaration Slip</title>
+  <style>
+    @page { size: A5; margin: 0.5cm; }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    @media print {
+      body { padding: 4px !important; }
+      .no-print { display: none !important; }
+    }
+    body { font-family: Arial, sans-serif; font-size: 8.5px; line-height: 1.4; padding: 10px; background: #fff; }
+    .slip { border: 2px solid #000; max-width: 540px; margin: 0 auto; }
+
+    .header { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; border-bottom: 2px solid #000; }
+    .logo { max-width: 100px; height: auto; }
+    .title-block { text-align: center; }
+    .title-block h1 { font-size: 13px; font-weight: bold; letter-spacing: 1px; }
+    .title-block p  { font-size: 7px; color: #555; }
+    .slip-meta { text-align: right; font-size: 7.5px; line-height: 1.9; }
+
+    .section-hdr { background: #f0f0f0; padding: 3px 10px; font-size: 7.5px; font-weight: bold; border-top: 1px solid #000; border-bottom: 1px solid #000; text-transform: uppercase; letter-spacing: 0.5px; }
+
+    .detail-grid { display: grid; grid-template-columns: 1fr 1fr; border-bottom: 1px solid #000; }
+    .detail-col { padding: 7px 10px; font-size: 8px; line-height: 2.0; }
+    .detail-col:first-child { border-right: 1px solid #000; }
+    .field { display: flex; gap: 4px; align-items: baseline; }
+    .field label { color: #555; white-space: nowrap; min-width: 86px; font-size: 7.5px; }
+    .field .line { flex: 1; border-bottom: 1px solid #aaa; height: 13px; }
+
+    .measurements { padding: 6px 10px; border-bottom: 1px solid #000; }
+    .mrow { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-top: 4px; }
+    .mbox { border: 1px solid #ccc; padding: 4px 6px; font-size: 7.5px; }
+    .mbox span { display: block; color: #888; font-size: 7px; margin-bottom: 2px; }
+    .mbox .val { border-bottom: 1px solid #999; min-height: 12px; }
+
+    .declaration-block { padding: 8px 10px; border-bottom: 1px solid #000; font-size: 7.5px; line-height: 1.6; background: #fffdf0; }
+    .declaration-block strong { display: block; font-size: 8px; margin-bottom: 4px; }
+
+    .tc-block { padding: 6px 10px; border-bottom: 1px solid #000; font-size: 7px; line-height: 1.55; color: #444; }
+    .tc-block h3 { font-size: 7.5px; font-weight: bold; margin-bottom: 4px; text-transform: uppercase; }
+    .tc-block ol { padding-left: 12px; }
+    .tc-block li { margin-bottom: 2px; }
+
+    .sig-grid { display: grid; grid-template-columns: 1fr 1fr; min-height: 60px; }
+    .sig-block { padding: 8px 10px; font-size: 7.5px; }
+    .sig-block:first-child { border-right: 1px solid #000; }
+    .sig-block strong { display: block; font-size: 8px; margin-bottom: 4px; }
+    .sig-line { border-bottom: 1px solid #000; margin: 16px 0 4px 0; }
+    .sig-detail { display: flex; gap: 12px; font-size: 7px; }
+    .sig-detail .line { border-bottom: 1px solid #aaa; min-width: 60px; flex: 1; height: 11px; }
+
+    .footer-bar { border-top: 1px solid #ccc; padding: 3px 10px; font-size: 6.5px; color: #888; text-align: center; }
+
+    .no-print { text-align: center; padding: 12px; }
+    .no-print button { background: #000; color: #fff; border: none; padding: 8px 24px; font-size: 12px; border-radius: 4px; cursor: pointer; }
+
+    /* Cut line between two copies */
+    .cut-line { border-top: 1px dashed #aaa; margin: 10px 0; text-align: center; font-size: 7px; color: #aaa; font-family: Arial; }
+  </style>
+</head>
+<body>
+
+<div class="no-print">
+  <button onclick="window.print()">Print (2 copies — customer + store)</button>
+</div>
+
+<!-- ═══════════════════ CUSTOMER COPY ═══════════════════ -->
+<div class="slip">
+
+  <div class="header">
+    <img src="https://cdn.shopify.com/s/files/1/0775/8322/0993/files/Timanti_Logo_Black.jpg?v=1766506323" alt="Timanti" class="logo">
+    <div class="title-block">
+      <h1>REPAIR DROP-OFF DECLARATION</h1>
+      <p>Customer Copy</p>
+    </div>
+    <div class="slip-meta">
+      <div><strong>Form No.:</strong> ___________</div>
+      <div><strong>Date:</strong> ___________</div>
+      <div><strong>Draft Ref.:</strong> ___________</div>
+    </div>
+  </div>
+
+  <div class="section-hdr">Customer &amp; Piece Details</div>
+  <div class="detail-grid">
+    <div class="detail-col">
+      <div class="field"><label>Customer Name:</label><div class="line"></div></div>
+      <div class="field"><label>Mobile:</label><div class="line"></div></div>
+      <div class="field"><label>Original Order No.:</label><div class="line"></div></div>
+    </div>
+    <div class="detail-col">
+      <div class="field"><label>Item Description:</label><div class="line"></div></div>
+      <div class="field"><label>SKU / Product Code:</label><div class="line"></div></div>
+      <div class="field"><label>Metal / Karat:</label><div class="line"></div></div>
+    </div>
+  </div>
+
+  <div class="section-hdr">Measurements at Drop-Off</div>
+  <div class="measurements">
+    <div class="mrow">
+      <div class="mbox"><span>Gross Wt (g)</span><div class="val"></div></div>
+      <div class="mbox"><span>Net Metal Wt (g)</span><div class="val"></div></div>
+      <div class="mbox"><span>Diamond Wt (cts)</span><div class="val"></div></div>
+      <div class="mbox"><span>Diamond Pcs</span><div class="val"></div></div>
+    </div>
+    <div class="mrow" style="margin-top:5px;">
+      <div class="mbox"><span>Col. Stone (pcs/cts)</span><div class="val"></div></div>
+      <div class="mbox"><span>Estimated Cost (₹)</span><div class="val"></div></div>
+      <div class="mbox"><span>Est. Completion</span><div class="val"></div></div>
+      <div class="mbox"><span>Missing Stones</span><div class="val">☐ None &nbsp;☐ ____</div></div>
+    </div>
+  </div>
+
+  <div class="section-hdr">Work Required</div>
+  <div style="padding:5px 10px; border-bottom:1px solid #000; font-size:7.5px; display:flex; gap:8px; flex-wrap:wrap;">
+    <span>☐ Resizing</span><span>☐ Stone replacement</span><span>☐ Prong re-tipping</span>
+    <span>☐ Polish / Rhodium</span><span>☐ Chain / clasp</span><span>☐ Engraving</span><span>☐ Other: ________</span>
+  </div>
+  <div style="padding:5px 10px 7px 10px; border-bottom:1px solid #000;">
+    <div style="font-size:7.5px; color:#555; margin-bottom:3px;">Description:</div>
+    <div style="border-bottom:1px solid #ccc; height:14px; margin-bottom:3px;"></div>
+    <div style="border-bottom:1px solid #ccc; height:14px;"></div>
+  </div>
+
+  <div class="section-hdr">Terms &amp; Conditions (Summary)</div>
+  <div class="tc-block">
+    <ol>
+      <li>This slip confirms that Timanti has received the above piece for repair/assessment. Measurements are recorded in the customer's presence and agreed by both parties.</li>
+      <li>The estimated cost is indicative. Final cost is confirmed and approved by the customer before work begins. Work will not commence without customer approval.</li>
+      <li>Timanti is not liable for pre-existing undisclosed damage, hairline fractures, structural weaknesses, or stone loss not noted on this form.</li>
+      <li>In the event of damage caused solely by Timanti's workmanship, liability is limited to the agreed repair cost only — not the full replacement value of the piece.</li>
+      <li>The customer will be notified via WhatsApp / email upon completion. The piece must be collected within <strong>30 days</strong> of notification; a storage fee may apply thereafter.</li>
+      <li>Full payment is due upon collection. No piece will be dispatched without payment in full.</li>
+      <li>Timanti may decline repairs where a satisfactory outcome cannot be guaranteed; the piece will be returned intact at no charge.</li>
+    </ol>
+  </div>
+
+  <div class="declaration-block">
+    <strong>Customer Declaration</strong>
+    I confirm that I am the owner of this piece (or am authorised by the owner to submit it for repair). I have read and understood the Terms &amp; Conditions above. I authorise Timanti to carry out the described repair at the agreed estimate. I confirm the measurements and condition noted above are accurate to the best of my knowledge.
+  </div>
+
+  <div class="sig-grid">
+    <div class="sig-block">
+      <strong>Customer Signature</strong>
+      <div class="sig-line"></div>
+      <div class="sig-detail">
+        <span>Name:</span><div class="line"></div>
+        <span>Date:</span><div class="line" style="max-width:55px;"></div>
+      </div>
+    </div>
+    <div class="sig-block">
+      <strong>Timanti — Received By</strong>
+      <div class="sig-line"></div>
+      <div class="sig-detail">
+        <span>Staff:</span><div class="line"></div>
+        <span>Date:</span><div class="line" style="max-width:55px;"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="footer-bar">
+    Auracarat Private Limited &nbsp;·&nbsp; 17th Cross, 19th Main Rd, HSR Layout Sec 2, Bengaluru – 560102 &nbsp;·&nbsp; +91-7710938305 &nbsp;·&nbsp; hello@timanti.in
+  </div>
+
+</div>
+
+<!-- ═══════════════════ CUT LINE ═══════════════════ -->
+<div class="cut-line">✂ &nbsp; cut here — store retains this copy &nbsp; ✂</div>
+
+<!-- ═══════════════════ STORE COPY (identical) ═══════════════════ -->
+<div class="slip">
+
+  <div class="header">
+    <img src="https://cdn.shopify.com/s/files/1/0775/8322/0993/files/Timanti_Logo_Black.jpg?v=1766506323" alt="Timanti" class="logo">
+    <div class="title-block">
+      <h1>REPAIR DROP-OFF DECLARATION</h1>
+      <p>Store Copy</p>
+    </div>
+    <div class="slip-meta">
+      <div><strong>Form No.:</strong> ___________</div>
+      <div><strong>Date:</strong> ___________</div>
+      <div><strong>Draft Ref.:</strong> ___________</div>
+    </div>
+  </div>
+
+  <div class="section-hdr">Customer &amp; Piece Details</div>
+  <div class="detail-grid">
+    <div class="detail-col">
+      <div class="field"><label>Customer Name:</label><div class="line"></div></div>
+      <div class="field"><label>Mobile:</label><div class="line"></div></div>
+      <div class="field"><label>Original Order No.:</label><div class="line"></div></div>
+    </div>
+    <div class="detail-col">
+      <div class="field"><label>Item Description:</label><div class="line"></div></div>
+      <div class="field"><label>SKU / Product Code:</label><div class="line"></div></div>
+      <div class="field"><label>Metal / Karat:</label><div class="line"></div></div>
+    </div>
+  </div>
+
+  <div class="section-hdr">Measurements at Drop-Off</div>
+  <div class="measurements">
+    <div class="mrow">
+      <div class="mbox"><span>Gross Wt (g)</span><div class="val"></div></div>
+      <div class="mbox"><span>Net Metal Wt (g)</span><div class="val"></div></div>
+      <div class="mbox"><span>Diamond Wt (cts)</span><div class="val"></div></div>
+      <div class="mbox"><span>Diamond Pcs</span><div class="val"></div></div>
+    </div>
+    <div class="mrow" style="margin-top:5px;">
+      <div class="mbox"><span>Col. Stone (pcs/cts)</span><div class="val"></div></div>
+      <div class="mbox"><span>Estimated Cost (₹)</span><div class="val"></div></div>
+      <div class="mbox"><span>Est. Completion</span><div class="val"></div></div>
+      <div class="mbox"><span>Missing Stones</span><div class="val">☐ None &nbsp;☐ ____</div></div>
+    </div>
+  </div>
+
+  <div class="section-hdr">Work Required</div>
+  <div style="padding:5px 10px; border-bottom:1px solid #000; font-size:7.5px; display:flex; gap:8px; flex-wrap:wrap;">
+    <span>☐ Resizing</span><span>☐ Stone replacement</span><span>☐ Prong re-tipping</span>
+    <span>☐ Polish / Rhodium</span><span>☐ Chain / clasp</span><span>☐ Engraving</span><span>☐ Other: ________</span>
+  </div>
+  <div style="padding:5px 10px 7px 10px; border-bottom:1px solid #000;">
+    <div style="font-size:7.5px; color:#555; margin-bottom:3px;">Description:</div>
+    <div style="border-bottom:1px solid #ccc; height:14px; margin-bottom:3px;"></div>
+    <div style="border-bottom:1px solid #ccc; height:14px;"></div>
+  </div>
+
+  <div class="section-hdr">Terms &amp; Conditions (Summary)</div>
+  <div class="tc-block">
+    <ol>
+      <li>This slip confirms that Timanti has received the above piece for repair/assessment. Measurements are recorded in the customer's presence and agreed by both parties.</li>
+      <li>The estimated cost is indicative. Final cost is confirmed and approved by the customer before work begins. Work will not commence without customer approval.</li>
+      <li>Timanti is not liable for pre-existing undisclosed damage, hairline fractures, structural weaknesses, or stone loss not noted on this form.</li>
+      <li>In the event of damage caused solely by Timanti's workmanship, liability is limited to the agreed repair cost only — not the full replacement value of the piece.</li>
+      <li>The customer will be notified via WhatsApp / email upon completion. The piece must be collected within <strong>30 days</strong> of notification; a storage fee may apply thereafter.</li>
+      <li>Full payment is due upon collection. No piece will be dispatched without payment in full.</li>
+      <li>Timanti may decline repairs where a satisfactory outcome cannot be guaranteed; the piece will be returned intact at no charge.</li>
+    </ol>
+  </div>
+
+  <div class="declaration-block">
+    <strong>Customer Declaration</strong>
+    I confirm that I am the owner of this piece (or am authorised by the owner to submit it for repair). I have read and understood the Terms &amp; Conditions above. I authorise Timanti to carry out the described repair at the agreed estimate. I confirm the measurements and condition noted above are accurate to the best of my knowledge.
+  </div>
+
+  <div class="sig-grid">
+    <div class="sig-block">
+      <strong>Customer Signature</strong>
+      <div class="sig-line"></div>
+      <div class="sig-detail">
+        <span>Name:</span><div class="line"></div>
+        <span>Date:</span><div class="line" style="max-width:55px;"></div>
+      </div>
+    </div>
+    <div class="sig-block">
+      <strong>Timanti — Received By</strong>
+      <div class="sig-line"></div>
+      <div class="sig-detail">
+        <span>Staff:</span><div class="line"></div>
+        <span>Date:</span><div class="line" style="max-width:55px;"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="footer-bar">
+    Auracarat Private Limited &nbsp;·&nbsp; 17th Cross, 19th Main Rd, HSR Layout Sec 2, Bengaluru – 560102 &nbsp;·&nbsp; +91-7710938305 &nbsp;·&nbsp; hello@timanti.in
+  </div>
+
+</div>
+
+</body>
+</html>

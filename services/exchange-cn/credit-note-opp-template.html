@@ -1,0 +1,186 @@
+<style>
+  @page { size: A4; margin: 0.5cm; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  @media print {
+    body { padding: 5px !important; margin: 0; }
+    .container { page-break-inside: avoid !important; }
+    a { display: none !important; visibility: hidden !important; }
+  }
+  body { font-family: Arial, sans-serif; font-size: 8px; line-height: 1.2; padding: 10px; }
+  .container { max-width: 800px; margin: 0 auto; border: 2px solid #000; padding: 0; }
+  .header-text { text-align: right; padding: 3px 8px; font-size: 7px; font-style: italic; border-bottom: 1px solid #000; }
+  .title-header { text-align: center; padding: 7px 10px; border-bottom: 2px solid #000; min-height: 60px; display: flex; flex-direction: column; justify-content: center; align-items: center; }
+  .logo { max-width: 120px; height: auto; margin-bottom: 4px; }
+  .title-center h1 { font-size: 14px; font-weight: bold; margin: 0; }
+  .company-invoice-grid { display: grid; grid-template-columns: 1.5fr 1fr; border-bottom: 2px solid #000; }
+  .company-section { padding: 5px 8px; border-right: 2px solid #000; font-size: 7px; line-height: 1.35; }
+  .company-section strong { font-size: 7.5px; }
+  .invoice-details-grid { display: grid; }
+  .invoice-detail-row { display: grid; grid-template-columns: 1fr 1fr 1fr; border-bottom: 1px solid #000; }
+  .invoice-detail-row:last-child { border-bottom: none; }
+  .invoice-detail-cell { padding: 4px 6px; font-size: 7px; border-right: 1px solid #000; }
+  .invoice-detail-cell:last-child { border-right: none; }
+  .invoice-detail-cell strong { display: block; font-size: 7px; font-weight: bold; margin-bottom: 1px; }
+  .customer-strip { padding: 5px 10px; font-size: 7px; line-height: 1.5; border-bottom: 2px solid #000; }
+  table { width: 100%; border-collapse: collapse; }
+  .items-table th { background-color: #f0f0f0; padding: 4px 6px; text-align: left; font-weight: bold; border: 1px solid #000; font-size: 7px; }
+  .items-table td { padding: 4px 6px; border: 1px solid #000; font-size: 7px; vertical-align: top; }
+  .text-center { text-align: center; }
+  .cn-box { margin: 14px; border: 2px solid #000; }
+  .cn-box-inner { display: grid; grid-template-columns: 1fr 1fr; }
+  .cn-code-side { padding: 12px 14px; border-right: 1px solid #000; }
+  .cn-amount-side { padding: 12px 14px; text-align: right; }
+  .cn-sublabel { font-size: 6.5px; font-weight: bold; text-transform: uppercase; letter-spacing: 0.5px; color: #555; margin-bottom: 4px; }
+  .cn-code-value { font-size: 15px; font-weight: bold; letter-spacing: 1.5px; margin-bottom: 4px; }
+  .cn-amount-value { font-size: 22px; font-weight: bold; margin-bottom: 4px; }
+  .cn-note { font-size: 6.5px; color: #444; }
+  .cn-bar { background: #000; color: #fff; text-align: center; padding: 5px 8px; font-size: 7px; }
+  .footer-section { display: grid; grid-template-columns: 1fr 1fr; border-top: 2px solid #000; font-size: 6.5px; line-height: 1.3; }
+  .footer-left { padding: 6px 8px; border-right: 2px solid #000; }
+  .footer-right { padding: 6px 8px; }
+  .footer-left h3, .footer-right h3 { font-size: 7px; margin-bottom: 3px; font-weight: bold; }
+  .footer-left p, .footer-right p { margin-bottom: 2px; }
+</style>
+
+{% comment %}── CN metafields written by Apps Script on creation ──{% endcomment %}
+{% assign cn_number = order.metafields.timanti.cn_number  | default: "" %}
+{% assign cn_value  = order.metafields.timanti.cn_value   | default: "0" %}
+{% assign cn_expiry = order.metafields.timanti.cn_expiry  | default: "" %}
+{% assign cn_issued = order.metafields.timanti.cn_issued_date | default: "" %}
+{% if cn_issued == "" %}{% assign cn_issued = order.created_at | date: "%d-%m-%Y" %}{% endif %}
+
+{% comment %}Tag fallback — if metafield write lagged{% endcomment %}
+{% if cn_number == "" %}
+  {% for tag in order.tags %}
+    {% assign _t = tag | strip %}
+    {% if _t contains "cn-issued:" %}{% assign cn_number = _t | remove: "cn-issued:" | strip %}{% endif %}
+  {% endfor %}
+{% endif %}
+
+{% assign cn_amount_paise = cn_value | plus: 0 | times: 100 | round %}
+
+<div class="container">
+
+  <div class="header-text">Original — Customer Copy</div>
+
+  <div class="title-header">
+    <img src="https://cdn.shopify.com/s/files/1/0775/8322/0993/files/Timanti_Logo_Black.jpg?v=1766506323" alt="Timanti" class="logo">
+    <div class="title-center"><h1>Credit Note</h1></div>
+  </div>
+
+  <div class="company-invoice-grid">
+    <div class="company-section">
+      <strong>AURACARAT PRIVATE LIMITED</strong><br>
+      <strong>Address:</strong> C207 Crystal Plaza, New Link Road, Andheri (W), Mumbai – 400053 Maharashtra<br>
+      <strong>Store:</strong> 17th Cross, 19th Main Rd, HSR Layout Sec 2, Opp. Gnan Srishti School, Bengaluru – 560102<br>
+      <strong>Tel:</strong> +91-7710938305 &nbsp;|&nbsp; <strong>Email:</strong> hello@timanti.in &nbsp;|&nbsp; <strong>Web:</strong> www.timanti.in<br>
+      <strong>GSTIN</strong> – 29ABBCA3309B1Z7 &nbsp;|&nbsp; <strong>PAN</strong> – ABBCA3309B
+    </div>
+    <div class="invoice-details-grid">
+      <div class="invoice-detail-row">
+        <div class="invoice-detail-cell" style="grid-column: span 2;">
+          <strong>Credit Note No.</strong>{{ cn_number | default: "—" }}
+        </div>
+        <div class="invoice-detail-cell">
+          <strong>Issued Date</strong>{{ cn_issued }}
+        </div>
+      </div>
+      <div class="invoice-detail-row">
+        <div class="invoice-detail-cell">
+          <strong>Against Order</strong>{{ order.name }}
+        </div>
+        <div class="invoice-detail-cell">
+          <strong>Order Date</strong>{{ order.created_at | date: "%d/%m/%Y" }}
+        </div>
+        <div class="invoice-detail-cell">
+          <strong>Valid Until</strong>{{ cn_expiry | default: "90 days from issue" }}
+        </div>
+      </div>
+      <div class="invoice-detail-row" style="grid-template-columns: 1fr;">
+        <div class="invoice-detail-cell" style="font-size: 6px; word-break: break-all;">
+          <strong>SKU(s)</strong>
+          {% for line_item in order.line_items %}{{ line_item.sku }}{% unless forloop.last %} &nbsp;·&nbsp; {% endunless %}{% endfor %}
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {% assign ba = order.billing_address %}
+  <div class="customer-strip">
+    <strong>Issued To: </strong>
+    {{ ba.first_name | upcase }} {{ ba.last_name | upcase }}
+    &nbsp;·&nbsp; {{ order.email }}
+    {% if ba.phone %}&nbsp;·&nbsp; {{ ba.phone }}{% endif %}
+    {% if ba.city %}&nbsp;·&nbsp; {{ ba.city }}, {{ ba.province }}{% endif %}
+  </div>
+
+  <table class="items-table">
+    <thead>
+      <tr>
+        <th style="width:4%;">#</th>
+        <th style="width:62%;">Item Description</th>
+        <th style="width:28%;">SKU</th>
+        <th class="text-center" style="width:6%;">Qty</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for line_item in order.line_items %}
+      <tr>
+        <td>{{ forloop.index }}</td>
+        <td>{{ line_item.title }}</td>
+        <td style="font-size:6.5px; word-break:break-all;">{{ line_item.sku | default: "—" }}</td>
+        <td class="text-center">{{ line_item.quantity }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <div class="cn-box">
+    <div class="cn-box-inner">
+      <div class="cn-code-side">
+        <div class="cn-sublabel">Discount Code — enter at checkout</div>
+        <div class="cn-code-value">{{ cn_number | default: "—" }}</div>
+        <div class="cn-note">auracarat.com &nbsp;·&nbsp; One-time use &nbsp;·&nbsp; Non-transferable</div>
+      </div>
+      <div class="cn-amount-side">
+        <div class="cn-sublabel">Credit Amount</div>
+        <div class="cn-amount-value">₹{{ cn_amount_paise | money_without_currency | remove: ',' }}</div>
+        <div class="cn-note">Expires {{ cn_expiry | default: "90 days from issue date" }}</div>
+      </div>
+    </div>
+    <div class="cn-bar">
+      Use code &nbsp;<strong>{{ cn_number }}</strong>&nbsp; at checkout on &nbsp;<strong>auracarat.com</strong>&nbsp; before &nbsp;<strong>{{ cn_expiry }}</strong>
+    </div>
+  </div>
+
+  <div class="footer-section">
+    <div class="footer-left">
+      <h3>Terms &amp; Conditions</h3>
+      <p>
+        <strong>1.</strong> This credit note is valid for <strong>90 days</strong> from the date of issue and expires on {{ cn_expiry | default: "the date stated above" }}. The validity period cannot be extended under any circumstances.<br>
+        <strong>2.</strong> Valid for <strong>one-time use only</strong> on auracarat.com. Any unused balance remaining after redemption is forfeited and will not be re-credited.<br>
+        <strong>3.</strong> <strong>Non-transferable</strong> — this credit may only be redeemed by the customer named on this document. It cannot be gifted, sold, or assigned to any third party.<br>
+        <strong>4.</strong> Cannot be combined with any other discount code, coupon, or promotional offer active on the store at the time of redemption.<br>
+        <strong>5.</strong> Applicable on all products listed on auracarat.com, subject to product availability at the time of redemption. Timanti / Auracarat does not guarantee the availability of any specific item.<br>
+        <strong>6.</strong> This credit note is issued under Section 34 of the CGST Act, 2017, against an exchange transaction on the order referenced above.<br>
+        <strong>7.</strong> The credit value is based on prevailing market rates for gold and diamonds applicable to the product at the time this exchange was processed. No adjustments will be made for subsequent rate changes.<br>
+        <strong>8.</strong> Auracarat Private Limited reserves the right to cancel or void this credit note if the original order is found to be fraudulent, disputed, or returned outside policy.
+      </p>
+    </div>
+    <div class="footer-right">
+      <h3>Contact Us</h3>
+      <p>
+        <strong>Email:</strong> hello@timanti.in<br>
+        <strong>Phone:</strong> +91-7710938305<br>
+        <strong>Website:</strong> www.timanti.in<br>
+        <strong>Store:</strong> 17th Cross, 19th Main Rd, HSR Layout Sec 2, Opp. Gnan Srishti School, Bengaluru – 560102
+      </p>
+      <p style="margin-top: 28px; text-align: right;"><strong>For — Auracarat Private Limited</strong></p>
+    </div>
+  </div>
+
+  <div style="border-top:2px solid #000; padding:8px 14px; font-size:7px; color:#444; text-align:center; line-height:1.5;">
+    <strong>COMPUTER GENERATED CREDIT NOTE</strong> — Electronically generated and legally valid without a physical signature or stamp, in accordance with the Information Technology Act, 2000 and applicable GST rules.
+  </div>
+
+</div>
