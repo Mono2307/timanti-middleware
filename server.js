@@ -854,8 +854,7 @@ async function fetchSerialRowsGraphQL(resource, { from, to }, token) {
       const n = edge.node;
       const mf = {};
       for (const m of (n.metafields?.edges || [])) mf[m.node.key] = m.node.value;
-      // Plain state for filtering/sorting; store_code preserves the staff dropdown (KA-HSR).
-      const plainState = String(mf.serial_state || mf.state_code || '').toUpperCase().split('-')[0];
+      const plainState = String(mf.state_code || '').toUpperCase().split('-')[0];
       rows.push({
         resource,
         name: n.name || '',
@@ -864,7 +863,6 @@ async function fetchSerialRowsGraphQL(resource, { from, to }, token) {
         total: n.currentTotalPriceSet?.shopMoney?.amount || n.totalPriceSet?.shopMoney?.amount || '',
         document_type: mf.document_type || '',
         state_code:    plainState,
-        store_code:    mf.state_code || '',
         serial_no:     mf.serial_no || '',
         serial_code:   mf.serial_code || '',
         serial_display: mf.serial_display || '',
@@ -898,7 +896,7 @@ app.get('/api/serial-report', async (req, res) => {
     rows.sort((a, b) => Number(a.serial_no) - Number(b.serial_no));
 
     if ((req.query.format || 'json').toLowerCase() === 'csv') {
-      const cols = ['resource','name','created_at','customer','total','document_type','state_code','store_code','serial_no','serial_code','serial_display'];
+      const cols = ['resource','name','created_at','customer','total','document_type','state_code','serial_no','serial_code','serial_display'];
       const escape = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
       const csv = [cols.join(','), ...rows.map(r => cols.map(c => escape(r[c])).join(','))].join('\r\n');
       res.setHeader('Content-Type', 'text/csv');

@@ -28,8 +28,8 @@ const DEFAULT_REGISTRY = {
   credit_note:    { scope: 'global', start: 1,    code: 'CNTM-{SEQ}',              display: 'CNTM-{SEQ}' },
 };
 
-// Machine-written keys (we never write custom.state_code — that's the staff store dropdown).
-const SERIAL_KEYS = ['document_type', 'serial_state', 'serial_no', 'serial_code', 'serial_display'];
+// Machine-written keys. state_code holds the plain derived state (KA/MH).
+const SERIAL_KEYS = ['document_type', 'state_code', 'serial_no', 'serial_code', 'serial_display'];
 
 let _registryCache = null;
 let _registryAt = 0;
@@ -206,11 +206,20 @@ async function allocateAndStamp(deps, { docType, stateCode, shopifyLocationId, s
   if (resource) {
     existing = await readSerialMetafields(deps, resource, resourceId, token);
     if (existing.serial_code) {
+      // Backfill state_code on already-stamped resources that predate it (state-scoped docs:
+      // derive from the existing state_code, else from the serial_code prefix e.g. KA-1028 → KA).
+      const reg0 = (await getRegistry(deps))[existing.document_type];
+      const stateScoped = reg0 ? reg0.scope === 'state' : false;
+      let derived = deriveStateCode(existing.state_code);
+      if (!derived && stateScoped) derived = deriveStateCode(existing.serial_code);
+      if (stateScoped && !existing.state_code && derived) {
+        await stampSerial(deps, resource, resourceId, { state_code: derived }, token);
+      }
       return {
         allocated: false,
         stamped: true,
         document_type: existing.document_type,
-        state_code: deriveStateCode(existing.serial_state || existing.state_code),
+        state_code: derived,
         serial_no: existing.serial_no,
         serial_code: existing.serial_code,
         serial_display: existing.serial_display,
@@ -235,7 +244,7 @@ async function allocateAndStamp(deps, { docType, stateCode, shopifyLocationId, s
   const alloc = await allocateSerial(deps, { docType, stateCode: state });
   const fields = {
     document_type: documentType || docType,
-    serial_state:  alloc.stateCode,
+    state_code:    alloc.stateCode,
     serial_no:     alloc.seq,
     serial_code:   alloc.code,
     serial_display: alloc.display,
