@@ -305,9 +305,8 @@ async function handleRepairDraftUpdate(incomingDraft, getShopifyToken, assignRep
     await updateDraftOrderTags(draft.id, [...tags, 'repair-hq-notified'], shopifyToken);
     await writeDraftOrderMetafields(draft.id, { repair_intake_at: new Date().toISOString() }, shopifyToken);
     await fetchAndCopyOriginalOrderSpecs(draft, shopifyToken);
-    // Allocate a global REP-N serial (written to the custom namespace so it survives
-    // draft→order conversion). Idempotent and non-blocking — failure won't break intake.
-    if (assignRepairSerial) { try { await assignRepairSerial(draft.id); } catch (_) {} }
+    // NOTE: serial is NOT minted at intake (v2). It mints only at repair-complete, and never
+    // for free repairs — so abandoned/free intakes never burn a number. See Trigger 3 below.
     console.log(`✅ Repair intake: HQ notified + customer ack sent: ${draft.name}`);
     return;
   }
@@ -512,6 +511,10 @@ async function handleRepairDraftUpdate(incomingDraft, getShopifyToken, assignRep
     await writeDraftOrderMetafields(draft.id, {
       repair_completed_at: new Date().toISOString()
     }, token);
+
+    // v2 serialization: mint the REP serial at completion (the repair's finalize point),
+    // skipping free repairs so they never get a number. Idempotent + non-blocking.
+    if (assignRepairSerial && !hasFreeTag) { try { await assignRepairSerial(draft); } catch (_) {} }
 
     console.log(`✅ Repair completion notified: ${draft.name}${sequelId ? ` (Sequel: ${sequelId})` : ''}`);
   }

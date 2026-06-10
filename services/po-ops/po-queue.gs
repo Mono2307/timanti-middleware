@@ -116,8 +116,31 @@ function onOpen() {
     .addItem('Sync All Now',               'syncAllTrigger')
     .addItem('Run Batch Raise Now',        'batchRaisePoDailyTrigger')
     .addSeparator()
+    .addItem('Set Batch Store Code',       'setBatchStoreCode')
     .addItem('Fix Duplicate Rows',         'dedupAllTabs')
     .addToUi();
+}
+
+// Store code applied to batch/merchandising POs (these have no source order). Persisted as a
+// Script Property so the unattended daily batch trigger can read it. The middleware mints the
+// PO serial (PO-{CODE}-{SEQ}) from this code at HQ acknowledge; blank → no serial. Auto-POs
+// (raised from a customer order) ignore this and use the source order's own store code.
+function getBatchStoreCode() {
+  return (PropertiesService.getScriptProperties().getProperty('BATCH_STORE_CODE') || '').toUpperCase().trim();
+}
+
+function setBatchStoreCode() {
+  const ui = SpreadsheetApp.getUi();
+  const current = getBatchStoreCode();
+  const resp = ui.prompt(
+    'Batch PO Store Code',
+    'Store code for batch/merchandising POs (e.g. MH-HQ, KA-HSR).\nCurrent: ' + (current || '(none)') + '\n\nEnter a new value (or leave blank to clear):',
+    ui.ButtonSet.OK_CANCEL
+  );
+  if (resp.getSelectedButton() !== ui.Button.OK) return;
+  const code = String(resp.getResponseText()).toUpperCase().trim();
+  PropertiesService.getScriptProperties().setProperty('BATCH_STORE_CODE', code);
+  ui.alert(code ? ('✅ Batch store code set to ' + code) : '✅ Batch store code cleared.');
 }
 
 function requireMiddlewareUrl() {
@@ -448,7 +471,7 @@ function callBatchRaise(poType, tabName, rows) {
   const resp = UrlFetchApp.fetch(MIDDLEWARE_URL + '/api/po-ops/batch-raise-po', {
     method: 'post',
     contentType: 'application/json',
-    payload: JSON.stringify({ po_type: poType, rows }),
+    payload: JSON.stringify({ po_type: poType, rows, store_code: getBatchStoreCode() }),
     muteHttpExceptions: true
   });
 

@@ -25,8 +25,9 @@ function handleize(str) {
   return str.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 }
 
-async function batchRaisePo({ po_type, rows, shopifyToken, shopifyStoreUrl, supabase }) {
+async function batchRaisePo({ po_type, rows, store_code, shopifyToken, shopifyStoreUrl, supabase }) {
   if (!rows?.length) return { ok: false, error: 'No rows provided' };
+  const storeCode = (store_code || '').toUpperCase().trim() || null; // staff dropdown; drives PO-{CODE}-{SEQ} at acknowledge
 
   // Shopify needs each line item to have either a real variant_id or a non-empty title.
   // A row with neither 422s the WHOLE draft (creation is atomic), so catch it here with a
@@ -114,7 +115,8 @@ async function batchRaisePo({ po_type, rows, shopifyToken, shopifyStoreUrl, supa
     draft_order_name: draftOrder.name,
     action_token:     token,
     status:           'pending',
-    batch_id:         batchId
+    batch_id:         batchId,
+    store_code:       storeCode   // staff-picked store code; null → no serial minted at acknowledge
   });
 
   // Store in batch_po_records for batch-level tracking

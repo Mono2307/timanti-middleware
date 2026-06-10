@@ -105,7 +105,10 @@ async function getPoGroups(orderId, lineItems, isDraftOrder, shopifyToken, shopi
     comments: {
       mto:           find('mto_comments')?.value           || '',
       replenishment: find('replenishment_comments')?.value || ''
-    }
+    },
+    // Place-of-supply store code from the SOURCE order (staff-set). Recorded on the PO so
+    // the v2 serial (PO-{CODE}-{SEQ}) can be minted at HQ acknowledge. May be blank.
+    stateCode: (find('state_code')?.value || '').toUpperCase().trim() || null
   };
 }
 
@@ -308,7 +311,7 @@ async function handlePoWebhook(req, res, { supabase, getShopifyToken, shopifySto
   ).catch(e => console.error('Failed to swap raise-po tag:', e.message));
 
   // Build groups from custom.po_mto_variants / custom.po_replenishment_variants metafields
-  const { groups, comments } = await getPoGroups(order.id, lineItems, isDraftOrder, shopifyToken, shopifyStoreUrl);
+  const { groups, comments, stateCode } = await getPoGroups(order.id, lineItems, isDraftOrder, shopifyToken, shopifyStoreUrl);
 
   if (Object.keys(groups).length === 0) return;
 
@@ -345,7 +348,8 @@ async function handlePoWebhook(req, res, { supabase, getShopifyToken, shopifySto
       draft_order_id:   String(draftOrder.id),
       draft_order_name: draftOrder.name,
       action_token:     token,
-      status:           'pending'
+      status:           'pending',
+      store_code:       stateCode   // source order's place of supply; null if staff didn't set it
     });
 
     await sendPoEmail({ draftOrder, poType, sourceOrderName });

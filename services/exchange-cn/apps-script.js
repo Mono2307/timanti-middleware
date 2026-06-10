@@ -28,6 +28,7 @@ function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu('Timanti CN Tools')
     .addItem('✅  Create Credit Note & Tag Order', 'createCreditNote')
+    .addItem('🗑️  Void Credit Note', 'voidCreditNote')
     .addSeparator()
     .addItem('🔄  Lookup Order Now', 'lookupOrderManual')
     .addSeparator()
@@ -501,8 +502,9 @@ function createCreditNote() {
     ui.alert('⚠️ Order ' + orderNumber + ' not found in Shopify. CN created but order not tagged.');
   }
 
+  // Last column (M) holds the Shopify price_rule_id so a later Void can delete the discount.
   log.appendRow([issued, cnNum, orderNumber, customerName, customerEmail,
-                 netWt, diaWt, goldVal, diaVal, netCredit, expiryFmt, 'Issued', '']);
+                 netWt, diaWt, goldVal, diaVal, netCredit, expiryFmt, 'Issued', String(priceRuleId)]);
 
   sendCnEmailViaMiddleware(customerName, customerEmail, cnNum, netCredit, expiryFmt, orderNumber);
 
@@ -568,6 +570,93 @@ function allocateCnSerial() {
     Logger.log('CN serial failed: ' + e.message);
     return null;
   }
+}
+
+// Retires the credit_note serial in the middleware ledger (status=cancelled, never reused).
+// Identified by seq — the CN's CNTM-YYYY-NNNN shares only the seq with the ledger. Non-throwing.
+function cancelCnSerial(seq) {
+  if (seq == null || isNaN(seq)) return false;
+  try {
+    var res = UrlFetchApp.fetch(MIDDLEWARE_URL + '/api/serial/cancel-by-code', {
+      method:             'post',
+      contentType:        'application/json',
+      muteHttpExceptions: true,
+      payload:            JSON.stringify({ docType: 'credit_note', serialNo: Number(seq) })
+    });
+    if (res.getResponseCode() !== 200) {
+      Logger.log('CN cancel warning: middleware returned ' + res.getResponseCode() + ' — ' + res.getContentText());
+      return false;
+    }
+    return true;
+  } catch (e) {
+    Logger.log('CN cancel failed: ' + e.message);
+    return false;
+  }
+}
+
+// ── VOID CREDIT NOTE ──────────────────────────────────────────────────────────
+// A CN is valid the moment it's created; it can only be VOIDED before its expiry date.
+// Voiding deletes the Shopify discount (price rule) and retires the serial in the ledger.
+function voidCreditNote() {
+  var ss  = SpreadsheetApp.getActiveSpreadsheet();
+  var log = ss.getSheetByName('CN Log');
+  var ui  = SpreadsheetApp.getUi();
+
+  var resp = ui.prompt('Void Credit Note', 'Enter the CN number to void (e.g. CNTM-2026-0042):', ui.ButtonSet.OK_CANCEL);
+  if (resp.getSelectedButton() !== ui.Button.OK) return;
+  var cnNum = String(resp.getResponseText()).trim();
+  if (!cnNum) { ui.alert('No CN number entered.'); return; }
+
+  // Locate the CN in the log (col B = CN number).
+  var data = log.getDataRange().getValues();
+  var rowIdx = -1;
+  for (var i = 1; i < data.length; i++) {
+    if (String(data[i][1]).trim().toUpperCase() === cnNum.toUpperCase()) { rowIdx = i; break; }
+  }
+  if (rowIdx === -1) { ui.alert('CN ' + cnNum + ' not found in CN Log.'); return; }
+
+  var row         = data[rowIdx];
+  var expiryFmt   = String(row[10]).trim();  // col K — dd-MM-yyyy
+  var status      = String(row[11]).trim();  // col L
+  var priceRuleId = String(row[12]).trim();  // col M
+
+  if (/void/i.test(status)) { ui.alert('CN ' + cnNum + ' is already voided.'); return; }
+
+  // Only voidable before expiry.
+  var expDate = parseDmy(expiryFmt);
+  if (expDate && new Date() > expDate) {
+    ui.alert('CN ' + cnNum + ' expired on ' + expiryFmt + ' — it can no longer be voided.');
+    return;
+  }
+
+  var confirm = ui.alert('Void ' + cnNum + '?',
+    'This deletes the Shopify discount and retires the serial. This cannot be undone.',
+    ui.ButtonSet.YES_NO);
+  if (confirm !== ui.Button.YES) return;
+
+  // 1. Delete the Shopify price rule (removes its discount code too).
+  if (priceRuleId) {
+    shopifyDelete('price_rules/' + priceRuleId + '.json');
+  } else {
+    Logger.log('Void ' + cnNum + ': no price_rule_id on log row — skipping Shopify delete.');
+  }
+
+  // 2. Retire the serial (by seq parsed from the CN number).
+  var seq = parseInt(String(cnNum).split('-').pop(), 10);
+  var retired = cancelCnSerial(seq);
+
+  // 3. Mark the log row voided (col L).
+  log.getRange(rowIdx + 1, 12).setValue('Voided');
+
+  ui.alert('✅ ' + cnNum + ' voided.\n\nDiscount removed' +
+           (retired ? ' and serial retired in the ledger.' : '. ⚠️ Ledger retire failed — check the logs.'));
+}
+
+// Parses a dd-MM-yyyy string into a Date (end-of-day, IST-agnostic). Returns null if unparseable.
+function parseDmy(s) {
+  var m = /^(\d{1,2})-(\d{1,2})-(\d{4})$/.exec(String(s).trim());
+  if (!m) return null;
+  return new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]), 23, 59, 59);
 }
 
 // ── HELPERS ───────────────────────────────────────────────────────────────────
@@ -642,6 +731,20 @@ function shopifyPut(endpoint, payload) {
   });
   if (res.getResponseCode() >= 400) return null;
   return JSON.parse(res.getContentText());
+}
+
+function shopifyDelete(endpoint) {
+  var url = 'https://' + SHOPIFY_SHOP + '/admin/api/2024-01/' + endpoint;
+  var res = UrlFetchApp.fetch(url, {
+    method:             'delete',
+    headers:            { 'X-Shopify-Access-Token': getToken() },
+    muteHttpExceptions: true
+  });
+  if (res.getResponseCode() >= 400) {
+    Logger.log('Shopify DELETE ' + endpoint + ' failed: ' + res.getContentText());
+    return false;
+  }
+  return true;
 }
 
 function getOrderData(orderName) {

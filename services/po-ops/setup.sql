@@ -35,3 +35,7 @@ create table if not exists batch_po_records (
 
 -- Add batch_id column to po_records (safe to run even if already exists)
 alter table po_records add column if not exists batch_id text;
+
+-- v2 serialization: store code (place of supply) used to mint PO-{CODE}-{SEQ} at HQ acknowledge.
+-- Auto-POs copy it from the source order's custom.state_code; batch POs get it from the sheet dropdown.
+alter table po_records add column if not exists store_code text;

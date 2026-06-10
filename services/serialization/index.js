@@ -292,8 +292,10 @@ async function allocateAndStamp(deps, { docType, stateCode, shopifyLocationId, s
 // mintSerial: the source-of-truth allocator. Idempotent per (docType, resourceId) via
 // the serial_ledger.serial_ledger_resource_unique constraint — a resource can never get
 // two numbers, no matter how many times this is called. Optionally mirrors onto Shopify.
-async function mintSerial(deps, { docType, storeCode, deliveryCode, resourceType, resourceId, resourceName, stamp = false }) {
-  const ridStr = resourceId != null ? String(resourceId) : null;
+// resourceIdFromCode: for resources that have no external id (credit notes), key the ledger row
+// by the freshly-minted serial_code itself, so it can later be cancelled by code.
+async function mintSerial(deps, { docType, storeCode, deliveryCode, resourceType, resourceId, resourceName, stamp = false, resourceIdFromCode = false }) {
+  let ridStr = resourceId != null ? String(resourceId) : null;
 
   // 1. Idempotency: already minted for this resource?
   if (ridStr) {
@@ -304,6 +306,9 @@ async function mintSerial(deps, { docType, storeCode, deliveryCode, resourceType
 
   // 2. Atomic next number via the existing counter.
   const alloc = await allocateSerial(deps, { docType, stateCode: storeCode, deliveryCode });
+
+  // For id-less resources, use the just-minted code as the resource id (unique by construction).
+  if (!ridStr && resourceIdFromCode) ridStr = alloc.code;
 
   // 3. Record in the ledger (the resource-unique constraint resolves webhook races).
   const { data: row, error } = await deps.supabase.from('serial_ledger').insert({
@@ -336,10 +341,16 @@ async function mintSerial(deps, { docType, storeCode, deliveryCode, resourceType
 }
 
 // cancelSerial: retire a number (status=cancelled). Never reused — GST-clean.
-async function cancelSerial(deps, { docType, resourceId }) {
-  const { data } = await deps.supabase.from('serial_ledger')
+// Identify the row by resourceId (the usual path) OR by seq (credit notes, whose customer-facing
+// CNTM-YYYY-NNNN number shares only the seq with the ledger's serial_code).
+async function cancelSerial(deps, { docType, resourceId, seq }) {
+  let q = deps.supabase.from('serial_ledger')
     .update({ status: 'cancelled', cancelled_at: new Date().toISOString() })
-    .eq('doc_type', docType).eq('resource_id', String(resourceId)).select().maybeSingle();
+    .eq('doc_type', docType);
+  if (resourceId != null)   q = q.eq('resource_id', String(resourceId));
+  else if (seq != null)     q = q.eq('seq', Number(seq));
+  else throw new Error('cancelSerial requires resourceId or seq');
+  const { data } = await q.select().maybeSingle();
   return data;
 }
 

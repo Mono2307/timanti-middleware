@@ -37,7 +37,7 @@ function errorPage(message) {
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Error</title><style>${CARD_STYLE}h2{color:#E74C3C;}</style></head><body><div class="card"><h2>Something went wrong</h2><p>${message}</p></div></body></html>`;
 }
 
-async function handlePoAction(req, res, { supabase, getShopifyToken, shopifyStoreUrl }) {
+async function handlePoAction(req, res, { supabase, getShopifyToken, shopifyStoreUrl, serialization, serialPo }) {
   const action = req.query.action;
   const token  = req.query.token;
 
@@ -89,6 +89,30 @@ async function handlePoAction(req, res, { supabase, getShopifyToken, shopifyStor
   }
 
   await supabase.from('po_records').update({ status: newStatus }).eq('action_token', token);
+
+  // ── v2 serialization (Stage 4/5) — PO is finalized on HQ acknowledge, retired on cancel ──
+  // Non-blocking: a serial failure must never stop the PO status flow.
+  if (serialization && serialPo) {
+    try {
+      if (action === 'acknowledge') {
+        const storeCode = (record.store_code || '').toUpperCase().trim();
+        if (!storeCode) {
+          console.warn(`[serial] PO ${poName}: no store_code on record — skipping mint`);
+        } else {
+          const r = await serialization.mintSerial(
+            { supabase, getShopifyToken, shopifyStoreUrl },
+            { docType: 'po', storeCode, resourceType: 'draft_order', resourceId: String(draftOrderId), resourceName: poName, stamp: true }
+          );
+          if (r.minted) console.log(`[serial] po ${poName} → ${r.serial_code}`);
+        }
+      } else if (action === 'cancelled') {
+        await serialization.cancelSerial({ supabase }, { docType: 'po', resourceId: String(draftOrderId) });
+        console.log(`[serial] po ${poName} serial retired (cancelled)`);
+      }
+    } catch (e) {
+      console.error(`[serial] PO action serial step failed for ${poName}:`, e.message);
+    }
+  }
 
   if (action === 'shipped' && shopifyToken) {
     try {

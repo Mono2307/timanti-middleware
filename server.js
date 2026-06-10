@@ -291,15 +291,31 @@ async function convertDraftToOrder(draftOrderId, transactionDbId) {
 // Payment Completion Handler
 // ─────────────────────────────────────────
 
-// Allocates a global REP-N serial on a repair draft (custom namespace, survives conversion).
-// Idempotent and non-throwing. Passed into handleRepairDraftUpdate.
-async function assignRepairSerial(draftId) {
+// Mints a REP-{CODE}-{SEQ} serial for a repair draft via the v2 ledger (Stage 3).
+// Called ONLY from the repair-complete trigger (not intake) and never for free repairs,
+// so abandoned/free intakes don't burn numbers. Store code = the draft's staff-set
+// custom.state_code (place of supply); blank → skip (staff hasn't set it). The ledger's
+// (doc_type,resource_id) unique constraint makes this idempotent. Non-throwing.
+// Accepts the draft object (preferred) or a bare draft id.
+async function assignRepairSerial(draft) {
   if (!SERIAL_REPAIR) return null;
+  const draftId = (draft && typeof draft === 'object') ? draft.id : draft;
   try {
-    const r = await serialization.allocateAndStamp(SERIAL_DEPS(), {
-      docType: 'repair', documentType: 'repair', draftOrderId: String(draftId),
+    const deps  = SERIAL_DEPS();
+    const token = await getShopifyToken();
+    const mf = await serialization.readSerialMetafields(deps, 'draft_orders', String(draftId), token);
+    const storeCode = (mf.state_code || '').toUpperCase().trim();
+    if (!storeCode) {
+      console.log(`[serial] repair ${draftId}: no state_code set — skipping mint`);
+      return null;
+    }
+    const r = await serialization.mintSerial(deps, {
+      docType: 'repair', storeCode,
+      resourceType: 'draft_order', resourceId: String(draftId),
+      resourceName: (draft && typeof draft === 'object') ? draft.name : null,
+      stamp: true,
     });
-    console.log(`[serial] repair draft ${draftId} → ${r.serial_code} (allocated=${r.allocated})`);
+    if (r.minted) console.log(`[serial] repair draft ${draftId} → ${r.serial_code}`);
     return r;
   } catch (err) {
     console.error(`[serial] repair assign failed for ${draftId}:`, err.message);
@@ -307,39 +323,59 @@ async function assignRepairSerial(draftId) {
   }
 }
 
-// Allocates a per-state serial for a draft-typed document (po/memo/transfer).
-// State precedence: a `state:XX` tag → shipping/billing province_code → (po only) PO_HQ_STATE.
-// Idempotent; on first allocation of a memo/transfer it clears the trigger tag.
+// Mints a per-store serial for a memo/transfer draft via the v2 ledger (Stage 4b).
+// Store code: a `state:XX` tag → the draft's staff-set custom.state_code.
+// Delivery code (destination): the draft's staff-set custom.delivery_code (required).
+// Idempotent via the ledger's (doc_type,resource_id) constraint; once a serial exists the
+// trigger tag is cleared so the draft-update webhook stops re-firing.
 async function assignDocSerial(draft, docType, removeTag = null) {
   try {
-    const rawTags = (draft.tags || '').split(',').map(t => t.trim());
-    const stateTag = rawTags.find(t => /^state:/i.test(t));
-    let stateCode = stateTag ? stateTag.split(':')[1].toUpperCase() : null;
-    // No state: tag → allocateAndStamp falls back to the draft's staff-set custom.state_code.
-    if (!stateCode && docType === 'po') stateCode = (process.env.PO_HQ_STATE || '').toUpperCase() || null;
+    const deps  = SERIAL_DEPS();
+    const token = await getShopifyToken();
+    const mf = await serialization.readSerialMetafields(deps, 'draft_orders', String(draft.id), token);
 
-    const r = await serialization.allocateAndStamp(SERIAL_DEPS(), {
-      docType, draftOrderId: String(draft.id), stateCode,
+    const stateTag  = (draft.tags || '').split(',').map(t => t.trim()).find(t => /^state:/i.test(t));
+    const storeCode = (stateTag ? stateTag.split(':')[1] : (mf.state_code || '')).toUpperCase().trim();
+    if (!storeCode) { console.log(`[serial] ${docType} draft ${draft.id}: no store code yet — skipping`); return; }
+
+    const deliveryCode = (mf.delivery_code || '').toUpperCase().trim();
+    if (!deliveryCode) { console.log(`[serial] ${docType} draft ${draft.id}: no delivery_code yet — skipping`); return; }
+
+    const r = await serialization.mintSerial(deps, {
+      docType, storeCode, deliveryCode,
+      resourceType: 'draft_order', resourceId: String(draft.id), resourceName: draft.name,
+      stamp: true,
     });
-    console.log(`[serial] ${docType} draft ${draft.id} → ${r.serial_code} (allocated=${r.allocated})`);
-    if (removeTag && r.allocated) await removeTagFromDraft(String(draft.id), removeTag);
+    if (r.minted) console.log(`[serial] ${docType} draft ${draft.id} → ${r.serial_code}`);
+    // Clear the trigger tag whether we just minted or it was already in the ledger — the doc is numbered.
+    if (removeTag) await removeTagFromDraft(String(draft.id), removeTag);
   } catch (err) {
-    if (err.code === 'NO_STATE' || err.code === 'NO_DELIVERY') return; // staff hasn't filled state_code/delivery_code yet
     console.error(`[serial] ${docType} assign failed for ${draft.id}:`, err.message);
   }
 }
 
-// Detects draft-document trigger tags and assigns the matching serial.
-// PO drafts carry `po-draft`; memo/transfer are triggered by staff adding `make-memo`/`make-transfer`.
+// Retires a memo/transfer serial when staff tag the draft cancel-memo / cancel-transfer (Stage 5).
+// Number is marked cancelled in the ledger and never reused (GST-clean audit).
+async function cancelDocSerial(draft, docType, removeTag = null) {
+  try {
+    const r = await serialization.cancelSerial(SERIAL_DEPS(), { docType, resourceId: String(draft.id) });
+    if (r) console.log(`[serial] ${docType} draft ${draft.id} serial retired (cancelled)`);
+    if (removeTag) await removeTagFromDraft(String(draft.id), removeTag);
+  } catch (err) {
+    console.error(`[serial] ${docType} cancel failed for ${draft.id}:`, err.message);
+  }
+}
+
+// Detects draft-document trigger tags and mints/retires the matching serial.
+// memo/transfer mint on `make-memo`/`make-transfer`, retire on `cancel-memo`/`cancel-transfer`.
+// (PO is no longer minted here — it mints at HQ acknowledge in handlePoAction.)
 async function handleDocumentSerialTags(draft) {
+  if (!SERIAL_MEMO_TRANSFER) return;
   const tags = (draft.tags || '').split(',').map(t => t.trim().toLowerCase());
-  if (SERIAL_PO && tags.includes('po-draft')) {
-    await assignDocSerial(draft, 'po');
-  }
-  if (SERIAL_MEMO_TRANSFER) {
-    if (tags.includes('make-memo'))          await assignDocSerial(draft, 'memo', 'make-memo');
-    else if (tags.includes('make-transfer')) await assignDocSerial(draft, 'transfer', 'make-transfer');
-  }
+  if (tags.includes('make-memo'))          await assignDocSerial(draft, 'memo', 'make-memo');
+  else if (tags.includes('make-transfer')) await assignDocSerial(draft, 'transfer', 'make-transfer');
+  else if (tags.includes('cancel-memo'))     await cancelDocSerial(draft, 'memo', 'cancel-memo');
+  else if (tags.includes('cancel-transfer')) await cancelDocSerial(draft, 'transfer', 'cancel-transfer');
 }
 
 async function handlePaymentCompletion(transaction, overrides = {}) {
@@ -782,98 +818,51 @@ app.get('/api/draft-orders-report', async (req, res) => {
 });
 
 // GET /api/serial-report
-// Serial-aware report across Orders and/or Draft Orders, filtered by the serial
-// metafields. Returns JSON rows (default) for the reporting Apps Script, or CSV with
-// ?format=csv. Uses GraphQL so serial metafields come back inline (no per-order N+1).
+// Serial report read straight from the v2 serial_ledger (the source of truth — includes both
+// active and cancelled/retired numbers, no Shopify GraphQL crawl). Returns JSON rows (default)
+// for the reporting Apps Script, or CSV with ?format=csv.
 //
 // Query params (all optional):
-//   resource=orders|draft_orders|both   (default both)
 //   docType=customer_order|repair|po|memo|transfer|credit_note
-//   state=KA|MH|...
-//   from=YYYY-MM-DD   to=YYYY-MM-DD      (created_at range)
-//   format=json|csv                      (default json)
-async function fetchSerialRowsGraphQL(resource, { from, to }, token) {
-  const gqlUrl = `${process.env.SHOPIFY_STORE_URL}/admin/api/2025-01/graphql.json`;
-  const hdrs   = { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' };
-
-  const searchParts = [];
-  if (from) searchParts.push(`created_at:>=${from}`);
-  if (to)   searchParts.push(`created_at:<=${to}`);
-  const search = searchParts.join(' ');
-
-  const root = resource === 'orders' ? 'orders' : 'draftOrders';
-  const customerField = resource === 'orders'
-    ? 'customer { displayName }'
-    : 'customer { displayName }';
-  const totalField = resource === 'orders'
-    ? 'currentTotalPriceSet { shopMoney { amount } }'
-    : 'totalPriceSet { shopMoney { amount } }';
-
-  const rows = [];
-  let cursor = null;
-  let pages = 0;
-  do {
-    const query = `query($cursor: String) {
-      ${root}(first: 100, after: $cursor, query: ${JSON.stringify(search)}) {
-        edges { cursor node {
-          name createdAt
-          ${customerField}
-          ${totalField}
-          metafields(first: 20, namespace: "custom") { edges { node { key value } } }
-        } }
-        pageInfo { hasNextPage }
-      }
-    }`;
-    const { data } = await axios.post(gqlUrl, { query, variables: { cursor } }, { headers: hdrs, timeout: 30000 });
-    const conn = data?.data?.[root];
-    if (!conn) break;
-    for (const edge of conn.edges) {
-      const n = edge.node;
-      const mf = {};
-      for (const m of (n.metafields?.edges || [])) mf[m.node.key] = m.node.value;
-      const plainState = String(mf.state_code || '').toUpperCase();
-      rows.push({
-        resource,
-        name: n.name || '',
-        created_at: n.createdAt ? new Date(n.createdAt).toLocaleDateString('en-IN') : '',
-        customer: n.customer?.displayName || '',
-        total: n.currentTotalPriceSet?.shopMoney?.amount || n.totalPriceSet?.shopMoney?.amount || '',
-        document_type: mf.document_type || '',
-        state_code:    plainState,
-        serial_no:     mf.serial_no || '',
-        serial_code:   mf.serial_code || '',
-        serial_display: mf.serial_display || '',
-      });
-    }
-    cursor = conn.pageInfo?.hasNextPage ? conn.edges[conn.edges.length - 1]?.cursor : null;
-    pages++;
-  } while (cursor && pages < 50);
-  return rows;
-}
-
+//   state=KA-HSR|MH-HQ|...                (matches ledger store_code)
+//   status=active|cancelled|all          (default all — shows retired numbers too)
+//   from=YYYY-MM-DD   to=YYYY-MM-DD       (ledger created_at range)
+//   format=json|csv                       (default json)
 app.get('/api/serial-report', async (req, res) => {
   try {
-    const token    = await getShopifyToken();
-    const resource = (req.query.resource || 'both').toLowerCase();
-    const docType  = (req.query.docType || '').toLowerCase();
-    const state    = (req.query.state || '').toUpperCase();
-    const range    = { from: req.query.from || null, to: req.query.to || null };
+    const docType = (req.query.docType || '').toLowerCase();
+    const state   = (req.query.state || '').toUpperCase();
+    const status  = (req.query.status || 'all').toLowerCase();
+    const from    = req.query.from || null;
+    const to      = req.query.to || null;
 
-    const resources = resource === 'orders' ? ['orders']
-                    : resource === 'draft_orders' ? ['draft_orders']
-                    : ['orders', 'draft_orders'];
+    let q = supabase.from('serial_ledger').select('*').order('seq', { ascending: true }).limit(10000);
+    if (docType)            q = q.eq('doc_type', docType);
+    if (state)              q = q.eq('store_code', state);
+    if (status !== 'all')   q = q.eq('status', status);
+    if (from)               q = q.gte('created_at', new Date(from).toISOString());
+    if (to)                 q = q.lte('created_at', new Date(to + 'T23:59:59Z').toISOString());
 
-    let rows = [];
-    for (const r of resources) rows = rows.concat(await fetchSerialRowsGraphQL(r, range, token));
+    const { data, error } = await q;
+    if (error) throw new Error(error.message);
 
-    // Only rows that actually carry a serial; then apply doc/state filters.
-    rows = rows.filter(r => r.serial_code);
-    if (docType) rows = rows.filter(r => r.document_type.toLowerCase() === docType);
-    if (state)   rows = rows.filter(r => r.state_code.toUpperCase() === state);
-    rows.sort((a, b) => Number(a.serial_no) - Number(b.serial_no));
+    const rows = (data || []).map(r => ({
+      resource:       r.resource_type || '',
+      name:           r.resource_name || '',
+      created_at:     r.created_at ? new Date(r.created_at).toLocaleDateString('en-IN') : '',
+      customer:       '',   // not tracked in the ledger
+      total:          '',   // not tracked in the ledger
+      document_type:  r.doc_type || '',
+      state_code:     r.store_code || '',
+      serial_no:      r.seq != null ? String(r.seq) : '',
+      serial_code:    r.serial_code || '',
+      serial_display: r.serial_code || '',
+      status:         r.status || '',
+      cancelled_at:   r.cancelled_at ? new Date(r.cancelled_at).toLocaleDateString('en-IN') : '',
+    }));
 
     if ((req.query.format || 'json').toLowerCase() === 'csv') {
-      const cols = ['resource','name','created_at','customer','total','document_type','state_code','serial_no','serial_code','serial_display'];
+      const cols = ['resource','name','created_at','customer','total','document_type','state_code','serial_no','serial_code','serial_display','status','cancelled_at'];
       const escape = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
       const csv = [cols.join(','), ...rows.map(r => cols.map(c => escape(r[c])).join(','))].join('\r\n');
       res.setHeader('Content-Type', 'text/csv');
@@ -2690,7 +2679,7 @@ app.get('/api/payment-links', async (req, res) => {
 // PO Operations
 // ─────────────────────────────────────────
 
-const PO_DEPS = () => ({ supabase, getShopifyToken, shopifyStoreUrl: process.env.SHOPIFY_STORE_URL });
+const PO_DEPS = () => ({ supabase, getShopifyToken, shopifyStoreUrl: process.env.SHOPIFY_STORE_URL, serialization, serialPo: SERIAL_PO });
 
 app.post('/api/po-webhook', async (req, res) => {
   const deps  = PO_DEPS();
@@ -2728,11 +2717,40 @@ app.post('/api/serial/allocate', async (req, res) => {
   try {
     const { docType } = req.body || {};
     if (!docType) return res.status(400).json({ success: false, error: 'docType required' });
+    // Credit notes are valid the moment they're created → record in the ledger (keyed by their own
+    // CNTM code) so they can be voided before expiry. CN has no Shopify resource id.
+    if (docType === 'credit_note') {
+      const r = await serialization.mintSerial(SERIAL_DEPS(), {
+        docType: 'credit_note', storeCode: 'ALL', resourceType: 'credit_note', resourceIdFromCode: true,
+      });
+      return res.json({ success: true, allocated: r.minted, serial_no: r.seq, serial_code: r.serial_code, serial_display: r.serial_code });
+    }
     const result = await serialization.allocateAndStamp(SERIAL_DEPS(), req.body);
     return res.json({ success: true, ...result });
   } catch (err) {
     if (err.code === 'NO_STATE') return res.status(400).json({ success: false, error: err.message });
     console.error('[serial] allocate failed:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST /api/serial/cancel-by-code — retire a serial that has no Shopify resource id (credit notes).
+// Identify by serialNo (the seq — preferred for CNs, whose CNTM-YYYY-NNNN shares only the seq with
+// the ledger) or by serialCode (the ledger resource_id). Body: { serialNo?|serialCode?, docType? }.
+app.post('/api/serial/cancel-by-code', async (req, res) => {
+  try {
+    const body    = req.body || {};
+    const docType = body.docType || 'credit_note';
+    const seq     = body.serialNo != null ? Number(body.serialNo) : null;
+    if (seq == null && !body.serialCode) {
+      return res.status(400).json({ success: false, error: 'serialNo or serialCode required' });
+    }
+    const r = await serialization.cancelSerial(SERIAL_DEPS(),
+      seq != null ? { docType, seq } : { docType, resourceId: String(body.serialCode) });
+    if (!r) return res.status(404).json({ success: false, error: `no serial found for ${seq != null ? 'seq ' + seq : body.serialCode}` });
+    return res.json({ success: true, serial_code: r.serial_code, seq: r.seq, status: r.status, cancelled_at: r.cancelled_at });
+  } catch (err) {
+    console.error('[serial] cancel-by-code failed:', err.message);
     return res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -2763,6 +2781,10 @@ app.post('/api/serial/order-serial', async (req, res) => {
     if (r.minted) console.log(`[serial] customer_order order ${order.name || order.id} → ${r.serial_code}`);
   })().catch(e => console.error(`[serial] order-serial failed for ${order.id}:`, e.message));
 });
+
+// NOTE: customer-order serials are PERMANENT once minted — there is intentionally NO cancellation
+// path for them. A cancelled/refunded order keeps its number (like an invoice number); any reversal
+// is handled by a separate credit note. Only PO / memo / transfer / credit_note can be voided.
 
 // Read-only peek at the current value of a counter (never allocates).
 app.get('/api/serial/peek', async (req, res) => {
@@ -3078,11 +3100,11 @@ app.post('/api/po-ops/sync-all', async (req, res) => {
 });
 
 app.post('/api/po-ops/batch-raise-po', async (req, res) => {
-  const { po_type, rows } = req.body;
+  const { po_type, rows, store_code } = req.body;
   if (!po_type || !rows?.length) return res.status(400).json({ ok: false, error: 'po_type and rows required' });
   try {
     const token  = await getShopifyToken();
-    const result = await batchRaisePo({ po_type, rows, shopifyToken: token, shopifyStoreUrl: process.env.SHOPIFY_STORE_URL, supabase });
+    const result = await batchRaisePo({ po_type, rows, store_code, shopifyToken: token, shopifyStoreUrl: process.env.SHOPIFY_STORE_URL, supabase });
     return res.json(result);
   } catch (e) {
     console.error('[BATCH-PO]', e.message);
