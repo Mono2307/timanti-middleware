@@ -30,10 +30,12 @@ const AUTO_SEND_DRAFT_INVOICE     = process.env.AUTO_SEND_DRAFT_INVOICE     === 
 const AUTO_SEND_DEPOSIT_EMAIL     = process.env.AUTO_SEND_DEPOSIT_EMAIL     === 'true';
 
 // Serialization feature flags — wire one doc type at a time.
-const SERIAL_CUSTOMER_ORDER = process.env.SERIAL_CUSTOMER_ORDER === 'true';
-const SERIAL_REPAIR         = process.env.SERIAL_REPAIR         === 'true';
-const SERIAL_MEMO_TRANSFER  = process.env.SERIAL_MEMO_TRANSFER  === 'true';
-const SERIAL_PO             = process.env.SERIAL_PO             === 'true';
+// Lenient parse so True/TRUE/1/yes/whitespace all count as on.
+const flagOn = (v) => ['true', '1', 'yes', 'on'].includes(String(v || '').trim().toLowerCase());
+const SERIAL_CUSTOMER_ORDER = flagOn(process.env.SERIAL_CUSTOMER_ORDER);
+const SERIAL_REPAIR         = flagOn(process.env.SERIAL_REPAIR);
+const SERIAL_MEMO_TRANSFER  = flagOn(process.env.SERIAL_MEMO_TRANSFER);
+const SERIAL_PO             = flagOn(process.env.SERIAL_PO);
 
 function getPinePaymentMode() {
   const mode = (process.env.PINE_PAYMENT_MODE || 'integer').toLowerCase();

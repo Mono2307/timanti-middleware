@@ -20,7 +20,7 @@ const GLOBAL = 'ALL'; // state_code sentinel for non-location-scoped sequences
 //   scope: 'state'  → keyed by (docType, stateCode); requires a resolvable state
 //   scope: 'global' → keyed by (docType, 'ALL'); ignores state
 const DEFAULT_REGISTRY = {
-  customer_order: { scope: 'state',  start: 1001, code: '{STATE}-{SEQ}',          display: 'Aura Carat {STATE} {SEQ}' },
+  customer_order: { scope: 'state',  start: 1001, code: 'TMNT-{STATE}-{SEQ}',     display: 'TMNT-{STATE}-{SEQ}' },
   po:             { scope: 'state',  start: 1001, code: 'PO-{STATE}-{SEQ}',        display: 'PO-{STATE}-{SEQ}' },
   memo:           { scope: 'state',  start: 1001, code: 'MEMO-{STATE}-{SEQ}',      display: 'MEMO-{STATE}-{SEQ}' },
   transfer:       { scope: 'state',  start: 1001, code: 'TRANSFER-{STATE}-{SEQ}',  display: 'TRANSFER-{STATE}-{SEQ}' },
