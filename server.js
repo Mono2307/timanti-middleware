@@ -3013,8 +3013,8 @@ async function runSerialSetState(req, res) {
     const updated = [];
 
     async function setOne(resource, id, name) {
-      await serialization.stampSerial(deps, resource, id, { state_code: code }, token);
-      updated.push({ resource, name: name || id });
+      const r = await serialization.stampSerial(deps, resource, id, { state_code: code }, token);
+      updated.push({ resource, name: name || id, ok: r.errors.length === 0, errors: r.errors });
     }
 
     if (p.orderId)      await setOne('orders', p.orderId);
