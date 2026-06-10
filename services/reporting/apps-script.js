@@ -22,7 +22,7 @@ const OUTPUT_START_ROW = 8;
 
 const REPORT_COLS = [
   'resource', 'name', 'created_at', 'customer', 'total',
-  'document_type', 'state_code', 'serial_no', 'serial_code', 'serial_display'
+  'document_type', 'state_code', 'store_code', 'serial_no', 'serial_code', 'serial_display'
 ];
 
 function onOpen() {

@@ -28,7 +28,8 @@ const DEFAULT_REGISTRY = {
   credit_note:    { scope: 'global', start: 1,    code: 'CNTM-{SEQ}',              display: 'CNTM-{SEQ}' },
 };
 
-const SERIAL_KEYS = ['document_type', 'state_code', 'serial_no', 'serial_code', 'serial_display'];
+// Machine-written keys (we never write custom.state_code — that's the staff store dropdown).
+const SERIAL_KEYS = ['document_type', 'serial_state', 'serial_no', 'serial_code', 'serial_display'];
 
 let _registryCache = null;
 let _registryAt = 0;
@@ -78,12 +79,21 @@ function resolveStateFromShippingAddress(addr) {
   return (addr?.province_code || '').toUpperCase() || null;
 }
 
-// Precedence: explicit stateCode > location lookup > shipping address.
+// Normalizes a raw location/store code to a plain state code for the sequence key.
+// Staff pick store-level codes (KA-HSR, MH-HQ); the sequence is per-STATE, so we take
+// the prefix before the first '-'.  "KA-HSR" → "KA", "mh-hq" → "MH", "KA" → "KA".
+function deriveStateCode(raw) {
+  return String(raw || '').toUpperCase().split('-')[0].trim() || null;
+}
+
+// Precedence: explicit stateCode > location lookup > shipping address. Each source is
+// normalized through deriveStateCode so store-level codes collapse to the state.
 async function resolveState(deps, { stateCode, shopifyLocationId, shippingAddress }) {
-  if (stateCode) return String(stateCode).toUpperCase();
+  if (stateCode) return deriveStateCode(stateCode);
   const fromLoc = await resolveStateFromLocation(deps, shopifyLocationId);
-  if (fromLoc) return fromLoc;
-  return resolveStateFromShippingAddress(shippingAddress);
+  if (fromLoc) return deriveStateCode(fromLoc);
+  const fromShip = resolveStateFromShippingAddress(shippingAddress);
+  return fromShip ? deriveStateCode(fromShip) : null;
 }
 
 // ─── Allocation (the ONLY caller of the RPC) ────────────────────────────────────
@@ -94,7 +104,7 @@ async function allocateSerial(deps, { docType, stateCode }) {
   if (!reg) throw new Error(`unknown docType: ${docType}`);
 
   const isGlobal = reg.scope === 'global';
-  const state = isGlobal ? GLOBAL : (stateCode ? String(stateCode).toUpperCase() : null);
+  const state = isGlobal ? GLOBAL : deriveStateCode(stateCode);
   if (!isGlobal && !state) throw new Error(`state required for docType ${docType}`);
 
   const { data, error } = await deps.supabase.rpc('allocate_serial', {
@@ -115,7 +125,8 @@ async function allocateSerial(deps, { docType, stateCode }) {
 
 // ─── Metafield read / write ─────────────────────────────────────────────────────
 
-// resource: 'orders' | 'draft_orders'
+// resource: 'orders' | 'draft_orders'. Returns ALL custom metafields as {key: value}
+// — we need serial_code for idempotency and the staff-set state_code for state fallback.
 async function readSerialMetafields(deps, resource, id, token) {
   const { data } = await axios.get(
     `${deps.shopifyStoreUrl}/admin/api/${API}/${resource}/${id}/metafields.json`,
@@ -123,7 +134,7 @@ async function readSerialMetafields(deps, resource, id, token) {
   );
   const out = {};
   for (const mf of (data.metafields || [])) {
-    if (mf.namespace === 'custom' && SERIAL_KEYS.includes(mf.key)) out[mf.key] = mf.value;
+    if (mf.namespace === 'custom') out[mf.key] = mf.value;
   }
   return out;
 }
@@ -132,75 +143,89 @@ function serialType(key) {
   return key === 'serial_no' ? 'number_integer' : 'single_line_text_field';
 }
 
-// Writes the serial metafields to an order. Drafts go through the injected
-// updateDraftOrderMetafields (which already does the custom-namespace GET→PUT/POST).
-async function writeOrderSerialMetafields(deps, orderId, fields, token) {
+// Resilient per-field writer for both orders and draft_orders. Each field is written
+// independently so one field with a conflicting metafield definition can't abort the rest
+// (critically: serial_code must always land for idempotency). Returns collected errors.
+async function writeSerialMetafields(deps, resource, id, fields, token) {
   const headers = shopifyHeaders(token);
-  const { data: existingData } = await axios.get(
-    `${deps.shopifyStoreUrl}/admin/api/${API}/orders/${orderId}/metafields.json`,
-    { headers: { 'X-Shopify-Access-Token': token }, timeout: 10000 }
-  );
+  const errors = [];
   const existingByKey = {};
-  for (const mf of (existingData.metafields || [])) {
-    if (mf.namespace === 'custom') existingByKey[mf.key] = mf.id;
+  try {
+    const { data } = await axios.get(
+      `${deps.shopifyStoreUrl}/admin/api/${API}/${resource}/${id}/metafields.json`,
+      { headers: { 'X-Shopify-Access-Token': token }, timeout: 10000 }
+    );
+    for (const mf of (data.metafields || [])) {
+      if (mf.namespace === 'custom') existingByKey[mf.key] = mf.id;
+    }
+  } catch (e) {
+    errors.push({ stage: 'read', error: e.response?.data || e.message });
   }
+
   for (const [key, value] of Object.entries(fields)) {
     if (value === null || value === undefined || String(value).trim() === '') continue;
-    const body = { metafield: { namespace: 'custom', key, value: String(value), type: serialType(key) } };
+    const type = serialType(key);
     const existingId = existingByKey[key];
     try {
       if (existingId) {
         await axios.put(
-          `${deps.shopifyStoreUrl}/admin/api/${API}/orders/${orderId}/metafields/${existingId}.json`,
-          { metafield: { id: existingId, value: String(value), type: serialType(key) } },
+          `${deps.shopifyStoreUrl}/admin/api/${API}/metafields/${existingId}.json`,
+          { metafield: { id: existingId, value: String(value), type } },
           { headers, timeout: 10000 }
         );
       } else {
         await axios.post(
-          `${deps.shopifyStoreUrl}/admin/api/${API}/orders/${orderId}/metafields.json`,
-          body, { headers, timeout: 10000 }
+          `${deps.shopifyStoreUrl}/admin/api/${API}/${resource}/${id}/metafields.json`,
+          { metafield: { namespace: 'custom', key, value: String(value), type } },
+          { headers, timeout: 10000 }
         );
       }
     } catch (err) {
-      console.error(`[serial] order metafield ${key} failed:`, err.response?.data || err.message);
+      errors.push({ key, error: err.response?.data || err.message });
+      console.error(`[serial] ${resource} metafield ${key} failed:`, JSON.stringify(err.response?.data) || err.message);
     }
   }
+  return { errors };
 }
 
 async function stampSerial(deps, resource, id, fields, token) {
-  if (resource === 'draft_orders') {
-    await deps.updateDraftOrderMetafields(id, fields);
-  } else {
-    await writeOrderSerialMetafields(deps, id, fields, token);
-  }
+  return writeSerialMetafields(deps, resource, id, fields, token);
 }
 
 // ─── allocateAndStamp: server-side one-shot (allocate + idempotent stamp) ────────
 // Pass exactly one of { draftOrderId, orderId } to stamp; omit both to just allocate.
+// We never write `state_code` — that is the staff-owned store dropdown (KA-HSR/MH-HQ);
+// the derived plain state is written as `serial_state` instead.
 async function allocateAndStamp(deps, { docType, stateCode, shopifyLocationId, shippingAddress, documentType, draftOrderId, orderId }) {
   const resource = draftOrderId ? 'draft_orders' : (orderId ? 'orders' : null);
   const resourceId = draftOrderId || orderId;
   const token = await deps.getShopifyToken();
 
   // Idempotency: never allocate twice for the same resource.
+  let existing = {};
   if (resource) {
-    const existing = await readSerialMetafields(deps, resource, resourceId, token);
+    existing = await readSerialMetafields(deps, resource, resourceId, token);
     if (existing.serial_code) {
       return {
         allocated: false,
+        stamped: true,
+        document_type: existing.document_type,
+        state_code: deriveStateCode(existing.serial_state || existing.state_code),
         serial_no: existing.serial_no,
         serial_code: existing.serial_code,
         serial_display: existing.serial_display,
-        state_code: existing.state_code,
-        document_type: existing.document_type,
       };
     }
   }
 
-  const state = await resolveState(deps, { stateCode, shopifyLocationId, shippingAddress });
   const registry = await getRegistry(deps);
   const reg = registry[docType];
   if (!reg) throw new Error(`unknown docType: ${docType}`);
+
+  // State: explicit arg → location → shipping → the resource's staff-set custom.state_code.
+  let state = await resolveState(deps, { stateCode, shopifyLocationId, shippingAddress });
+  if (!state && existing.state_code) state = deriveStateCode(existing.state_code);
+
   if (reg.scope === 'state' && !state) {
     const err = new Error(`could not resolve state for docType ${docType}`);
     err.code = 'NO_STATE';
@@ -210,14 +235,24 @@ async function allocateAndStamp(deps, { docType, stateCode, shopifyLocationId, s
   const alloc = await allocateSerial(deps, { docType, stateCode: state });
   const fields = {
     document_type: documentType || docType,
+    serial_state:  alloc.stateCode,
+    serial_no:     alloc.seq,
+    serial_code:   alloc.code,
+    serial_display: alloc.display,
+  };
+  let writeResult = { errors: [] };
+  if (resource) writeResult = await stampSerial(deps, resource, resourceId, fields, token);
+
+  return {
+    allocated: true,
+    stamped: resource ? writeResult.errors.length === 0 : null,
+    writeErrors: writeResult.errors,
+    document_type: fields.document_type,
     state_code: alloc.stateCode,
     serial_no: alloc.seq,
     serial_code: alloc.code,
     serial_display: alloc.display,
   };
-  if (resource) await stampSerial(deps, resource, resourceId, fields, token);
-
-  return { allocated: true, ...fields };
 }
 
 module.exports = {
