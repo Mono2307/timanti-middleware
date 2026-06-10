@@ -1,19 +1,30 @@
 # Serialization v2 — Stages 3/4/5 Testing Plan
 
-_Built 2026-06-11. Code is committed but every trigger is behind an env flag (off by default),
-so deploying is safe — nothing fires until you flip the flag for the stage you're testing._
+_Built 2026-06-11. Code is on `origin/main` (commit `e3b9f3c`). Every trigger is behind an env flag
+(off by default), so deploying is safe — nothing fires until you flip the flag for that stage._
 
-## Pre-req: one-time setup (run before any stage)
-1. **SQL** — Supabase → SQL Editor:
-   - `services/serialization/ledger_setup.sql` (already run — `serial_ledger` exists)
-   - `services/po-ops/setup.sql` (adds `po_records.store_code` — `alter ... add column if not exists`, safe to re-run)
-2. **Ledger sanity** — confirm the backfill is present and the counter is ahead:
-   ```sql
-   select doc_type, store_code, count(*), min(seq), max(seq) from serial_ledger group by 1,2;
-   select * from serial_counters order by doc_type, state_code;   -- current_value >= max(seq) per (doc_type, store_code)
-   ```
+> **Throughout:** `BASE=https://timanti-middleware.fly.dev`, `STORE=auracarat.myshopify.com`.
 
-Replace `BASE=https://timanti-middleware.fly.dev` and `STORE=auracarat.myshopify.com` below.
+## Run order for tomorrow (do these in sequence)
+1. **Deploy first** — complete `DEPLOY_v2.md` steps 1–3: run `po-ops/setup.sql`, `flyctl deploy`,
+   paste the two Apps Scripts. (No Shopify webhook needed.)
+2. **Smoke test** — open `BASE/api/serial-report?docType=customer_order` in a browser → you should see
+   JSON data, not an error. App is alive.
+3. **Pre-req SQL sanity** (below) — confirm ledger + counters are healthy.
+4. **Test one stage at a time:** flip its flag → run that stage's checks → only then move to the next.
+   Flags (each triggers a rolling restart): `flyctl secrets set SERIAL_REPAIR=true` (Stage 3),
+   `SERIAL_PO=true` (Stage 4a/PO-cancel), `SERIAL_MEMO_TRANSFER=true` (Stage 4b/memo-cancel).
+   CN + report need no flag. To back out: same command with `=false`.
+5. Run the **Regression checks** (bottom) after each flag flip.
+
+## Pre-req SQL sanity (run before flipping any flag)
+- `services/serialization/ledger_setup.sql` already applied; `services/po-ops/setup.sql` adds
+  `po_records.store_code` (safe to re-run).
+- Confirm the backfill is present and the counter is ahead of every minted seq:
+  ```sql
+  select doc_type, store_code, count(*), min(seq), max(seq) from serial_ledger group by 1,2;
+  select * from serial_counters order by doc_type, state_code;   -- current_value >= max(seq) per (doc_type, store_code)
+  ```
 
 ---
 
