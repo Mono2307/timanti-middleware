@@ -335,9 +335,8 @@ async function assignDocSerial(draft, docType, removeTag = null) {
   try {
     const rawTags = (draft.tags || '').split(',').map(t => t.trim());
     const stateTag = rawTags.find(t => /^state:/i.test(t));
-    const explicitState = stateTag ? stateTag.split(':')[1].toUpperCase() : null;
-    const province = (draft.shipping_address?.province_code || draft.billing_address?.province_code || '').toUpperCase() || null;
-    let stateCode = explicitState || province || null;
+    let stateCode = stateTag ? stateTag.split(':')[1].toUpperCase() : null;
+    // No state: tag → allocateAndStamp falls back to the draft's staff-set custom.state_code.
     if (!stateCode && docType === 'po') stateCode = (process.env.PO_HQ_STATE || '').toUpperCase() || null;
 
     const r = await serialization.allocateAndStamp(SERIAL_DEPS(), {
