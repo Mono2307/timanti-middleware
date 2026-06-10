@@ -347,6 +347,7 @@ async function assignDocSerial(draft, docType, removeTag = null) {
     console.log(`[serial] ${docType} draft ${draft.id} → ${r.serial_code} (allocated=${r.allocated})`);
     if (removeTag && r.allocated) await removeTagFromDraft(String(draft.id), removeTag);
   } catch (err) {
+    if (err.code === 'NO_STATE' || err.code === 'NO_DELIVERY') return; // staff hasn't filled state_code/delivery_code yet
     console.error(`[serial] ${docType} assign failed for ${draft.id}:`, err.message);
   }
 }
@@ -873,7 +874,7 @@ async function fetchSerialRowsGraphQL(resource, { from, to }, token) {
       const n = edge.node;
       const mf = {};
       for (const m of (n.metafields?.edges || [])) mf[m.node.key] = m.node.value;
-      const plainState = String(mf.state_code || '').toUpperCase().split('-')[0];
+      const plainState = String(mf.state_code || '').toUpperCase();
       rows.push({
         resource,
         name: n.name || '',
@@ -2872,7 +2873,7 @@ async function runSerialBackfill(req, res) {
 
       const mf = await serialization.readSerialMetafields(deps, 'orders', String(o.id), token);
       if (mf.serial_code) { skipped.push({ name: o.name, reason: 'already', serial_code: mf.serial_code }); continue; }
-      const state = mf.state_code ? mf.state_code.toUpperCase().split('-')[0] : null;
+      const state = mf.state_code ? mf.state_code.toUpperCase() : null;
       if (!state) { skipped.push({ name: o.name, reason: 'no-state_code' }); continue; }
 
       if (dryRun) {
@@ -2882,7 +2883,7 @@ async function runSerialBackfill(req, res) {
           sim[state] = cnt ? Number(cnt.current_value) : 1000;
         }
         sim[state] += 1;
-        processed.push({ name: o.name, state, predicted_serial_code: `${state}-${sim[state]}` });
+        processed.push({ name: o.name, state, predicted_serial_code: `TMNT-${state}-${sim[state]}` });
       } else {
         const r = await serialization.allocateAndStamp(deps, { docType, orderId: String(o.id) });
         processed.push({ name: o.name, state, serial_code: r.serial_code, stamped: r.stamped });
@@ -2957,6 +2958,90 @@ async function runSerialClear(req, res) {
 }
 app.get('/api/serial/clear', runSerialClear);
 app.post('/api/serial/clear', runSerialClear);
+
+// GET/POST /api/serial/counter — read / set / delete a single counter row. Browser-clickable.
+//   ?docType=customer_order&state=KA-HSR            → read current + next
+//   ?docType=customer_order&state=KA-HSR&set=1018   → set current_value (next = 1019)
+//   ?docType=repair&state=KA-HSR&delete=true        → delete the row (resets to its start)
+async function runSerialCounter(req, res) {
+  try {
+    const p = { ...(req.query || {}), ...(req.body || {}) };
+    const docType = p.docType;
+    const state = (p.state || '').toUpperCase().trim();
+    if (!docType || !state) return res.status(400).json({ success: false, error: 'docType and state required' });
+
+    if (p.delete === 'true' || p.delete === true) {
+      await supabase.from('serial_counters').delete().eq('doc_type', docType).eq('state_code', state);
+      return res.json({ success: true, action: 'deleted', docType, state });
+    }
+    if (p.set != null && p.set !== '') {
+      const v = parseInt(p.set);
+      await supabase.from('serial_counters').upsert(
+        { doc_type: docType, state_code: state, current_value: v, updated_at: new Date().toISOString() },
+        { onConflict: 'doc_type,state_code' });
+      return res.json({ success: true, action: 'set', docType, state, current_value: v, next_value: v + 1 });
+    }
+    const { data } = await supabase.from('serial_counters')
+      .select('current_value, updated_at').eq('doc_type', docType).eq('state_code', state).maybeSingle();
+    return res.json({ success: true, docType, state,
+      current_value: data ? Number(data.current_value) : null,
+      next_value: data ? Number(data.current_value) + 1 : null });
+  } catch (err) {
+    console.error('[serial] counter admin failed:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+}
+app.get('/api/serial/counter', runSerialCounter);
+app.post('/api/serial/counter', runSerialCounter);
+
+// GET/POST /api/serial/set-state — bulk-set custom.state_code (store code) on an order range
+// or one resource. Use to retag historical orders before re-numbering. Browser-clickable.
+//   ?nameFrom=1038&nameTo=1056&code=KA-HSR   |   ?orderId=123&code=KA-HSR   |   ?draftOrderId=123&code=KA-HSR
+async function runSerialSetState(req, res) {
+  try {
+    const p = { ...(req.query || {}), ...(req.body || {}) };
+    const code = (p.code || '').toUpperCase().trim();
+    if (!code) return res.status(400).json({ success: false, error: 'code required' });
+    const token = await getShopifyToken();
+    const deps  = SERIAL_DEPS();
+    const hdrs  = { 'X-Shopify-Access-Token': token, 'Accept': 'application/json' };
+    const updated = [];
+
+    async function setOne(resource, id, name) {
+      await serialization.stampSerial(deps, resource, id, { state_code: code }, token);
+      updated.push({ resource, name: name || id });
+    }
+
+    if (p.orderId)      await setOne('orders', p.orderId);
+    if (p.draftOrderId) await setOne('draft_orders', p.draftOrderId);
+
+    if (p.nameFrom != null || p.nameTo != null) {
+      const nf = p.nameFrom != null ? parseInt(p.nameFrom) : null;
+      const nt = p.nameTo   != null ? parseInt(p.nameTo)   : null;
+      let url = `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/orders.json?status=any&order=created_at asc&limit=250`;
+      const orders = [];
+      while (url) {
+        const { data, headers } = await serialization.withRetry(() => axios.get(url, { headers: hdrs, timeout: 30000 }));
+        orders.push(...(data.orders || []));
+        const m = (headers['link'] || '').match(/<([^>]+)>;\s*rel="next"/);
+        url = m ? m[1] : null;
+      }
+      for (const o of orders) {
+        const num = parseInt((o.name || '').replace(/\D/g, ''));
+        if (nf != null && num < nf) continue;
+        if (nt != null && num > nt) continue;
+        await setOne('orders', String(o.id), o.name);
+        await new Promise(r => setTimeout(r, 300));
+      }
+    }
+    return res.json({ success: true, code, updatedCount: updated.length, updated });
+  } catch (err) {
+    console.error('[serial] set-state failed:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+}
+app.get('/api/serial/set-state', runSerialSetState);
+app.post('/api/serial/set-state', runSerialSetState);
 
 // ── PO Queue routes ───────────────────────────────────────────────
 

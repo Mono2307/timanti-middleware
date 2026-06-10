@@ -17,18 +17,21 @@ const GLOBAL = 'ALL'; // state_code sentinel for non-location-scoped sequences
 
 // Document-type registry. Override at runtime via the `config.serial_registry`
 // JSON row (merged over these defaults) — new doc types/locations need no code.
-//   scope: 'state'  → keyed by (docType, stateCode); requires a resolvable state
-//   scope: 'global' → keyed by (docType, 'ALL'); ignores state
+//   scope: 'store'  → keyed by (docType, full compound store code e.g. KA-HSR)
+//   scope: 'global' → keyed by (docType, 'ALL'); ignores location
+// Tokens: {CODE}=origin store code, {DELIVERY}=destination store code, {SEQ}=number.
+// needsDelivery → requires a staff-set custom.delivery_code (memo/transfer).
 const DEFAULT_REGISTRY = {
-  customer_order: { scope: 'state',  start: 1001, code: 'TMNT-{STATE}-{SEQ}',     display: 'TMNT-{STATE}-{SEQ}' },
-  po:             { scope: 'state',  start: 1001, code: 'PO-{STATE}-{SEQ}',        display: 'PO-{STATE}-{SEQ}' },
-  memo:           { scope: 'state',  start: 1001, code: 'MEMO-{STATE}-{SEQ}',      display: 'MEMO-{STATE}-{SEQ}' },
-  transfer:       { scope: 'state',  start: 1001, code: 'TRANSFER-{STATE}-{SEQ}',  display: 'TRANSFER-{STATE}-{SEQ}' },
-  repair:         { scope: 'global', start: 1,    code: 'REP-{SEQ}',               display: 'REP-{SEQ}' },
-  credit_note:    { scope: 'global', start: 1,    code: 'CNTM-{SEQ}',              display: 'CNTM-{SEQ}' },
+  customer_order: { scope: 'store',  start: 1001, code: 'TMNT-{CODE}-{SEQ}',               display: 'TMNT-{CODE}-{SEQ}' },
+  po:             { scope: 'store',  start: 1,    code: 'PO-{CODE}-{SEQ}',                 display: 'PO-{CODE}-{SEQ}' },
+  memo:           { scope: 'store',  start: 1,    code: 'MEMO-{CODE}/{DELIVERY}-{SEQ}',     display: 'MEMO-{CODE}/{DELIVERY}-{SEQ}',     needsDelivery: true },
+  transfer:       { scope: 'store',  start: 1,    code: 'TRANSFER-{CODE}/{DELIVERY}-{SEQ}', display: 'TRANSFER-{CODE}/{DELIVERY}-{SEQ}', needsDelivery: true },
+  repair:         { scope: 'store',  start: 1,    code: 'REP-{CODE}-{SEQ}',                display: 'REP-{CODE}-{SEQ}' },
+  credit_note:    { scope: 'global', start: 1,    code: 'CNTM-{SEQ}',                      display: 'CNTM-{SEQ}' },
 };
 
-// Machine-written keys. state_code holds the plain derived state (KA/MH).
+// Machine-written keys. state_code holds the full compound store code (e.g. KA-HSR),
+// staff-entered; delivery_code (memo/transfer destination) is also staff-entered.
 const SERIAL_KEYS = ['document_type', 'state_code', 'serial_no', 'serial_code', 'serial_display'];
 
 let _registryCache = null;
@@ -74,8 +77,12 @@ async function withRetry(fn) {
   }
 }
 
-function format(template, stateCode, seq) {
-  return template.replace('{STATE}', stateCode).replace('{SEQ}', String(seq));
+function format(template, code, seq, delivery) {
+  return template
+    .replace('{CODE}', code || '')
+    .replace('{STATE}', code || '')   // backward-compat alias
+    .replace('{DELIVERY}', delivery || '')
+    .replace('{SEQ}', String(seq));
 }
 
 // ─── State resolution ─────────────────────────────────────────────────────────
@@ -97,15 +104,13 @@ function resolveStateFromShippingAddress(addr) {
   return (addr?.province_code || '').toUpperCase() || null;
 }
 
-// Normalizes a raw location/store code to a plain state code for the sequence key.
-// Staff pick store-level codes (KA-HSR, MH-HQ); the sequence is per-STATE, so we take
-// the prefix before the first '-'.  "KA-HSR" → "KA", "mh-hq" → "MH", "KA" → "KA".
+// Normalizes a store code for use as the counter key and in the serial — the FULL
+// compound code is kept (no derivation). "ka-hsr" → "KA-HSR", " MH-HQ " → "MH-HQ".
 function deriveStateCode(raw) {
-  return String(raw || '').toUpperCase().split('-')[0].trim() || null;
+  return String(raw || '').toUpperCase().trim() || null;
 }
 
-// Precedence: explicit stateCode > location lookup > shipping address. Each source is
-// normalized through deriveStateCode so store-level codes collapse to the state.
+// Precedence: explicit stateCode > location lookup > shipping address.
 async function resolveState(deps, { stateCode, shopifyLocationId, shippingAddress }) {
   if (stateCode) return deriveStateCode(stateCode);
   const fromLoc = await resolveStateFromLocation(deps, shopifyLocationId);
@@ -116,28 +121,30 @@ async function resolveState(deps, { stateCode, shopifyLocationId, shippingAddres
 
 // ─── Allocation (the ONLY caller of the RPC) ────────────────────────────────────
 
-async function allocateSerial(deps, { docType, stateCode }) {
+async function allocateSerial(deps, { docType, stateCode, deliveryCode }) {
   const registry = await getRegistry(deps);
   const reg = registry[docType];
   if (!reg) throw new Error(`unknown docType: ${docType}`);
 
   const isGlobal = reg.scope === 'global';
-  const state = isGlobal ? GLOBAL : deriveStateCode(stateCode);
-  if (!isGlobal && !state) throw new Error(`state required for docType ${docType}`);
+  const code = isGlobal ? GLOBAL : deriveStateCode(stateCode);
+  if (!isGlobal && !code) throw new Error(`store code required for docType ${docType}`);
 
   const { data, error } = await deps.supabase.rpc('allocate_serial', {
-    p_doc_type: docType, p_state_code: state, p_start: reg.start,
+    p_doc_type: docType, p_state_code: code, p_start: reg.start,
   });
   if (error) throw new Error(`allocate_serial RPC failed: ${error.message}`);
   const seq = Number(data);
 
-  // For global sequences the {STATE} token is dropped from the templates.
-  const displayState = isGlobal ? '' : state;
+  // For global sequences the {CODE} token is dropped from the templates.
+  const tplCode  = isGlobal ? '' : code;
+  const delivery = deriveStateCode(deliveryCode) || '';
+  const tidy = (s) => s.replace('/-', '-').replace('--', '-').replace(/[-/]$/, '').trim();
   return {
     seq,
-    stateCode: state,
-    code: format(reg.code, displayState, seq).replace('--', '-').replace(/-$/, ''),
-    display: format(reg.display, displayState, seq).replace(/\s+/g, ' ').trim(),
+    stateCode: code,
+    code:    tidy(format(reg.code,    tplCode, seq, delivery)),
+    display: tidy(format(reg.display, tplCode, seq, delivery)),
   };
 }
 
@@ -212,9 +219,9 @@ async function stampSerial(deps, resource, id, fields, token) {
 
 // ─── allocateAndStamp: server-side one-shot (allocate + idempotent stamp) ────────
 // Pass exactly one of { draftOrderId, orderId } to stamp; omit both to just allocate.
-// We never write `state_code` — that is the staff-owned store dropdown (KA-HSR/MH-HQ);
-// the derived plain state is written as `serial_state` instead.
-async function allocateAndStamp(deps, { docType, stateCode, shopifyLocationId, shippingAddress, documentType, draftOrderId, orderId }) {
+// state_code (full compound store code, e.g. KA-HSR) is staff-entered; we only fill it
+// when blank (Pine flow), never clobbering it. memo/transfer also read staff delivery_code.
+async function allocateAndStamp(deps, { docType, stateCode, shopifyLocationId, shippingAddress, deliveryCode, documentType, draftOrderId, orderId }) {
   const resource = draftOrderId ? 'draft_orders' : (orderId ? 'orders' : null);
   const resourceId = draftOrderId || orderId;
   const token = await deps.getShopifyToken();
@@ -224,20 +231,11 @@ async function allocateAndStamp(deps, { docType, stateCode, shopifyLocationId, s
   if (resource) {
     existing = await readSerialMetafields(deps, resource, resourceId, token);
     if (existing.serial_code) {
-      // Backfill state_code on already-stamped resources that predate it (state-scoped docs:
-      // derive from the existing state_code, else from the serial_code prefix e.g. KA-1028 → KA).
-      const reg0 = (await getRegistry(deps))[existing.document_type];
-      const stateScoped = reg0 ? reg0.scope === 'state' : false;
-      let derived = deriveStateCode(existing.state_code);
-      if (!derived && stateScoped) derived = deriveStateCode(existing.serial_code);
-      if (stateScoped && !existing.state_code && derived) {
-        await stampSerial(deps, resource, resourceId, { state_code: derived }, token);
-      }
       return {
         allocated: false,
         stamped: true,
         document_type: existing.document_type,
-        state_code: derived,
+        state_code: existing.state_code || null,
         serial_no: existing.serial_no,
         serial_code: existing.serial_code,
         serial_display: existing.serial_display,
@@ -249,25 +247,31 @@ async function allocateAndStamp(deps, { docType, stateCode, shopifyLocationId, s
   const reg = registry[docType];
   if (!reg) throw new Error(`unknown docType: ${docType}`);
 
-  // State: explicit arg → location → shipping → the resource's staff-set custom.state_code.
-  let state = await resolveState(deps, { stateCode, shopifyLocationId, shippingAddress });
-  if (!state && existing.state_code) state = deriveStateCode(existing.state_code);
-
-  if (reg.scope === 'state' && !state) {
-    const err = new Error(`could not resolve state for docType ${docType}`);
+  // Store code: explicit arg → location → shipping → the resource's staff-set custom.state_code.
+  let code = await resolveState(deps, { stateCode, shopifyLocationId, shippingAddress });
+  if (!code && existing.state_code) code = deriveStateCode(existing.state_code);
+  if (reg.scope === 'store' && !code) {
+    const err = new Error(`could not resolve store code for docType ${docType}`);
     err.code = 'NO_STATE';
     throw err;
   }
 
-  const alloc = await allocateSerial(deps, { docType, stateCode: state });
+  // Delivery (memo/transfer): explicit arg → the resource's staff-set custom.delivery_code.
+  const delivery = deriveStateCode(deliveryCode) || deriveStateCode(existing.delivery_code);
+  if (reg.needsDelivery && !delivery) {
+    const err = new Error(`could not resolve delivery code for docType ${docType}`);
+    err.code = 'NO_DELIVERY';
+    throw err;
+  }
+
+  const alloc = await allocateSerial(deps, { docType, stateCode: code, deliveryCode: delivery });
   const fields = {
     document_type: documentType || docType,
     serial_no:     alloc.seq,
     serial_code:   alloc.code,
     serial_display: alloc.display,
   };
-  // state_code is a staff input (place of supply). Only fill it when staff left it blank
-  // (e.g. the Pine/terminal flow) — never clobber a value the staff entered.
+  // state_code is a staff input. Only fill it when staff left it blank (e.g. Pine flow).
   if (!existing.state_code) fields.state_code = alloc.stateCode;
   let writeResult = { errors: [] };
   if (resource) writeResult = await stampSerial(deps, resource, resourceId, fields, token);
