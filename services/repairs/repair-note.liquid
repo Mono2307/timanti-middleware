@@ -81,7 +81,10 @@
 {% if metal_str == blank %}{% assign metal_str = recv_variant %}{% endif %}
 
 {% comment %}── Note / reference fields ──{% endcomment %}
-{% assign note_number   = order.metafields.custom.note_number %}
+{% comment %} Prefer the serialization service number (REP-N), then legacy note_number, then order.name {% endcomment %}
+{% assign note_number   = order.metafields.custom.serial_display %}
+{% if note_number == blank %}{% assign note_number = order.metafields.custom.serial_code %}{% endif %}
+{% if note_number == blank %}{% assign note_number = order.metafields.custom.note_number %}{% endif %}
 {% if note_number == blank %}{% assign note_number = order.name %}{% endif %}
 {% assign orig_order_ref  = order.metafields.custom.repair_order_reference %}
 {% assign orig_inv_ref    = order.metafields.custom.original_invoice_reference %}
