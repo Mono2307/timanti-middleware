@@ -2899,6 +2899,64 @@ async function runSerialBackfill(req, res) {
 app.get('/api/serial/backfill', runSerialBackfill);   // browser-clickable
 app.post('/api/serial/backfill', runSerialBackfill);
 
+// GET/POST /api/serial/clear — removes the machine-written serial metafields
+// (document_type, serial_no, serial_code, serial_display) so a resource can be re-numbered.
+// Leaves the staff-entered state_code intact. Browser-clickable.
+//   ?draftOrderId=X | ?orderId=X | ?nameFrom=1038&nameTo=1056  (orders range)
+async function runSerialClear(req, res) {
+  try {
+    const p = { ...(req.query || {}), ...(req.body || {}) };
+    const token = await getShopifyToken();
+    const hdrs  = { 'X-Shopify-Access-Token': token, 'Accept': 'application/json' };
+    const keys  = ['document_type', 'serial_no', 'serial_code', 'serial_display'];
+    const cleared = [];
+
+    async function clearOne(resource, id, name) {
+      const { data } = await axios.get(
+        `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/${resource}/${id}/metafields.json`,
+        { headers: hdrs, timeout: 15000 });
+      const removed = [];
+      for (const mf of (data.metafields || [])) {
+        if (mf.namespace === 'custom' && keys.includes(mf.key)) {
+          await axios.delete(`${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/metafields/${mf.id}.json`, { headers: hdrs, timeout: 15000 });
+          removed.push(mf.key);
+        }
+      }
+      cleared.push({ resource, name: name || id, removed });
+    }
+
+    if (p.draftOrderId) await clearOne('draft_orders', p.draftOrderId);
+    if (p.orderId)      await clearOne('orders', p.orderId);
+
+    if (p.nameFrom != null || p.nameTo != null) {
+      const nf = p.nameFrom != null ? parseInt(p.nameFrom) : null;
+      const nt = p.nameTo   != null ? parseInt(p.nameTo)   : null;
+      let url = `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/orders.json?status=any&order=created_at asc&limit=250`;
+      const orders = [];
+      while (url) {
+        const { data, headers } = await axios.get(url, { headers: hdrs, timeout: 30000 });
+        orders.push(...(data.orders || []));
+        const m = (headers['link'] || '').match(/<([^>]+)>;\s*rel="next"/);
+        url = m ? m[1] : null;
+      }
+      for (const o of orders) {
+        const num = parseInt((o.name || '').replace(/\D/g, ''));
+        if (nf != null && num < nf) continue;
+        if (nt != null && num > nt) continue;
+        await clearOne('orders', String(o.id), o.name);
+        await new Promise(r => setTimeout(r, 300)); // throttle
+      }
+    }
+
+    return res.json({ success: true, clearedCount: cleared.length, cleared });
+  } catch (err) {
+    console.error('[serial] clear failed:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+}
+app.get('/api/serial/clear', runSerialClear);
+app.post('/api/serial/clear', runSerialClear);
+
 // ── PO Queue routes ───────────────────────────────────────────────
 
 app.post('/api/po-ops/sync-all', async (req, res) => {
