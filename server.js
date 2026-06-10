@@ -291,29 +291,6 @@ async function convertDraftToOrder(draftOrderId, transactionDbId) {
 // Payment Completion Handler
 // ─────────────────────────────────────────
 
-// Resolves the state code for an offline transaction via its store → location → state_code,
-// then allocates+stamps a customer_order serial on the draft (idempotent). Never throws —
-// a serialization failure must not block the payment/conversion flow.
-async function maybeAssignCustomerOrderSerial(draftId, transaction) {
-  if (!SERIAL_CUSTOMER_ORDER) return;
-  try {
-    let stateCode = null;
-    if (transaction.location_id) {
-      const { data: store } = await supabase.from('stores').select('location_ref').eq('id', transaction.location_id).maybeSingle();
-      if (store?.location_ref) {
-        const { data: loc } = await supabase.from('locations').select('state_code').eq('location_id', store.location_ref).maybeSingle();
-        stateCode = loc?.state_code || null;
-      }
-    }
-    const result = await serialization.allocateAndStamp(SERIAL_DEPS(), {
-      docType: 'customer_order', stateCode, draftOrderId: draftId.toString(),
-    });
-    console.log(`[serial] customer_order draft ${draftId} → ${result.serial_code} (allocated=${result.allocated})`);
-  } catch (err) {
-    console.error(`[serial] customer_order assign failed for draft ${draftId}:`, err.message);
-  }
-}
-
 // Allocates a global REP-N serial on a repair draft (custom namespace, survives conversion).
 // Idempotent and non-throwing. Passed into handleRepairDraftUpdate.
 async function assignRepairSerial(draftId) {
@@ -349,24 +326,6 @@ async function assignDocSerial(draft, docType, removeTag = null) {
   } catch (err) {
     if (err.code === 'NO_STATE' || err.code === 'NO_DELIVERY') return; // staff hasn't filled state_code/delivery_code yet
     console.error(`[serial] ${docType} assign failed for ${draft.id}:`, err.message);
-  }
-}
-
-// Offline customer-order drafts: assign once staff have entered custom.state_code (place of
-// supply). Fires on draft create/update. Skips drafts owned by other doc-type flows
-// (repairs/PO/memo/transfer). Quiet no-op until state_code is set (NO_STATE).
-async function handleCustomerOrderDraftSerial(draft) {
-  if (!SERIAL_CUSTOMER_ORDER) return;
-  const tags = (draft.tags || '').split(',').map(t => t.trim().toLowerCase());
-  if (tags.some(t => ['repair-intake', 'po-draft', 'make-memo', 'make-transfer'].includes(t))) return;
-  try {
-    const r = await serialization.allocateAndStamp(SERIAL_DEPS(), {
-      docType: 'customer_order', draftOrderId: String(draft.id), // state from the draft's staff-set custom.state_code
-    });
-    if (r.allocated) console.log(`[serial] customer_order draft ${draft.id} → ${r.serial_code}`);
-  } catch (err) {
-    if (err.code === 'NO_STATE') return; // staff hasn't entered state_code yet
-    console.error(`[serial] customer_order draft ${draft.id} failed:`, err.message);
   }
 }
 
@@ -482,14 +441,12 @@ async function handlePaymentCompletion(transaction, overrides = {}) {
 
     if (newStatus === 'paid') {
       console.log(`✅ Fully paid — draft ${transaction.shopify_draft_id}`);
-      await maybeAssignCustomerOrderSerial(transaction.shopify_draft_id, transaction);
       await convertDraftToOrder(transaction.shopify_draft_id, transaction.id);
     } else {
       console.log(`⏳ ${installmentType} recorded — Rs${Math.max(0, newAmountPending).toFixed(2)} pending`);
     }
 
   } else {
-    await maybeAssignCustomerOrderSerial(transaction.shopify_draft_id, transaction);
     await convertDraftToOrder(transaction.shopify_draft_id, transaction.id);
   }
 }
@@ -2040,7 +1997,6 @@ app.post('/api/shopify-draft-updated', async (req, res) => {
     if ((req.headers['x-shopify-topic'] || '') === 'draft_orders/create') {
       await handleDraftCreated(draft);
       await handleDocumentSerialTags(draft);      // PO/memo/transfer present at creation
-      await handleCustomerOrderDraftSerial(draft); // customer order if staff set state_code
       return;
     }
 
@@ -2079,7 +2035,6 @@ app.post('/api/shopify-draft-updated', async (req, res) => {
     await handlePaymentMetafieldSync(draft);
     await handleRepairDraftUpdate(draft, getShopifyToken, assignRepairSerial);
     await handleDocumentSerialTags(draft);      // PO/memo/transfer tags added after creation
-    await handleCustomerOrderDraftSerial(draft); // customer order once staff set state_code
 
     console.log(`Draft updated webhook: #${draft.name} — tag handlers complete`);
   } catch (err) {
@@ -2785,18 +2740,27 @@ app.post('/api/serial/allocate', async (req, res) => {
 // orders/create + orders/update webhook → stamp a customer_order serial on online orders
 // once staff have entered the order's custom.state_code (place of supply). Shipping province
 // is NOT used. Draft-origin orders are skipped — they're serialized on the draft and copied.
+// orders/create + orders/update → mint a customer_order serial at the ORDER level (v2 ledger).
+// Fires for BOTH online (staff set state_code on the order) and offline (state_code copied from
+// the paid draft). Mints only once store code is present; idempotent via the ledger.
 app.post('/api/serial/order-serial', async (req, res) => {
   res.json({ success: true }); // ack immediately; work is fire-and-forget
   if (!SERIAL_CUSTOMER_ORDER) return;
   const order = req.body || {};
   if (!order.id) return;
-  if (order.source_name === 'shopify_draft_order') return; // offline/draft path owns these
-  serialization.allocateAndStamp(SERIAL_DEPS(), {
-    docType: 'customer_order',
-    orderId: String(order.id),   // state read from the order's staff-set custom.state_code
-  })
-    .then(r => { if (r.allocated) console.log(`[serial] customer_order order ${order.id} → ${r.serial_code}`); })
-    .catch(e => { if (e.code !== 'NO_STATE') console.error(`[serial] order serial failed for ${order.id}:`, e.message); });
+  (async () => {
+    const deps  = SERIAL_DEPS();
+    const token = await getShopifyToken();
+    const mf = await serialization.readSerialMetafields(deps, 'orders', String(order.id), token);
+    const storeCode = (mf.state_code || '').toUpperCase().trim();
+    if (!storeCode) return; // store code not set yet — nothing to mint
+    const r = await serialization.mintSerial(deps, {
+      docType: 'customer_order', storeCode,
+      resourceType: 'order', resourceId: String(order.id), resourceName: order.name,
+      stamp: true,
+    });
+    if (r.minted) console.log(`[serial] customer_order order ${order.name || order.id} → ${r.serial_code}`);
+  })().catch(e => console.error(`[serial] order-serial failed for ${order.id}:`, e.message));
 });
 
 // Read-only peek at the current value of a counter (never allocates).
