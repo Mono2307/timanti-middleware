@@ -3048,6 +3048,54 @@ async function runSerialSetState(req, res) {
 app.get('/api/serial/set-state', runSerialSetState);
 app.post('/api/serial/set-state', runSerialSetState);
 
+// GET/POST /api/serial/ledger-backfill — load already-stamped orders into serial_ledger.
+// Non-breaking (Stage 1). ?docType=customer_order&code=KA-HSR&nameFrom=1038&nameTo=1056
+//   code = store_code to record (use it because historical state_code may be blank).
+async function runSerialLedgerBackfill(req, res) {
+  try {
+    const p = { ...(req.query || {}), ...(req.body || {}) };
+    const docType = p.docType || 'customer_order';
+    const code = (p.code || '').toUpperCase().trim() || null;
+    const token = await getShopifyToken();
+    const hdrs  = { 'X-Shopify-Access-Token': token, 'Accept': 'application/json' };
+    const deps  = SERIAL_DEPS();
+
+    const nf = p.nameFrom != null ? parseInt(p.nameFrom) : null;
+    const nt = p.nameTo   != null ? parseInt(p.nameTo)   : null;
+    let url = `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/orders.json?status=any&order=created_at asc&limit=250`;
+    const orders = [];
+    while (url) {
+      const { data, headers } = await serialization.withRetry(() => axios.get(url, { headers: hdrs, timeout: 30000 }));
+      orders.push(...(data.orders || []));
+      const m = (headers['link'] || '').match(/<([^>]+)>;\s*rel="next"/);
+      url = m ? m[1] : null;
+    }
+
+    const inserted = [], skipped = [];
+    for (const o of orders) {
+      const num = parseInt((o.name || '').replace(/\D/g, ''));
+      if (nf != null && num < nf) continue;
+      if (nt != null && num > nt) continue;
+      const mf = await serialization.readSerialMetafields(deps, 'orders', String(o.id), token);
+      if (!mf.serial_code) { skipped.push({ name: o.name, reason: 'no-serial' }); continue; }
+      const storeCode = code || (mf.state_code ? mf.state_code.toUpperCase() : null) || 'UNKNOWN';
+      const { error } = await supabase.from('serial_ledger').insert({
+        doc_type: docType, store_code: storeCode, seq: parseInt(mf.serial_no), serial_code: mf.serial_code,
+        resource_type: 'order', resource_id: String(o.id), resource_name: o.name, status: 'active',
+      });
+      if (error) skipped.push({ name: o.name, reason: /duplicate|unique/i.test(error.message) ? 'already-in-ledger' : error.message });
+      else inserted.push({ name: o.name, serial_code: mf.serial_code, seq: parseInt(mf.serial_no) });
+      await new Promise(r => setTimeout(r, 150));
+    }
+    return res.json({ success: true, insertedCount: inserted.length, skippedCount: skipped.length, inserted, skipped });
+  } catch (err) {
+    console.error('[serial] ledger-backfill failed:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+}
+app.get('/api/serial/ledger-backfill', runSerialLedgerBackfill);
+app.post('/api/serial/ledger-backfill', runSerialLedgerBackfill);
+
 // ── PO Queue routes ───────────────────────────────────────────────
 
 app.post('/api/po-ops/sync-all', async (req, res) => {

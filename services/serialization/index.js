@@ -288,6 +288,61 @@ async function allocateAndStamp(deps, { docType, stateCode, shopifyLocationId, s
   };
 }
 
+// ─── v2 ledger (Stage 1) ─────────────────────────────────────────────────────
+// mintSerial: the source-of-truth allocator. Idempotent per (docType, resourceId) via
+// the serial_ledger.serial_ledger_resource_unique constraint — a resource can never get
+// two numbers, no matter how many times this is called. Optionally mirrors onto Shopify.
+async function mintSerial(deps, { docType, storeCode, deliveryCode, resourceType, resourceId, resourceName, stamp = false }) {
+  const ridStr = resourceId != null ? String(resourceId) : null;
+
+  // 1. Idempotency: already minted for this resource?
+  if (ridStr) {
+    const { data: existing } = await deps.supabase.from('serial_ledger')
+      .select('*').eq('doc_type', docType).eq('resource_id', ridStr).maybeSingle();
+    if (existing) return { ...existing, minted: false };
+  }
+
+  // 2. Atomic next number via the existing counter.
+  const alloc = await allocateSerial(deps, { docType, stateCode: storeCode, deliveryCode });
+
+  // 3. Record in the ledger (the resource-unique constraint resolves webhook races).
+  const { data: row, error } = await deps.supabase.from('serial_ledger').insert({
+    doc_type: docType, store_code: alloc.stateCode, seq: alloc.seq, serial_code: alloc.code,
+    resource_type: resourceType || null, resource_id: ridStr, resource_name: resourceName || null,
+    status: 'active',
+  }).select().single();
+
+  if (error) {
+    // Lost a race on resource_id → return the row that won (the seq we drew is burned).
+    if (ridStr) {
+      const { data: won } = await deps.supabase.from('serial_ledger')
+        .select('*').eq('doc_type', docType).eq('resource_id', ridStr).maybeSingle();
+      if (won) return { ...won, minted: false };
+    }
+    throw new Error(`serial_ledger insert failed: ${error.message}`);
+  }
+
+  // 4. Optionally mirror onto the Shopify resource.
+  let stampErrors = [];
+  if (stamp && resourceType && ridStr) {
+    const token = await deps.getShopifyToken();
+    const fields = { document_type: docType, serial_no: alloc.seq, serial_code: alloc.code, serial_display: alloc.display };
+    const res = resourceType === 'order' ? 'orders' : 'draft_orders';
+    const w = await stampSerial(deps, res, ridStr, fields, token);
+    stampErrors = w.errors;
+  }
+
+  return { ...row, minted: true, stampErrors };
+}
+
+// cancelSerial: retire a number (status=cancelled). Never reused — GST-clean.
+async function cancelSerial(deps, { docType, resourceId }) {
+  const { data } = await deps.supabase.from('serial_ledger')
+    .update({ status: 'cancelled', cancelled_at: new Date().toISOString() })
+    .eq('doc_type', docType).eq('resource_id', String(resourceId)).select().maybeSingle();
+  return data;
+}
+
 module.exports = {
   DEFAULT_REGISTRY,
   SERIAL_KEYS,
@@ -299,5 +354,7 @@ module.exports = {
   readSerialMetafields,
   stampSerial,
   allocateAndStamp,
+  mintSerial,
+  cancelSerial,
   withRetry,
 };
