@@ -2840,6 +2840,7 @@ async function runSerialBackfill(req, res) {
     const { nameFrom, nameTo, from, to } = p;
     const docType = p.docType || 'customer_order';
     const skipTag = p.skipTag != null ? p.skipTag : 'skip-serial';
+    const code    = (p.code || '').toUpperCase().trim() || null; // store code to apply if order has none
     const dryRun  = !(p.dryRun === false || p.dryRun === 'false'); // default true; execute only on explicit ?dryRun=false
     const token = await getShopifyToken();
     const hdrs  = { 'X-Shopify-Access-Token': token, 'Accept': 'application/json' };
@@ -2873,7 +2874,8 @@ async function runSerialBackfill(req, res) {
 
       const mf = await serialization.readSerialMetafields(deps, 'orders', String(o.id), token);
       if (mf.serial_code) { skipped.push({ name: o.name, reason: 'already', serial_code: mf.serial_code }); continue; }
-      const state = mf.state_code ? mf.state_code.toUpperCase() : null;
+      // The ?code= param wins so a clean redo can re-stamp; else use the order's existing state_code.
+      const state = code || (mf.state_code ? mf.state_code.toUpperCase() : null);
       if (!state) { skipped.push({ name: o.name, reason: 'no-state_code' }); continue; }
 
       if (dryRun) {
@@ -2885,7 +2887,7 @@ async function runSerialBackfill(req, res) {
         sim[state] += 1;
         processed.push({ name: o.name, state, predicted_serial_code: `TMNT-${state}-${sim[state]}` });
       } else {
-        const r = await serialization.allocateAndStamp(deps, { docType, orderId: String(o.id) });
+        const r = await serialization.allocateAndStamp(deps, { docType, orderId: String(o.id), stateCode: state });
         processed.push({ name: o.name, state, serial_code: r.serial_code, stamped: r.stamped });
         await new Promise(res => setTimeout(res, 350)); // throttle to stay under Shopify's rate limit
       }
@@ -2909,7 +2911,8 @@ async function runSerialClear(req, res) {
     const p = { ...(req.query || {}), ...(req.body || {}) };
     const token = await getShopifyToken();
     const hdrs  = { 'X-Shopify-Access-Token': token, 'Accept': 'application/json' };
-    const keys  = ['document_type', 'serial_no', 'serial_code', 'serial_display'];
+    const withState = (p.withState === 'true' || p.withState === true);
+    const keys  = ['document_type', 'serial_no', 'serial_code', 'serial_display'].concat(withState ? ['state_code'] : []);
     const cleared = [];
 
     async function clearOne(resource, id, name) {
