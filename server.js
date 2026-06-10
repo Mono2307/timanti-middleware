@@ -2752,6 +2752,7 @@ app.post('/api/serial/order-serial', async (req, res) => {
     const deps  = SERIAL_DEPS();
     const token = await getShopifyToken();
     const mf = await serialization.readSerialMetafields(deps, 'orders', String(order.id), token);
+    if (mf.serial_code) return; // already numbered (v1 or prior) — NEVER re-mint, even if the ledger lacks it
     const storeCode = (mf.state_code || '').toUpperCase().trim();
     if (!storeCode) return; // store code not set yet — nothing to mint
     const r = await serialization.mintSerial(deps, {
