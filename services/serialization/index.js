@@ -244,11 +244,13 @@ async function allocateAndStamp(deps, { docType, stateCode, shopifyLocationId, s
   const alloc = await allocateSerial(deps, { docType, stateCode: state });
   const fields = {
     document_type: documentType || docType,
-    state_code:    alloc.stateCode,
     serial_no:     alloc.seq,
     serial_code:   alloc.code,
     serial_display: alloc.display,
   };
+  // state_code is a staff input (place of supply). Only fill it when staff left it blank
+  // (e.g. the Pine/terminal flow) — never clobber a value the staff entered.
+  if (!existing.state_code) fields.state_code = alloc.stateCode;
   let writeResult = { errors: [] };
   if (resource) writeResult = await stampSerial(deps, resource, resourceId, fields, token);
 

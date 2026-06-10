@@ -350,6 +350,24 @@ async function assignDocSerial(draft, docType, removeTag = null) {
   }
 }
 
+// Offline customer-order drafts: assign once staff have entered custom.state_code (place of
+// supply). Fires on draft create/update. Skips drafts owned by other doc-type flows
+// (repairs/PO/memo/transfer). Quiet no-op until state_code is set (NO_STATE).
+async function handleCustomerOrderDraftSerial(draft) {
+  if (!SERIAL_CUSTOMER_ORDER) return;
+  const tags = (draft.tags || '').split(',').map(t => t.trim().toLowerCase());
+  if (tags.some(t => ['repair-intake', 'po-draft', 'make-memo', 'make-transfer'].includes(t))) return;
+  try {
+    const r = await serialization.allocateAndStamp(SERIAL_DEPS(), {
+      docType: 'customer_order', draftOrderId: String(draft.id), // state from the draft's staff-set custom.state_code
+    });
+    if (r.allocated) console.log(`[serial] customer_order draft ${draft.id} → ${r.serial_code}`);
+  } catch (err) {
+    if (err.code === 'NO_STATE') return; // staff hasn't entered state_code yet
+    console.error(`[serial] customer_order draft ${draft.id} failed:`, err.message);
+  }
+}
+
 // Detects draft-document trigger tags and assigns the matching serial.
 // PO drafts carry `po-draft`; memo/transfer are triggered by staff adding `make-memo`/`make-transfer`.
 async function handleDocumentSerialTags(draft) {
@@ -2019,7 +2037,8 @@ app.post('/api/shopify-draft-updated', async (req, res) => {
     // Auto-hydrate line item properties from variant metafields on creation
     if ((req.headers['x-shopify-topic'] || '') === 'draft_orders/create') {
       await handleDraftCreated(draft);
-      await handleDocumentSerialTags(draft); // PO/memo/transfer present at creation
+      await handleDocumentSerialTags(draft);      // PO/memo/transfer present at creation
+      await handleCustomerOrderDraftSerial(draft); // customer order if staff set state_code
       return;
     }
 
@@ -2057,7 +2076,8 @@ app.post('/api/shopify-draft-updated', async (req, res) => {
     await handleRecalculatePriceTag(draft, { force: true });
     await handlePaymentMetafieldSync(draft);
     await handleRepairDraftUpdate(draft, getShopifyToken, assignRepairSerial);
-    await handleDocumentSerialTags(draft); // PO/memo/transfer tags added after creation
+    await handleDocumentSerialTags(draft);      // PO/memo/transfer tags added after creation
+    await handleCustomerOrderDraftSerial(draft); // customer order once staff set state_code
 
     console.log(`Draft updated webhook: #${draft.name} — tag handlers complete`);
   } catch (err) {
@@ -2760,10 +2780,10 @@ app.post('/api/serial/allocate', async (req, res) => {
   }
 });
 
-// orders/create webhook → stamp a customer_order serial on online (web) orders.
-// In-store orders arrive via draft completion and are already stamped on the draft
-// (then copied to the order), so we skip draft-origin orders to avoid double-allocation.
-app.post('/api/serial/order-created', async (req, res) => {
+// orders/create + orders/update webhook → stamp a customer_order serial on online orders
+// once staff have entered the order's custom.state_code (place of supply). Shipping province
+// is NOT used. Draft-origin orders are skipped — they're serialized on the draft and copied.
+app.post('/api/serial/order-serial', async (req, res) => {
   res.json({ success: true }); // ack immediately; work is fire-and-forget
   if (!SERIAL_CUSTOMER_ORDER) return;
   const order = req.body || {};
@@ -2771,11 +2791,10 @@ app.post('/api/serial/order-created', async (req, res) => {
   if (order.source_name === 'shopify_draft_order') return; // offline/draft path owns these
   serialization.allocateAndStamp(SERIAL_DEPS(), {
     docType: 'customer_order',
-    shippingAddress: order.shipping_address,
-    orderId: String(order.id),
+    orderId: String(order.id),   // state read from the order's staff-set custom.state_code
   })
-    .then(r => console.log(`[serial] customer_order order ${order.id} → ${r.serial_code} (allocated=${r.allocated})`))
-    .catch(e => console.error(`[serial] order-created assign failed for ${order.id}:`, e.message));
+    .then(r => { if (r.allocated) console.log(`[serial] customer_order order ${order.id} → ${r.serial_code}`); })
+    .catch(e => { if (e.code !== 'NO_STATE') console.error(`[serial] order serial failed for ${order.id}:`, e.message); });
 });
 
 // Read-only peek at the current value of a counter (never allocates).
