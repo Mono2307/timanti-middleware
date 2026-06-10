@@ -2912,14 +2912,15 @@ async function runSerialClear(req, res) {
     const cleared = [];
 
     async function clearOne(resource, id, name) {
-      const { data } = await axios.get(
+      const { data } = await serialization.withRetry(() => axios.get(
         `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/${resource}/${id}/metafields.json`,
-        { headers: hdrs, timeout: 15000 });
+        { headers: hdrs, timeout: 15000 }));
       const removed = [];
       for (const mf of (data.metafields || [])) {
         if (mf.namespace === 'custom' && keys.includes(mf.key)) {
-          await axios.delete(`${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/metafields/${mf.id}.json`, { headers: hdrs, timeout: 15000 });
+          await serialization.withRetry(() => axios.delete(`${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/metafields/${mf.id}.json`, { headers: hdrs, timeout: 15000 }));
           removed.push(mf.key);
+          await new Promise(r => setTimeout(r, 200)); // throttle deletes
         }
       }
       cleared.push({ resource, name: name || id, removed });
@@ -2934,7 +2935,7 @@ async function runSerialClear(req, res) {
       let url = `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/orders.json?status=any&order=created_at asc&limit=250`;
       const orders = [];
       while (url) {
-        const { data, headers } = await axios.get(url, { headers: hdrs, timeout: 30000 });
+        const { data, headers } = await serialization.withRetry(() => axios.get(url, { headers: hdrs, timeout: 30000 }));
         orders.push(...(data.orders || []));
         const m = (headers['link'] || '').match(/<([^>]+)>;\s*rel="next"/);
         url = m ? m[1] : null;

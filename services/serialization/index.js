@@ -295,4 +295,5 @@ module.exports = {
   readSerialMetafields,
   stampSerial,
   allocateAndStamp,
+  withRetry,
 };
