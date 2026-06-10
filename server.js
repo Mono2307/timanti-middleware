@@ -2886,6 +2886,7 @@ async function runSerialBackfill(req, res) {
       } else {
         const r = await serialization.allocateAndStamp(deps, { docType, orderId: String(o.id) });
         processed.push({ name: o.name, state, serial_code: r.serial_code, stamped: r.stamped });
+        await new Promise(res => setTimeout(res, 350)); // throttle to stay under Shopify's rate limit
       }
     }
 

@@ -56,6 +56,24 @@ function shopifyHeaders(token) {
   return { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' };
 }
 
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// Retries an axios call on Shopify 429 (Too Many Requests), honoring Retry-After.
+async function withRetry(fn) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (err.response?.status === 429 && attempt < 6) {
+        const ra = parseFloat(err.response.headers?.['retry-after']) || 2;
+        await sleep(Math.ceil(ra * 1000) + 250);
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
 function format(template, stateCode, seq) {
   return template.replace('{STATE}', stateCode).replace('{SEQ}', String(seq));
 }
@@ -128,10 +146,10 @@ async function allocateSerial(deps, { docType, stateCode }) {
 // resource: 'orders' | 'draft_orders'. Returns ALL custom metafields as {key: value}
 // — we need serial_code for idempotency and the staff-set state_code for state fallback.
 async function readSerialMetafields(deps, resource, id, token) {
-  const { data } = await axios.get(
+  const { data } = await withRetry(() => axios.get(
     `${deps.shopifyStoreUrl}/admin/api/${API}/${resource}/${id}/metafields.json`,
     { headers: { 'X-Shopify-Access-Token': token }, timeout: 10000 }
-  );
+  ));
   const out = {};
   for (const mf of (data.metafields || [])) {
     if (mf.namespace === 'custom') out[mf.key] = mf.value;
@@ -151,10 +169,10 @@ async function writeSerialMetafields(deps, resource, id, fields, token) {
   const errors = [];
   const existingByKey = {};
   try {
-    const { data } = await axios.get(
+    const { data } = await withRetry(() => axios.get(
       `${deps.shopifyStoreUrl}/admin/api/${API}/${resource}/${id}/metafields.json`,
       { headers: { 'X-Shopify-Access-Token': token }, timeout: 10000 }
-    );
+    ));
     for (const mf of (data.metafields || [])) {
       if (mf.namespace === 'custom') existingByKey[mf.key] = mf.id;
     }
@@ -168,17 +186,17 @@ async function writeSerialMetafields(deps, resource, id, fields, token) {
     const existingId = existingByKey[key];
     try {
       if (existingId) {
-        await axios.put(
+        await withRetry(() => axios.put(
           `${deps.shopifyStoreUrl}/admin/api/${API}/metafields/${existingId}.json`,
           { metafield: { id: existingId, value: String(value), type } },
           { headers, timeout: 10000 }
-        );
+        ));
       } else {
-        await axios.post(
+        await withRetry(() => axios.post(
           `${deps.shopifyStoreUrl}/admin/api/${API}/${resource}/${id}/metafields.json`,
           { metafield: { namespace: 'custom', key, value: String(value), type } },
           { headers, timeout: 10000 }
-        );
+        ));
       }
     } catch (err) {
       errors.push({ key, error: err.response?.data || err.message });
