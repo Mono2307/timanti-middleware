@@ -2821,6 +2821,75 @@ app.get('/api/serial/peek', async (req, res) => {
   }
 });
 
+// POST /api/serial/backfill — one-time assignment of customer_order serials to ALREADY-PUNCHED
+// orders, in chronological order (earliest KA order → KA-1001, etc.). Opt-in = staff has set the
+// order's custom.state_code; opt-out = tag the order `skip-serial`. DRY RUN BY DEFAULT.
+//
+// Body: { nameFrom?, nameTo?, from?, to?, docType='customer_order', skipTag='skip-serial', dryRun=true }
+//   nameFrom/nameTo : numeric order-name range (e.g. 1038..1056)
+//   from/to         : created_at range (YYYY-MM-DD) — alternative to name range
+//   dryRun=true     : preview only (predicts numbers, allocates nothing)
+//   dryRun=false    : actually allocate + stamp
+app.post('/api/serial/backfill', async (req, res) => {
+  try {
+    if (!SERIAL_CUSTOMER_ORDER) return res.status(400).json({ success: false, error: 'SERIAL_CUSTOMER_ORDER flag is off' });
+    const { nameFrom, nameTo, from, to, docType = 'customer_order', skipTag = 'skip-serial', dryRun = true } = req.body || {};
+    const token = await getShopifyToken();
+    const hdrs  = { 'X-Shopify-Access-Token': token, 'Accept': 'application/json' };
+    const deps  = SERIAL_DEPS();
+
+    // Fetch orders oldest-first so serials follow chronological order.
+    const qp = new URLSearchParams({ status: 'any', order: 'created_at asc', limit: '250' });
+    if (from) qp.set('created_at_min', new Date(from).toISOString());
+    if (to)   qp.set('created_at_max', new Date(to + 'T23:59:59Z').toISOString());
+    let url = `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/orders.json?${qp}`;
+    const orders = [];
+    while (url) {
+      const { data, headers } = await axios.get(url, { headers: hdrs, timeout: 30000 });
+      orders.push(...(data.orders || []));
+      const m = (headers['link'] || '').match(/<([^>]+)>;\s*rel="next"/);
+      url = m ? m[1] : null;
+    }
+
+    const nf = nameFrom != null ? parseInt(nameFrom) : null;
+    const nt = nameTo   != null ? parseInt(nameTo)   : null;
+    const processed = [], skipped = [];
+    const sim = {}; // dry-run per-state running counter
+
+    for (const o of orders) {
+      const num = parseInt((o.name || '').replace(/\D/g, ''));
+      if (nf != null && num < nf) continue;
+      if (nt != null && num > nt) continue;
+
+      const tags = (o.tags || '').split(',').map(t => t.trim().toLowerCase());
+      if (skipTag && tags.includes(skipTag.toLowerCase())) { skipped.push({ name: o.name, reason: 'skip-tag' }); continue; }
+
+      const mf = await serialization.readSerialMetafields(deps, 'orders', String(o.id), token);
+      if (mf.serial_code) { skipped.push({ name: o.name, reason: 'already', serial_code: mf.serial_code }); continue; }
+      const state = mf.state_code ? mf.state_code.toUpperCase().split('-')[0] : null;
+      if (!state) { skipped.push({ name: o.name, reason: 'no-state_code' }); continue; }
+
+      if (dryRun) {
+        if (sim[state] == null) {
+          const { data: cnt } = await supabase.from('serial_counters')
+            .select('current_value').eq('doc_type', docType).eq('state_code', state).maybeSingle();
+          sim[state] = cnt ? Number(cnt.current_value) : 1000;
+        }
+        sim[state] += 1;
+        processed.push({ name: o.name, state, predicted_serial_code: `${state}-${sim[state]}` });
+      } else {
+        const r = await serialization.allocateAndStamp(deps, { docType, orderId: String(o.id) });
+        processed.push({ name: o.name, state, serial_code: r.serial_code, stamped: r.stamped });
+      }
+    }
+
+    return res.json({ success: true, dryRun, processedCount: processed.length, skippedCount: skipped.length, processed, skipped });
+  } catch (err) {
+    console.error('[serial] backfill failed:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // ── PO Queue routes ───────────────────────────────────────────────
 
 app.post('/api/po-ops/sync-all', async (req, res) => {
