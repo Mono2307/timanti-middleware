@@ -12,6 +12,7 @@ const { batchRaisePo } = require('./services/po-ops/batch');
 const { createPaymentLink: createGokwikLink, cancelPaymentLink: cancelGokwikLink } = require('./services/gokwik');
 const { sendSMS } = require('./services/sms');
 const { registerRepairRoutes, handleRepairPayment, handleRepairDraftUpdate } = require('./services/repairs');
+const serialization = require('./services/serialization');
 
 const app = express();
 app.use(cors());
@@ -27,6 +28,12 @@ const AUTO_PUSH_TO_TERMINAL       = process.env.AUTO_PUSH_TO_TERMINAL       === 
 const AUTO_CONVERT_DRAFT_TO_ORDER = process.env.AUTO_CONVERT_DRAFT_TO_ORDER === 'true';
 const AUTO_SEND_DRAFT_INVOICE     = process.env.AUTO_SEND_DRAFT_INVOICE     === 'true';
 const AUTO_SEND_DEPOSIT_EMAIL     = process.env.AUTO_SEND_DEPOSIT_EMAIL     === 'true';
+
+// Serialization feature flags — wire one doc type at a time.
+const SERIAL_CUSTOMER_ORDER = process.env.SERIAL_CUSTOMER_ORDER === 'true';
+const SERIAL_REPAIR         = process.env.SERIAL_REPAIR         === 'true';
+const SERIAL_MEMO_TRANSFER  = process.env.SERIAL_MEMO_TRANSFER  === 'true';
+const SERIAL_PO             = process.env.SERIAL_PO             === 'true';
 
 function getPinePaymentMode() {
   const mode = (process.env.PINE_PAYMENT_MODE || 'integer').toLowerCase();
@@ -214,6 +221,7 @@ function getMetafieldType(key) {
   if (key === 'amount_paid' || key === 'amount_pending' || key === 'gold_rate') return 'number_decimal';
   if (key === 'is_finalized') return 'boolean';
   if (key === 'gold_rate_date') return 'date_time';
+  if (key === 'serial_no') return 'number_integer';
   return 'single_line_text_field';
 }
 
@@ -280,6 +288,80 @@ async function convertDraftToOrder(draftOrderId, transactionDbId) {
 // ─────────────────────────────────────────
 // Payment Completion Handler
 // ─────────────────────────────────────────
+
+// Resolves the state code for an offline transaction via its store → location → state_code,
+// then allocates+stamps a customer_order serial on the draft (idempotent). Never throws —
+// a serialization failure must not block the payment/conversion flow.
+async function maybeAssignCustomerOrderSerial(draftId, transaction) {
+  if (!SERIAL_CUSTOMER_ORDER) return;
+  try {
+    let stateCode = null;
+    if (transaction.location_id) {
+      const { data: store } = await supabase.from('stores').select('location_ref').eq('id', transaction.location_id).maybeSingle();
+      if (store?.location_ref) {
+        const { data: loc } = await supabase.from('locations').select('state_code').eq('location_id', store.location_ref).maybeSingle();
+        stateCode = loc?.state_code || null;
+      }
+    }
+    const result = await serialization.allocateAndStamp(SERIAL_DEPS(), {
+      docType: 'customer_order', stateCode, draftOrderId: draftId.toString(),
+    });
+    console.log(`[serial] customer_order draft ${draftId} → ${result.serial_code} (allocated=${result.allocated})`);
+  } catch (err) {
+    console.error(`[serial] customer_order assign failed for draft ${draftId}:`, err.message);
+  }
+}
+
+// Allocates a global REP-N serial on a repair draft (custom namespace, survives conversion).
+// Idempotent and non-throwing. Passed into handleRepairDraftUpdate.
+async function assignRepairSerial(draftId) {
+  if (!SERIAL_REPAIR) return null;
+  try {
+    const r = await serialization.allocateAndStamp(SERIAL_DEPS(), {
+      docType: 'repair', documentType: 'repair', draftOrderId: String(draftId),
+    });
+    console.log(`[serial] repair draft ${draftId} → ${r.serial_code} (allocated=${r.allocated})`);
+    return r;
+  } catch (err) {
+    console.error(`[serial] repair assign failed for ${draftId}:`, err.message);
+    return null;
+  }
+}
+
+// Allocates a per-state serial for a draft-typed document (po/memo/transfer).
+// State precedence: a `state:XX` tag → shipping/billing province_code → (po only) PO_HQ_STATE.
+// Idempotent; on first allocation of a memo/transfer it clears the trigger tag.
+async function assignDocSerial(draft, docType, removeTag = null) {
+  try {
+    const rawTags = (draft.tags || '').split(',').map(t => t.trim());
+    const stateTag = rawTags.find(t => /^state:/i.test(t));
+    const explicitState = stateTag ? stateTag.split(':')[1].toUpperCase() : null;
+    const province = (draft.shipping_address?.province_code || draft.billing_address?.province_code || '').toUpperCase() || null;
+    let stateCode = explicitState || province || null;
+    if (!stateCode && docType === 'po') stateCode = (process.env.PO_HQ_STATE || '').toUpperCase() || null;
+
+    const r = await serialization.allocateAndStamp(SERIAL_DEPS(), {
+      docType, draftOrderId: String(draft.id), stateCode,
+    });
+    console.log(`[serial] ${docType} draft ${draft.id} → ${r.serial_code} (allocated=${r.allocated})`);
+    if (removeTag && r.allocated) await removeTagFromDraft(String(draft.id), removeTag);
+  } catch (err) {
+    console.error(`[serial] ${docType} assign failed for ${draft.id}:`, err.message);
+  }
+}
+
+// Detects draft-document trigger tags and assigns the matching serial.
+// PO drafts carry `po-draft`; memo/transfer are triggered by staff adding `make-memo`/`make-transfer`.
+async function handleDocumentSerialTags(draft) {
+  const tags = (draft.tags || '').split(',').map(t => t.trim().toLowerCase());
+  if (SERIAL_PO && tags.includes('po-draft')) {
+    await assignDocSerial(draft, 'po');
+  }
+  if (SERIAL_MEMO_TRANSFER) {
+    if (tags.includes('make-memo'))          await assignDocSerial(draft, 'memo', 'make-memo');
+    else if (tags.includes('make-transfer')) await assignDocSerial(draft, 'transfer', 'make-transfer');
+  }
+}
 
 async function handlePaymentCompletion(transaction, overrides = {}) {
   if (!transaction.shopify_draft_id) return;
@@ -380,12 +462,14 @@ async function handlePaymentCompletion(transaction, overrides = {}) {
 
     if (newStatus === 'paid') {
       console.log(`✅ Fully paid — draft ${transaction.shopify_draft_id}`);
+      await maybeAssignCustomerOrderSerial(transaction.shopify_draft_id, transaction);
       await convertDraftToOrder(transaction.shopify_draft_id, transaction.id);
     } else {
       console.log(`⏳ ${installmentType} recorded — Rs${Math.max(0, newAmountPending).toFixed(2)} pending`);
     }
 
   } else {
+    await maybeAssignCustomerOrderSerial(transaction.shopify_draft_id, transaction);
     await convertDraftToOrder(transaction.shopify_draft_id, transaction.id);
   }
 }
@@ -716,6 +800,111 @@ app.get('/api/draft-orders-report', async (req, res) => {
 
   } catch (err) {
     console.error('draft-orders-report error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// GET /api/serial-report
+// Serial-aware report across Orders and/or Draft Orders, filtered by the serial
+// metafields. Returns JSON rows (default) for the reporting Apps Script, or CSV with
+// ?format=csv. Uses GraphQL so serial metafields come back inline (no per-order N+1).
+//
+// Query params (all optional):
+//   resource=orders|draft_orders|both   (default both)
+//   docType=customer_order|repair|po|memo|transfer|credit_note
+//   state=KA|MH|...
+//   from=YYYY-MM-DD   to=YYYY-MM-DD      (created_at range)
+//   format=json|csv                      (default json)
+async function fetchSerialRowsGraphQL(resource, { from, to }, token) {
+  const gqlUrl = `${process.env.SHOPIFY_STORE_URL}/admin/api/2025-01/graphql.json`;
+  const hdrs   = { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' };
+
+  const searchParts = [];
+  if (from) searchParts.push(`created_at:>=${from}`);
+  if (to)   searchParts.push(`created_at:<=${to}`);
+  const search = searchParts.join(' ');
+
+  const root = resource === 'orders' ? 'orders' : 'draftOrders';
+  const customerField = resource === 'orders'
+    ? 'customer { displayName }'
+    : 'customer { displayName }';
+  const totalField = resource === 'orders'
+    ? 'currentTotalPriceSet { shopMoney { amount } }'
+    : 'totalPriceSet { shopMoney { amount } }';
+
+  const rows = [];
+  let cursor = null;
+  let pages = 0;
+  do {
+    const query = `query($cursor: String) {
+      ${root}(first: 100, after: $cursor, query: ${JSON.stringify(search)}) {
+        edges { cursor node {
+          name createdAt
+          ${customerField}
+          ${totalField}
+          metafields(first: 20, namespace: "custom") { edges { node { key value } } }
+        } }
+        pageInfo { hasNextPage }
+      }
+    }`;
+    const { data } = await axios.post(gqlUrl, { query, variables: { cursor } }, { headers: hdrs, timeout: 30000 });
+    const conn = data?.data?.[root];
+    if (!conn) break;
+    for (const edge of conn.edges) {
+      const n = edge.node;
+      const mf = {};
+      for (const m of (n.metafields?.edges || [])) mf[m.node.key] = m.node.value;
+      rows.push({
+        resource,
+        name: n.name || '',
+        created_at: n.createdAt ? new Date(n.createdAt).toLocaleDateString('en-IN') : '',
+        customer: n.customer?.displayName || '',
+        total: n.currentTotalPriceSet?.shopMoney?.amount || n.totalPriceSet?.shopMoney?.amount || '',
+        document_type: mf.document_type || '',
+        state_code:    mf.state_code || '',
+        serial_no:     mf.serial_no || '',
+        serial_code:   mf.serial_code || '',
+        serial_display: mf.serial_display || '',
+      });
+    }
+    cursor = conn.pageInfo?.hasNextPage ? conn.edges[conn.edges.length - 1]?.cursor : null;
+    pages++;
+  } while (cursor && pages < 50);
+  return rows;
+}
+
+app.get('/api/serial-report', async (req, res) => {
+  try {
+    const token    = await getShopifyToken();
+    const resource = (req.query.resource || 'both').toLowerCase();
+    const docType  = (req.query.docType || '').toLowerCase();
+    const state    = (req.query.state || '').toUpperCase();
+    const range    = { from: req.query.from || null, to: req.query.to || null };
+
+    const resources = resource === 'orders' ? ['orders']
+                    : resource === 'draft_orders' ? ['draft_orders']
+                    : ['orders', 'draft_orders'];
+
+    let rows = [];
+    for (const r of resources) rows = rows.concat(await fetchSerialRowsGraphQL(r, range, token));
+
+    // Only rows that actually carry a serial; then apply doc/state filters.
+    rows = rows.filter(r => r.serial_code);
+    if (docType) rows = rows.filter(r => r.document_type.toLowerCase() === docType);
+    if (state)   rows = rows.filter(r => r.state_code.toUpperCase() === state);
+    rows.sort((a, b) => Number(a.serial_no) - Number(b.serial_no));
+
+    if ((req.query.format || 'json').toLowerCase() === 'csv') {
+      const cols = ['resource','name','created_at','customer','total','document_type','state_code','serial_no','serial_code','serial_display'];
+      const escape = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+      const csv = [cols.join(','), ...rows.map(r => cols.map(c => escape(r[c])).join(','))].join('\r\n');
+      res.setHeader('Content-Type', 'text/csv');
+      res.setHeader('Content-Disposition', `attachment; filename="serial-report-${new Date().toISOString().slice(0,10)}.csv"`);
+      return res.send(csv);
+    }
+    return res.json({ success: true, count: rows.length, rows });
+  } catch (err) {
+    console.error('serial-report error:', err.message);
     return res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -1829,6 +2018,7 @@ app.post('/api/shopify-draft-updated', async (req, res) => {
     // Auto-hydrate line item properties from variant metafields on creation
     if ((req.headers['x-shopify-topic'] || '') === 'draft_orders/create') {
       await handleDraftCreated(draft);
+      await handleDocumentSerialTags(draft); // PO/memo/transfer present at creation
       return;
     }
 
@@ -1865,7 +2055,8 @@ app.post('/api/shopify-draft-updated', async (req, res) => {
     await handleRecalculatePriceTag(draft, { force: false });
     await handleRecalculatePriceTag(draft, { force: true });
     await handlePaymentMetafieldSync(draft);
-    await handleRepairDraftUpdate(draft, getShopifyToken);
+    await handleRepairDraftUpdate(draft, getShopifyToken, assignRepairSerial);
+    await handleDocumentSerialTags(draft); // PO/memo/transfer tags added after creation
 
     console.log(`Draft updated webhook: #${draft.name} — tag handlers complete`);
   } catch (err) {
@@ -2541,6 +2732,75 @@ app.post('/api/po-webhook', async (req, res) => {
   return handlePoWebhook(req, res, deps);
 });
 app.get('/api/po-action',   (req, res) => handlePoAction(req, res, PO_DEPS()));
+
+// ─────────────────────────────────────────
+// Serialization
+// ─────────────────────────────────────────
+
+const SERIAL_DEPS = () => ({
+  supabase,
+  getShopifyToken,
+  shopifyStoreUrl: process.env.SHOPIFY_STORE_URL,
+  updateDraftOrderMetafields,
+});
+
+// Allocate (and optionally stamp) a serial. Used by internal callers and Apps Script.
+// Body: { docType, stateCode?, shopifyLocationId?, shippingAddress?, draftOrderId?, orderId?, documentType? }
+app.post('/api/serial/allocate', async (req, res) => {
+  try {
+    const { docType } = req.body || {};
+    if (!docType) return res.status(400).json({ success: false, error: 'docType required' });
+    const result = await serialization.allocateAndStamp(SERIAL_DEPS(), req.body);
+    return res.json({ success: true, ...result });
+  } catch (err) {
+    if (err.code === 'NO_STATE') return res.status(400).json({ success: false, error: err.message });
+    console.error('[serial] allocate failed:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// orders/create webhook → stamp a customer_order serial on online (web) orders.
+// In-store orders arrive via draft completion and are already stamped on the draft
+// (then copied to the order), so we skip draft-origin orders to avoid double-allocation.
+app.post('/api/serial/order-created', async (req, res) => {
+  res.json({ success: true }); // ack immediately; work is fire-and-forget
+  if (!SERIAL_CUSTOMER_ORDER) return;
+  const order = req.body || {};
+  if (!order.id) return;
+  if (order.source_name === 'shopify_draft_order') return; // offline/draft path owns these
+  serialization.allocateAndStamp(SERIAL_DEPS(), {
+    docType: 'customer_order',
+    shippingAddress: order.shipping_address,
+    orderId: String(order.id),
+  })
+    .then(r => console.log(`[serial] customer_order order ${order.id} → ${r.serial_code} (allocated=${r.allocated})`))
+    .catch(e => console.error(`[serial] order-created assign failed for ${order.id}:`, e.message));
+});
+
+// Read-only peek at the current value of a counter (never allocates).
+app.get('/api/serial/peek', async (req, res) => {
+  try {
+    const { docType, state } = req.query;
+    if (!docType) return res.status(400).json({ success: false, error: 'docType required' });
+    const registry = await serialization.getRegistry(SERIAL_DEPS());
+    const reg = registry[docType];
+    if (!reg) return res.status(400).json({ success: false, error: `unknown docType: ${docType}` });
+    const stateCode = reg.scope === 'global' ? 'ALL' : (state ? String(state).toUpperCase() : null);
+    if (reg.scope === 'state' && !stateCode) return res.status(400).json({ success: false, error: 'state required' });
+    const { data } = await supabase
+      .from('serial_counters').select('current_value, updated_at')
+      .eq('doc_type', docType).eq('state_code', stateCode).maybeSingle();
+    return res.json({
+      success: true, docType, stateCode,
+      current_value: data ? Number(data.current_value) : null,
+      next_value: data ? Number(data.current_value) + 1 : reg.start,
+      updated_at: data?.updated_at || null,
+    });
+  } catch (err) {
+    console.error('[serial] peek failed:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
 
 // ── PO Queue routes ───────────────────────────────────────────────
 

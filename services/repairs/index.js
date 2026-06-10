@@ -234,7 +234,7 @@ async function handleRepairPayment(draft, { transactionId, gatewayRef }, getShop
 }
 
 // ── Called directly from the existing /api/shopify-draft-updated handler ──────
-async function handleRepairDraftUpdate(incomingDraft, getShopifyToken) {
+async function handleRepairDraftUpdate(incomingDraft, getShopifyToken, assignRepairSerial = null) {
   // In-process lock: each of our API calls (updateTags, writeMetafields, specCopy)
   // triggers another draft_orders/update webhook. The lock absorbs the burst so only
   // the first invocation per draft processes; the rest are dropped for 15 seconds.
@@ -305,6 +305,9 @@ async function handleRepairDraftUpdate(incomingDraft, getShopifyToken) {
     await updateDraftOrderTags(draft.id, [...tags, 'repair-hq-notified'], shopifyToken);
     await writeDraftOrderMetafields(draft.id, { repair_intake_at: new Date().toISOString() }, shopifyToken);
     await fetchAndCopyOriginalOrderSpecs(draft, shopifyToken);
+    // Allocate a global REP-N serial (written to the custom namespace so it survives
+    // draft→order conversion). Idempotent and non-blocking — failure won't break intake.
+    if (assignRepairSerial) { try { await assignRepairSerial(draft.id); } catch (_) {} }
     console.log(`✅ Repair intake: HQ notified + customer ack sent: ${draft.name}`);
     return;
   }
