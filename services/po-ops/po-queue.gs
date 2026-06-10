@@ -173,6 +173,17 @@ function upsertRows(tabName, rows) {
   if (!sheet) throw new Error('Tab not found: ' + tabName);
   const C = getColumnMap(tabName);
 
+  // Draft→order conversion: the order's rows carry source_draft_name = the originating
+  // draft order's numeric id. The order's line items get brand-new line_item_ids, so they
+  // won't match the existing draft rows — purge ALL pending rows still keyed to that draft
+  // up front, then let the order's line items insert fresh below. (Doing this per-row with a
+  // pre-built SOURCE_ID index collapsed multi-line orders, because every line item resolved to
+  // the same single draft row.) Non-pending draft rows (raised-po / po-created) are preserved.
+  const draftIdsToClear = new Set(
+    rows.map(r => r.source_draft_name).filter(Boolean).map(String)
+  );
+  draftIdsToClear.forEach(draftId => removeStaleRows(sheet, C, draftId, new Set()));
+
   // For each source_id in the payload, delete stale pending rows whose
   // line_item_id is no longer present (handles re-added line items on drafts)
   const incoming = {};
@@ -184,34 +195,20 @@ function upsertRows(tabName, rows) {
   Object.entries(incoming).forEach(([sid, currentIds]) => removeStaleRows(sheet, C, sid, currentIds));
 
   const lineItemIndex = buildIndex(sheet, C.LINE_ITEM_ID);
-  const sourceIdIndex = buildIndex(sheet, C.SOURCE_ID);  // for draft→order dedup: source_draft_name is the numeric draft ID
   let inserted = 0, refreshed = 0;
 
   rows.forEach(row => {
     const lineItemId = String(row.line_item_id);
-    let existRow = lineItemIndex[lineItemId];
-
-    // Dedup: order converted from a draft — source_draft_name is the numeric draft order ID (source_identifier),
-    // so look it up against SOURCE_ID (col A), not ORDER_NAME (col B which stores "#D83" not the numeric ID)
-    if (!existRow && row.source_draft_name) {
-      existRow = sourceIdIndex[String(row.source_draft_name)];
-    }
+    const existRow = lineItemIndex[lineItemId];
 
     if (existRow) {
       const status = sheet.getRange(existRow, C.STATUS).getValue();
       if (status === 'pending') {
         writeRow(sheet, existRow, row, C, false);
-        // After converting draft→order, writeRow updates SOURCE_ID to the order's ID,
-        // so any remaining pending rows still holding the old draft source_id are now stale — delete them
-        if (row.source_draft_name) {
-          removeStaleRows(sheet, C, String(row.source_draft_name), new Set());
-        }
         refreshed++;
       } else {
         sheet.getRange(existRow, C.SYNCED_AT).setValue(row.synced_at);
-        if (row.source_draft_name) {
-          sheet.getRange(existRow, C.SOURCE_ID).setValue(row.source_id);
-        }
+        sheet.getRange(existRow, C.SOURCE_ID).setValue(row.source_id);
       }
     } else {
       const newRow = sheet.getLastRow() + 1;

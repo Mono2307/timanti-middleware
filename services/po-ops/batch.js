@@ -28,6 +28,15 @@ function handleize(str) {
 async function batchRaisePo({ po_type, rows, shopifyToken, shopifyStoreUrl, supabase }) {
   if (!rows?.length) return { ok: false, error: 'No rows provided' };
 
+  // Shopify needs each line item to have either a real variant_id or a non-empty title.
+  // A row with neither 422s the WHOLE draft (creation is atomic), so catch it here with a
+  // clear message instead of a generic Shopify error.
+  const invalid = rows.filter(r => !Number(r.variant_id) && !String(r.product_title || '').trim());
+  if (invalid.length) {
+    const ids = invalid.map(r => r.line_item_id || r.sku || '(blank row)').join(', ');
+    return { ok: false, error: `${invalid.length} row(s) have no variant and no product title — fill the Product column or remove them: ${ids}` };
+  }
+
   const batchDate = new Date().toISOString().slice(0, 10);
   const batchId   = `${po_type}-${batchDate}-${Date.now()}`;
   const token     = generateToken();
@@ -90,7 +99,9 @@ async function batchRaisePo({ po_type, rows, shopifyToken, shopifyStoreUrl, supa
   } catch (e) {
     const detail = e.response?.data ? JSON.stringify(e.response.data) : e.message;
     console.error('[BATCH] Draft order creation failed:', detail);
-    return { ok: false, error: 'Draft order creation failed: ' + e.message };
+    // Surface Shopify's actual reason (e.g. a deleted/archived variant) to the Apps Script
+    // alert — the bare "status code 422" hid which line item was the problem.
+    return { ok: false, error: 'Draft order creation failed: ' + detail };
   }
 
   console.log(`[BATCH] Created ${draftOrder.name} for batch ${batchId}`);

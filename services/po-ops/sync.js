@@ -105,9 +105,11 @@ async function syncOrderToSheet(order, shopifyToken, shopifyStoreUrl) {
   const orderType = metas.find(m => m.namespace === 'custom' && m.key === 'order_type')?.value;
   const tab       = orderTypeToTab(orderType);
 
-  // If this order was converted from a draft, pass the draft name for deduplication in the sheet
-  const extra = (order.source_name === 'draft_orders' && order.source_identifier)
-    ? { source_draft_name: order.source_identifier }
+  // If this order was converted from a draft, pass the originating draft order id so the
+  // sheet can drop the now-stale draft rows. Shopify sets source_name to 'shopify_draft_order'
+  // (NOT 'draft_orders') and source_identifier to the draft order's numeric id.
+  const extra = (order.source_name === 'shopify_draft_order' && order.source_identifier)
+    ? { source_draft_name: String(order.source_identifier) }
     : {};
 
   const rows = await buildRows(
