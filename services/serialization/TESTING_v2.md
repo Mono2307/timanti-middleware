@@ -5,6 +5,21 @@ _Built 2026-06-11. Code is on `origin/main` (commit `e3b9f3c`). Every trigger is
 
 > **Throughout:** `BASE=https://timanti-middleware.fly.dev`, `STORE=auracarat.myshopify.com`.
 
+## ⏯️ WHERE WE ARE (paused 2026-06-11 eve — resume here tomorrow)
+Deploy is **done**. Automated read-only checks all **PASS** (re-run anytime to confirm):
+- **Stage 5c report** ✅ `BASE/api/serial-report?docType=customer_order` → 18 backfilled orders, all `active`, new `status`/`cancelled_at` columns present.
+- **`cancel-by-code` deployed** ✅ (HTTP 400 on empty body). **`order-cancelled` removed** ✅ (HTTP 404 — locking rule live).
+- **Counters healthy** ✅ customer_order KA-HSR at 1018→next 1019; repair/po/memo/transfer/credit_note all next=1 (nothing minted yet).
+
+**Remaining = the 4 manual end-to-end tests below (need Shopify/Sheet actions).** Suggested order:
+- **A. Credit Note** — no flag. Create CN in the sheet → verify ledger `active` → Void → verify `cancelled`.
+- **B. Repairs** — set `SERIAL_REPAIR=true`. Free repair → no row; complete a paid one → `REP-KA-HSR-1`.
+- **C. PO** — set `SERIAL_PO=true`. Raise from an order w/ `state_code` → Acknowledge → `PO-KA-HSR-1`; Cancel → `cancelled`.
+- **D. Memo/transfer** — set `SERIAL_MEMO_TRANSFER=true`. `make-memo` w/ `state_code`+`delivery_code` → `MEMO-…`; `cancel-memo` → `cancelled`.
+
+After each manual action, verify with: `curl "$BASE/api/serial-report?docType=<repair|po|memo|transfer|credit_note>"`.
+Full per-stage detail + expected values are in the stage sections below.
+
 ## Run order for tomorrow (do these in sequence)
 1. **Deploy first** — complete `DEPLOY_v2.md` steps 1–3: run `po-ops/setup.sql`, `flyctl deploy`,
    paste the two Apps Scripts. (No Shopify webhook needed.)
