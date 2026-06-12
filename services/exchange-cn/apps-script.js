@@ -24,9 +24,12 @@ const SHOPIFY_SHOP    = 'auracarat.myshopify.com';
 const CALC_SHEET_NAME = 'Exchange Calculator';
 
 // Document classification (run "Set up Document Type fields" once to build these cells).
-// Relocate here if B45/B46 are not free on your sheet — nothing else hardcodes the positions.
-const DOCTYPE_CELL    = 'B45';   // dropdown: Voucher | Exchange Note
-const NEWDRAFT_CELL   = 'B46';   // new sale's draft/order # (Exchange Note only)
+// Both sit on row 37 (the blank row under NET CREDIT NOTE VALUE) so no existing rows shift —
+// the script hardcodes B27/B28/B36/B43, so inserting rows would break them. setupDocTypeFields
+// aborts if these cells (or their labels) aren't empty, so a wrong guess can't overwrite data.
+// To relocate, change these two refs only — nothing else hardcodes the positions.
+const DOCTYPE_CELL    = 'B37';   // dropdown: Voucher | Exchange Note   (label in A37)
+const NEWDRAFT_CELL   = 'D37';   // new sale's draft/order # (Exchange Note only)  (label in C37)
 const VOUCHER_LOG     = 'Voucher Log';   // renamed from 'CN Log'
 const EXCHANGE_LOG    = 'Exchange Log';  // new tab for Exchange Notes
 
@@ -51,8 +54,9 @@ function onOpen() {
     .addToUi();
 }
 
-// One-time structural setup: builds the Document Type dropdown (B45) + New Draft/Order # field (B46),
-// labels, default, help note, and a conditional format that grays B46 when "Voucher" is selected.
+// One-time structural setup: builds the Document Type dropdown (DOCTYPE_CELL) + New Draft/Order #
+// field (NEWDRAFT_CELL), labels, default, help note, and a conditional format that grays the
+// New Draft cell when "Voucher" is selected.
 // Safe to re-run (idempotent). Also creates the Voucher Log / Exchange Log tabs if missing.
 function setupDocTypeFields() {
   var ss   = SpreadsheetApp.getActiveSpreadsheet();
@@ -62,6 +66,23 @@ function setupDocTypeFields() {
 
   var docTypeRange  = calc.getRange(DOCTYPE_CELL);
   var newDraftRange = calc.getRange(NEWDRAFT_CELL);
+
+  // SAFETY GUARD: refuse to write if the target cells (or their labels) already hold
+  // something that isn't ours. Protects the live sheet even if the row guess is off.
+  var docLabelRange = calc.getRange(docTypeRange.getRow(),  docTypeRange.getColumn()  - 1);
+  var drfLabelRange = calc.getRange(newDraftRange.getRow(), newDraftRange.getColumn() - 1);
+  var ours = { 'Document Type': 1, 'Voucher': 1, 'Exchange Note': 1,
+               'New Draft/Order # (Exchange Note only)': 1 };
+  var blocked = [docLabelRange, docTypeRange, drfLabelRange, newDraftRange].filter(function (r) {
+    var v = String(r.getValue()).trim();
+    return v !== '' && !ours[v];
+  });
+  if (blocked.length) {
+    ui.alert('Aborted — row ' + docTypeRange.getRow() + ' is not empty.\n\n' +
+      blocked.map(function (r) { return '  • ' + r.getA1Notation() + ' = "' + String(r.getValue()).trim() + '"'; }).join('\n') +
+      '\n\nNothing was changed. Tell me a different free row and I\'ll move DOCTYPE_CELL / NEWDRAFT_CELL.');
+    return;
+  }
 
   // Labels in the column immediately left of each field.
   calc.getRange(docTypeRange.getRow(),  docTypeRange.getColumn()  - 1).setValue('Document Type');
@@ -83,7 +104,7 @@ function setupDocTypeFields() {
     var rngs = r.getRanges();
     return !rngs.some(function (g) { return g.getA1Notation() === newDraftRange.getA1Notation(); });
   });
-  var absDocType = docTypeRange.getA1Notation().replace(/([A-Z]+)(\d+)/, '$$$1$$$2'); // B45 → $B$45
+  var absDocType = docTypeRange.getA1Notation().replace(/([A-Z]+)(\d+)/, '$$$1$$$2'); // B37 → $B$37
   keep.push(SpreadsheetApp.newConditionalFormatRule()
     .whenFormulaSatisfied('=' + absDocType + '="Voucher"')
     .setBackground('#efefef')
@@ -486,7 +507,7 @@ function removeTriggers() {
 }
 
 // ── DISPATCHER: branch on the Document Type cell ─────────────────────────────
-// B45 (DOCTYPE_CELL) = "Voucher" (1-year store credit, discount code) or
+// DOCTYPE_CELL (B37) = "Voucher" (1-year store credit, discount code) or
 // "Exchange Note" (instant post-tax deduction on a new invoice).
 function createDocument() {
   const calc = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CALC_SHEET_NAME);
@@ -910,7 +931,7 @@ function voidExchangeNote() {
       method:             'post',
       contentType:        'application/json',
       muteHttpExceptions: true,
-      payload:            JSON.stringify({ newDraftRef: newDraftId, excNumber: excNum })
+      payload:            JSON.stringify({ newDraftId: newDraftId, excNumber: excNum })
     });
     var body = {};
     try { body = JSON.parse(res.getContentText()); } catch (e) {}
