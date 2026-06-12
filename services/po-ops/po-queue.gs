@@ -490,6 +490,35 @@ function batchRaisePoDailyTrigger() {
   } else {
     Logger.log('No raised-po rows for Unclassified');
   }
+
+  // Don't let raised-po rows vanish silently: getApprovedRows drops Unclassified rows whose
+  // PO Type is blank, so the log above can read "No raised-po rows" while rows are actually
+  // sitting there approved. Surface them explicitly.
+  const missingType = unclassifiedRaisedMissingType();
+  if (missingType.length) {
+    const names = missingType.join(', ');
+    Logger.log('⚠️ Unclassified: ' + missingType.length + ' raised-po row(s) NOT raised — PO Type is blank: ' + names);
+    try {
+      SpreadsheetApp.getUi().alert('⚠️ ' + missingType.length + ' raised-po row(s) in Unclassified were NOT raised because the PO Type column is blank.\n\nFill PO Type (mto / in-stock) for: ' + names + '\n\nThen run Batch Raise again.');
+    } catch (_) { /* time-based trigger has no UI — log only */ }
+  }
+}
+
+// raised-po rows in Unclassified that are skipped only because PO Type (col P) is blank.
+function unclassifiedRaisedMissingType() {
+  const sheet = SS.getSheetByName(TAB.UNCLASSIFIED);
+  if (!sheet) return [];
+  const C    = getColumnMap(TAB.UNCLASSIFIED);
+  const last = sheet.getLastRow();
+  if (last < 2) return [];
+  const data = sheet.getRange(2, 1, last - 1, tabWidth(TAB.UNCLASSIFIED)).getValues();
+  const names = [];
+  data.forEach(r => {
+    if (r[C.STATUS - 1] === 'raised-po' && !String(r[C.PO_TYPE - 1] || '').trim()) {
+      names.push(r[C.ORDER_NAME - 1] || r[C.SKU - 1] || '(row)');
+    }
+  });
+  return names;
 }
 
 function callBatchRaise(poType, tabName, rows) {
