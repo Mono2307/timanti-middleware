@@ -15,7 +15,7 @@ const MIDDLEWARE_URL = PropertiesService.getScriptProperties().getProperty('MIDD
 
 const TAB = { MTO: 'mto', INSTOCK: 'InStock', UNCLASSIFIED: 'unclassified' };
 
-// ── MTO tab columns (1-based, A=1) — 23 cols A–W ────────────────
+// ── MTO tab columns (1-based, A=1) — 24 cols A–X ────────────────
 const C_MTO = {
   SOURCE_ID: 1,         // A hidden
   ORDER_NAME: 2,        // B
@@ -39,10 +39,11 @@ const C_MTO = {
   GOLD_RATE: 20,        // T
   GOLD_RATE_DATE: 21,   // U
   REPRICE_STATUS: 22,   // V
-  REPRICED_AT: 23       // W
+  REPRICED_AT: 23,      // W
+  STORE_CODE: 24        // X ← source order place-of-supply (machine-synced); drives PO split + serial
 };
 
-// ── InStock tab columns (1-based) — 15 cols A–O ─────────────────
+// ── InStock tab columns (1-based) — 16 cols A–P ─────────────────
 const C_IS = {
   SOURCE_ID: 1,
   ORDER_NAME: 2,
@@ -58,10 +59,11 @@ const C_IS = {
   SYNCED_AT: 12,
   STATUS: 13,            // ← staff editable
   PO_BATCH_ID: 14,
-  PO_RAISED_AT: 15
+  PO_RAISED_AT: 15,
+  STORE_CODE: 16         // P ← source order place-of-supply (machine-synced); drives PO split + serial
 };
 
-// ── Unclassified tab columns (1-based) — 24 cols A–X ────────────
+// ── Unclassified tab columns (1-based) — 25 cols A–Y ────────────
 // Staff fills PO_TYPE (col P) with 'mto' or 'in-stock' before approving
 const C_UC = {
   SOURCE_ID: 1,         // A hidden
@@ -87,7 +89,8 @@ const C_UC = {
   GOLD_RATE: 21,        // U
   GOLD_RATE_DATE: 22,   // V
   REPRICE_STATUS: 23,   // W
-  REPRICED_AT: 24       // X
+  REPRICED_AT: 24,      // X
+  STORE_CODE: 25        // Y ← source order place-of-supply (machine-synced); drives PO split + serial
 };
 
 function getColumnMap(tabName) {
@@ -98,10 +101,10 @@ function getColumnMap(tabName) {
 }
 
 function tabWidth(tabName) {
-  if (tabName === TAB.MTO)           return 23;
-  if (tabName === TAB.INSTOCK)       return 15;
-  if (tabName === TAB.UNCLASSIFIED)  return 24;
-  return 15;
+  if (tabName === TAB.MTO)           return 24;
+  if (tabName === TAB.INSTOCK)       return 16;
+  if (tabName === TAB.UNCLASSIFIED)  return 25;
+  return 16;
 }
 
 // =================================================================
@@ -141,6 +144,42 @@ function setBatchStoreCode() {
   const code = String(resp.getResponseText()).toUpperCase().trim();
   PropertiesService.getScriptProperties().setProperty('BATCH_STORE_CODE', code);
   ui.alert(code ? ('✅ Batch store code set to ' + code) : '✅ Batch store code cleared.');
+}
+
+// Fallback store code for rows with NO source location (merchandising POs with no source order,
+// or orders whose state_code was never set). Rows that carry their own store code never reach
+// here. Without a code such a PO mints NO serial at acknowledge (the middleware logs and skips),
+// so we refuse to raise rather than let that happen silently.
+//   • Interactive run (UI available): prompt for the code inline and persist it, or abort on cancel.
+//   • Unattended daily trigger (no UI): hard-abort and log — nothing is raised until staff set it.
+// Returns the store code on success, or '' (falsy) to signal the caller must abort.
+function ensureBatchStoreCode() {
+  const existing = getBatchStoreCode();
+  if (existing) return existing;
+
+  let ui = null;
+  try { ui = SpreadsheetApp.getUi(); } catch (_) { ui = null; }
+  if (!ui) {
+    Logger.log('❌ Batch raise aborted — BATCH_STORE_CODE not set (unattended run). Set it via PO Ops → Set Batch Store Code, then re-run.');
+    return '';
+  }
+
+  const resp = ui.prompt(
+    'Batch PO Store Code required',
+    'Some approved rows have no source location, and no fallback batch store code is set.\nSuch POs need a location to mint a serial (PO-{CODE}-{SEQ}) at HQ acknowledge.\n\nEnter a fallback store code (e.g. MH-HQ, KA-HSR) to continue, or Cancel to abort:',
+    ui.ButtonSet.OK_CANCEL
+  );
+  if (resp.getSelectedButton() !== ui.Button.OK) {
+    ui.alert('❌ Batch raise cancelled — no store code entered. Nothing was raised.');
+    return '';
+  }
+  const code = String(resp.getResponseText()).toUpperCase().trim();
+  if (!code) {
+    ui.alert('❌ Batch raise aborted — store code was blank. Nothing was raised.');
+    return '';
+  }
+  PropertiesService.getScriptProperties().setProperty('BATCH_STORE_CODE', code);
+  return code;
 }
 
 function requireMiddlewareUrl() {
@@ -267,6 +306,7 @@ function writeRow(sheet, rowIdx, row, C, isNew) {
   s(C.JEWEL_CODE,      row.jewel_code || '');
   s(C.LINE_ITEM_PROPS, row.line_item_properties || '');
   s(C.SYNCED_AT,       row.synced_at);
+  s(C.STORE_CODE,      (row.store_code || '').toString().toUpperCase().trim());
   if (isNew) {
     s(C.QTY_TO_RAISE, row.original_qty);
     s(C.STATUS, 'pending');
@@ -460,6 +500,7 @@ function getApprovedRows(tabName) {
       qty_to_raise:         Number(r[C.QTY_TO_RAISE - 1]) || Number(r[C.ORIGINAL_QTY - 1]),
       jewel_code:           r[C.JEWEL_CODE - 1] || '',
       line_item_properties: r[C.LINE_ITEM_PROPS - 1] || '',
+      store_code:           String(r[C.STORE_CODE - 1] || '').toUpperCase().trim(),
       ...(tabName === TAB.UNCLASSIFIED ? { po_type: r[C.PO_TYPE - 1] } : {})
     }));
 }
@@ -470,15 +511,16 @@ function getApprovedRows(tabName) {
 
 function batchRaisePoDailyTrigger() {
   if (!requireMiddlewareUrl()) return;
-  // MTO and InStock: po_type comes from the tab
-  [{ type: 'mto', tab: TAB.MTO }, { type: 'in-stock', tab: TAB.INSTOCK }]
-    .forEach(({ type, tab }) => {
-      const rows = getApprovedRows(tab);
-      if (!rows.length) { Logger.log('No raised-po rows for ' + type); return; }
-      callBatchRaise(type, tab, rows);
-    });
 
-  // Unclassified: group by the po_type column value staff filled in
+  // Collect every raise job as {type, tab, rows}. po_type comes from the tab for MTO/InStock,
+  // and from the staff-filled column for Unclassified.
+  const jobs = [];
+  [{ type: 'mto', tab: TAB.MTO }, { type: 'in-stock', tab: TAB.INSTOCK }].forEach(({ type, tab }) => {
+    const rows = getApprovedRows(tab);
+    if (rows.length) jobs.push({ type: type, tab: tab, rows: rows });
+    else Logger.log('No raised-po rows for ' + type);
+  });
+
   const ucRows = getApprovedRows(TAB.UNCLASSIFIED);
   if (ucRows.length) {
     const byType = {};
@@ -486,10 +528,33 @@ function batchRaisePoDailyTrigger() {
       if (!byType[r.po_type]) byType[r.po_type] = [];
       byType[r.po_type].push(r);
     });
-    Object.entries(byType).forEach(([type, rows]) => callBatchRaise(type, TAB.UNCLASSIFIED, rows));
+    Object.entries(byType).forEach(([type, rows]) => jobs.push({ type: type, tab: TAB.UNCLASSIFIED, rows: rows }));
   } else {
     Logger.log('No raised-po rows for Unclassified');
   }
+
+  // Each row carries its source order's store code. Rows without one (merchandising POs with no
+  // source order, or orders whose state_code was never set) fall back to BATCH_STORE_CODE. Only
+  // require that fallback when such rows exist — prompt interactively / hard-abort the unattended
+  // run rather than raise a PO that mints no serial at acknowledge.
+  const needsFallback = jobs.some(j => j.rows.some(r => !String(r.store_code || '').trim()));
+  let fallback = getBatchStoreCode();
+  if (needsFallback && !fallback) {
+    fallback = ensureBatchStoreCode();
+    if (!fallback) return; // staff cancelled, or unattended run with no code set — raise nothing
+  }
+
+  // Raise each job split by store code: one vendor PO + one serial (PO-{CODE}-{SEQ}) per location.
+  // Line items from KA-HSR and MH-XXX in the same tab become two separate POs, not one.
+  jobs.forEach(({ type, tab, rows }) => {
+    const byStore = {};
+    rows.forEach(r => {
+      const code = String(r.store_code || '').toUpperCase().trim() || fallback; // blank source → fallback
+      if (!byStore[code]) byStore[code] = [];
+      byStore[code].push(r);
+    });
+    Object.entries(byStore).forEach(([code, groupRows]) => callBatchRaise(type, tab, groupRows, code));
+  });
 
   // Don't let raised-po rows vanish silently: getApprovedRows drops Unclassified rows whose
   // PO Type is blank, so the log above can read "No raised-po rows" while rows are actually
@@ -521,11 +586,11 @@ function unclassifiedRaisedMissingType() {
   return names;
 }
 
-function callBatchRaise(poType, tabName, rows) {
+function callBatchRaise(poType, tabName, rows, storeCode) {
   const resp = UrlFetchApp.fetch(MIDDLEWARE_URL + '/api/po-ops/batch-raise-po', {
     method: 'post',
     contentType: 'application/json',
-    payload: JSON.stringify({ po_type: poType, rows, store_code: getBatchStoreCode() }),
+    payload: JSON.stringify({ po_type: poType, rows, store_code: storeCode || '' }),
     muteHttpExceptions: true
   });
 

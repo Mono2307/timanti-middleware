@@ -86,11 +86,14 @@ async function syncDraftOrderToSheet(draftOrder, shopifyToken, shopifyStoreUrl) 
 
   const metas     = await fetchMetafields('draft_orders', draftOrder.id, shopifyToken, shopifyStoreUrl);
   const orderType = metas.find(m => m.namespace === 'custom' && m.key === 'order_type')?.value;
+  const stateCode = metas.find(m => m.namespace === 'custom' && m.key === 'state_code')?.value || '';
   const tab       = orderTypeToTab(orderType);
 
+  // Carry the source order's place of supply onto every row so the batch raise can split by
+  // location (one PO + one serial per store code). Already in `metas` — no extra Shopify call.
   const rows = await buildRows(
     String(draftOrder.id), draftOrder.name, 'draft_order',
-    getCustomerName(draftOrder), lineItems, shopifyToken, shopifyStoreUrl, {}
+    getCustomerName(draftOrder), lineItems, shopifyToken, shopifyStoreUrl, { store_code: stateCode }
   );
 
   await postToPoQueue({ action: 'upsertRows', tab, rows });
@@ -103,14 +106,18 @@ async function syncOrderToSheet(order, shopifyToken, shopifyStoreUrl) {
 
   const metas     = await fetchMetafields('orders', order.id, shopifyToken, shopifyStoreUrl);
   const orderType = metas.find(m => m.namespace === 'custom' && m.key === 'order_type')?.value;
+  const stateCode = metas.find(m => m.namespace === 'custom' && m.key === 'state_code')?.value || '';
   const tab       = orderTypeToTab(orderType);
 
+  // Carry the source order's place of supply onto every row so the batch raise can split by
+  // location (one PO + one serial per store code). Already in `metas` — no extra Shopify call.
+  const extra = { store_code: stateCode };
   // If this order was converted from a draft, pass the originating draft order id so the
   // sheet can drop the now-stale draft rows. Shopify sets source_name to 'shopify_draft_order'
   // (NOT 'draft_orders') and source_identifier to the draft order's numeric id.
-  const extra = (order.source_name === 'shopify_draft_order' && order.source_identifier)
-    ? { source_draft_name: String(order.source_identifier) }
-    : {};
+  if (order.source_name === 'shopify_draft_order' && order.source_identifier) {
+    extra.source_draft_name = String(order.source_identifier);
+  }
 
   const rows = await buildRows(
     String(order.id), order.name, 'order',
