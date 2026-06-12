@@ -196,6 +196,16 @@ function upsertRows(tabName, rows) {
   if (!sheet) throw new Error('Tab not found: ' + tabName);
   const C = getColumnMap(tabName);
 
+  // ONE source → ONE tab. A draft/order and its line items must live in a single tab. When a
+  // draft is reclassified (order_type set later → unclassified→mto/InStock) or converted to an
+  // order in a different tab, its line items get new ids and re-insert here, but the old pending
+  // rows linger in the other tab. Evict every source in this payload — plus any originating
+  // draft (source_draft_name) — from the OTHER tabs first. Only pending rows are removed;
+  // raised-po / po-created stay put as the committed PO record.
+  const evictIds = new Set(rows.map(r => String(r.source_id)));
+  rows.map(r => r.source_draft_name).filter(Boolean).forEach(d => evictIds.add(String(d)));
+  removeSourcesFromOtherTabs(tabName, evictIds);
+
   // Draft→order conversion: the order's rows carry source_draft_name = the originating
   // draft order's numeric id. The order's line items get brand-new line_item_ids, so they
   // won't match the existing draft rows — purge ALL pending rows still keyed to that draft
@@ -261,6 +271,21 @@ function writeRow(sheet, rowIdx, row, C, isNew) {
     s(C.QTY_TO_RAISE, row.original_qty);
     s(C.STATUS, 'pending');
   }
+}
+
+// Evict a source's pending rows from every tab except the one it now belongs to.
+// Keeps a source (and its line items) from appearing in two tabs after reclassification
+// or a cross-tab draft→order conversion. raised-po / po-created rows are preserved.
+function removeSourcesFromOtherTabs(targetTab, sourceIds) {
+  [TAB.MTO, TAB.INSTOCK, TAB.UNCLASSIFIED].forEach(function(name) {
+    if (name === targetTab) return;
+    const sheet = SS.getSheetByName(name);
+    if (!sheet) return;
+    const C = getColumnMap(name);
+    sourceIds.forEach(function(sid) {
+      removeStaleRows(sheet, C, String(sid), new Set()); // empty set → remove all pending for this source
+    });
+  });
 }
 
 function removeStaleRows(sheet, C, sourceId, currentLineItemIds) {

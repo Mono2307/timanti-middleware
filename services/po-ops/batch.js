@@ -29,13 +29,15 @@ async function batchRaisePo({ po_type, rows, store_code, shopifyToken, shopifySt
   if (!rows?.length) return { ok: false, error: 'No rows provided' };
   const storeCode = (store_code || '').toUpperCase().trim() || null; // staff dropdown; drives PO-{CODE}-{SEQ} at acknowledge
 
-  // Shopify needs each line item to have either a real variant_id or a non-empty title.
-  // A row with neither 422s the WHOLE draft (creation is atomic), so catch it here with a
-  // clear message instead of a generic Shopify error.
-  const invalid = rows.filter(r => !Number(r.variant_id) && !String(r.product_title || '').trim());
+  // A custom line item (temp design not on Shopify) has no variant — it raises as a custom item
+  // carried by its name. That name lives in Product, but for these it often sits in SKU, so use
+  // whichever holds it as the title. Reject only a row with no variant and no name at all.
+  const lineName = r => String(r.product_title || r.sku || '').trim();
+
+  const invalid = rows.filter(r => !Number(r.variant_id) && !lineName(r));
   if (invalid.length) {
     const ids = invalid.map(r => r.line_item_id || r.sku || '(blank row)').join(', ');
-    return { ok: false, error: `${invalid.length} row(s) have no variant and no product title — fill the Product column or remove them: ${ids}` };
+    return { ok: false, error: `${invalid.length} empty row(s) — no variant and no name to raise: ${ids}` };
   }
 
   const batchDate = new Date().toISOString().slice(0, 10);
@@ -50,7 +52,7 @@ async function batchRaisePo({ po_type, rows, store_code, shopifyToken, shopifySt
     const item = {
       quantity:   Number(row.qty_to_raise) || 1,
       price:      '0.00',
-      title:      row.product_title,
+      title:      lineName(row),
       properties: [
         { name: '_source_line_item_id', value: String(row.line_item_id) },
         { name: '_source_draft_order',  value: row.draft_order_name },
