@@ -143,8 +143,13 @@ async function sendBatchPoEmail({ draftOrder, po_type, batchDate, batchId, rows 
   const attrs     = Object.fromEntries((draftOrder.note_attributes || []).map(na => [na.name, na.value]));
   const itemsHtml = rows.map(r => `${r.product_title} × ${r.qty_to_raise} (${r.sku || '—'})`).join('<br>');
   const pdfUrl    = `https://timanti.in/apps/download-pdf/drafts/291a11815ae190ec88fb/${draftOrder.id * 8108}/${handleize(draftOrder.name)}.pdf`;
-  const typeColor = po_type === 'mto' ? '#1565C0' : '#2E7D32';
-  const typeBg    = po_type === 'mto' ? '#E3F2FD' : '#E8F5E9';
+  // po_type badge colors — mto (blue), in-stock (green), merchandising (purple, temp designs).
+  const TYPE_STYLES = {
+    'mto':           { color: '#1565C0', bg: '#E3F2FD' },
+    'in-stock':      { color: '#2E7D32', bg: '#E8F5E9' },
+    'merchandising': { color: '#6A1B9A', bg: '#F3E5F5' }
+  };
+  const { color: typeColor, bg: typeBg } = TYPE_STYLES[po_type] || TYPE_STYLES['in-stock'];
 
   const html = `<!DOCTYPE html>
 <html lang="en">
