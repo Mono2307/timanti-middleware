@@ -4,7 +4,7 @@ const express = require('express');
 const cors    = require('cors');
 const axios   = require('axios');
 const { createClient } = require('@supabase/supabase-js');
-const { sendEmail, sendDepositEmail, buildCreditNoteHtml } = require('./emailService');
+const { sendEmail, sendDepositEmail, buildCreditNoteHtml, buildExchangeNoteHtml } = require('./emailService');
 const { handlePoWebhook } = require('./services/po-ops/webhook');
 const { handlePoAction }  = require('./services/po-ops/action');
 const { syncDraftOrderToSheet, syncOrderToSheet, syncAllDraftOrders, syncAllOrders, removeDraftFromSheet, pruneOrphans } = require('./services/po-ops/sync');
@@ -1405,6 +1405,15 @@ async function hydrateItemFromVariant(item, token) {
   return { id: item.id, variant_id: item.variant_id || undefined, quantity: item.quantity, price: item.price, properties: updatedProps, title: item.title, varMf };
 }
 
+// Exchange Note line: a negative custom line item applied by /api/exc-redeem. It is a POST-tax
+// trade-in adjustment, NOT a discount — it must be excluded from the pricing/GST engine (never
+// counted into gross_total, never repriced) and always preserved verbatim on the draft. Identified
+// by the title (human-guaranteed by /api/exc-redeem) or the durable _exc_ref machine marker.
+function isExcLine(item) {
+  return (item.title || '').startsWith('Exchange Note ') ||
+         (item.properties || []).some(p => p.name === '_exc_ref');
+}
+
 // Hydrates Gold/Diamond/Making/_gold_rate properties from variant metafields on a freshly created draft.
 // Fires on draft_orders/create webhook — never changes price, only populates breakdown properties.
 async function handleDraftCreated(draft) {
@@ -1412,7 +1421,7 @@ async function handleDraftCreated(draft) {
   if (!draftOrderId) return;
 
   const productItems = (draft.line_items || []).filter(item =>
-    item.variant_id &&
+    item.variant_id && !isExcLine(item) &&
     !((item.title || '').toLowerCase().includes('discount') && parseFloat(item.price) < 0)
   );
   if (productItems.length === 0) return;
@@ -1477,7 +1486,11 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
 
   const hasAnyNetWt = netWtArr.some(v => v !== null && v > 0);
 
+  // EXC lines are excluded here so they never enter gross_total / GST math and are never repriced.
+  // The full-set rebuild below re-sends them verbatim (they're never in repricedMap), so the
+  // post-tax trade-in deduction simply rides the draft total.
   const productItems = (draft.line_items || []).filter(item =>
+    !isExcLine(item) &&
     !((item.title || '').toLowerCase().includes('discount') && parseFloat(item.price) < 0) &&
     ((item.properties || []).some(p => p.name === 'Gold') || !!item.variant_id)
   );
@@ -1605,6 +1618,7 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
 
     const allUpdatedItems = (draft.line_items || []).map(item => {
       const h = hydratedItems.find(u => u.id === item.id);
+      // else-branch re-sends non-product lines verbatim — EXC lines pass through here untouched.
       return h
         ? { variant_id: h.variant_id, quantity: h.quantity, price: h.price, properties: h.properties, title: item.title }
         : { variant_id: item.variant_id || undefined, quantity: item.quantity, price: item.price, properties: item.properties || [], title: item.title };
@@ -1776,6 +1790,7 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
   const allLineItems = (draft.line_items || []).map(item => {
     const r = repricedMap.get(item.id);
     if (r) return { variant_id: r.variant_id, quantity: r.quantity, price: r.price, properties: r.properties, title: r.title };
+    // else-branch re-sends non-repriced lines verbatim — EXC lines pass through here untouched.
     return { variant_id: item.variant_id || undefined, quantity: item.quantity, price: item.price, properties: item.properties || [], title: item.title };
   });
 
@@ -2717,11 +2732,13 @@ app.post('/api/serial/allocate', async (req, res) => {
   try {
     const { docType } = req.body || {};
     if (!docType) return res.status(400).json({ success: false, error: 'docType required' });
-    // Credit notes are valid the moment they're created → record in the ledger (keyed by their own
-    // CNTM code) so they can be voided before expiry. CN has no Shopify resource id.
-    if (docType === 'credit_note') {
+    // Vouchers and exchange notes are valid the moment they're created → record in the ledger
+    // (keyed by their own VCH-/EXC- code) so they can be voided. Neither has a Shopify resource id
+    // at allocate time. Minted ONCE here — downstream endpoints (e.g. /api/exc-redeem) must not
+    // re-mint, or the customer-facing number and the ledger row would diverge.
+    if (docType === 'voucher' || docType === 'exchange_note') {
       const r = await serialization.mintSerial(SERIAL_DEPS(), {
-        docType: 'credit_note', storeCode: 'ALL', resourceType: 'credit_note', resourceIdFromCode: true,
+        docType, storeCode: 'ALL', resourceType: docType, resourceIdFromCode: true,
       });
       return res.json({ success: true, allocated: r.minted, serial_no: r.seq, serial_code: r.serial_code, serial_display: r.serial_code });
     }
@@ -2740,7 +2757,7 @@ app.post('/api/serial/allocate', async (req, res) => {
 app.post('/api/serial/cancel-by-code', async (req, res) => {
   try {
     const body    = req.body || {};
-    const docType = body.docType || 'credit_note';
+    const docType = body.docType || 'voucher';
     const seq     = body.serialNo != null ? Number(body.serialNo) : null;
     if (seq == null && !body.serialCode) {
       return res.status(400).json({ success: false, error: 'serialNo or serialCode required' });
@@ -3489,8 +3506,8 @@ app.get('/api/recon', async (req, res) => {
 
 // ─────────────────────────────────────────
 // POST /api/cn-email
-// Called by Apps Script after CN creation.
-// Sends credit note email via Resend using the shared emailService template.
+// Called by Apps Script after Voucher creation. (Route name kept for back-compat; cnNumber now
+// carries the VCH-YYYY-NNNN code.) Sends the voucher email via Resend.
 // ─────────────────────────────────────────
 app.post('/api/cn-email', async (req, res) => {
   const { customerName, customerEmail, cnNumber, creditValue, validUntil, originalOrder } = req.body;
@@ -3500,14 +3517,166 @@ app.post('/api/cn-email', async (req, res) => {
   try {
     await sendEmail({
       to:      customerEmail,
-      subject: `Your Timanti Credit Note — Rs.${creditValue} | Code: ${cnNumber}`,
+      subject: `Your Timanti Voucher — Rs.${creditValue} | Code: ${cnNumber}`,
       html:    buildCreditNoteHtml({ customerName, cnNumber, creditValue, validUntil, originalOrder })
     });
-    console.log(`CN email sent → ${customerEmail} | ${cnNumber}`);
+    console.log(`Voucher email sent → ${customerEmail} | ${cnNumber}`);
     res.json({ ok: true });
   } catch (err) {
-    console.error('CN email error:', err.message);
+    console.error('Voucher email error:', err.message);
     res.status(500).json({ error: err.message });
+  }
+});
+
+// ─────────────────────────────────────────
+// POST /api/exc-email
+// Called by Apps Script after an Exchange Note is applied to a new invoice.
+// Confirmation only — there is no code to redeem and no expiry; the value is already deducted.
+// ─────────────────────────────────────────
+app.post('/api/exc-email', async (req, res) => {
+  const { customerName, customerEmail, excNumber, excValue, oldOrder, newOrder } = req.body;
+  if (!customerEmail || !excNumber) {
+    return res.status(400).json({ error: 'customerEmail and excNumber are required' });
+  }
+  try {
+    await sendEmail({
+      to:      customerEmail,
+      subject: `Your Timanti Exchange Note — Rs.${excValue} applied | ${excNumber}`,
+      html:    buildExchangeNoteHtml({ customerName, excNumber, excValue, oldOrder, newOrder })
+    });
+    console.log(`EXC email sent → ${customerEmail} | ${excNumber}`);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('EXC email error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Resolves a draft-order reference to a numeric id. Accepts a numeric id (passed through) or a
+// draft name like "#D123" / "D123" (resolved via GraphQL — REST draft_orders can't filter by name).
+async function resolveDraftId(ref, token) {
+  const raw = String(ref || '').trim();
+  if (!raw) return null;
+  if (/^\d+$/.test(raw)) return raw;
+  const name = raw.startsWith('#') ? raw : '#' + raw;
+  const q = `query($q:String!){ draftOrders(first:1, query:$q){ nodes{ id } } }`;
+  const resp = await axios.post(
+    `${process.env.SHOPIFY_STORE_URL}/admin/api/2025-01/graphql.json`,
+    { query: q, variables: { q: `name:${name}` } },
+    { headers: { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' }, timeout: 10000 }
+  );
+  const node = resp.data?.data?.draftOrders?.nodes?.[0];
+  return node ? String(node.id).split('/').pop() : null;
+}
+
+// Maps a Shopify REST draft line item back to the gqlSetDraftLineItems input shape (verbatim
+// pass-through — preserves custom prices, titles, and properties on re-send).
+function draftLineToInput(li) {
+  return {
+    variant_id:        li.variant_id || undefined,
+    title:             li.title,
+    quantity:          li.quantity,
+    price:             li.price,
+    taxable:           li.taxable,
+    requires_shipping: li.requires_shipping,
+    properties:        (li.properties || []).map(p => ({ name: p.name, value: p.value })),
+  };
+}
+
+// ─────────────────────────────────────────
+// POST /api/exc-redeem
+// Applies an Exchange Note as a POST-tax negative custom line item on a new draft order.
+// The EXC value (already minted at /api/serial/allocate) is deducted from the invoice total but
+// stays OUT of the GST engine (taxable:false, excluded by isExcLine). Body:
+//   { newDraftRef, excNumber, excValue, oldOrderNumber?, customerName? }
+//   newDraftRef = numeric draft id OR a draft name like "#D123".
+// ─────────────────────────────────────────
+app.post('/api/exc-redeem', async (req, res) => {
+  const { newDraftRef, excNumber, excValue, oldOrderNumber } = req.body || {};
+  const value = parseFloat(excValue);
+  if (!newDraftRef || !excNumber || !(value > 0)) {
+    return res.status(400).json({ success: false, error: 'newDraftRef, excNumber and excValue>0 are required' });
+  }
+  try {
+    const token = await getShopifyToken();
+    const newDraftId = await resolveDraftId(newDraftRef, token);
+    if (!newDraftId) return res.status(404).json({ success: false, error: `draft "${newDraftRef}" not found` });
+    // 1. Fetch the draft's current line items via REST (preserves custom prices + properties).
+    const { data } = await axios.get(
+      `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${newDraftId}.json`,
+      { headers: { 'X-Shopify-Access-Token': token }, timeout: 10000 }
+    );
+    const draft = data.draft_order;
+    if (!draft) return res.status(404).json({ success: false, error: `draft ${newDraftId} not found` });
+
+    // 2. Idempotency: bail if an EXC line is already present (Apps Script retry-safe).
+    if ((draft.line_items || []).some(isExcLine)) {
+      return res.json({ success: true, alreadyApplied: true, draftId: newDraftId, excNumber });
+    }
+
+    // 3. Existing items, verbatim, + the appended negative EXC line.
+    const existing = (draft.line_items || []).map(draftLineToInput);
+    const excLine = {
+      title:             `Exchange Note ${excNumber}`,
+      quantity:          1,
+      price:             (-Math.abs(value)).toFixed(2),
+      taxable:           false,             // post-tax deduction — never enters GST math
+      requires_shipping: false,
+      properties: [
+        { name: '_exc_ref',        value: String(excNumber) },
+        { name: '_exc_old_order',  value: String(oldOrderNumber || '') },
+        { name: 'Exchange Credit', value: `Rs${Math.abs(value).toFixed(2)}` },
+      ],
+    };
+
+    // 4. Resend the FULL set (append-not-replace — omitting `existing` would delete the purchase).
+    const tags = (draft.tags || '').split(',').map(t => t.trim()).filter(Boolean)
+      .concat(['exc-applied', `exc-num:${excNumber}`]).join(', ');
+    await gqlSetDraftLineItems(newDraftId, existing.concat([excLine]), token, { tags });
+
+    // NOTE: the ledger row was already minted at /api/serial/allocate — do NOT mint again here.
+    return res.json({ success: true, draftId: newDraftId, excNumber, deducted: Math.abs(value).toFixed(2) });
+  } catch (err) {
+    console.error('exc-redeem error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ─────────────────────────────────────────
+// POST /api/exc-void
+// Removes an Exchange Note line from a (still-draft) order and cancels its ledger serial.
+// Body: { newDraftId, excNumber }. Refuses (409) if the draft has already converted to an order.
+// ─────────────────────────────────────────
+app.post('/api/exc-void', async (req, res) => {
+  const { newDraftId, excNumber } = req.body || {};
+  if (!newDraftId || !excNumber) {
+    return res.status(400).json({ success: false, error: 'newDraftId and excNumber are required' });
+  }
+  try {
+    const token = await getShopifyToken();
+    const { data } = await axios.get(
+      `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${newDraftId}.json`,
+      { headers: { 'X-Shopify-Access-Token': token }, timeout: 10000 }
+    );
+    const draft = data.draft_order;
+    if (!draft) return res.status(404).json({ success: false, error: `draft ${newDraftId} not found` });
+    if (draft.status === 'completed' || draft.order_id) {
+      return res.status(409).json({ success: false, error: 'draft already completed — edit the order line item manually' });
+    }
+
+    // Rebuild the line set excluding any EXC line, and strip the exc-* tags.
+    const kept = (draft.line_items || []).filter(li => !isExcLine(li)).map(draftLineToInput);
+    const tags = (draft.tags || '').split(',').map(t => t.trim())
+      .filter(t => t && t !== 'exc-applied' && !t.startsWith('exc-num:')).join(', ');
+    await gqlSetDraftLineItems(newDraftId, kept, token, { tags });
+
+    // Cancel the ledger serial by seq (parsed from EXC-YYYY-NNNN — shares only the seq with the ledger).
+    const seq = parseInt(String(excNumber).split('-').pop(), 10);
+    const cancelled = await serialization.cancelSerial(SERIAL_DEPS(), { docType: 'exchange_note', seq });
+    return res.json({ success: true, draftId: newDraftId, excNumber, serialCancelled: !!cancelled });
+  } catch (err) {
+    console.error('exc-void error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
   }
 });
 

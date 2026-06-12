@@ -23,15 +23,24 @@
 const SHOPIFY_SHOP    = 'auracarat.myshopify.com';
 const CALC_SHEET_NAME = 'Exchange Calculator';
 
+// Document classification (run "Set up Document Type fields" once to build these cells).
+// Relocate here if B45/B46 are not free on your sheet — nothing else hardcodes the positions.
+const DOCTYPE_CELL    = 'B45';   // dropdown: Voucher | Exchange Note
+const NEWDRAFT_CELL   = 'B46';   // new sale's draft/order # (Exchange Note only)
+const VOUCHER_LOG     = 'Voucher Log';   // renamed from 'CN Log'
+const EXCHANGE_LOG    = 'Exchange Log';  // new tab for Exchange Notes
+
 // ── MENU ─────────────────────────────────────────────────────────────────────
 function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu('Timanti CN Tools')
-    .addItem('✅  Create Credit Note & Tag Order', 'createCreditNote')
-    .addItem('🗑️  Void Credit Note', 'voidCreditNote')
+    .addItem('✅  Create Document (Voucher / Exchange)', 'createDocument')
+    .addItem('🗑️  Void Voucher', 'voidVoucher')
+    .addItem('🗑️  Void Exchange Note', 'voidExchangeNote')
     .addSeparator()
     .addItem('🔄  Lookup Order Now', 'lookupOrderManual')
     .addSeparator()
+    .addItem('🧩  Set up Document Type fields', 'setupDocTypeFields')
     .addItem('⚙️  Setup Auto-fill Triggers', 'setupTriggers')
     .addItem('🗑️  Remove Auto-fill Triggers', 'removeTriggers')
     .addSeparator()
@@ -40,6 +49,63 @@ function onOpen() {
     .addItem('🐛  Debug Cell Values', 'debugCells')
     .addItem('🐛  Show Line Item Properties', 'showLineItemProperties')
     .addToUi();
+}
+
+// One-time structural setup: builds the Document Type dropdown (B45) + New Draft/Order # field (B46),
+// labels, default, help note, and a conditional format that grays B46 when "Voucher" is selected.
+// Safe to re-run (idempotent). Also creates the Voucher Log / Exchange Log tabs if missing.
+function setupDocTypeFields() {
+  var ss   = SpreadsheetApp.getActiveSpreadsheet();
+  var calc = ss.getSheetByName(CALC_SHEET_NAME);
+  var ui   = SpreadsheetApp.getUi();
+  if (!calc) { ui.alert('Sheet "' + CALC_SHEET_NAME + '" not found.'); return; }
+
+  var docTypeRange  = calc.getRange(DOCTYPE_CELL);
+  var newDraftRange = calc.getRange(NEWDRAFT_CELL);
+
+  // Labels in the column immediately left of each field.
+  calc.getRange(docTypeRange.getRow(),  docTypeRange.getColumn()  - 1).setValue('Document Type');
+  calc.getRange(newDraftRange.getRow(), newDraftRange.getColumn() - 1).setValue('New Draft/Order # (Exchange Note only)');
+
+  // Dropdown on the Document Type cell.
+  var rule = SpreadsheetApp.newDataValidation()
+    .requireValueInList(['Voucher', 'Exchange Note'], true)
+    .setAllowInvalid(false)
+    .setHelpText('Voucher = 1-year store credit (discount code). Exchange Note = instant deduction on a new invoice.')
+    .build();
+  docTypeRange.setDataValidation(rule);
+  if (!String(docTypeRange.getValue()).trim()) docTypeRange.setValue('Voucher');
+
+  newDraftRange.setNote('Only for Exchange Note. Enter the new sale\'s draft order number (e.g. #D123) — the exchange value is deducted from that invoice.');
+
+  // Gray out the New Draft cell whenever the doc type is Voucher (visual "not needed" cue).
+  var keep = calc.getConditionalFormatRules().filter(function (r) {
+    var rngs = r.getRanges();
+    return !rngs.some(function (g) { return g.getA1Notation() === newDraftRange.getA1Notation(); });
+  });
+  var absDocType = docTypeRange.getA1Notation().replace(/([A-Z]+)(\d+)/, '$$$1$$$2'); // B45 → $B$45
+  keep.push(SpreadsheetApp.newConditionalFormatRule()
+    .whenFormulaSatisfied('=' + absDocType + '="Voucher"')
+    .setBackground('#efefef')
+    .setRanges([newDraftRange])
+    .build());
+  calc.setConditionalFormatRules(keep);
+
+  // Ensure log tabs exist.
+  if (!ss.getSheetByName(VOUCHER_LOG)) {
+    var old = ss.getSheetByName('CN Log');
+    if (old) old.setName(VOUCHER_LOG); else ss.insertSheet(VOUCHER_LOG);
+  }
+  if (!ss.getSheetByName(EXCHANGE_LOG)) {
+    var ex = ss.insertSheet(EXCHANGE_LOG);
+    ex.appendRow(['Issued', 'EXC Number', 'Old Order', 'New Draft', 'Customer', 'Email',
+                  'Net Wt', 'Dia Wt', 'Gold Val', 'Dia Val', 'Exchange Value', 'Status', 'New Draft ID']);
+  }
+
+  ui.alert('Document Type fields ready:\n\n' +
+    '• ' + DOCTYPE_CELL + ' — dropdown (Voucher / Exchange Note), default Voucher\n' +
+    '• ' + NEWDRAFT_CELL + ' — New Draft/Order # (grays out for Voucher)\n\n' +
+    'Tabs: "' + VOUCHER_LOG + '" and "' + EXCHANGE_LOG + '" are present.');
 }
 
 // ── AUTO-FILL: INSTALLABLE onEdit HANDLER ────────────────────────────────────
@@ -419,12 +485,26 @@ function removeTriggers() {
   SpreadsheetApp.getUi().alert('Triggers removed.');
 }
 
-// ── MAIN FUNCTION: CREATE CREDIT NOTE ────────────────────────────────────────
-function createCreditNote() {
+// ── DISPATCHER: branch on the Document Type cell ─────────────────────────────
+// B45 (DOCTYPE_CELL) = "Voucher" (1-year store credit, discount code) or
+// "Exchange Note" (instant post-tax deduction on a new invoice).
+function createDocument() {
+  const calc = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CALC_SHEET_NAME);
+  const modality = String(calc.getRange(DOCTYPE_CELL).getValue()).trim().toLowerCase();
+  if (modality.indexOf('exchange') === 0 || modality === 'exc') return createExchangeNote_();
+  return createVoucher_();
+}
+
+// Back-compat alias for any saved trigger / habit pointing at the old name.
+function createCreditNote() { return createVoucher_(); }
+
+// ── VOUCHER (rebranded credit note) — 1-year discount code, tagged to the order ──
+function createVoucher_() {
   const ss   = SpreadsheetApp.getActiveSpreadsheet();
   const calc = ss.getSheetByName(CALC_SHEET_NAME);
-  const log  = ss.getSheetByName('CN Log');
+  const log  = ss.getSheetByName(VOUCHER_LOG) || ss.getSheetByName('CN Log');
   const ui   = SpreadsheetApp.getUi();
+  if (!log) { ui.alert('Log tab "' + VOUCHER_LOG + '" not found. Run "Set up Document Type fields" first.'); return; }
 
   const customerName  = calc.getRange('B4').getValue();
   const customerEmail = calc.getRange('B5').getValue();
@@ -436,7 +516,8 @@ function createCreditNote() {
   const netCredit     = toNum(calc.getRange('B36').getValue());
 
   const today      = new Date();
-  const validUntil = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 90);
+  // 1-year validity (same day next year — JS rolls leap years over cleanly).
+  const validUntil = new Date(today.getFullYear() + 1, today.getMonth(), today.getDate());
 
   if (!customerEmail || !orderNumber || netCredit <= 0) {
     ui.alert('Missing data. Fill customer email, order number, and ensure net credit > 0.');
@@ -444,11 +525,11 @@ function createCreditNote() {
   }
 
   const year   = today.getFullYear();
-  // Serial now comes from the central counter service (atomic, no gaps/dupes across devices).
+  // Serial from the central counter service (atomic, no gaps/dupes across devices).
   // Falls back to the legacy sheet-row count if the middleware is unreachable.
-  const seq    = allocateCnSerial();
+  const seq    = allocateVoucherSerial();
   const serial = String(seq != null ? seq : log.getLastRow()).padStart(4, '0');
-  const cnNum  = 'CNTM-' + year + '-' + serial;
+  const cnNum  = 'VCH-' + year + '-' + serial;
 
   const issued    = Utilities.formatDate(today, 'Asia/Kolkata', 'dd-MM-yyyy');
   const expiryFmt = Utilities.formatDate(validUntil, 'Asia/Kolkata', 'dd-MM-yyyy');
@@ -490,6 +571,7 @@ function createCreditNote() {
 
   calc.getRange('B43').setValue(cnNum);
 
+  // Internal cn-* tag names kept unchanged so the existing OPP print template renders untouched.
   if (orderId) {
     addOrderTags(orderId, [
       'cn-issued',
@@ -499,32 +581,111 @@ function createCreditNote() {
       'cn-iss:' + issued
     ]);
   } else {
-    ui.alert('⚠️ Order ' + orderNumber + ' not found in Shopify. CN created but order not tagged.');
+    ui.alert('⚠️ Order ' + orderNumber + ' not found in Shopify. Voucher created but order not tagged.');
   }
 
   // Last column (M) holds the Shopify price_rule_id so a later Void can delete the discount.
   log.appendRow([issued, cnNum, orderNumber, customerName, customerEmail,
                  netWt, diaWt, goldVal, diaVal, netCredit, expiryFmt, 'Issued', String(priceRuleId)]);
 
-  sendCnEmailViaMiddleware(customerName, customerEmail, cnNum, netCredit, expiryFmt, orderNumber);
+  sendVoucherEmail_(customerName, customerEmail, cnNum, netCredit, expiryFmt, orderNumber);
 
   ui.alert(
-    '✅ Credit Note Created\n\n' +
-    'CN Number: ' + cnNum + '\n' +
+    '✅ Voucher Created\n\n' +
+    'Voucher: ' + cnNum + '\n' +
     'Discount Code: ' + cnNum + '\n' +
-    'Net Value: ₹' + netCredit.toLocaleString('en-IN', { minimumFractionDigits: 2 }) + '\n' +
-    'Valid Until: ' + expiryFmt + '\n\n' +
-    "Tag 'cn-issued' added to order " + orderNumber + '.\n' +
-    'Resend will trigger the email to ' + customerEmail + ' (when server flag is enabled).'
+    'Value: ₹' + netCredit.toLocaleString('en-IN', { minimumFractionDigits: 2 }) + '\n' +
+    'Valid Until: ' + expiryFmt + ' (1 year)\n\n' +
+    'Order ' + orderNumber + ' tagged. Email sent to ' + customerEmail + '.'
+  );
+}
+
+// ── EXCHANGE NOTE — instant post-tax deduction applied to a NEW invoice ──────────
+// Staff ring up the new item (creating a Shopify draft), then enter that draft # in NEWDRAFT_CELL.
+// The middleware appends a negative custom line item (EXC-...) to that draft.
+function createExchangeNote_() {
+  const ss   = SpreadsheetApp.getActiveSpreadsheet();
+  const calc = ss.getSheetByName(CALC_SHEET_NAME);
+  const log  = ss.getSheetByName(EXCHANGE_LOG);
+  const ui   = SpreadsheetApp.getUi();
+  if (!log) { ui.alert('Log tab "' + EXCHANGE_LOG + '" not found. Run "Set up Document Type fields" first.'); return; }
+
+  const customerName  = calc.getRange('B4').getValue();
+  const customerEmail = calc.getRange('B5').getValue();
+  const orderNumber   = String(calc.getRange('B7').getValue()).trim();   // OLD order (item exchanged)
+  const newDraftRef   = String(calc.getRange(NEWDRAFT_CELL).getValue()).trim();  // NEW sale's draft
+  const netWt         = toNum(calc.getRange('B15').getValue());
+  const diaWt         = toNum(calc.getRange('B16').getValue());
+  const goldVal       = toNum(calc.getRange('B27').getValue());
+  const diaVal        = toNum(calc.getRange('B28').getValue());
+  const excValue      = toNum(calc.getRange('B36').getValue());
+
+  if (!customerEmail || !orderNumber || excValue <= 0) {
+    ui.alert('Missing data. Fill customer email, old order number, and ensure exchange value > 0.');
+    return;
+  }
+  if (!newDraftRef) {
+    ui.alert('Enter the new sale\'s draft order number in ' + NEWDRAFT_CELL + ' (e.g. #D123).\n\n' +
+             'Ring up the new item as a draft in Shopify first, then run this again.');
+    return;
+  }
+
+  const today  = new Date();
+  const year   = today.getFullYear();
+  const seq    = allocateExcSerial();
+  if (seq == null) { ui.alert('Could not allocate an Exchange Note number (middleware unreachable). Try again.'); return; }
+  const serial = String(seq).padStart(4, '0');
+  const excNum = 'EXC-' + year + '-' + serial;
+  const issued = Utilities.formatDate(today, 'Asia/Kolkata', 'dd-MM-yyyy');
+
+  // Apply the deduction to the new draft via the middleware. Returns the resolved numeric draft id.
+  const result = applyExchangeNote_(newDraftRef, excNum, excValue, orderNumber, customerName);
+  if (!result || !result.success) {
+    ui.alert('❌ Exchange Note not applied.\n\n' +
+             (result && result.error ? result.error : 'Middleware error — check that the draft number is correct.') +
+             '\n\nThe number ' + excNum + ' was reserved; void it if you do not retry.');
+    return;
+  }
+  const newDraftId   = result.draftId || '';
+  const newDraftName = newDraftRef.indexOf('#') === 0 ? newDraftRef : ('#' + newDraftRef);
+
+  calc.getRange('B43').setValue(excNum);
+
+  // Tag the OLD order so the exchanged item is traceable to the new sale.
+  const cleanOrderNum = orderNumber.replace('#', '');
+  const orderData     = getOrderData(cleanOrderNum);
+  if (orderData && orderData.id) {
+    addOrderTags(orderData.id, [
+      'exc-given',
+      'exc-num:' + excNum,
+      'exc-val:' + excValue.toFixed(2),
+      'exc-applied-to:' + newDraftName,
+      'exc-iss:' + issued
+    ]);
+  } else {
+    ui.alert('⚠️ Old order ' + orderNumber + ' not found — Exchange Note applied but old order not tagged.');
+  }
+
+  log.appendRow([issued, excNum, orderNumber, newDraftName, customerName, customerEmail,
+                 netWt, diaWt, goldVal, diaVal, excValue, 'Applied', String(newDraftId)]);
+
+  sendExcEmail_(customerName, customerEmail, excNum, excValue, orderNumber, newDraftName);
+
+  ui.alert(
+    '✅ Exchange Note Applied\n\n' +
+    'Exchange Note: ' + excNum + '\n' +
+    'Deducted: ₹' + excValue.toLocaleString('en-IN', { minimumFractionDigits: 2 }) + '\n' +
+    'Applied to: ' + newDraftName + '\n\n' +
+    'The new invoice total is reduced by this amount (GST unchanged). Email sent to ' + customerEmail + '.'
   );
 }
 
 // ── EMAIL — routed through middleware → Resend → hello@timanti.in ─────────────
-// Template: emailService.js → buildCreditNoteHtml()
-// Middleware route: POST /api/cn-email
+// Voucher template: emailService.js → buildCreditNoteHtml() via POST /api/cn-email
+// Exchange Note template: buildExchangeNoteHtml() via POST /api/exc-email
 const MIDDLEWARE_URL = 'https://timanti-middleware.fly.dev'; // update if URL changes
 
-function sendCnEmailViaMiddleware(customerName, customerEmail, cnNum, netCredit, expiryFmt, orderNumber) {
+function sendVoucherEmail_(customerName, customerEmail, cnNum, netCredit, expiryFmt, orderNumber) {
   if (!customerEmail) return;
   try {
     var res = UrlFetchApp.fetch(MIDDLEWARE_URL + '/api/cn-email', {
@@ -542,90 +703,148 @@ function sendCnEmailViaMiddleware(customerName, customerEmail, cnNum, netCredit,
     });
     var code = res.getResponseCode();
     if (code !== 200) {
-      Logger.log('CN email warning: middleware returned ' + code + ' — ' + res.getContentText());
+      Logger.log('Voucher email warning: middleware returned ' + code + ' — ' + res.getContentText());
     }
   } catch (e) {
-    Logger.log('CN email failed: ' + e.message);
+    Logger.log('Voucher email failed: ' + e.message);
   }
 }
 
-// ── CN SERIAL — central counter via middleware ────────────────────────────────
-// Returns the next credit_note sequence number (integer), or null on any failure
-// so the caller can fall back to the legacy sheet-row count.
-function allocateCnSerial() {
+function sendExcEmail_(customerName, customerEmail, excNum, excValue, oldOrder, newOrder) {
+  if (!customerEmail) return;
+  try {
+    var res = UrlFetchApp.fetch(MIDDLEWARE_URL + '/api/exc-email', {
+      method:             'post',
+      contentType:        'application/json',
+      muteHttpExceptions: true,
+      payload:            JSON.stringify({
+        customerName:  customerName,
+        customerEmail: customerEmail,
+        excNumber:     excNum,
+        excValue:      String(Math.round(excValue)),
+        oldOrder:      oldOrder,
+        newOrder:      newOrder
+      })
+    });
+    var code = res.getResponseCode();
+    if (code !== 200) {
+      Logger.log('EXC email warning: middleware returned ' + code + ' — ' + res.getContentText());
+    }
+  } catch (e) {
+    Logger.log('EXC email failed: ' + e.message);
+  }
+}
+
+// Applies the Exchange Note deduction to a new draft via the middleware. Returns the parsed
+// JSON ({ success, draftId, ... }) or an { success:false, error } object on failure.
+function applyExchangeNote_(newDraftRef, excNum, excValue, oldOrder, customerName) {
+  try {
+    var res = UrlFetchApp.fetch(MIDDLEWARE_URL + '/api/exc-redeem', {
+      method:             'post',
+      contentType:        'application/json',
+      muteHttpExceptions: true,
+      payload:            JSON.stringify({
+        newDraftRef:     newDraftRef,
+        excNumber:       excNum,
+        excValue:        excValue,
+        oldOrderNumber:  oldOrder,
+        customerName:    customerName
+      })
+    });
+    var body = {};
+    try { body = JSON.parse(res.getContentText()); } catch (e) {}
+    if (res.getResponseCode() !== 200) {
+      return { success: false, error: (body && body.error) || ('middleware ' + res.getResponseCode()) };
+    }
+    return body;
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+}
+
+// ── SERIAL — central counter via middleware ───────────────────────────────────
+// Allocates (and mints into the ledger) the next sequence number for a doc type.
+// Returns the integer seq, or null on any failure.
+function allocateSerial_(docType) {
   try {
     var res = UrlFetchApp.fetch(MIDDLEWARE_URL + '/api/serial/allocate', {
       method:             'post',
       contentType:        'application/json',
       muteHttpExceptions: true,
-      payload:            JSON.stringify({ docType: 'credit_note' })
+      payload:            JSON.stringify({ docType: docType })
     });
     if (res.getResponseCode() !== 200) {
-      Logger.log('CN serial warning: middleware returned ' + res.getResponseCode() + ' — ' + res.getContentText());
+      Logger.log(docType + ' serial warning: middleware returned ' + res.getResponseCode() + ' — ' + res.getContentText());
       return null;
     }
     var body = JSON.parse(res.getContentText());
     return (body && body.serial_no != null) ? Number(body.serial_no) : null;
   } catch (e) {
-    Logger.log('CN serial failed: ' + e.message);
+    Logger.log(docType + ' serial failed: ' + e.message);
     return null;
   }
 }
 
-// Retires the credit_note serial in the middleware ledger (status=cancelled, never reused).
-// Identified by seq — the CN's CNTM-YYYY-NNNN shares only the seq with the ledger. Non-throwing.
-function cancelCnSerial(seq) {
+// Voucher falls back to the sheet-row count if the middleware is down; Exchange Note does not
+// (it must not be applied to an invoice without a real ledger number).
+function allocateVoucherSerial() { return allocateSerial_('voucher'); }
+function allocateExcSerial()     { return allocateSerial_('exchange_note'); }
+
+// Retires a serial in the middleware ledger (status=cancelled, never reused). Identified by seq —
+// the customer-facing VCH-/EXC-YYYY-NNNN shares only the seq with the ledger. Non-throwing.
+function cancelSerialByCode_(docType, seq) {
   if (seq == null || isNaN(seq)) return false;
   try {
     var res = UrlFetchApp.fetch(MIDDLEWARE_URL + '/api/serial/cancel-by-code', {
       method:             'post',
       contentType:        'application/json',
       muteHttpExceptions: true,
-      payload:            JSON.stringify({ docType: 'credit_note', serialNo: Number(seq) })
+      payload:            JSON.stringify({ docType: docType, serialNo: Number(seq) })
     });
     if (res.getResponseCode() !== 200) {
-      Logger.log('CN cancel warning: middleware returned ' + res.getResponseCode() + ' — ' + res.getContentText());
+      Logger.log(docType + ' cancel warning: middleware returned ' + res.getResponseCode() + ' — ' + res.getContentText());
       return false;
     }
     return true;
   } catch (e) {
-    Logger.log('CN cancel failed: ' + e.message);
+    Logger.log(docType + ' cancel failed: ' + e.message);
     return false;
   }
 }
 
-// ── VOID CREDIT NOTE ──────────────────────────────────────────────────────────
-// A CN is valid the moment it's created; it can only be VOIDED before its expiry date.
-// Voiding deletes the Shopify discount (price rule) and retires the serial in the ledger.
-function voidCreditNote() {
+// ── VOID VOUCHER ──────────────────────────────────────────────────────────────
+// A voucher can only be VOIDED before its expiry date. Voiding deletes the Shopify discount
+// (price rule) and retires the serial in the ledger.
+function voidVoucher() {
   var ss  = SpreadsheetApp.getActiveSpreadsheet();
-  var log = ss.getSheetByName('CN Log');
+  var log = ss.getSheetByName(VOUCHER_LOG) || ss.getSheetByName('CN Log');
   var ui  = SpreadsheetApp.getUi();
+  if (!log) { ui.alert('Log tab "' + VOUCHER_LOG + '" not found.'); return; }
 
-  var resp = ui.prompt('Void Credit Note', 'Enter the CN number to void (e.g. CNTM-2026-0042):', ui.ButtonSet.OK_CANCEL);
+  var resp = ui.prompt('Void Voucher', 'Enter the voucher number to void (e.g. VCH-2026-0042):', ui.ButtonSet.OK_CANCEL);
   if (resp.getSelectedButton() !== ui.Button.OK) return;
   var cnNum = String(resp.getResponseText()).trim();
-  if (!cnNum) { ui.alert('No CN number entered.'); return; }
+  if (!cnNum) { ui.alert('No voucher number entered.'); return; }
 
-  // Locate the CN in the log (col B = CN number).
+  // Locate the voucher in the log (col B = number).
   var data = log.getDataRange().getValues();
   var rowIdx = -1;
   for (var i = 1; i < data.length; i++) {
     if (String(data[i][1]).trim().toUpperCase() === cnNum.toUpperCase()) { rowIdx = i; break; }
   }
-  if (rowIdx === -1) { ui.alert('CN ' + cnNum + ' not found in CN Log.'); return; }
+  if (rowIdx === -1) { ui.alert(cnNum + ' not found in ' + VOUCHER_LOG + '.'); return; }
 
   var row         = data[rowIdx];
   var expiryFmt   = String(row[10]).trim();  // col K — dd-MM-yyyy
   var status      = String(row[11]).trim();  // col L
   var priceRuleId = String(row[12]).trim();  // col M
 
-  if (/void/i.test(status)) { ui.alert('CN ' + cnNum + ' is already voided.'); return; }
+  if (/void/i.test(status)) { ui.alert(cnNum + ' is already voided.'); return; }
 
   // Only voidable before expiry.
   var expDate = parseDmy(expiryFmt);
   if (expDate && new Date() > expDate) {
-    ui.alert('CN ' + cnNum + ' expired on ' + expiryFmt + ' — it can no longer be voided.');
+    ui.alert(cnNum + ' expired on ' + expiryFmt + ' — it can no longer be voided.');
     return;
   }
 
@@ -641,15 +860,88 @@ function voidCreditNote() {
     Logger.log('Void ' + cnNum + ': no price_rule_id on log row — skipping Shopify delete.');
   }
 
-  // 2. Retire the serial (by seq parsed from the CN number).
+  // 2. Retire the serial (by seq parsed from the voucher number).
   var seq = parseInt(String(cnNum).split('-').pop(), 10);
-  var retired = cancelCnSerial(seq);
+  var retired = cancelSerialByCode_('voucher', seq);
 
   // 3. Mark the log row voided (col L).
   log.getRange(rowIdx + 1, 12).setValue('Voided');
 
   ui.alert('✅ ' + cnNum + ' voided.\n\nDiscount removed' +
            (retired ? ' and serial retired in the ledger.' : '. ⚠️ Ledger retire failed — check the logs.'));
+}
+
+// ── VOID EXCHANGE NOTE ────────────────────────────────────────────────────────
+// Removes the EXC line item from the new draft and retires the serial. Only possible while the
+// new sale is still a DRAFT (the middleware refuses if it has converted to an order).
+function voidExchangeNote() {
+  var ss  = SpreadsheetApp.getActiveSpreadsheet();
+  var log = ss.getSheetByName(EXCHANGE_LOG);
+  var ui  = SpreadsheetApp.getUi();
+  if (!log) { ui.alert('Log tab "' + EXCHANGE_LOG + '" not found.'); return; }
+
+  var resp = ui.prompt('Void Exchange Note', 'Enter the EXC number to void (e.g. EXC-2026-0042):', ui.ButtonSet.OK_CANCEL);
+  if (resp.getSelectedButton() !== ui.Button.OK) return;
+  var excNum = String(resp.getResponseText()).trim();
+  if (!excNum) { ui.alert('No EXC number entered.'); return; }
+
+  var data = log.getDataRange().getValues();
+  var rowIdx = -1;
+  for (var i = 1; i < data.length; i++) {
+    if (String(data[i][1]).trim().toUpperCase() === excNum.toUpperCase()) { rowIdx = i; break; }
+  }
+  if (rowIdx === -1) { ui.alert(excNum + ' not found in ' + EXCHANGE_LOG + '.'); return; }
+
+  var row        = data[rowIdx];
+  var oldOrder   = String(row[2]).trim();   // col C
+  var status     = String(row[11]).trim();  // col L
+  var newDraftId = String(row[12]).trim();  // col M — resolved numeric draft id
+
+  if (/void/i.test(status)) { ui.alert(excNum + ' is already voided.'); return; }
+
+  var confirm = ui.alert('Void ' + excNum + '?',
+    'This removes the exchange line from the new draft and retires the serial. Only works if the new sale is still a draft.',
+    ui.ButtonSet.YES_NO);
+  if (confirm !== ui.Button.YES) return;
+
+  // Ask the middleware to remove the EXC line + cancel the serial.
+  try {
+    var res = UrlFetchApp.fetch(MIDDLEWARE_URL + '/api/exc-void', {
+      method:             'post',
+      contentType:        'application/json',
+      muteHttpExceptions: true,
+      payload:            JSON.stringify({ newDraftRef: newDraftId, excNumber: excNum })
+    });
+    var body = {};
+    try { body = JSON.parse(res.getContentText()); } catch (e) {}
+    if (res.getResponseCode() !== 200) {
+      ui.alert('❌ Could not void ' + excNum + ':\n\n' + ((body && body.error) || ('middleware ' + res.getResponseCode())));
+      return;
+    }
+  } catch (e) {
+    ui.alert('❌ Void failed: ' + e.message);
+    return;
+  }
+
+  // Strip the exc-* tags from the old order.
+  if (oldOrder) {
+    var od = getOrderData(oldOrder.replace('#', ''));
+    if (od && od.id) removeOrderTagsByPrefix_(od.id, ['exc-given', 'exc-num:', 'exc-val:', 'exc-applied-to:', 'exc-iss:']);
+  }
+
+  log.getRange(rowIdx + 1, 12).setValue('Voided');
+  ui.alert('✅ ' + excNum + ' voided.\n\nExchange line removed from the draft and serial retired.');
+}
+
+// Removes any tags on an order that exactly match or start with one of the given prefixes.
+function removeOrderTagsByPrefix_(orderId, prefixes) {
+  var data = shopifyGet('orders/' + orderId + '.json?fields=id,tags');
+  if (!data || !data.order) return;
+  var existing = data.order.tags ? data.order.tags.split(', ').map(function (t) { return t.trim(); }) : [];
+  var kept = existing.filter(function (t) {
+    return !prefixes.some(function (p) { return t === p || t.indexOf(p) === 0; });
+  });
+  shopifyPut('orders/' + orderId + '.json', { order: { id: orderId, tags: kept.join(', ') } });
 }
 
 // Parses a dd-MM-yyyy string into a Date (end-of-day, IST-agnostic). Returns null if unparseable.

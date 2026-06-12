@@ -27,7 +27,11 @@ const DEFAULT_REGISTRY = {
   memo:           { scope: 'store',  start: 1,    code: 'MEMO-{CODE}/{DELIVERY}-{SEQ}',     display: 'MEMO-{CODE}/{DELIVERY}-{SEQ}',     needsDelivery: true },
   transfer:       { scope: 'store',  start: 1,    code: 'TRANSFER-{CODE}/{DELIVERY}-{SEQ}', display: 'TRANSFER-{CODE}/{DELIVERY}-{SEQ}', needsDelivery: true },
   repair:         { scope: 'store',  start: 1,    code: 'REP-{CODE}-{SEQ}',                display: 'REP-{CODE}-{SEQ}' },
-  credit_note:    { scope: 'global', start: 1,    code: 'CNTM-{SEQ}',                      display: 'CNTM-{SEQ}' },
+  // Voucher = the rebranded credit note (1-year store credit, discount-code mechanism). New doc_type
+  // ⇒ fresh counter starting at 1 (the CNTM→VCH counter reset). Old credit_note ledger rows are kept
+  // for history but never reused. exchange_note = instant post-tax adjustment on a new invoice.
+  voucher:        { scope: 'global', start: 1,    code: 'VCH-{SEQ}',                       display: 'VCH-{SEQ}' },
+  exchange_note:  { scope: 'global', start: 1,    code: 'EXC-{SEQ}',                       display: 'EXC-{SEQ}' },
 };
 
 // Machine-written keys. state_code holds the full compound store code (e.g. KA-HSR),
