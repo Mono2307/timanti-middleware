@@ -2968,6 +2968,67 @@ async function runSerialClear(req, res) {
 app.get('/api/serial/clear', runSerialClear);
 app.post('/api/serial/clear', runSerialClear);
 
+// GET/POST /api/serial/restamp-from-ledger — re-mirror serial metafields onto resources from the
+// serial_ledger (the source of truth). Recovers orders whose metafields a clear stripped. This
+// ALLOCATES NOTHING and advances NO counter — it only writes the existing ledger number back.
+// Idempotent: skips any resource that still carries custom.serial_code. Dry-run unless ?apply=true.
+//   ?docType=customer_order  ?status=active  ?nameFrom=1038&nameTo=1056  ?apply=true
+async function runSerialRestamp(req, res) {
+  try {
+    const p       = { ...(req.query || {}), ...(req.body || {}) };
+    const docType = p.docType || 'customer_order';
+    const status  = p.status  || 'active';
+    const apply   = (p.apply === 'true' || p.apply === true);
+    const nf      = p.nameFrom != null ? parseInt(p.nameFrom) : null;
+    const nt      = p.nameTo   != null ? parseInt(p.nameTo)   : null;
+    const deps    = SERIAL_DEPS();
+    const token   = await getShopifyToken();
+
+    // Source of truth: ledger rows for this doc type, ordered by seq. Only order-backed rows can be
+    // restamped (credit notes have no Shopify resource).
+    let q = deps.supabase.from('serial_ledger').select('*')
+      .eq('doc_type', docType).eq('resource_type', 'order').order('seq', { ascending: true });
+    if (status !== 'all') q = q.eq('status', status);
+    const { data: rows, error } = await q;
+    if (error) throw new Error(error.message);
+
+    const report = [];
+    for (const row of (rows || [])) {
+      if (!row.resource_id) { report.push({ seq: row.seq, serial_code: row.serial_code, action: 'skip:no-resource-id' }); continue; }
+      const num = parseInt(String(row.resource_name || '').replace(/\D/g, ''));
+      if (nf != null && num && num < nf) continue;
+      if (nt != null && num && num > nt) continue;
+
+      // Idempotency: never overwrite a resource that already carries a serial.
+      const mf = await serialization.readSerialMetafields(deps, 'orders', String(row.resource_id), token);
+      if (mf.serial_code) { report.push({ name: row.resource_name, serial_code: row.serial_code, action: 'skip:already-stamped' }); continue; }
+
+      const fields = {
+        document_type:  row.doc_type,
+        serial_no:      row.seq,
+        serial_code:    row.serial_code,
+        serial_display: row.serial_code, // customer_order display == code
+      };
+      // Restore staff state_code only if it too was stripped (clear ?withState=true); never clobber.
+      if (!mf.state_code && row.store_code) fields.state_code = row.store_code;
+
+      if (!apply) { report.push({ name: row.resource_name, serial_code: row.serial_code, action: 'would-stamp', fields }); continue; }
+
+      const w = await serialization.stampSerial(deps, 'orders', String(row.resource_id), fields, token);
+      report.push({ name: row.resource_name, serial_code: row.serial_code, action: w.errors.length ? 'stamp-errors' : 'stamped', errors: w.errors });
+      await new Promise(r => setTimeout(r, 250)); // throttle Shopify writes
+    }
+
+    const summary = report.reduce((a, r) => { a[r.action] = (a[r.action] || 0) + 1; return a; }, {});
+    return res.json({ success: true, dryRun: !apply, docType, status, count: report.length, summary, report });
+  } catch (err) {
+    console.error('[serial] restamp failed:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+}
+app.get('/api/serial/restamp-from-ledger', runSerialRestamp);
+app.post('/api/serial/restamp-from-ledger', runSerialRestamp);
+
 // GET/POST /api/serial/counter — read / set / delete a single counter row. Browser-clickable.
 //   ?docType=customer_order&state=KA-HSR            → read current + next
 //   ?docType=customer_order&state=KA-HSR&set=1018   → set current_value (next = 1019)
