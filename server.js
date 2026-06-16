@@ -220,7 +220,11 @@ async function tagShopifyDraftOrder(shopifyDraftId, amountPaid, amountPending, s
 }
 
 function getMetafieldType(key) {
-  if (key === 'amount_paid' || key === 'amount_pending' || key === 'gold_rate') return 'number_decimal';
+  // gold_rate is single_line_text so it can hold a positional, comma-separated list of rates
+  // ("9713,10200") for multi-product reprice. Readers parseFloat each position regardless of type.
+  if (key === 'gold_rate') return 'single_line_text_field';
+  if (key === 'amount_paid' || key === 'amount_pending' ||
+      key === 'exchange_note_value' || key === 'voucher_value' || key === 'amount_to_be_collected') return 'number_decimal';
   if (key === 'is_finalized') return 'boolean';
   if (key === 'gold_rate_date') return 'date_time';
   if (key === 'serial_no') return 'number_integer';
@@ -1471,13 +1475,21 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
     if (mf.namespace === 'custom') mfMap[mf.key] = mf.value;
   }
 
-  // Gold rate override: if custom.gold_rate is set on the draft, use it instead of the locked line item rate.
-  // This is the signal from the Google Form / staff manual entry path.
-  const mfGoldRate = mfMap['gold_rate'] ? parseFloat(mfMap['gold_rate']) : null;
-
-  // Draft metafield values can be comma-separated for 2-item drafts: "5.2, 3.8" → item[0]=5.2, item[1]=3.8
+  // Draft metafield values can be comma-separated, positional per line item: "5.2, 3.8" → item[0]=5.2, item[1]=3.8
   const csvF = (key) => (mfMap[key] || '').split(',').map(s => { const f = parseFloat(s.trim()); return isNaN(f) ? null : f; });
   const csvI = (key) => (mfMap[key] || '').split(',').map(s => { const i = parseInt(s.trim());  return isNaN(i) ? null : i; });
+
+  // Gold rate override: custom.gold_rate on the draft overrides the locked per-item _gold_rate and
+  // bypasses the 5% threshold. It is POSITIONAL per product, comma-separated, for ANY number of items:
+  //   "9713,10200" → item[0]@9713/g, item[1]@10200/g. A SINGLE value applies to every product (back-compat).
+  //   A blank position (e.g. "9713,") leaves that item on its locked _gold_rate.
+  // Enter rates WITHOUT thousands separators (comma is the item delimiter).
+  const goldRateArr = csvF('gold_rate');
+  const goldRateForIdx = (idx) => {
+    if (!goldRateArr.some(r => r && r > 0)) return null;
+    const r = goldRateArr.length === 1 ? goldRateArr[0] : (goldRateArr[idx] ?? null);
+    return (r && r > 0) ? r : null;
+  };
 
   const netWtArr   = csvF('jewelcode_net_weight');
   const grossWtArr = csvF('jewelcode_gross_weight');
@@ -1525,19 +1537,20 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
       await removeTagFromDraft(draftOrderId, tagToProcess);
       return;
     }
-    // reprice tag, no weight data: recalculate gold component if mfGoldRate is set, then fix discount/GST math
+    // reprice tag, no weight data: recalculate gold component per-item from custom.gold_rate (positional), then fix discount/GST math
     const r2 = (v) => Math.round(v * 100) / 100;
 
     // Hydrate all items first — this bootstraps _gold_rate and Gold from variant metafields
     // for fresh items that have never been repriced (no locked props yet)
     const hydratedBase = await Promise.all(productItems.map(item => hydrateItemFromVariant(item, token)));
 
-    // When mfGoldRate is set, derive net weight per item using best available source:
+    // When a per-item gold rate is set (goldRateForIdx), derive net weight per item using best available source:
     // 1. variant net_wt metafield (most reliable)
     // 2. variant price_breakup_gold / gold_rate (both written together by price-update service)
     // 3. locked item Gold / _gold_rate (written by a previous reprice)
-    const itemRecalc = mfGoldRate
-      ? productItems.map((item, idx) => {
+    const itemRecalc = productItems.map((item, idx) => {
+          const rateForItem = goldRateForIdx(idx);
+          if (!rateForItem) return null;
           const vMf    = hydratedBase[idx].varMf || {};
           const iProps = {};
           for (const p of (item.properties || [])) iProps[p.name] = p.value;
@@ -1554,9 +1567,13 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
           const bootstrappedRate = parseFloat((hItemProps['_gold_rate'] || '').trim()) || 0;
           const effectiveRate    = lockedRate || bootstrappedRate;
 
+          // Printed _net_wt on the line item wins — it's the staff-confirmed weight. Only when it's
+          // absent do we derive from variant net_wt, variant gold/rate, or locked Gold/rate.
+          const lockedNetWt = parseFloat((iProps['_net_wt'] || '').trim()) || 0;
           let netWt = 0;
-          if (varNetWt > 0)                         netWt = varNetWt * item.quantity;
-          else if (varGoldPbp > 0 && varRate > 0)   netWt = varGoldPbp / varRate;
+          if (lockedNetWt > 0)                          netWt = lockedNetWt;
+          else if (varNetWt > 0)                        netWt = varNetWt * item.quantity;
+          else if (varGoldPbp > 0 && varRate > 0)       netWt = varGoldPbp / varRate;
           else if (lockedGold > 0 && effectiveRate > 0) netWt = lockedGold / effectiveRate;
 
           if (netWt <= 0) return null;
@@ -1564,11 +1581,10 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
           const diaVal = parseFloat((iProps['Diamond'] || '').replace('Rs', '').trim()) || parseFloat(vMf.price_breakup_diamond || 0) * item.quantity;
           const mkgVal = parseFloat((iProps['Making'] || iProps['Making Charges'] || '').replace('Rs', '').trim()) || parseFloat(vMf.price_breakup_making || 0) * item.quantity;
 
-          const newGold = r2(netWt * mfGoldRate);
+          const newGold = r2(netWt * rateForItem);
           return { newPreTaxGross: r2(newGold + diaVal + mkgVal), newGold };
-        })
-      : productItems.map(() => null);
-    const anyGoldRecalc = mfGoldRate && itemRecalc.some(r => r !== null);
+        });
+    const anyGoldRecalc = itemRecalc.some(r => r !== null);
 
     // Pre-tax gross per item: use recalculated value when available, else back-calculate from current price
     // (items missing _gold_rate keep their existing price; items with it get repriced)
@@ -1611,7 +1627,8 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
         { name: 'Gross Value',      value: `Rs${grossValue.toFixed(2)}` },
         { name: 'Discount Applied', value: `Rs${itemDisc.toFixed(2)}` },
       );
-      const effectiveRate = mfGoldRate ? String(mfGoldRate) : ((item.properties || []).find(p => p.name === '_gold_rate')?.value || h.properties.find(p => p.name === '_gold_rate')?.value || '');
+      const idxRate = goldRateForIdx(idx);
+      const effectiveRate = idxRate ? String(idxRate) : ((item.properties || []).find(p => p.name === '_gold_rate')?.value || h.properties.find(p => p.name === '_gold_rate')?.value || '');
       if (effectiveRate) filteredProps.push({ name: '_gold_rate', value: effectiveRate });
       return { ...h, price: unitPrice.toFixed(2), properties: filteredProps };
     });
@@ -1642,8 +1659,9 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
 
     const { varMf, prodMf } = await fetchItemMetaLocal(item);
 
-    let goldRate = mfGoldRate || parseFloat(props['_gold_rate']);
-    let goldRateOverridden = !!(mfGoldRate && mfGoldRate > 0);
+    const mfRateForItem = goldRateForIdx(idx);
+    let goldRate = mfRateForItem || parseFloat(props['_gold_rate']);
+    let goldRateOverridden = !!(mfRateForItem && mfRateForItem > 0);
     let bootstrapGoldRate = false;
     if (!goldRate && varMf.gold_rate) {
       goldRate = parseFloat(varMf.gold_rate);
@@ -3647,11 +3665,14 @@ function draftLineToInput(li) {
 
 // ─────────────────────────────────────────
 // POST /api/exc-redeem
-// Applies an Exchange Note as a POST-tax negative custom line item on a new draft order.
-// The EXC value (already minted at /api/serial/allocate) is deducted from the invoice total but
-// stays OUT of the GST engine (taxable:false, excluded by isExcLine). Body:
+// Applies an Exchange Note as a POST-tax adjustment on a new draft order, stored in the
+// custom.exchange_note_value metafield (Shopify rejects negative line items). Also writes
+// custom.amount_to_be_collected = draft total − all post-tax adjustments (exchange_note_value +
+// voucher_value + old_gold_value). The invoice template reads these and deducts after GST. The
+// EXC value was already minted at /api/serial/allocate. Linkage (old order) lives in tags. Body:
 //   { newDraftRef, excNumber, excValue, oldOrderNumber?, customerName? }
 //   newDraftRef = numeric draft id OR a draft name like "#D123".
+// NOTE: keying amount_to_be_collected INTO amount_paid/amount_pending is a separate consolidated step.
 // ─────────────────────────────────────────
 app.post('/api/exc-redeem', async (req, res) => {
   const { newDraftRef, excNumber, excValue, oldOrderNumber } = req.body || {};
@@ -3663,38 +3684,43 @@ app.post('/api/exc-redeem', async (req, res) => {
     const token = await getShopifyToken();
     const newDraftId = await resolveDraftId(newDraftRef, token);
     if (!newDraftId) return res.status(404).json({ success: false, error: `draft "${newDraftRef}" not found` });
-    // 1. Fetch the draft's current line items via REST (preserves custom prices + properties).
-    const { data } = await axios.get(
-      `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${newDraftId}.json`,
-      { headers: { 'X-Shopify-Access-Token': token }, timeout: 10000 }
-    );
+    // 1. Fetch the draft (for tags) and its metafields (for idempotency).
+    const headers = { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' };
+    const [{ data }, { data: mfData }] = await Promise.all([
+      axios.get(`${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${newDraftId}.json`, { headers, timeout: 10000 }),
+      axios.get(`${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${newDraftId}/metafields.json`, { headers, timeout: 10000 }),
+    ]);
     const draft = data.draft_order;
     if (!draft) return res.status(404).json({ success: false, error: `draft ${newDraftId} not found` });
 
-    // 2. Idempotency: bail if an EXC line is already present (Apps Script retry-safe).
-    if ((draft.line_items || []).some(isExcLine)) {
+    // 2. Idempotency: bail if the exchange-note metafield is already set (Apps Script retry-safe).
+    const alreadySet = (mfData.metafields || []).some(m =>
+      m.namespace === 'custom' && m.key === 'exchange_note_value' && parseFloat(m.value) > 0);
+    if (alreadySet) {
       return res.json({ success: true, alreadyApplied: true, draftId: newDraftId, excNumber });
     }
 
-    // 3. Existing items, verbatim, + the appended negative EXC line.
-    const existing = (draft.line_items || []).map(draftLineToInput);
-    const excLine = {
-      title:             `Exchange Note ${excNumber}`,
-      quantity:          1,
-      price:             (-Math.abs(value)).toFixed(2),
-      taxable:           false,             // post-tax deduction — never enters GST math
-      requires_shipping: false,
-      properties: [
-        { name: '_exc_ref',        value: String(excNumber) },
-        { name: '_exc_old_order',  value: String(oldOrderNumber || '') },
-        { name: 'Exchange Credit', value: `Rs${Math.abs(value).toFixed(2)}` },
-      ],
+    // 3. Write the post-tax adjustment as a metafield (NOT a line item — Shopify rejects negative
+    //    lines), plus amount_to_be_collected = total − all post-tax adjustments (net to collect).
+    const mfVal = (key) => {
+      const m = (mfData.metafields || []).find(x => x.namespace === 'custom' && x.key === key);
+      return m ? Math.abs(parseFloat(m.value) || 0) : 0;
     };
+    const adjustments = Math.abs(value) + mfVal('voucher_value') + mfVal('old_gold_value');
+    const netToCollect = Math.max(0, parseFloat(draft.total_price || 0) - adjustments).toFixed(2);
+    await updateDraftOrderMetafields(newDraftId, {
+      exchange_note_value:    Math.abs(value).toFixed(2),
+      amount_to_be_collected: netToCollect,
+    });
 
-    // 4. Resend the FULL set (append-not-replace — omitting `existing` would delete the purchase).
-    const tags = (draft.tags || '').split(',').map(t => t.trim()).filter(Boolean)
-      .concat(['exc-applied', `exc-num:${excNumber}`]).join(', ');
-    await gqlSetDraftLineItems(newDraftId, existing.concat([excLine]), token, { tags });
+    // 4. Linkage stays in tags (no metafield bloat): exc-applied, exc-num, exc-original (old order).
+    const newTags = (draft.tags || '').split(',').map(t => t.trim()).filter(Boolean)
+      .concat(['exc-applied', `exc-num:${excNumber}`, ...(oldOrderNumber ? [`exc-original:${oldOrderNumber}`] : [])]);
+    await axios.put(
+      `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${newDraftId}.json`,
+      { draft_order: { id: newDraftId, tags: [...new Set(newTags)].join(', ') } },
+      { headers, timeout: 10000 }
+    );
 
     // NOTE: the ledger row was already minted at /api/serial/allocate — do NOT mint again here.
     return res.json({ success: true, draftId: newDraftId, excNumber, deducted: Math.abs(value).toFixed(2) });
@@ -3716,21 +3742,38 @@ app.post('/api/exc-void', async (req, res) => {
   }
   try {
     const token = await getShopifyToken();
-    const { data } = await axios.get(
-      `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${newDraftId}.json`,
-      { headers: { 'X-Shopify-Access-Token': token }, timeout: 10000 }
-    );
+    const headers = { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' };
+    const [{ data }, { data: mfData }] = await Promise.all([
+      axios.get(`${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${newDraftId}.json`, { headers, timeout: 10000 }),
+      axios.get(`${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${newDraftId}/metafields.json`, { headers, timeout: 10000 }),
+    ]);
     const draft = data.draft_order;
     if (!draft) return res.status(404).json({ success: false, error: `draft ${newDraftId} not found` });
     if (draft.status === 'completed' || draft.order_id) {
-      return res.status(409).json({ success: false, error: 'draft already completed — edit the order line item manually' });
+      return res.status(409).json({ success: false, error: 'draft already completed — edit the order manually' });
     }
 
-    // Rebuild the line set excluding any EXC line, and strip the exc-* tags.
-    const kept = (draft.line_items || []).filter(li => !isExcLine(li)).map(draftLineToInput);
+    // Delete the exchange-note metafield, recompute net-to-collect, and strip the exc-* tags.
+    const excMf = (mfData.metafields || []).find(m => m.namespace === 'custom' && m.key === 'exchange_note_value');
+    if (excMf) {
+      await axios.delete(`${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/metafields/${excMf.id}.json`, { headers, timeout: 10000 });
+    }
+    const mfVal = (key) => {
+      const m = (mfData.metafields || []).find(x => x.namespace === 'custom' && x.key === key);
+      return m ? Math.abs(parseFloat(m.value) || 0) : 0;
+    };
+    // exchange_note_value is being removed; net-to-collect = total − remaining adjustments.
+    const remaining   = mfVal('voucher_value') + mfVal('old_gold_value');
+    const netToCollect = Math.max(0, parseFloat(draft.total_price || 0) - remaining).toFixed(2);
+    await updateDraftOrderMetafields(newDraftId, { amount_to_be_collected: netToCollect });
+
     const tags = (draft.tags || '').split(',').map(t => t.trim())
-      .filter(t => t && t !== 'exc-applied' && !t.startsWith('exc-num:')).join(', ');
-    await gqlSetDraftLineItems(newDraftId, kept, token, { tags });
+      .filter(t => t && t !== 'exc-applied' && !t.startsWith('exc-num:') && !t.startsWith('exc-original:')).join(', ');
+    await axios.put(
+      `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${newDraftId}.json`,
+      { draft_order: { id: newDraftId, tags } },
+      { headers, timeout: 10000 }
+    );
 
     // Cancel the ledger serial by seq (parsed from EXC-YYYY-NNNN — shares only the seq with the ledger).
     const seq = parseInt(String(excNumber).split('-').pop(), 10);
