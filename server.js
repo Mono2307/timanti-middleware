@@ -2969,9 +2969,10 @@ app.get('/api/serial/clear', runSerialClear);
 app.post('/api/serial/clear', runSerialClear);
 
 // GET/POST /api/serial/restamp-from-ledger — re-mirror serial metafields onto resources from the
-// serial_ledger (the source of truth). Recovers orders whose metafields a clear stripped. This
-// ALLOCATES NOTHING and advances NO counter — it only writes the existing ledger number back.
-// Idempotent: skips any resource that still carries custom.serial_code. Dry-run unless ?apply=true.
+// serial_ledger (the source of truth). Recovers orders whose metafields a clear stripped AND
+// offline draft→order orders that got the serial but never the state_code. This ALLOCATES NOTHING
+// and advances NO counter — it writes the existing ledger numbers (and store code) back, overwriting
+// whatever is on the order. Dry-run unless ?apply=true.
 //   ?docType=customer_order  ?status=active  ?nameFrom=1038&nameTo=1056  ?apply=true
 async function runSerialRestamp(req, res) {
   try {
@@ -2999,23 +3000,23 @@ async function runSerialRestamp(req, res) {
       if (nf != null && num && num < nf) continue;
       if (nt != null && num && num > nt) continue;
 
-      // Idempotency: never overwrite a resource that already carries a serial.
-      const mf = await serialization.readSerialMetafields(deps, 'orders', String(row.resource_id), token);
-      if (mf.serial_code) { report.push({ name: row.resource_name, serial_code: row.serial_code, action: 'skip:already-stamped' }); continue; }
-
+      // Full re-mirror from the ledger (the source of truth): write EVERY field — state_code
+      // plus all serial fields — onto the order. The offline draft→order path copies the serial
+      // across but drops state_code, so a state-only backfill isn't enough; we rewrite the lot.
+      // writeSerialMetafields skips blank values, so a ledger row with no store_code simply
+      // leaves state_code untouched. Counters are NOT advanced — these are the existing numbers.
       const fields = {
         document_type:  row.doc_type,
         serial_no:      row.seq,
         serial_code:    row.serial_code,
         serial_display: row.serial_code, // customer_order display == code
+        state_code:     row.store_code || '',
       };
-      // Restore staff state_code only if it too was stripped (clear ?withState=true); never clobber.
-      if (!mf.state_code && row.store_code) fields.state_code = row.store_code;
 
-      if (!apply) { report.push({ name: row.resource_name, serial_code: row.serial_code, action: 'would-stamp', fields }); continue; }
+      if (!apply) { report.push({ name: row.resource_name, serial_code: row.serial_code, store_code: row.store_code, action: 'would-stamp', fields }); continue; }
 
       const w = await serialization.stampSerial(deps, 'orders', String(row.resource_id), fields, token);
-      report.push({ name: row.resource_name, serial_code: row.serial_code, action: w.errors.length ? 'stamp-errors' : 'stamped', errors: w.errors });
+      report.push({ name: row.resource_name, serial_code: row.serial_code, store_code: row.store_code, action: w.errors.length ? 'stamp-errors' : 'stamped', errors: w.errors });
       await new Promise(r => setTimeout(r, 250)); // throttle Shopify writes
     }
 
