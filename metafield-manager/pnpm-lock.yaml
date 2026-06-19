@@ -32,13 +32,25 @@ importers:
   extensions/order-metafield-manager:
     dependencies:
       '@preact/signals':
-        specifier: ^2.3.x
+        specifier: ^2.9.2
         version: 2.9.2(preact@10.29.2)
       '@shopify/ui-extensions':
-        specifier: 2025.10.x
+        specifier: ~2025.10.15
         version: 2025.10.15(@preact/signals@2.9.2(preact@10.29.2))(preact@10.29.2)
       preact:
-        specifier: ^10.10.x
+        specifier: ^10.29.2
+        version: 10.29.2
+
+  extensions/order-metafield-manager-order:
+    dependencies:
+      '@preact/signals':
+        specifier: ^2.9.2
+        version: 2.9.2(preact@10.29.2)
+      '@shopify/ui-extensions':
+        specifier: ~2025.10.15
+        version: 2025.10.15(@preact/signals@2.9.2(preact@10.29.2))(preact@10.29.2)
+      preact:
+        specifier: ^10.29.2
         version: 10.29.2
 
 packages:

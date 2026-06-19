@@ -1,0 +1,12 @@
+api_version = "2025-10"
+
+[[extensions]]
+name = "t:name"
+handle = "order-metafield-manager-order"
+uid = "ec2c437c-1ba1-26ab-23af-fef71e22883d69a27275"
+type = "ui_extension"
+
+# An Admin block extension supports only one block target.
+[[extensions.targeting]]
+module = "./src/OrderBlockExtension.jsx"
+target = "admin.order-details.block.render"

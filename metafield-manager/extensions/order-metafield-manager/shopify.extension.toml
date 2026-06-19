@@ -6,13 +6,10 @@ handle = "order-metafield-manager"
 type = "ui_extension"
 uid = "e71ca1e0-9d72-9140-ef43-3574020438957400eb57"
 
+# An Admin block extension supports only one block target.
 [[extensions.targeting]]
 module = "./src/BlockExtension.jsx"
 target = "admin.draft-order-details.block.render"
-
-[[extensions.targeting]]
-module = "./src/OrderBlockExtension.jsx"
-target = "admin.order-details.block.render"
 
 
 # Valid extension targets:
