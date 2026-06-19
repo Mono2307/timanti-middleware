@@ -2010,6 +2010,29 @@ async function handlePaymentMetafieldSync(draft) {
   await applyPaymentTagsToDraftOrder(draftOrderId, token);
 }
 
+// Universal net-to-collect: custom.amount_to_be_collected = draft total − ALL post-tax adjustments
+// (exchange_note_value + voucher_value + old_gold_value). Runs on every draft create/update so the
+// field is correct in EVERY scenario (plain sale, discount, voucher, exchange, old-gold), not just
+// exchange. Change-guarded so it never loops or writes a no-op. Metafield writes don't fire the
+// draft webhook, so there's no recursion.
+async function syncAmountToCollect(draft) {
+  const draftOrderId = draft?.id?.toString();
+  if (!draftOrderId) return;
+  const token = await getShopifyToken();
+  const { data: mfData } = await axios.get(
+    `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}/metafields.json`,
+    { headers: { 'X-Shopify-Access-Token': token }, timeout: 10000 }
+  );
+  const mf  = (key) => { const m = (mfData.metafields || []).find(x => x.namespace === 'custom' && x.key === key); return m ? m.value : null; };
+  const adj = (key) => Math.abs(parseFloat(mf(key)) || 0);
+  const total = parseFloat(draft.total_price || 0);
+  const net   = Math.max(0, total - adj('exchange_note_value') - adj('voucher_value') - adj('old_gold_value'));
+  const current = mf('amount_to_be_collected');
+  if (current !== null && Math.abs(parseFloat(current) - net) < 0.005) return; // unchanged → skip (loop/no-op guard)
+  await updateDraftOrderMetafields(draftOrderId, { amount_to_be_collected: net.toFixed(2) });
+  console.log(`Draft ${draftOrderId}: amount_to_be_collected = ${net.toFixed(2)} (total ${total} − adjustments)`);
+}
+
 // ─────────────────────────────────────────
 // Pricing Engine — routes
 // ─────────────────────────────────────────
@@ -2024,6 +2047,7 @@ app.post('/api/shopify-draft-updated', async (req, res) => {
     if ((req.headers['x-shopify-topic'] || '') === 'draft_orders/create') {
       await handleDraftCreated(draft);
       await handleDocumentSerialTags(draft);      // PO/memo/transfer present at creation
+      await syncAmountToCollect(draft);           // establish net-to-collect on every new draft
       return;
     }
 
@@ -2062,6 +2086,7 @@ app.post('/api/shopify-draft-updated', async (req, res) => {
     await handlePaymentMetafieldSync(draft);
     await handleRepairDraftUpdate(draft, getShopifyToken, assignRepairSerial);
     await handleDocumentSerialTags(draft);      // PO/memo/transfer tags added after creation
+    await syncAmountToCollect(draft);           // recompute net-to-collect after any change
 
     console.log(`Draft updated webhook: #${draft.name} — tag handlers complete`);
   } catch (err) {
