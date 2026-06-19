@@ -13,6 +13,7 @@ const { createPaymentLink: createGokwikLink, cancelPaymentLink: cancelGokwikLink
 const { sendSMS } = require('./services/sms');
 const { registerRepairRoutes, handleRepairPayment, handleRepairDraftUpdate } = require('./services/repairs');
 const serialization = require('./services/serialization');
+const { handleTypeformWebhook } = require('./services/typeform');
 
 const app = express();
 app.use(cors());
@@ -36,6 +37,10 @@ const SERIAL_CUSTOMER_ORDER = flagOn(process.env.SERIAL_CUSTOMER_ORDER);
 const SERIAL_REPAIR         = flagOn(process.env.SERIAL_REPAIR);
 const SERIAL_MEMO_TRANSFER  = flagOn(process.env.SERIAL_MEMO_TRANSFER);
 const SERIAL_PO             = flagOn(process.env.SERIAL_PO);
+
+// Typeform in-store customer capture -> Shopify customer + metafields.
+app.post('/api/webhooks/typeform/customer-capture',
+  (req, res) => handleTypeformWebhook(req, res, { supabase, getShopifyToken }));
 
 function getPinePaymentMode() {
   const mode = (process.env.PINE_PAYMENT_MODE || 'integer').toLowerCase();
