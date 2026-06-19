@@ -62,11 +62,11 @@ const FIELD_RULES = [
   ['staff_comments',   /comment|remark/i],
   ['captured_by',      /staff\s*name|captured\s*by|associate|staff\s*member|store\s*staff/i],
   ['store_location',   /store\s*location|\blocation\b|branch|outlet|\bstore\b/i],
-  ['pincode',          /pin\s*code|pincode|postal|\bzip\b/i],
+  ['pincode',          /pin\s*code|pincode|postal|\bzip\b|where do you (stay|live)/i],
   ['birthday',         /birth\s*day|birthday|\bdob\b|date of birth/i],
   ['anniversary',      /anniversary/i],
   ['lead_source',      /hear about|how did you|lead\s*source|\bsource\b|find us|refer/i],
-  ['product_interest', /product.*interest|interest.*product|interested in|products? of interest|\binterest/i],
+  ['product_interest', /\bproducts?\b|\binterest|looking for/i],
   ['marketing_consent',/consent|marketing|subscrib|opt[\s-]?in|newsletter|promotion/i],
   ['email',            /e-?mail/i],
   ['phone',            /phone|mobile|contact\s*number|whats\s*app|whatsapp/i],
@@ -93,20 +93,27 @@ function truthyConsent(v) {
 function mapSubmission(body) {
   const fr        = body.form_response || {};
   const fields    = (fr.definition && fr.definition.fields) || [];
-  const titleById = {};
-  for (const f of fields) titleById[f.id] = f.title || '';
+  const metaById  = {};
+  for (const f of fields) {
+    const title = f.title || '';
+    // Titles can be vague ("Where do you stay?"); the hint often lives in the
+    // description. Match against both when the payload carries a description.
+    const desc  = f.description || (f.properties && f.properties.description) || '';
+    metaById[f.id] = { title, text: `${title} ${desc}`.trim() };
+  }
 
   const out      = {};
   const unmapped = [];
 
   for (const answer of (fr.answers || [])) {
     const fieldId = answer.field && answer.field.id;
-    const title   = titleById[fieldId] || '';
+    const meta    = metaById[fieldId] || { title: '', text: '' };
+    const title   = meta.title;
     const value   = getAnswerValue(answer);
 
     let target = null;
     for (const [key, rx] of FIELD_RULES) {
-      if (rx.test(title)) { target = key; break; }
+      if (rx.test(meta.text)) { target = key; break; }
     }
     if (!target) target = TYPE_FALLBACK[answer.type] || null;
 
