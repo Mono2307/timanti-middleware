@@ -31,6 +31,21 @@ const SECTION_ORDER = [
   "System",
 ];
 
+// Compulsory staff inputs, in the priority order they must be filled. These are
+// promoted into a single "Required Inputs" section at the top of the block,
+// ahead of (and removed from) their topical sections below. Ordering here is
+// the source of truth for the required tier — editability still comes from
+// FIELD_CONFIG.
+const REQUIRED_FIELDS = [
+  "order_type",
+  "channel",
+  "payment_status",
+  "payment_mode_advance",
+  "amount_paid",
+];
+const REQUIRED_SET = new Set(REQUIRED_FIELDS);
+const REQUIRED_SECTION = "Required Inputs";
+
 const FIELD_CONFIG = {
   order_type: { section: "Order Details", label: "Order Type", editable: true, applies: "both" },
   channel: { section: "Order Details", label: "Channel", editable: true, applies: "both" },
@@ -119,25 +134,57 @@ function fieldsForScope(scope) {
 }
 
 function buildSections(scope) {
+  const inScope = fieldsForScope(scope);
+  const inScopeSet = new Set(inScope);
+
+  // Required staff inputs → single top section, in REQUIRED_FIELDS priority order.
+  const requiredFields = REQUIRED_FIELDS.filter((key) => inScopeSet.has(key)).map((key) => ({
+    key,
+    label: FIELD_CONFIG[key].label,
+    editable: FIELD_CONFIG[key].editable,
+    required: true,
+  }));
+
+  // Everything else stays in its topical section (required keys are removed here
+  // since they've been promoted above).
   const bySection = {};
-  for (const key of fieldsForScope(scope)) {
+  for (const key of inScope) {
+    if (REQUIRED_SET.has(key)) continue;
     const cfg = FIELD_CONFIG[key];
     (bySection[cfg.section] ||= []).push({ key, label: cfg.label, editable: cfg.editable });
   }
-  return SECTION_ORDER.filter((title) => bySection[title]?.length).map((title) => ({
+  const topical = SECTION_ORDER.filter((title) => bySection[title]?.length).map((title) => ({
     title,
     fields: bySection[title],
   }));
+
+  const sections = [];
+  if (requiredFields.length) sections.push({ title: REQUIRED_SECTION, fields: requiredFields });
+  return sections.concat(topical);
 }
 
 function buildDefinitionsQuery(ownerType) {
   return `
     query WorkflowMetafieldDefinitions {
       metafieldDefinitions(first: 250, ownerType: ${ownerType}) {
-        nodes { namespace key type { name } }
+        nodes { namespace key type { name } validations { name value } }
       }
     }
   `;
+}
+
+// Choice-list metafields are stored as text/list types with a "choices"
+// validation holding a JSON array of allowed values. Pull it out so the editor
+// can render a dropdown instead of a free-text box.
+function parseChoices(validations) {
+  const v = (validations ?? []).find((x) => x.name === "choices");
+  if (!v?.value) return undefined;
+  try {
+    const parsed = JSON.parse(v.value);
+    return Array.isArray(parsed) && parsed.length ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function buildValuesQuery(resourceField) {
@@ -220,7 +267,11 @@ export default function MetafieldManager() {
         const res = await shopify.query(buildDefinitionsQuery(ctx.ownerType));
         if (res?.errors?.length) warnings.push(res.errors.map((e) => e.message).join("; "));
         for (const d of res?.data?.metafieldDefinitions?.nodes ?? []) {
-          defsByKey[d.key] = { namespace: d.namespace, type: d.type?.name };
+          defsByKey[d.key] = {
+            namespace: d.namespace,
+            type: d.type?.name,
+            choices: parseChoices(d.validations),
+          };
         }
       } catch (e) {
         warnings.push(`Couldn't load definitions: ${e?.message || e}`);
@@ -339,7 +390,7 @@ export default function MetafieldManager() {
             <s-stack direction="block" gap="base">
               {section.fields.map((field) =>
                 field.editable
-                  ? renderEditable(field, defs[field.key]?.type || "", edits[field.key] ?? "", setField, saving)
+                  ? renderEditable(field, defs[field.key]?.type || "", defs[field.key]?.choices, edits[field.key] ?? "", setField, saving)
                   : renderReadOnly(field, values[field.key] ?? ""),
               )}
             </s-stack>
@@ -371,13 +422,30 @@ function renderReadOnly(field, value) {
   );
 }
 
-function renderEditable(field, type, value, setField, saving) {
+function renderEditable(field, type, choices, value, setField, saving) {
   const disabled = saving ? "" : undefined;
   const onChange = (e) => setField(field.key, e.target.value ?? "");
+  // Required staff inputs get an asterisk so the compulsory fields read clearly.
+  const label = field.required ? `${field.label} *` : field.label;
+
+  // Definition-driven choice list (e.g. order_type, channel, payment_status)
+  // takes precedence over the type-based widget so staff get a dropdown.
+  if (Array.isArray(choices) && choices.length) {
+    return (
+      <s-select key={field.key} label={label} value={value} disabled={disabled} onChange={onChange}>
+        <s-option value="">—</s-option>
+        {choices.map((c) => (
+          <s-option key={c} value={c}>
+            {c}
+          </s-option>
+        ))}
+      </s-select>
+    );
+  }
 
   if (type === "boolean") {
     return (
-      <s-select key={field.key} label={field.label} value={value} disabled={disabled} onChange={onChange}>
+      <s-select key={field.key} label={label} value={value} disabled={disabled} onChange={onChange}>
         <s-option value="">—</s-option>
         <s-option value="true">Yes</s-option>
         <s-option value="false">No</s-option>
@@ -385,13 +453,13 @@ function renderEditable(field, type, value, setField, saving) {
     );
   }
   if (type === "date" || type === "date_time") {
-    return <s-date-field key={field.key} label={field.label} value={value} disabled={disabled} onChange={onChange} />;
+    return <s-date-field key={field.key} label={label} value={value} disabled={disabled} onChange={onChange} />;
   }
   if (type.startsWith("number_") || type === "money" || type === "dimension" || type === "weight" || type === "volume") {
-    return <s-number-field key={field.key} label={field.label} value={value} disabled={disabled} onChange={onChange} />;
+    return <s-number-field key={field.key} label={label} value={value} disabled={disabled} onChange={onChange} />;
   }
   if (type === "multi_line_text_field" || type === "json" || type.startsWith("list.")) {
-    return <s-text-area key={field.key} label={field.label} value={value} disabled={disabled} onChange={onChange} />;
+    return <s-text-area key={field.key} label={label} value={value} disabled={disabled} onChange={onChange} />;
   }
-  return <s-text-field key={field.key} label={field.label} value={value} disabled={disabled} onChange={onChange} />;
+  return <s-text-field key={field.key} label={label} value={value} disabled={disabled} onChange={onChange} />;
 }
