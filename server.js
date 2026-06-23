@@ -129,6 +129,25 @@ async function initShopifyToken() {
   } catch (err) { console.error('❌ Shopify token init failed:', err.message); }
 }
 
+// ── Old-gold buying rate table (Supabase config key 'buying_rate_table') ──
+// Built daily from the 24kt pure rate in /api/trigger-price-update. Cached in memory.
+let _buyingTableCache = null, _buyingTableAt = null;
+async function getBuyingRateTable() {
+  const now = Date.now();
+  if (_buyingTableCache && _buyingTableAt && (now - _buyingTableAt) < 60 * 60 * 1000) return _buyingTableCache;
+  try {
+    const { data } = await supabase.from('config').select('value').eq('key', 'buying_rate_table').single();
+    if (!data?.value) return null;
+    _buyingTableCache = JSON.parse(data.value); _buyingTableAt = now;
+    return _buyingTableCache;
+  } catch (err) { console.warn('Buying rate table load failed:', err.message); return null; }
+}
+// Buy-back rate for a (possibly fractional) karat: karat/24 × pure × (1 − haircut).
+function buyingRateFor(table, purity) {
+  if (!table || !(purity > 0) || purity > 24) return null;
+  return +((purity / 24) * table.base_24k * (1 - table.haircut_pct / 100)).toFixed(2);
+}
+
 // ─────────────────────────────────────────
 // Pine Helpers
 // ─────────────────────────────────────────
@@ -229,7 +248,8 @@ function getMetafieldType(key) {
   // ("9713,10200") for multi-product reprice. Readers parseFloat each position regardless of type.
   if (key === 'gold_rate') return 'single_line_text_field';
   if (key === 'amount_paid' || key === 'amount_pending' ||
-      key === 'exchange_note_value' || key === 'voucher_value' || key === 'amount_to_be_collected') return 'number_decimal';
+      key === 'exchange_note_value' || key === 'voucher_value' || key === 'amount_to_be_collected' ||
+      key === 'old_gold_value' || key === 'old_gold_weight' || key === 'old_gold_purity') return 'number_decimal';
   if (key === 'is_finalized') return 'boolean';
   if (key === 'gold_rate_date') return 'date_time';
   if (key === 'serial_no') return 'number_integer';
@@ -2026,10 +2046,31 @@ async function syncAmountToCollect(draft) {
   const mf  = (key) => { const m = (mfData.metafields || []).find(x => x.namespace === 'custom' && x.key === key); return m ? m.value : null; };
   const adj = (key) => Math.abs(parseFloat(mf(key)) || 0);
   const total = parseFloat(draft.total_price || 0);
-  const net   = Math.max(0, total - adj('exchange_note_value') - adj('voucher_value') - adj('old_gold_value'));
+
+  const patch = {};
+  // Auto-value old gold from weight × buying rate — only when no human value is present (manual always wins).
+  const oldGoldRaw = mf('old_gold_value');
+  let   oldGoldVal = Math.abs(parseFloat(oldGoldRaw) || 0);
+  if (!oldGoldRaw || oldGoldVal === 0) {
+    const wt     = parseFloat(mf('old_gold_weight') || 0);
+    const purity = parseFloat(mf('old_gold_purity') || 0);
+    if (wt > 0 && purity > 0 && purity <= 24) {
+      const rate = buyingRateFor(await getBuyingRateTable(), purity);
+      if (rate != null) {
+        oldGoldVal = +(wt * rate).toFixed(2);
+        patch.old_gold_value = oldGoldVal.toFixed(2);
+        console.log(`Draft ${draftOrderId}: old_gold_value auto = ${oldGoldVal} (${wt}g × ${rate}/g @ ${purity}kt)`);
+      } else {
+        console.warn(`Draft ${draftOrderId}: buying table unavailable or purity ${purity} out of range — old_gold_value left blank`);
+      }
+    }
+  }
+
+  const net = Math.max(0, total - adj('exchange_note_value') - adj('voucher_value') - oldGoldVal);
   const current = mf('amount_to_be_collected');
-  if (current !== null && Math.abs(parseFloat(current) - net) < 0.005) return; // unchanged → skip (loop/no-op guard)
-  await updateDraftOrderMetafields(draftOrderId, { amount_to_be_collected: net.toFixed(2) });
+  if (current === null || Math.abs(parseFloat(current) - net) >= 0.005) patch.amount_to_be_collected = net.toFixed(2);
+  if (Object.keys(patch).length === 0) return; // nothing changed → skip (no-op guard)
+  await updateDraftOrderMetafields(draftOrderId, patch);
   console.log(`Draft ${draftOrderId}: amount_to_be_collected = ${net.toFixed(2)} (total ${total} − adjustments)`);
 }
 
@@ -3418,6 +3459,20 @@ app.post('/api/trigger-price-update', async (req, res) => {
   if (dbErr) {
     console.error('Price update trigger: Supabase write failed:', dbErr.message);
     return res.status(500).json({ success: false, error: 'Failed to save gold rate to Supabase' });
+  }
+
+  // Build & store the old-gold buying rate table (9..24kt), derived from pure with a 5% haircut.
+  const BUYING_HAIRCUT = 0.05;
+  const buyingRates = {};
+  for (let k = 9; k <= 24; k++) buyingRates[k] = +((k / 24) * pure * (1 - BUYING_HAIRCUT)).toFixed(2);
+  const buyingBlob = JSON.stringify({ base_24k: pure, haircut_pct: 5, set_at: setAt, rates: buyingRates });
+  const { error: buyErr } = await supabase.from('config').upsert({
+    key: 'buying_rate_table', value: buyingBlob, updated_at: setAt,
+  });
+  if (buyErr) {
+    console.error('Price update trigger: buying table write failed:', buyErr.message);
+  } else {
+    _buyingTableCache = JSON.parse(buyingBlob); _buyingTableAt = Date.now();
   }
 
   const testGati = (req.body.test_gati || '').toString().trim().toUpperCase();
