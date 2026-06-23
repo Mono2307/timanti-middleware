@@ -131,6 +131,16 @@ def _load_gold_rate(log: logging.Logger) -> dict:
 
     pure   = float(data['pure'])
     set_at = data.get('set_at', '')
+    mode   = str(data.get('mode', 'auto')).strip().lower()
+
+    # Manual 18kt/14kt rates from the form (entered directly by staff, never derived)
+    def _opt_float(v):
+        try:
+            return float(v) if v not in (None, '') else None
+        except (TypeError, ValueError):
+            return None
+    manual_18k = _opt_float(data.get('r18k'))
+    manual_14k = _opt_float(data.get('r14k'))
 
     try:
         sa = datetime.fromisoformat(set_at)
@@ -148,12 +158,23 @@ def _load_gold_rate(log: logging.Logger) -> dict:
         age_h = 0.0
         log.warning('Could not parse gold rate timestamp — proceeding anyway')
 
-    rate_18k = round(pure * RATIO_18K, 2)
-    rate_14k = round(pure * RATIO_14K, 2)
+    # 22K and 24K are always derived from pure. 18K and 14K are used as entered
+    # only when the form is set to manual mode AND both rates are provided.
     rate_22k = round(pure * RATIO_22K, 2)
     rate_24k = round(pure * RATIO_24K, 2)
 
-    log.info(f'Gold rate ({source}) — pure: Rs {pure:,.0f}/g | 24K: Rs {rate_24k:,.2f}/g | 22K: Rs {rate_22k:,.2f}/g | 18K: Rs {rate_18k:,.2f}/g | 14K: Rs {rate_14k:,.2f}/g')
+    if mode == 'manual' and manual_18k is not None and manual_14k is not None:
+        calc_mode = 'manual'
+        rate_18k  = round(manual_18k, 2)
+        rate_14k  = round(manual_14k, 2)
+    else:
+        calc_mode = 'auto'
+        rate_18k  = round(pure * RATIO_18K, 2)
+        rate_14k  = round(pure * RATIO_14K, 2)
+        if mode == 'manual':
+            log.warning('Mode=manual but 18kt/14kt not both provided — falling back to auto calculation')
+
+    log.info(f'Gold rate ({source}, {calc_mode}) — pure: Rs {pure:,.0f}/g | 24K: Rs {rate_24k:,.2f}/g | 22K: Rs {rate_22k:,.2f}/g | 18K: Rs {rate_18k:,.2f}/g | 14K: Rs {rate_14k:,.2f}/g')
     log.info(f'Rate age  — {age_h:.1f}h (set {set_at})')
 
     return {
@@ -162,6 +183,7 @@ def _load_gold_rate(log: logging.Logger) -> dict:
         '14k':       rate_14k,
         '22k':       rate_22k,
         '24k':       rate_24k,
+        'mode':      calc_mode,
         'set_at':    set_at,
         'age_hours': age_h,
         'ratio_18k': RATIO_18K,
@@ -290,6 +312,7 @@ def run(test_gati: str = None):
         log.info(f'  22K rate  : Rs {gold_rate["22k"]:>10,.2f} / gram')
         log.info(f'  18K rate  : Rs {gold_rate["18k"]:>10,.2f} / gram')
         log.info(f'  14K rate  : Rs {gold_rate["14k"]:>10,.2f} / gram')
+        log.info(f'  Calc mode : {gold_rate.get("mode", "auto").upper()} (18K/14K {"entered manually" if gold_rate.get("mode") == "manual" else "derived from pure"})')
         log.info(f'  Rate set  : {gold_rate.get("set_at", "")[:16].replace("T", " ")} UTC')
         log.info('-' * 70)
 
