@@ -225,7 +225,7 @@ function collectErrors(result, mutationField) {
   return errs;
 }
 
-export default function MetafieldManager({ surface = "block" } = {}) {
+export default function MetafieldManager() {
   const ctx = resolveContext();
   const ownerId = ctx.id;
 
@@ -366,8 +366,8 @@ export default function MetafieldManager({ surface = "block" } = {}) {
 
   const sections = buildSections(ctx.scope);
 
-  // Shared body — identical in the inline block and the full-screen action.
-  const banners = (
+  // Rendered fresh in each location (inline card + modal) so vnodes aren't shared.
+  const renderBanners = () => (
     <>
       {error ? (
         <s-banner tone="critical" heading="Couldn't save">
@@ -387,61 +387,60 @@ export default function MetafieldManager({ surface = "block" } = {}) {
     </>
   );
 
-  const sectionList = sections.map((section) => (
-    <s-section key={section.title} heading={section.title}>
-      <s-stack direction="block" gap="base">
-        {section.fields.map((field) =>
-          field.editable
-            ? renderEditable(field, defs[field.key]?.type || "", defs[field.key]?.choices, edits[field.key] ?? "", setField, saving)
-            : renderReadOnly(field, values[field.key] ?? ""),
-        )}
-      </s-stack>
-    </s-section>
-  ));
-
-  // Action surface: render in the full-size overlay opened from "More actions",
-  // with Save/Close in the action footer (no height cap — every field is shown).
-  if (surface === "action") {
-    return (
-      <s-admin-action heading="Jewellery Workspace">
-        <s-stack direction="block" gap="large-100">
-          {banners}
-          {sectionList}
+  const renderSections = () =>
+    sections.map((section) => (
+      <s-section key={section.title} heading={section.title}>
+        <s-stack direction="block" gap="base">
+          {section.fields.map((field) =>
+            field.editable
+              ? renderEditable(field, defs[field.key]?.type || "", defs[field.key]?.choices, edits[field.key] ?? "", setField, saving)
+              : renderReadOnly(field, values[field.key] ?? ""),
+          )}
         </s-stack>
-        <s-button
-          slot="primary-action"
-          variant="primary"
-          onClick={save}
-          loading={saving ? "" : undefined}
-          disabled={!dirty || saving ? "" : undefined}
-        >
-          Save
-        </s-button>
-        <s-button slot="secondary-actions" onClick={() => shopify.close?.()}>
-          Close
-        </s-button>
-      </s-admin-action>
-    );
-  }
+      </s-section>
+    ));
 
-  // Block surface: inline card on the order/draft page (with its own Save button).
+  const renderSaveButton = () => (
+    <s-button
+      variant="primary"
+      onClick={save}
+      loading={saving ? "" : undefined}
+      disabled={!dirty || saving ? "" : undefined}
+    >
+      Save
+    </s-button>
+  );
+
+  // Block on the order/draft page. The inline card shows the fields, and
+  // "Open all fields" pops a roomy in-editor modal with the same content — no
+  // app navigation, no separate extension. The modal lives in this block, so it
+  // can never be dropped by a deploy.
   return (
     <s-admin-block heading="Jewellery Workspace">
       <s-stack direction="block" gap="large-100">
-        {banners}
-        {sectionList}
+        {renderBanners()}
+        <s-button command="--show" commandFor="jw-all-fields">
+          Open all fields
+        </s-button>
+        {renderSections()}
         <s-stack direction="inline" gap="base" alignItems="center">
-          <s-button
-            variant="primary"
-            onClick={save}
-            loading={saving ? "" : undefined}
-            disabled={!dirty || saving ? "" : undefined}
-          >
-            Save
-          </s-button>
+          {renderSaveButton()}
           {dirty ? <s-text>Unsaved changes</s-text> : null}
         </s-stack>
       </s-stack>
+
+      <s-modal id="jw-all-fields" heading="Jewellery Workspace — all fields" size="large">
+        <s-stack direction="block" gap="large-100">
+          {renderBanners()}
+          {renderSections()}
+          <s-stack direction="inline" gap="base" alignItems="center">
+            {renderSaveButton()}
+            <s-button command="--hide" commandFor="jw-all-fields">
+              Close
+            </s-button>
+          </s-stack>
+        </s-stack>
+      </s-modal>
     </s-admin-block>
   );
 }
