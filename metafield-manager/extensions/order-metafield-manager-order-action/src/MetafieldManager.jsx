@@ -225,13 +225,6 @@ function collectErrors(result, mutationField) {
   return errs;
 }
 
-// Block buttons open the matching action extension for the roomy all-fields view
-// (Shopify's documented block -> action navigation; blocks can't host a modal).
-const ACTION_HANDLE = {
-  draft: "order-metafield-manager-draft-action",
-  order: "order-metafield-manager-order-action",
-};
-
 export default function MetafieldManager({ surface = "block" } = {}) {
   const ctx = resolveContext();
   const ownerId = ctx.id;
@@ -443,19 +436,13 @@ export default function MetafieldManager({ surface = "block" } = {}) {
     );
   }
 
-  // Block on the order/draft page: inline card with the fields. "Open all fields"
-  // navigates to the matching action extension (Shopify's documented block ->
-  // action navigation) for the full, uncapped editor.
-  const openAllFields = () => {
-    const handle = ACTION_HANDLE[ctx.scope];
-    if (handle) shopify.navigation?.navigate(`extension://${handle}`);
-  };
-
+  // Block on the order/draft page: inline card with the fields (reorder +
+  // dropdowns). The roomy all-fields view stays exactly where v8 put it — the
+  // "More actions" menu, served by the untouched action extensions.
   return (
     <s-admin-block heading="Jewellery Workspace">
       <s-stack direction="block" gap="large-100">
         {renderBanners()}
-        <s-button onClick={openAllFields}>Open all fields</s-button>
         {renderSections()}
         <s-stack direction="inline" gap="base" alignItems="center">
           {renderSaveButton()}
