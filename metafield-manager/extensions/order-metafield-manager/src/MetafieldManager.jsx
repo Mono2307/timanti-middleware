@@ -225,7 +225,7 @@ function collectErrors(result, mutationField) {
   return errs;
 }
 
-export default function MetafieldManager() {
+export default function MetafieldManager({ surface = "block" } = {}) {
   const ctx = resolveContext();
   const ownerId = ctx.id;
 
@@ -366,37 +366,70 @@ export default function MetafieldManager() {
 
   const sections = buildSections(ctx.scope);
 
+  // Shared body — identical in the inline block and the full-screen action.
+  const banners = (
+    <>
+      {error ? (
+        <s-banner tone="critical" heading="Couldn't save">
+          {error}
+        </s-banner>
+      ) : null}
+      {saved ? (
+        <s-banner tone="success" heading="Saved" dismissible>
+          Metafields updated.
+        </s-banner>
+      ) : null}
+      {notice ? (
+        <s-banner tone="warning" heading="Some data may be incomplete" dismissible>
+          {notice}
+        </s-banner>
+      ) : null}
+    </>
+  );
+
+  const sectionList = sections.map((section) => (
+    <s-section key={section.title} heading={section.title}>
+      <s-stack direction="block" gap="base">
+        {section.fields.map((field) =>
+          field.editable
+            ? renderEditable(field, defs[field.key]?.type || "", defs[field.key]?.choices, edits[field.key] ?? "", setField, saving)
+            : renderReadOnly(field, values[field.key] ?? ""),
+        )}
+      </s-stack>
+    </s-section>
+  ));
+
+  // Action surface: render in the full-size overlay opened from "More actions",
+  // with Save/Close in the action footer (no height cap — every field is shown).
+  if (surface === "action") {
+    return (
+      <s-admin-action heading="Jewellery Workspace">
+        <s-stack direction="block" gap="large-100">
+          {banners}
+          {sectionList}
+        </s-stack>
+        <s-button
+          slot="primary-action"
+          variant="primary"
+          onClick={save}
+          loading={saving ? "" : undefined}
+          disabled={!dirty || saving ? "" : undefined}
+        >
+          Save
+        </s-button>
+        <s-button slot="secondary-actions" onClick={() => shopify.close?.()}>
+          Close
+        </s-button>
+      </s-admin-action>
+    );
+  }
+
+  // Block surface: inline card on the order/draft page (with its own Save button).
   return (
     <s-admin-block heading="Jewellery Workspace">
       <s-stack direction="block" gap="large-100">
-        {error ? (
-          <s-banner tone="critical" heading="Couldn't save">
-            {error}
-          </s-banner>
-        ) : null}
-        {saved ? (
-          <s-banner tone="success" heading="Saved" dismissible>
-            Metafields updated.
-          </s-banner>
-        ) : null}
-        {notice ? (
-          <s-banner tone="warning" heading="Some data may be incomplete" dismissible>
-            {notice}
-          </s-banner>
-        ) : null}
-
-        {sections.map((section) => (
-          <s-section key={section.title} heading={section.title}>
-            <s-stack direction="block" gap="base">
-              {section.fields.map((field) =>
-                field.editable
-                  ? renderEditable(field, defs[field.key]?.type || "", defs[field.key]?.choices, edits[field.key] ?? "", setField, saving)
-                  : renderReadOnly(field, values[field.key] ?? ""),
-              )}
-            </s-stack>
-          </s-section>
-        ))}
-
+        {banners}
+        {sectionList}
         <s-stack direction="inline" gap="base" alignItems="center">
           <s-button
             variant="primary"
