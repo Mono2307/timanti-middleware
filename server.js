@@ -3376,8 +3376,38 @@ app.post('/api/trigger-price-update', async (req, res) => {
     return res.status(400).json({ success: false, error: 'pure_rate must be between 1000 and 200000' });
   }
 
-  const setAt   = new Date().toISOString();
-  const payload = JSON.stringify({ pure, set_at: setAt });
+  // Calculation mode: 'manual' uses the entered 18K/14K rates verbatim; anything
+  // else (default 'auto') derives 18K/14K from pure. 22K/24K always derive from pure.
+  const calcMode  = String(req.body.calc_mode || req.body.mode || 'auto').trim().toLowerCase() === 'manual' ? 'manual' : 'auto';
+  const manual18k = parseFloat(req.body.r18k);
+  const manual14k = parseFloat(req.body.r14k);
+  if (calcMode === 'manual') {
+    if (isNaN(manual18k) || isNaN(manual14k)) {
+      return res.status(400).json({ success: false, error: 'manual mode requires numeric r18k and r14k' });
+    }
+    // Sanity guard: reject manual rates that deviate more than ±10% from what
+    // auto would compute from pure — catches typos / wrong-karat entries.
+    const auto18k = pure * 0.771;
+    const auto14k = pure * 0.604;
+    const dev18   = Math.abs(manual18k - auto18k) / auto18k;
+    const dev14   = Math.abs(manual14k - auto14k) / auto14k;
+    if (dev18 > 0.10 || dev14 > 0.10) {
+      return res.status(400).json({
+        success: false,
+        error: `manual rate out of ±10% range vs auto. ` +
+               `18K entered ${manual18k.toFixed(2)} (auto ${auto18k.toFixed(2)}, ${(dev18 * 100).toFixed(1)}% off); ` +
+               `14K entered ${manual14k.toFixed(2)} (auto ${auto14k.toFixed(2)}, ${(dev14 * 100).toFixed(1)}% off)`,
+      });
+    }
+  }
+
+  const setAt    = new Date().toISOString();
+  const rateBlob = { pure, mode: calcMode, set_at: setAt };
+  if (calcMode === 'manual') {
+    rateBlob.r18k = manual18k;
+    rateBlob.r14k = manual14k;
+  }
+  const payload = JSON.stringify(rateBlob);
 
   const { error: dbErr } = await supabase.from('config').upsert({
     key:        'gold_rate',
@@ -3394,19 +3424,20 @@ app.post('/api/trigger-price-update', async (req, res) => {
   const extraArgs = testGati ? ['--test', testGati] : [];
   const proc = _spawnPriceUpdate(extraArgs);
 
-  const rate18k = (pure * 0.771).toFixed(2);
-  const rate14k = (pure * 0.604).toFixed(2);
-  const mode    = testGati ? `TEST (${testGati})` : 'FULL RUN';
-  console.log(`Price update triggered [${mode}] — pure Rs${pure}/g | 18K Rs${rate18k} | 14K Rs${rate14k} | PID ${proc.pid}`);
+  const rate18k = calcMode === 'manual' ? manual18k.toFixed(2) : (pure * 0.771).toFixed(2);
+  const rate14k = calcMode === 'manual' ? manual14k.toFixed(2) : (pure * 0.604).toFixed(2);
+  const runMode = testGati ? `TEST (${testGati})` : 'FULL RUN';
+  console.log(`Price update triggered [${runMode}] [${calcMode}] — pure Rs${pure}/g | 18K Rs${rate18k} | 14K Rs${rate14k} | PID ${proc.pid}`);
 
   return res.json({
-    success:   true,
-    message:   'Gold rate saved. Price update started — results emailed when complete.',
-    pure_rate: pure,
-    rate_18k:  parseFloat(rate18k),
-    rate_14k:  parseFloat(rate14k),
-    set_at:    setAt,
-    mode:      testGati ? `test:${testGati}` : 'full',
+    success:    true,
+    message:    'Gold rate saved. Price update started — results emailed when complete.',
+    pure_rate:  pure,
+    rate_18k:   parseFloat(rate18k),
+    rate_14k:   parseFloat(rate14k),
+    calc_mode:  calcMode,
+    set_at:     setAt,
+    mode:       testGati ? `test:${testGati}` : 'full',
   });
 });
 

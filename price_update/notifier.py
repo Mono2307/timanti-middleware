@@ -49,6 +49,10 @@ def send_run_report(gold_rate: dict, snapshot_stats: dict, import_stats: dict,
     duration    = _fmt_duration(import_stats.get('duration_seconds', 0))
     status_icon = '✓' if errors == 0 else '⚠'
     err_colour  = '#27ae60' if errors == 0 else '#c0392b'
+    mode        = str(gold_rate.get('mode', 'auto')).lower()
+    mode_label  = ('Manual — 18K &amp; 14K entered directly'
+                   if mode == 'manual'
+                   else 'Auto — 18K &amp; 14K derived from pure rate')
     test_banner = (f'<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;'
                    f'padding:10px 16px;margin-bottom:20px;font-size:13px;color:#856404;">'
                    f'<strong>TEST RUN</strong> — product {test_gati} only. '
@@ -87,6 +91,10 @@ def send_run_report(gold_rate: dict, snapshot_stats: dict, import_stats: dict,
     <tr style="background:#fffbf0;">
       <td style="padding:9px 14px;font-weight:600;">14K Rate</td>
       <td style="padding:9px 14px;">Rs {gold_rate['14k']:,.2f} / gram</td>
+    </tr>
+    <tr>
+      <td style="padding:9px 14px;font-weight:600;">Calculation Mode</td>
+      <td style="padding:9px 14px;">{mode_label}</td>
     </tr>
   </table>
 
@@ -141,6 +149,10 @@ def send_rates_confirmation(gold_rate: dict, snapshot_stats: dict, import_stats:
     date_str = _fmt_date()
     written  = import_stats.get('variants_written', 0)
     now_str  = datetime.now().strftime('%d %b %Y %H:%M')
+    mode       = str(gold_rate.get('mode', 'auto')).lower()
+    mode_label = ('Manual — 18K &amp; 14K entered directly'
+                  if mode == 'manual'
+                  else 'Auto — 18K &amp; 14K derived from pure rate')
 
     html = f"""
 <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;
@@ -172,6 +184,10 @@ def send_rates_confirmation(gold_rate: dict, snapshot_stats: dict, import_stats:
     <tr style="background:#f8f9fa;">
       <td style="padding:14px 18px;font-weight:600;">14K Rate</td>
       <td style="padding:14px 18px;">Rs {gold_rate['14k']:,.2f} / gram</td>
+    </tr>
+    <tr>
+      <td style="padding:14px 18px;font-weight:600;">Calculation Mode</td>
+      <td style="padding:14px 18px;">{mode_label}</td>
     </tr>
   </table>
 
