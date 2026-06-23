@@ -225,7 +225,14 @@ function collectErrors(result, mutationField) {
   return errs;
 }
 
-export default function MetafieldManager() {
+// Block buttons open the matching action extension for the roomy all-fields view
+// (Shopify's documented block -> action navigation; blocks can't host a modal).
+const ACTION_HANDLE = {
+  draft: "order-metafield-manager-draft-action",
+  order: "order-metafield-manager-order-action",
+};
+
+export default function MetafieldManager({ surface = "block" } = {}) {
   const ctx = resolveContext();
   const ownerId = ctx.id;
 
@@ -411,36 +418,50 @@ export default function MetafieldManager() {
     </s-button>
   );
 
-  // Block on the order/draft page. The inline card shows the fields, and
-  // "Open all fields" pops a roomy in-editor modal with the same content — no
-  // app navigation, no separate extension. The modal lives in this block, so it
-  // can never be dropped by a deploy.
+  // Action surface: the roomy all-fields overlay opened from the block (or from
+  // "More actions"). No height cap here — every field is shown with room.
+  if (surface === "action") {
+    return (
+      <s-admin-action heading="Jewellery Workspace — all fields">
+        <s-stack direction="block" gap="large-100">
+          {renderBanners()}
+          {renderSections()}
+        </s-stack>
+        <s-button
+          slot="primary-action"
+          variant="primary"
+          onClick={save}
+          loading={saving ? "" : undefined}
+          disabled={!dirty || saving ? "" : undefined}
+        >
+          Save
+        </s-button>
+        <s-button slot="secondary-actions" onClick={() => shopify.close?.()}>
+          Close
+        </s-button>
+      </s-admin-action>
+    );
+  }
+
+  // Block on the order/draft page: inline card with the fields. "Open all fields"
+  // navigates to the matching action extension (Shopify's documented block ->
+  // action navigation) for the full, uncapped editor.
+  const openAllFields = () => {
+    const handle = ACTION_HANDLE[ctx.scope];
+    if (handle) shopify.navigation?.navigate(`extension://${handle}`);
+  };
+
   return (
     <s-admin-block heading="Jewellery Workspace">
       <s-stack direction="block" gap="large-100">
         {renderBanners()}
-        <s-button command="--show" commandFor="jw-all-fields">
-          Open all fields
-        </s-button>
+        <s-button onClick={openAllFields}>Open all fields</s-button>
         {renderSections()}
         <s-stack direction="inline" gap="base" alignItems="center">
           {renderSaveButton()}
           {dirty ? <s-text>Unsaved changes</s-text> : null}
         </s-stack>
       </s-stack>
-
-      <s-modal id="jw-all-fields" heading="Jewellery Workspace — all fields" size="large">
-        <s-stack direction="block" gap="large-100">
-          {renderBanners()}
-          {renderSections()}
-          <s-stack direction="inline" gap="base" alignItems="center">
-            {renderSaveButton()}
-            <s-button command="--hide" commandFor="jw-all-fields">
-              Close
-            </s-button>
-          </s-stack>
-        </s-stack>
-      </s-modal>
     </s-admin-block>
   );
 }
