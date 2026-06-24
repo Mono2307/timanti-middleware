@@ -1400,8 +1400,10 @@ async function fetchItemMeta(item, token) {
 // Bootstraps _gold_rate from variant if not already locked. Does NOT change price.
 async function hydrateItemFromVariant(item, token) {
   const { varMf, prodMf } = await fetchItemMeta(item, token);
-  const grossWt    = parseFloat(varMf.gross_wt   || 0);
-  const netWt      = parseFloat(varMf.net_wt      || 0);
+  // Variant weight metafields: catalog uses net_metal_weight_g / total_metal_weight_g.
+  // Keep the legacy net_wt / gross_wt keys as fallbacks for any older variants.
+  const grossWt    = parseFloat(varMf.gross_wt || varMf.total_metal_weight_g || 0);
+  const netWt      = parseFloat(varMf.net_wt   || varMf.net_metal_weight_g   || 0);
   const diaCts     = parseFloat(prodMf.totaldiamondweight || 0);
   const gemCts     = parseFloat(prodMf.gemstone_weight    || 0);
   const goldVal    = parseFloat(varMf.price_breakup_gold    || 0) * item.quantity;
@@ -1580,7 +1582,7 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
           const iProps = {};
           for (const p of (item.properties || [])) iProps[p.name] = p.value;
 
-          const varNetWt   = parseFloat(vMf.net_wt || 0);
+          const varNetWt   = parseFloat(vMf.net_wt || vMf.net_metal_weight_g || 0);
           const varGoldPbp = parseFloat(vMf.price_breakup_gold || 0) * item.quantity;
           const varRate    = parseFloat(vMf.gold_rate || 0);
           const lockedGold = parseFloat((iProps['Gold'] || '').replace('Rs', '').trim()) || 0;
@@ -3755,13 +3757,18 @@ async function resolveDraftId(ref, token) {
   if (!raw) return null;
   if (/^\d+$/.test(raw)) return raw;
   const name = raw.startsWith('#') ? raw : '#' + raw;
-  const q = `query($q:String!){ draftOrders(first:1, query:$q){ nodes{ id } } }`;
-  const resp = await axios.post(
-    `${process.env.SHOPIFY_STORE_URL}/admin/api/2025-01/graphql.json`,
-    { query: q, variables: { q: `name:${name}` } },
-    { headers: { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' }, timeout: 10000 }
-  );
-  const node = resp.data?.data?.draftOrders?.nodes?.[0];
+  // GraphQL name: search is fuzzy/unreliable with "#" (it matched "#D1" for "#D139"). Scan OPEN
+  // drafts via REST and EXACT-match the name — deterministic. Exchange targets are always open.
+  const headers = { 'X-Shopify-Access-Token': token };
+  let url = `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders.json?limit=250&status=open`;
+  let node = null;
+  while (url && !node) {
+    const resp = await axios.get(url, { headers, timeout: 30000 });
+    node = (resp.data.draft_orders || []).find(d => d.name === name) || null;
+    const link = resp.headers['link'] || '';
+    const m = link.match(/<([^>]*page_info=[^>&"]+[^>]*)>;\s*rel="next"/);
+    url = (!node && m) ? m[1] : null;
+  }
   return node ? String(node.id).split('/').pop() : null;
 }
 

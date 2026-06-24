@@ -4,3 +4,16 @@
 .env
 Dockerfile
 fly.toml
+
+# Non-runtime junk (excluded so the Docker build context stays clean).
+# metafield-manager is a SEPARATE Shopify app whose pnpm node_modules symlinks
+# break `archive/tar: unknown file mode` during the build context upload.
+metafield-manager
+Recon Test
+.claude
+**/__pycache__
+~$*
+**/~$*
+*.patch
+*.csv
+*.xlsx
