@@ -19,19 +19,27 @@ const GLOBAL = 'ALL'; // state_code sentinel for non-location-scoped sequences
 // JSON row (merged over these defaults) — new doc types/locations need no code.
 //   scope: 'store'  → keyed by (docType, full compound store code e.g. KA-HSR)
 //   scope: 'global' → keyed by (docType, 'ALL'); ignores location
-// Tokens: {CODE}=origin store code, {DELIVERY}=destination store code, {SEQ}=number.
-// needsDelivery → requires a staff-set custom.delivery_code (memo/transfer).
+//   fy: true        → financial-year-scoped: the FY-end (IST) is folded into the counter
+//                     key so the sequence RESETS each FY, and {FY} is printed in the serial.
+//   pad             → zero-pad width for {SEQ}.
+// Tokens: {CODE}=full compound store code, {DELIVERY}=destination store code,
+//         {FY}=2-digit financial-year-end, {SEQ}=zero-padded number.
+//
+// Serials are capped at 16 chars for the GST tax-invoice series (customer_order, customer_service,
+// b2b); the brand token is trimmed (TM/TS) so KA-HSR + FY still fit. See SERIALIZATION_MIGRATION_PLAN.md.
 const DEFAULT_REGISTRY = {
-  customer_order: { scope: 'store',  start: 1001, code: 'TMNT-{CODE}-{SEQ}',               display: 'TMNT-{CODE}-{SEQ}' },
-  po:             { scope: 'store',  start: 1,    code: 'PO-{CODE}-{SEQ}',                 display: 'PO-{CODE}-{SEQ}' },
-  memo:           { scope: 'store',  start: 1,    code: 'MEMO-{CODE}/{DELIVERY}-{SEQ}',     display: 'MEMO-{CODE}/{DELIVERY}-{SEQ}',     needsDelivery: true },
-  transfer:       { scope: 'store',  start: 1,    code: 'TRANSFER-{CODE}/{DELIVERY}-{SEQ}', display: 'TRANSFER-{CODE}/{DELIVERY}-{SEQ}', needsDelivery: true },
-  repair:         { scope: 'store',  start: 1,    code: 'REP-{CODE}-{SEQ}',                display: 'REP-{CODE}-{SEQ}' },
-  // Voucher = the rebranded credit note (1-year store credit, discount-code mechanism). New doc_type
-  // ⇒ fresh counter starting at 1 (the CNTM→VCH counter reset). Old credit_note ledger rows are kept
-  // for history but never reused. exchange_note = instant post-tax adjustment on a new invoice.
-  voucher:        { scope: 'global', start: 1,    code: 'VCH-{SEQ}',                       display: 'VCH-{SEQ}' },
-  exchange_note:  { scope: 'global', start: 1,    code: 'EXC-{SEQ}',                       display: 'EXC-{SEQ}' },
+  // B2C product order — per-store, resets per FY. TM27-KA-HSR-0001 (16 chars).
+  customer_order:   { scope: 'store',  start: 1, pad: 4, fy: true,  code: 'TM{FY}-{CODE}-{SEQ}', display: 'TM{FY}-{CODE}-{SEQ}' },
+  // B2C service order — repairs + CAD/design merged into ONE per-store, per-FY counter. TS27-KA-HSR-0001.
+  customer_service: { scope: 'store',  start: 1, pad: 4, fy: true,  code: 'TS{FY}-{CODE}-{SEQ}', display: 'TS{FY}-{CODE}-{SEQ}' },
+  // B2B tax invoice == inter-store transfer == sale (one doc type, one counter). AURA-KA-HSR-0001 (16).
+  b2b:              { scope: 'store',  start: 1, pad: 4, fy: false, code: 'AURA-{CODE}-{SEQ}',   display: 'AURA-{CODE}-{SEQ}' },
+  // Delivery challan (was memo). Origin only in the serial; destination lives in custom.delivery_code.
+  delivery_challan: { scope: 'store',  start: 1, pad: 4, fy: false, code: 'DC-{CODE}-{SEQ}',     display: 'DC-{CODE}-{SEQ}' },
+  po:               { scope: 'store',  start: 1, pad: 5, fy: false, code: 'PO-{CODE}-{SEQ}',     display: 'PO-{CODE}-{SEQ}' },
+  // Adjustments — global, reset per FY. EXC-27-0001 / VCH-27-0001.
+  voucher:          { scope: 'global', start: 1, pad: 4, fy: true,  code: 'VCH-{FY}-{SEQ}',      display: 'VCH-{FY}-{SEQ}' },
+  exchange_note:    { scope: 'global', start: 1, pad: 4, fy: true,  code: 'EXC-{FY}-{SEQ}',      display: 'EXC-{FY}-{SEQ}' },
 };
 
 // Machine-written keys. state_code holds the full compound store code (e.g. KA-HSR),
@@ -81,12 +89,28 @@ async function withRetry(fn) {
   }
 }
 
-function format(template, code, seq, delivery) {
+// 2-digit financial-year-END in IST (India FY = Apr 1 → Mar 31). FY 2026-27 → "27".
+// Computed in IST regardless of server timezone, frozen into the serial at mint time.
+function fyEnd(now = new Date()) {
+  const ist = new Date(now.getTime() + (5.5 * 60 * 60 * 1000)); // UTC+5:30
+  const y = ist.getUTCFullYear();
+  const m = ist.getUTCMonth() + 1; // 1-12
+  const endYear = (m >= 4) ? y + 1 : y;
+  return String(endYear).slice(-2);
+}
+
+function padSeq(seq, width) {
+  const s = String(seq);
+  return (width && s.length < width) ? s.padStart(width, '0') : s;
+}
+
+function format(template, { code, seq, delivery, fy, pad }) {
   return template
+    .replace('{FY}', fy || '')
     .replace('{CODE}', code || '')
     .replace('{STATE}', code || '')   // backward-compat alias
     .replace('{DELIVERY}', delivery || '')
-    .replace('{SEQ}', String(seq));
+    .replace('{SEQ}', padSeq(seq, pad));
 }
 
 // ─── State resolution ─────────────────────────────────────────────────────────
@@ -134,8 +158,13 @@ async function allocateSerial(deps, { docType, stateCode, deliveryCode }) {
   const code = isGlobal ? GLOBAL : deriveStateCode(stateCode);
   if (!isGlobal && !code) throw new Error(`store code required for docType ${docType}`);
 
+  // FY-scoped types fold the FY-end into the counter key (and the ledger store_code) so the
+  // sequence resets each financial year; the same {FY} is printed in the serial.
+  const fy = reg.fy ? fyEnd() : '';
+  const counterKey = reg.fy ? `${fy}|${code}` : code;
+
   const { data, error } = await deps.supabase.rpc('allocate_serial', {
-    p_doc_type: docType, p_state_code: code, p_start: reg.start,
+    p_doc_type: docType, p_state_code: counterKey, p_start: reg.start,
   });
   if (error) throw new Error(`allocate_serial RPC failed: ${error.message}`);
   const seq = Number(data);
@@ -144,11 +173,14 @@ async function allocateSerial(deps, { docType, stateCode, deliveryCode }) {
   const tplCode  = isGlobal ? '' : code;
   const delivery = deriveStateCode(deliveryCode) || '';
   const tidy = (s) => s.replace('/-', '-').replace('--', '-').replace(/[-/]$/, '').trim();
+  const fmtArgs = { seq, delivery, fy, pad: reg.pad };
   return {
     seq,
-    stateCode: code,
-    code:    tidy(format(reg.code,    tplCode, seq, delivery)),
-    display: tidy(format(reg.display, tplCode, seq, delivery)),
+    stateCode: code,       // bare store code for the staff-facing custom.state_code metafield
+    counterKey,            // FY-folded key — used as the ledger store_code (unique per FY)
+    fy,
+    code:    tidy(format(reg.code,    { ...fmtArgs, code: tplCode })),
+    display: tidy(format(reg.display, { ...fmtArgs, code: tplCode })),
   };
 }
 
@@ -316,7 +348,7 @@ async function mintSerial(deps, { docType, storeCode, deliveryCode, resourceType
 
   // 3. Record in the ledger (the resource-unique constraint resolves webhook races).
   const { data: row, error } = await deps.supabase.from('serial_ledger').insert({
-    doc_type: docType, store_code: alloc.stateCode, seq: alloc.seq, serial_code: alloc.code,
+    doc_type: docType, store_code: alloc.counterKey, seq: alloc.seq, serial_code: alloc.code,
     resource_type: resourceType || null, resource_id: ridStr, resource_name: resourceName || null,
     status: 'active',
   }).select().single();
@@ -363,6 +395,7 @@ module.exports = {
   SERIAL_KEYS,
   getRegistry,
   allocateSerial,
+  fyEnd,
   resolveState,
   resolveStateFromLocation,
   resolveStateFromShippingAddress,
