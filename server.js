@@ -320,16 +320,17 @@ async function convertDraftToOrder(draftOrderId, transactionDbId) {
 // Payment Completion Handler
 // ─────────────────────────────────────────
 
-// Mints a customer_service serial (TS{FY}-{CODE}-{SEQ}) for a repair draft via the v2 ledger.
-// Repairs share the merged per-store services counter (repairs + CAD/design).
-// Called ONLY from the repair-complete trigger (not intake) and never for free repairs,
-// so abandoned/free intakes don't burn numbers. Store code = the draft's staff-set
-// custom.state_code (place of supply); blank → skip (staff hasn't set it). The ledger's
-// (doc_type,resource_id) unique constraint makes this idempotent. Non-throwing.
+// Mints a service serial for a repair draft via the v2 ledger, at the repair-complete trigger
+// (not intake) so abandoned intakes never burn a number. Paid repairs use the customer_service
+// counter (TS{FY}-{CODE}-{SEQ}, shared with CAD/design); free/complimentary repairs use a SEPARATE
+// free_service counter (FS{FY}-{CODE}-{SEQ}) — pass opts.free to route there. Store code = the
+// draft's staff-set custom.state_code (place of supply); blank → skip (staff hasn't set it). The
+// ledger's (doc_type,resource_id) unique constraint makes this idempotent. Non-throwing.
 // Accepts the draft object (preferred) or a bare draft id.
-async function assignRepairSerial(draft) {
+async function assignRepairSerial(draft, opts = {}) {
   if (!SERIAL_REPAIR) return null;
   const draftId = (draft && typeof draft === 'object') ? draft.id : draft;
+  const docType = opts.free ? 'free_service' : 'customer_service';
   try {
     const deps  = SERIAL_DEPS();
     const token = await getShopifyToken();
@@ -340,12 +341,12 @@ async function assignRepairSerial(draft) {
       return null;
     }
     const r = await serialization.mintSerial(deps, {
-      docType: 'customer_service', storeCode,
+      docType, storeCode,
       resourceType: 'draft_order', resourceId: String(draftId),
       resourceName: (draft && typeof draft === 'object') ? draft.name : null,
       stamp: true,
     });
-    if (r.minted) console.log(`[serial] customer_service (repair) draft ${draftId} → ${r.serial_code}`);
+    if (r.minted) console.log(`[serial] ${docType} (repair) draft ${draftId} → ${r.serial_code}`);
     return r;
   } catch (err) {
     console.error(`[serial] repair assign failed for ${draftId}:`, err.message);
@@ -2832,8 +2833,11 @@ app.post('/api/serial/allocate', async (req, res) => {
     // at allocate time. Minted ONCE here — downstream endpoints (e.g. /api/exc-redeem) must not
     // re-mint, or the customer-facing number and the ledger row would diverge.
     if (docType === 'voucher' || docType === 'exchange_note') {
+      // EXC/VCH are now per-store (EXC27-KAHSR-0001) — the caller must pass the issuing store code.
+      const storeCode = (req.body.stateCode || req.body.storeCode || '').toUpperCase().trim();
+      if (!storeCode) return res.status(400).json({ success: false, error: `stateCode (store code) required for ${docType}` });
       const r = await serialization.mintSerial(SERIAL_DEPS(), {
-        docType, storeCode: 'ALL', resourceType: docType, resourceIdFromCode: true,
+        docType, storeCode, resourceType: docType, resourceIdFromCode: true,
       });
       return res.json({ success: true, allocated: r.minted, serial_no: r.seq, serial_code: r.serial_code, serial_display: r.serial_code });
     }

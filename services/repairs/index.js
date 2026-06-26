@@ -512,9 +512,10 @@ async function handleRepairDraftUpdate(incomingDraft, getShopifyToken, assignRep
       repair_completed_at: new Date().toISOString()
     }, token);
 
-    // v2 serialization: mint the REP serial at completion (the repair's finalize point),
-    // skipping free repairs so they never get a number. Idempotent + non-blocking.
-    if (assignRepairSerial && !hasFreeTag) { try { await assignRepairSerial(draft); } catch (_) {} }
+    // v2 serialization: mint the service serial at completion (the repair's finalize point).
+    // Paid → customer_service (TS); free/complimentary → free_service (FS), a separate counter.
+    // Idempotent + non-blocking.
+    if (assignRepairSerial) { try { await assignRepairSerial(draft, { free: hasFreeTag }); } catch (_) {} }
 
     console.log(`✅ Repair completion notified: ${draft.name}${sequelId ? ` (Sequel: ${sequelId})` : ''}`);
   }

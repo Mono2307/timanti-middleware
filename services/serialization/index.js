@@ -26,20 +26,25 @@ const GLOBAL = 'ALL'; // state_code sentinel for non-location-scoped sequences
 //         {FY}=2-digit financial-year-end, {SEQ}=zero-padded number.
 //
 // Serials are capped at 16 chars for the GST tax-invoice series (customer_order, customer_service,
-// b2b); the brand token is trimmed (TM/TS) so KA-HSR + FY still fit. See SERIALIZATION_MIGRATION_PLAN.md.
+// free_service, b2b); the brand token is trimmed (TM/TS/FS) so KAHSR + FY still fit.
+// The store code is rendered WITHOUT its hyphen in every serial (KA-HSR → KAHSR), which frees the
+// char that lets the B2C/service series carry a 5-digit sequence. The counter key and the staff-facing
+// custom.state_code metafield keep the full hyphenated KA-HSR. See SERIALIZATION_MIGRATION_PLAN.md.
 const DEFAULT_REGISTRY = {
-  // B2C product order — per-store, resets per FY. TM27-KA-HSR-0001 (16 chars).
-  customer_order:   { scope: 'store',  start: 1, pad: 4, fy: true,  code: 'TM{FY}-{CODE}-{SEQ}', display: 'TM{FY}-{CODE}-{SEQ}' },
-  // B2C service order — repairs + CAD/design merged into ONE per-store, per-FY counter. TS27-KA-HSR-0001.
-  customer_service: { scope: 'store',  start: 1, pad: 4, fy: true,  code: 'TS{FY}-{CODE}-{SEQ}', display: 'TS{FY}-{CODE}-{SEQ}' },
-  // B2B tax invoice == inter-store transfer == sale (one doc type, one counter). AURA-KA-HSR-0001 (16).
+  // B2C product order — per-store, resets per FY. TM27-KAHSR-00001 (16 chars).
+  customer_order:   { scope: 'store',  start: 1, pad: 5, fy: true,  code: 'TM{FY}-{CODE}-{SEQ}', display: 'TM{FY}-{CODE}-{SEQ}' },
+  // B2C PAID service order — repairs + CAD/design merged into ONE per-store, per-FY counter. TS27-KAHSR-00001.
+  customer_service: { scope: 'store',  start: 1, pad: 5, fy: true,  code: 'TS{FY}-{CODE}-{SEQ}', display: 'TS{FY}-{CODE}-{SEQ}' },
+  // B2C FREE service order — complimentary/warranty repairs, separate per-store, per-FY counter. FS27-KAHSR-00001.
+  free_service:     { scope: 'store',  start: 1, pad: 5, fy: true,  code: 'FS{FY}-{CODE}-{SEQ}', display: 'FS{FY}-{CODE}-{SEQ}' },
+  // B2B tax invoice == inter-store transfer == sale (one doc type, one counter). AURA-KAHSR-0001.
   b2b:              { scope: 'store',  start: 1, pad: 4, fy: false, code: 'AURA-{CODE}-{SEQ}',   display: 'AURA-{CODE}-{SEQ}' },
   // Delivery challan (was memo). Origin only in the serial; destination lives in custom.delivery_code.
   delivery_challan: { scope: 'store',  start: 1, pad: 4, fy: false, code: 'DC-{CODE}-{SEQ}',     display: 'DC-{CODE}-{SEQ}' },
   po:               { scope: 'store',  start: 1, pad: 5, fy: false, code: 'PO-{CODE}-{SEQ}',     display: 'PO-{CODE}-{SEQ}' },
-  // Adjustments — global, reset per FY. EXC-27-0001 / VCH-27-0001.
-  voucher:          { scope: 'global', start: 1, pad: 4, fy: true,  code: 'VCH-{FY}-{SEQ}',      display: 'VCH-{FY}-{SEQ}' },
-  exchange_note:    { scope: 'global', start: 1, pad: 4, fy: true,  code: 'EXC-{FY}-{SEQ}',      display: 'EXC-{FY}-{SEQ}' },
+  // Adjustments — per-store now, reset per FY. EXC27-KAHSR-0001 / VCH27-KAHSR-0001.
+  voucher:          { scope: 'store',  start: 1, pad: 4, fy: true,  code: 'VCH{FY}-{CODE}-{SEQ}', display: 'VCH{FY}-{CODE}-{SEQ}' },
+  exchange_note:    { scope: 'store',  start: 1, pad: 4, fy: true,  code: 'EXC{FY}-{CODE}-{SEQ}', display: 'EXC{FY}-{CODE}-{SEQ}' },
 };
 
 // Machine-written keys. state_code holds the full compound store code (e.g. KA-HSR),
@@ -169,9 +174,10 @@ async function allocateSerial(deps, { docType, stateCode, deliveryCode }) {
   if (error) throw new Error(`allocate_serial RPC failed: ${error.message}`);
   const seq = Number(data);
 
-  // For global sequences the {CODE} token is dropped from the templates.
-  const tplCode  = isGlobal ? '' : code;
-  const delivery = deriveStateCode(deliveryCode) || '';
+  // For global sequences the {CODE} token is dropped from the templates. The store code is printed
+  // WITHOUT its hyphen (KA-HSR → KAHSR) — the full hyphenated code still drives the counter key above.
+  const tplCode  = (isGlobal ? '' : code).replace(/-/g, '');
+  const delivery = (deriveStateCode(deliveryCode) || '').replace(/-/g, '');
   const tidy = (s) => s.replace('/-', '-').replace('--', '-').replace(/[-/]$/, '').trim();
   const fmtArgs = { seq, delivery, fy, pad: reg.pad };
   return {
