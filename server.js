@@ -320,15 +320,17 @@ async function convertDraftToOrder(draftOrderId, transactionDbId) {
 // Payment Completion Handler
 // ─────────────────────────────────────────
 
-// Mints a REP-{CODE}-{SEQ} serial for a repair draft via the v2 ledger (Stage 3).
-// Called ONLY from the repair-complete trigger (not intake) and never for free repairs,
-// so abandoned/free intakes don't burn numbers. Store code = the draft's staff-set
-// custom.state_code (place of supply); blank → skip (staff hasn't set it). The ledger's
-// (doc_type,resource_id) unique constraint makes this idempotent. Non-throwing.
+// Mints a service serial for a repair draft via the v2 ledger, at the repair-complete trigger
+// (not intake) so abandoned intakes never burn a number. Paid repairs use the customer_service
+// counter (TS{FY}-{CODE}-{SEQ}, shared with CAD/design); free/complimentary repairs use a SEPARATE
+// free_service counter (FS{FY}-{CODE}-{SEQ}) — pass opts.free to route there. Store code = the
+// draft's staff-set custom.state_code (place of supply); blank → skip (staff hasn't set it). The
+// ledger's (doc_type,resource_id) unique constraint makes this idempotent. Non-throwing.
 // Accepts the draft object (preferred) or a bare draft id.
-async function assignRepairSerial(draft) {
+async function assignRepairSerial(draft, opts = {}) {
   if (!SERIAL_REPAIR) return null;
   const draftId = (draft && typeof draft === 'object') ? draft.id : draft;
+  const docType = opts.free ? 'free_service' : 'customer_service';
   try {
     const deps  = SERIAL_DEPS();
     const token = await getShopifyToken();
@@ -339,12 +341,12 @@ async function assignRepairSerial(draft) {
       return null;
     }
     const r = await serialization.mintSerial(deps, {
-      docType: 'repair', storeCode,
+      docType, storeCode,
       resourceType: 'draft_order', resourceId: String(draftId),
       resourceName: (draft && typeof draft === 'object') ? draft.name : null,
       stamp: true,
     });
-    if (r.minted) console.log(`[serial] repair draft ${draftId} → ${r.serial_code}`);
+    if (r.minted) console.log(`[serial] ${docType} (repair) draft ${draftId} → ${r.serial_code}`);
     return r;
   } catch (err) {
     console.error(`[serial] repair assign failed for ${draftId}:`, err.message);
@@ -367,8 +369,9 @@ async function assignDocSerial(draft, docType, removeTag = null) {
     const storeCode = (stateTag ? stateTag.split(':')[1] : (mf.state_code || '')).toUpperCase().trim();
     if (!storeCode) { console.log(`[serial] ${docType} draft ${draft.id}: no store code yet — skipping`); return; }
 
+    // Destination is optional now — DC/b2b serials encode origin only; delivery_code (when set) is
+    // still captured on the resource for the document body, just not required to mint.
     const deliveryCode = (mf.delivery_code || '').toUpperCase().trim();
-    if (!deliveryCode) { console.log(`[serial] ${docType} draft ${draft.id}: no delivery_code yet — skipping`); return; }
 
     const r = await serialization.mintSerial(deps, {
       docType, storeCode, deliveryCode,
@@ -383,7 +386,7 @@ async function assignDocSerial(draft, docType, removeTag = null) {
   }
 }
 
-// Retires a memo/transfer serial when staff tag the draft cancel-memo / cancel-transfer (Stage 5).
+// Retires a delivery_challan/b2b serial when staff tag the draft cancel-challan / cancel-transfer.
 // Number is marked cancelled in the ledger and never reused (GST-clean audit).
 async function cancelDocSerial(draft, docType, removeTag = null) {
   try {
@@ -396,15 +399,16 @@ async function cancelDocSerial(draft, docType, removeTag = null) {
 }
 
 // Detects draft-document trigger tags and mints/retires the matching serial.
-// memo/transfer mint on `make-memo`/`make-transfer`, retire on `cancel-memo`/`cancel-transfer`.
+//   make-challan  → delivery_challan (DC-…),  retire on cancel-challan
+//   make-transfer → b2b (AURA-… ; B2B tax invoice == inter-store transfer == sale), retire on cancel-transfer
 // (PO is no longer minted here — it mints at HQ acknowledge in handlePoAction.)
 async function handleDocumentSerialTags(draft) {
   if (!SERIAL_MEMO_TRANSFER) return;
   const tags = (draft.tags || '').split(',').map(t => t.trim().toLowerCase());
-  if (tags.includes('make-memo'))          await assignDocSerial(draft, 'memo', 'make-memo');
-  else if (tags.includes('make-transfer')) await assignDocSerial(draft, 'transfer', 'make-transfer');
-  else if (tags.includes('cancel-memo'))     await cancelDocSerial(draft, 'memo', 'cancel-memo');
-  else if (tags.includes('cancel-transfer')) await cancelDocSerial(draft, 'transfer', 'cancel-transfer');
+  if (tags.includes('make-challan'))          await assignDocSerial(draft, 'delivery_challan', 'make-challan');
+  else if (tags.includes('make-transfer'))    await assignDocSerial(draft, 'b2b', 'make-transfer');
+  else if (tags.includes('cancel-challan'))   await cancelDocSerial(draft, 'delivery_challan', 'cancel-challan');
+  else if (tags.includes('cancel-transfer'))  await cancelDocSerial(draft, 'b2b', 'cancel-transfer');
 }
 
 async function handlePaymentCompletion(transaction, overrides = {}) {
@@ -867,7 +871,6 @@ app.get('/api/serial-report', async (req, res) => {
 
     let q = supabase.from('serial_ledger').select('*').order('seq', { ascending: true }).limit(10000);
     if (docType)            q = q.eq('doc_type', docType);
-    if (state)              q = q.eq('store_code', state);
     if (status !== 'all')   q = q.eq('status', status);
     if (from)               q = q.gte('created_at', new Date(from).toISOString());
     if (to)                 q = q.lte('created_at', new Date(to + 'T23:59:59Z').toISOString());
@@ -875,14 +878,18 @@ app.get('/api/serial-report', async (req, res) => {
     const { data, error } = await q;
     if (error) throw new Error(error.message);
 
-    const rows = (data || []).map(r => ({
+    // store_code may be FY-folded ("27|KA-HSR") for per-FY doc types; compare/show the bare store.
+    const bareStore = (sc) => String(sc || '').split('|').pop();
+    const filtered = state ? (data || []).filter(r => bareStore(r.store_code).toUpperCase() === state) : (data || []);
+
+    const rows = filtered.map(r => ({
       resource:       r.resource_type || '',
       name:           r.resource_name || '',
       created_at:     r.created_at ? new Date(r.created_at).toLocaleDateString('en-IN') : '',
       customer:       '',   // not tracked in the ledger
       total:          '',   // not tracked in the ledger
       document_type:  r.doc_type || '',
-      state_code:     r.store_code || '',
+      state_code:     bareStore(r.store_code),
       serial_no:      r.seq != null ? String(r.seq) : '',
       serial_code:    r.serial_code || '',
       serial_display: r.serial_code || '',
@@ -2828,8 +2835,11 @@ app.post('/api/serial/allocate', async (req, res) => {
     // at allocate time. Minted ONCE here — downstream endpoints (e.g. /api/exc-redeem) must not
     // re-mint, or the customer-facing number and the ledger row would diverge.
     if (docType === 'voucher' || docType === 'exchange_note') {
+      // EXC/VCH are now per-store (EXC27-KAHSR-0001) — the caller must pass the issuing store code.
+      const storeCode = (req.body.stateCode || req.body.storeCode || '').toUpperCase().trim();
+      if (!storeCode) return res.status(400).json({ success: false, error: `stateCode (store code) required for ${docType}` });
       const r = await serialization.mintSerial(SERIAL_DEPS(), {
-        docType, storeCode: 'ALL', resourceType: docType, resourceIdFromCode: true,
+        docType, storeCode, resourceType: docType, resourceIdFromCode: true,
       });
       return res.json({ success: true, allocated: r.minted, serial_no: r.seq, serial_code: r.serial_code, serial_display: r.serial_code });
     }
@@ -2974,13 +2984,10 @@ async function runSerialBackfill(req, res) {
       if (!state) { skipped.push({ name: o.name, reason: 'no-state_code' }); continue; }
 
       if (dryRun) {
-        if (sim[state] == null) {
-          const { data: cnt } = await supabase.from('serial_counters')
-            .select('current_value').eq('doc_type', docType).eq('state_code', state).maybeSingle();
-          sim[state] = cnt ? Number(cnt.current_value) : 1000;
-        }
+        if (sim[state] == null) sim[state] = 0;
         sim[state] += 1;
-        processed.push({ name: o.name, state, predicted_serial_code: `TMNT-${state}-${sim[state]}` });
+        // Approximate only — the live allocate path resolves the real FY-folded counter + format.
+        processed.push({ name: o.name, state, predicted_serial_code: `${docType} ${state} #~${sim[state]} (approx; run live for the real serial)` });
       } else {
         const r = await serialization.allocateAndStamp(deps, { docType, orderId: String(o.id), stateCode: state });
         processed.push({ name: o.name, state, serial_code: r.serial_code, stamped: r.stamped });
@@ -3096,12 +3103,15 @@ async function runSerialRestamp(req, res) {
       // across but drops state_code, so a state-only backfill isn't enough; we rewrite the lot.
       // writeSerialMetafields skips blank values, so a ledger row with no store_code simply
       // leaves state_code untouched. Counters are NOT advanced — these are the existing numbers.
+      // store_code may be FY-folded (e.g. "27|KA-HSR") for per-FY doc types; the staff-facing
+      // state_code metafield wants only the bare store code, so strip any "FY|" prefix.
+      const bareStore = String(row.store_code || '').split('|').pop();
       const fields = {
         document_type:  row.doc_type,
         serial_no:      row.seq,
         serial_code:    row.serial_code,
         serial_display: row.serial_code, // customer_order display == code
-        state_code:     row.store_code || '',
+        state_code:     bareStore === 'ALL' ? '' : bareStore,
       };
 
       if (!apply) { report.push({ name: row.resource_name, serial_code: row.serial_code, store_code: row.store_code, action: 'would-stamp', fields }); continue; }
@@ -3898,9 +3908,9 @@ app.post('/api/exc-void', async (req, res) => {
       { headers, timeout: 10000 }
     );
 
-    // Cancel the ledger serial by seq (parsed from EXC-YYYY-NNNN — shares only the seq with the ledger).
-    const seq = parseInt(String(excNumber).split('-').pop(), 10);
-    const cancelled = await serialization.cancelSerial(SERIAL_DEPS(), { docType: 'exchange_note', seq });
+    // Cancel the ledger serial by its full code (resource_id). seq is no longer unique now that the
+    // exchange_note counter resets per FY, so EXC-27-0001 must be matched whole, not by seq alone.
+    const cancelled = await serialization.cancelSerial(SERIAL_DEPS(), { docType: 'exchange_note', resourceId: String(excNumber) });
     return res.json({ success: true, draftId: newDraftId, excNumber, serialCancelled: !!cancelled });
   } catch (err) {
     console.error('exc-void error:', err.message);
