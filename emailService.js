@@ -567,8 +567,8 @@ function buildCreditNoteHtml({ customerName, cnNumber, creditValue, validUntil, 
       <table width="100%" cellpadding="0" cellspacing="0">
         <tr><td style="padding:28px 30px 10px 30px; text-align:center;">
           <p style="font-size:13px; color:#999999; margin-bottom:8px;">Original Order ${originalOrder}</p>
-          <h2 style="font-size:22px; color:#000000; margin-bottom:16px;">Your Exchange Voucher</h2>
-          <p style="font-size:14px; color:#444444; line-height:1.6;">Hi <strong>${customerName}</strong>, your exchange has been processed. Here are your voucher details.</p>
+          <h2 style="font-size:22px; color:#000000; margin-bottom:16px;">Your Voucher</h2>
+          <p style="font-size:14px; color:#444444; line-height:1.6;">Hi <strong>${customerName}</strong>, your store-credit voucher is ready. Use the code below on your next purchase — here are the details.</p>
         </td></tr>
       </table>
 
