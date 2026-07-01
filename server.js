@@ -250,9 +250,10 @@ function getMetafieldType(key) {
   if (key === 'amount_paid' || key === 'amount_pending' ||
       key === 'exchange_note_value' || key === 'voucher_value' || key === 'amount_to_be_collected' ||
       key === 'old_gold_value' || key === 'old_gold_weight' || key === 'old_gold_purity' ||
-      key === 'gross_value' || key === 'discount_applied') return 'number_decimal';
+      key === 'gross_value' || key === 'discount_applied' || key === 'advance') return 'number_decimal';
   if (key === 'is_finalized') return 'boolean';
   if (key === 'gold_rate_date') return 'date_time';
+  if (key === 'advance_date') return 'date';
   if (key === 'serial_no') return 'number_integer';
   return 'single_line_text_field';
 }
@@ -2152,6 +2153,105 @@ async function syncAmountToCollect(draft) {
   console.log(`Draft ${draftOrderId}: amount_to_be_collected = ${net.toFixed(2)} (total ${total} − adjustments)`);
 }
 
+// A draft carries a CAD advance if it has a "CAD Advance" line item (one product, fixed-price variants).
+function hasCadAdvanceLine(draft) {
+  return (draft.line_items || []).some(li =>
+    /cad advance/i.test(String(li.title || '')) || /^CAD-ADV/i.test(String(li.sku || '')));
+}
+
+// CAD Advance CAPTURE (draft update): a draft carrying a CAD-Advance line + a recorded payment → stamp
+// custom.advance / advance_date (starts the 365-day clock) / advance_status='open'. The draft stays open;
+// syncAmountToCollect nets `advance` post-tax. Idempotent once advance_status is set. Never throws into
+// the webhook chain.
+async function handleAdvanceCapture(draft) {
+  try {
+    if (!hasCadAdvanceLine(draft)) return;
+    const draftOrderId = draft.id.toString();
+    const token = await getShopifyToken();
+    const { data: mfData } = await axios.get(
+      `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}/metafields.json`,
+      { headers: { 'X-Shopify-Access-Token': token }, timeout: 10000 }
+    );
+    const mf = (key) => { const m = (mfData.metafields || []).find(x => x.namespace === 'custom' && x.key === key); return m ? m.value : null; };
+    if (mf('advance_status')) return;                       // already captured
+    if (!(parseFloat(mf('amount_paid') || 0) > 0)) return;  // advance is money collected, not intent
+    const advanceAmount = (draft.line_items || [])
+      .filter(li => /cad advance/i.test(String(li.title || '')) || /^CAD-ADV/i.test(String(li.sku || '')))
+      .reduce((s, li) => s + parseFloat(li.price || 0) * (li.quantity || 0), 0);
+    if (!(advanceAmount > 0)) return;
+    const today = new Date().toISOString().slice(0, 10);
+    await updateDraftOrderMetafields(draftOrderId, {
+      advance: advanceAmount.toFixed(2), advance_date: today, advance_status: 'open',
+    });
+    console.log(`[cad-advance] captured ${advanceAmount.toFixed(2)} on draft ${draft.name || draftOrderId} (date ${today})`);
+  } catch (e) {
+    console.error(`[cad-advance] capture failed for draft ${draft?.id}:`, e.message);
+  }
+}
+
+// CAD Advance REDEEM (Path B): staff put the advance order # in intake.advance_ref on a NEW sale draft.
+// Resolve it, gate (advance_status==='open' AND ≤365 days from advance_date), then apply the advance
+// POST-tax on the new draft (custom.advance → netted by syncAmountToCollect), mark the SOURCE order
+// advance_status='redeemed' + redeemed_against, and clear the ref. On failure, tag advance-invalid:<why>.
+// Transient lookup errors leave the ref in place to retry; never throws into the chain.
+async function handleAdvanceRedeem(draft) {
+  try {
+    const draftOrderId = draft.id.toString();
+    const base = process.env.SHOPIFY_STORE_URL;
+    const token = await getShopifyToken();
+    const headers = { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' };
+    const { data: mfData } = await axios.get(
+      `${base}/admin/api/2024-01/draft_orders/${draftOrderId}/metafields.json`, { headers, timeout: 10000 });
+    const findMf = (ns, key) => (mfData.metafields || []).find(x => x.namespace === ns && x.key === key) || null;
+    const refMf = findMf('intake', 'advance_ref');
+    const ref = refMf ? String(refMf.value || '').trim() : '';
+    if (!ref) return;
+
+    const delRef = async () => {
+      try { await axios.delete(`${base}/admin/api/2024-01/metafields/${refMf.id}.json`, { headers, timeout: 10000 }); }
+      catch (e) { console.error(`[cad-advance] clear ref: ${e.message}`); }
+    };
+    const failTag = async (reason) => {
+      const tags = (draft.tags || '').split(',').map(t => t.trim()).filter(Boolean).concat([`advance-invalid: ${reason}`]);
+      await axios.put(`${base}/admin/api/2024-01/draft_orders/${draftOrderId}.json`,
+        { draft_order: { id: draftOrderId, tags: [...new Set(tags)].join(', ') } }, { headers, timeout: 10000 });
+      console.warn(`[cad-advance] ${draft.name || draftOrderId}: ${reason}`);
+    };
+
+    // Idempotent: advance already applied on this draft → just clear the ref.
+    const already = findMf('custom', 'advance');
+    if (already && parseFloat(already.value) > 0) { await delRef(); return; }
+
+    // Resolve the advance ORDER by name ("#1042" or "1042"). Transient failure → keep ref, retry later.
+    const name = ref.startsWith('#') ? ref : '#' + ref;
+    let advOrder = null, lookupFailed = false;
+    try {
+      const { data } = await axios.get(
+        `${base}/admin/api/2024-01/orders.json?status=any&name=${encodeURIComponent(name)}`, { headers, timeout: 15000 });
+      advOrder = (data.orders || []).find(o => o.name === name) || (data.orders || [])[0] || null;
+    } catch (e) { lookupFailed = true; console.error(`[cad-advance] resolve ${ref}: ${e.message}`); }
+    if (lookupFailed) return;
+    if (!advOrder) { await failTag(`not found ${ref}`); await delRef(); return; }
+
+    const { data: aMfData } = await axios.get(
+      `${base}/admin/api/2024-01/orders/${advOrder.id}/metafields.json`, { headers, timeout: 10000 });
+    const a = {}; for (const m of (aMfData.metafields || [])) if (m.namespace === 'custom') a[m.key] = m.value;
+    const advVal = parseFloat(a.advance || 0);
+    if (!(advVal > 0))               { await failTag(`no advance on ${ref}`); await delRef(); return; }
+    if (a.advance_status !== 'open') { await failTag(`already ${a.advance_status || 'used'}`); await delRef(); return; }
+    const days = a.advance_date ? (Date.now() - new Date(a.advance_date).getTime()) / 864e5 : 1e9;
+    if (days > 365)                  { await failTag(`expired ${a.advance_date}`); await delRef(); return; }
+
+    // PASS — apply on the new draft, mark the source redeemed, clear the ref.
+    await updateDraftOrderMetafields(draftOrderId, { advance: advVal.toFixed(2) });
+    await updateOrderMetafields(String(advOrder.id), { advance_status: 'redeemed', redeemed_against: draft.name || draftOrderId }, token);
+    await delRef();
+    console.log(`[cad-advance] redeemed ${advVal.toFixed(2)} from ${ref} → ${draft.name || draftOrderId}`);
+  } catch (e) {
+    console.error(`[cad-advance] redeem failed for draft ${draft?.id}:`, e.message);
+  }
+}
+
 // ─────────────────────────────────────────
 // Pricing Engine — routes
 // ─────────────────────────────────────────
@@ -2203,6 +2303,8 @@ app.post('/api/shopify-draft-updated', async (req, res) => {
     await handleRecalculatePriceTag(draft, { force: false });
     await handleRecalculatePriceTag(draft, { force: true });
     await handlePaymentMetafieldSync(draft);
+    await handleAdvanceCapture(draft);          // CAD: stamp advance metafields once a payment lands
+    await handleAdvanceRedeem(draft);           // CAD: apply a referenced advance (Path B), gates + refs
     await handleRepairDraftUpdate(draft, getShopifyToken, assignRepairSerial);
     await handleDocumentSerialTags(draft);      // PO/memo/transfer tags added after creation
     await syncAmountToCollect(draft);           // recompute net-to-collect after any change
