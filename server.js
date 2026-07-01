@@ -4207,6 +4207,22 @@ app.post('/api/voucher-redeem', async (req, res) => {
       m.namespace === 'custom' && m.key === 'voucher_value' && parseFloat(m.value) > 0);
     if (alreadySet) return res.json({ success: true, alreadyApplied: true, draftId: newDraftId, vchNumber });
 
+    // Validity + single-use gate against the ledger. If the voucher was recorded at issue, enforce it's
+    // still open and unexpired; a redemption on a DIFFERENT draft is rejected (single-use). No ledger
+    // row (legacy / issue-hook not wired) → can't verify → allow.
+    try {
+      const inst = await creditInstruments.getBySerial(supabase, { instrumentType: 'voucher', serialCode: vchNumber });
+      if (inst) {
+        const expired = inst.expires_at && new Date(inst.expires_at).getTime() < Date.now();
+        if (inst.status === 'voided')
+          return res.status(409).json({ success: false, error: `voucher ${vchNumber} was voided` });
+        if (inst.status === 'expired' || (inst.status === 'open' && expired))
+          return res.status(409).json({ success: false, error: `voucher ${vchNumber} expired` });
+        if (inst.status === 'redeemed' && String(inst.target_draft_id || '') !== String(newDraftId))
+          return res.status(409).json({ success: false, error: `voucher ${vchNumber} already redeemed on ${inst.target_order_name || inst.target_draft_id || 'another order'}` });
+      }
+    } catch (e) { console.error('[voucher-redeem] ledger check:', e.message); }
+
     const mfVal = (key) => {
       const m = (mfData.metafields || []).find(x => x.namespace === 'custom' && x.key === key);
       return m ? Math.abs(parseFloat(m.value) || 0) : 0;

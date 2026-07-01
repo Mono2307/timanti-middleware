@@ -83,6 +83,14 @@ async function listOpenForCustomer(supabase, { customerId, instrumentType } = {}
   return (data || []).filter(r => !(r.expires_at && new Date(r.expires_at).getTime() < now));
 }
 
+// Single instrument by (type, serial) — used to gate redemption (validity + single-use). null if none.
+async function getBySerial(supabase, { instrumentType, serialCode }) {
+  const { data, error } = await supabase.from(TABLE).select('*')
+    .eq('instrument_type', instrumentType).eq('serial_code', serialCode).maybeSingle();
+  if (error) throw new Error(`getBySerial ${serialCode}: ${error.message}`);
+  return data || null;
+}
+
 // Fetch rows for the recon report (aggregation happens in the route).
 async function fetchAll(supabase, { from, to, instrumentType } = {}) {
   let q = supabase.from(TABLE).select('*');
@@ -100,4 +108,4 @@ function effectiveStatus(row, nowMs) {
   return row.status;
 }
 
-module.exports = { upsertIssued, redeem, voidInstrument, listOpenForCustomer, fetchAll, effectiveStatus };
+module.exports = { upsertIssued, redeem, voidInstrument, getBySerial, listOpenForCustomer, fetchAll, effectiveStatus };
