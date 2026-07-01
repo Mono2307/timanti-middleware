@@ -13,6 +13,7 @@ const { createPaymentLink: createGokwikLink, cancelPaymentLink: cancelGokwikLink
 const { sendSMS } = require('./services/sms');
 const { registerRepairRoutes, handleRepairPayment, handleRepairDraftUpdate } = require('./services/repairs');
 const serialization = require('./services/serialization');
+const creditInstruments = require('./services/exchange-cn/credit_instruments');
 const { handleTypeformWebhook } = require('./services/typeform');
 
 const app = express();
@@ -3097,6 +3098,17 @@ async function freezeOnlineVoucher(order, token) {
     voucher_value:    voucherValue.toFixed(2),
   }, token);
   console.log(`[voucher-freeze] order ${order.name || order.id}: gross=${grossValue.toFixed(2)} discount_applied=${discountApplied.toFixed(2)} voucher_value=${voucherValue.toFixed(2)}`);
+
+  // Record the online voucher redemption in the credit-instrument ledger.
+  const vchCode = (codes.find(c => /^VCH/i.test(String(c.code || ''))) || {}).code;
+  if (vchCode) {
+    try {
+      await creditInstruments.redeem(supabase, {
+        instrumentType: 'voucher', serialCode: vchCode,
+        targetOrderId: order.id, targetOrderName: order.name, value: voucherValue,
+      });
+    } catch (e) { console.error('[ledger] online voucher redeem:', e.message); }
+  }
 }
 
 // orders/create + orders/update webhook → stamp a customer_order serial on online orders
@@ -4088,7 +4100,17 @@ app.post('/api/exc-redeem', async (req, res) => {
       { headers, timeout: 10000 }
     );
 
-    // NOTE: the ledger row was already minted at /api/serial/allocate — do NOT mint again here.
+    // NOTE: the serial was already minted at /api/serial/allocate — do NOT mint again here.
+    // Record the exchange note in the credit-instrument ledger (issue + immediate redemption).
+    try {
+      await creditInstruments.upsertIssued(supabase, {
+        instrumentType: 'exchange_note', serialCode: excNumber, value: Math.abs(value),
+        customerName: req.body.customerName, sourceOrderName: oldOrderNumber || null,
+      });
+      await creditInstruments.redeem(supabase, {
+        instrumentType: 'exchange_note', serialCode: excNumber, targetDraftId: newDraftId, value: Math.abs(value),
+      });
+    } catch (e) { console.error('[ledger] exc-redeem:', e.message); }
     return res.json({ success: true, draftId: newDraftId, excNumber, deducted: Math.abs(value).toFixed(2) });
   } catch (err) {
     console.error('exc-redeem error:', err.message);
@@ -4144,6 +4166,8 @@ app.post('/api/exc-void', async (req, res) => {
     // Cancel the ledger serial by its full code (resource_id). seq is no longer unique now that the
     // exchange_note counter resets per FY, so EXC-27-0001 must be matched whole, not by seq alone.
     const cancelled = await serialization.cancelSerial(SERIAL_DEPS(), { docType: 'exchange_note', resourceId: String(excNumber) });
+    try { await creditInstruments.voidInstrument(supabase, { instrumentType: 'exchange_note', serialCode: excNumber }); }
+    catch (e) { console.error('[ledger] exc-void:', e.message); }
     return res.json({ success: true, draftId: newDraftId, excNumber, serialCancelled: !!cancelled });
   } catch (err) {
     console.error('exc-void error:', err.message);
@@ -4203,6 +4227,11 @@ app.post('/api/voucher-redeem', async (req, res) => {
       { draft_order: { id: newDraftId, tags: [...new Set(newTags)].join(', ') } },
       { headers, timeout: 10000 }
     );
+    try {
+      await creditInstruments.redeem(supabase, {
+        instrumentType: 'voucher', serialCode: vchNumber, targetDraftId: newDraftId, value: Math.abs(value),
+      });
+    } catch (e) { console.error('[ledger] voucher-redeem:', e.message); }
     return res.json({ success: true, draftId: newDraftId, vchNumber, deducted: Math.abs(value).toFixed(2) });
   } catch (err) {
     console.error('voucher-redeem error:', err.message);
@@ -4255,9 +4284,130 @@ app.post('/api/voucher-void', async (req, res) => {
     );
 
     const cancelled = await serialization.cancelSerial(SERIAL_DEPS(), { docType: 'voucher', resourceId: String(vchNumber) });
+    try { await creditInstruments.voidInstrument(supabase, { instrumentType: 'voucher', serialCode: vchNumber }); }
+    catch (e) { console.error('[ledger] voucher-void:', e.message); }
     return res.json({ success: true, draftId: newDraftId, vchNumber, serialCancelled: !!cancelled });
   } catch (err) {
     console.error('voucher-void error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ─────────────────────────────────────────
+// Credit-instrument ledger — issue / open-lookup / reconciliation
+// ─────────────────────────────────────────
+
+// POST /api/credit-instrument/issue — record an issued instrument (called by the voucher Apps Script
+// at creation, and by the log-backfill). Idempotent. Body: { instrumentType, serialCode, value,
+// customerId?, customerName?, sourceOrderId?, sourceOrderName?, stateCode?, expiresAt?, status?,
+// targetOrderName? }. status='redeemed'|'voided' lets the backfill replay historical states.
+app.post('/api/credit-instrument/issue', async (req, res) => {
+  const b = req.body || {};
+  if (!b.instrumentType || !b.serialCode || !(parseFloat(b.value) > 0)) {
+    return res.status(400).json({ success: false, error: 'instrumentType, serialCode and value>0 are required' });
+  }
+  try {
+    await creditInstruments.upsertIssued(supabase, {
+      instrumentType: b.instrumentType, serialCode: b.serialCode, value: parseFloat(b.value),
+      customerId: b.customerId, customerName: b.customerName,
+      sourceOrderId: b.sourceOrderId, sourceOrderName: b.sourceOrderName,
+      stateCode: b.stateCode, expiresAt: b.expiresAt,
+    });
+    if (b.status === 'redeemed') await creditInstruments.redeem(supabase, { instrumentType: b.instrumentType, serialCode: b.serialCode, targetOrderName: b.targetOrderName, value: parseFloat(b.value) });
+    if (b.status === 'voided')   await creditInstruments.voidInstrument(supabase, { instrumentType: b.instrumentType, serialCode: b.serialCode });
+    return res.json({ success: true, serialCode: b.serialCode });
+  } catch (err) {
+    console.error('credit-instrument/issue error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// GET /api/credit-instrument/open?customerId=&type= — open instruments for a customer (drives the
+// offline "pick a voucher" dropdown). type defaults to voucher.
+app.get('/api/credit-instrument/open', async (req, res) => {
+  try {
+    const rows = await creditInstruments.listOpenForCustomer(supabase, {
+      customerId: req.query.customerId, instrumentType: req.query.type || 'voucher',
+    });
+    return res.json({ success: true, count: rows.length, rows });
+  } catch (err) {
+    console.error('credit-instrument/open error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// GET /api/recon-ledger?view=summary|outstanding|tieout&type=&from=&to=&format=json|csv
+// The joinable reconciliation report over credit_instruments. (Distinct from the ad-hoc /api/recon
+// CSV tool.) summary: issued = redeemed + outstanding + voided + expired per type/month. outstanding:
+// the open-credit liability register. tieout: redeemed instruments and their target order.
+app.get('/api/recon-ledger', async (req, res) => {
+  try {
+    const view = (req.query.view || 'summary').toLowerCase();
+    const rows = await creditInstruments.fetchAll(supabase, {
+      from: req.query.from, to: req.query.to, instrumentType: req.query.type,
+    });
+    const now = Date.now();
+    let out = [];
+
+    if (view === 'summary') {
+      const groups = {};
+      for (const r of rows) {
+        const month = String(r.issued_at || '').slice(0, 7);
+        const key = `${r.instrument_type}|${month}`;
+        const g = groups[key] || (groups[key] = {
+          instrument_type: r.instrument_type, month,
+          issued_count: 0, issued_value: 0, redeemed_count: 0, redeemed_value: 0,
+          outstanding_count: 0, outstanding_value: 0, voided_count: 0, voided_value: 0,
+          expired_count: 0, expired_value: 0,
+        });
+        const val = parseFloat(r.value) || 0;
+        g.issued_count++; g.issued_value += val;
+        const st = creditInstruments.effectiveStatus(r, now);
+        if (st === 'redeemed')      { g.redeemed_count++;    g.redeemed_value    += val; }
+        else if (st === 'voided')   { g.voided_count++;      g.voided_value      += val; }
+        else if (st === 'expired')  { g.expired_count++;     g.expired_value     += val; }
+        else                        { g.outstanding_count++; g.outstanding_value += val; }
+      }
+      out = Object.values(groups).map(g => ({
+        ...g,
+        issued_value: g.issued_value.toFixed(2), redeemed_value: g.redeemed_value.toFixed(2),
+        outstanding_value: g.outstanding_value.toFixed(2), voided_value: g.voided_value.toFixed(2),
+        expired_value: g.expired_value.toFixed(2),
+        balances: (g.redeemed_count + g.outstanding_count + g.voided_count + g.expired_count) === g.issued_count,
+      })).sort((a, b) => (a.instrument_type + a.month).localeCompare(b.instrument_type + b.month));
+
+    } else if (view === 'outstanding') {
+      out = rows.filter(r => creditInstruments.effectiveStatus(r, now) === 'open').map(r => ({
+        instrument_type: r.instrument_type, serial_code: r.serial_code, value: parseFloat(r.value).toFixed(2),
+        customer_name: r.customer_name || '', source_order_name: r.source_order_name || '',
+        issued_at: r.issued_at, expires_at: r.expires_at || '',
+        days_to_expiry: r.expires_at ? Math.round((new Date(r.expires_at).getTime() - now) / 864e5) : '',
+      })).sort((a, b) => String(a.expires_at).localeCompare(String(b.expires_at)));
+
+    } else if (view === 'tieout') {
+      out = rows.filter(r => creditInstruments.effectiveStatus(r, now) === 'redeemed').map(r => ({
+        instrument_type: r.instrument_type, serial_code: r.serial_code, value: parseFloat(r.value).toFixed(2),
+        customer_name: r.customer_name || '', source_order_name: r.source_order_name || '',
+        target_order_name: r.target_order_name || '', target_draft_id: r.target_draft_id || '',
+        redeemed_at: r.redeemed_at || '',
+      }));
+    } else {
+      return res.status(400).json({ success: false, error: `unknown view: ${view}` });
+    }
+
+    if ((req.query.format || '').toLowerCase() === 'csv') {
+      const cols = out.length ? Object.keys(out[0]) : [];
+      const csv = [cols.join(',')].concat(out.map(r => cols.map(c => {
+        const v = r[c] == null ? '' : String(r[c]);
+        return /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
+      }).join(','))).join('\n');
+      res.setHeader('Content-Type', 'text/csv');
+      res.setHeader('Content-Disposition', `attachment; filename="recon-ledger-${view}.csv"`);
+      return res.send(csv);
+    }
+    return res.json({ success: true, view, count: out.length, rows: out });
+  } catch (err) {
+    console.error('recon-ledger error:', err.message);
     return res.status(500).json({ success: false, error: err.message });
   }
 });
