@@ -249,7 +249,8 @@ function getMetafieldType(key) {
   if (key === 'gold_rate') return 'single_line_text_field';
   if (key === 'amount_paid' || key === 'amount_pending' ||
       key === 'exchange_note_value' || key === 'voucher_value' || key === 'amount_to_be_collected' ||
-      key === 'old_gold_value' || key === 'old_gold_weight' || key === 'old_gold_purity') return 'number_decimal';
+      key === 'old_gold_value' || key === 'old_gold_weight' || key === 'old_gold_purity' ||
+      key === 'gross_value' || key === 'discount_applied') return 'number_decimal';
   if (key === 'is_finalized') return 'boolean';
   if (key === 'gold_rate_date') return 'date_time';
   if (key === 'serial_no') return 'number_integer';
@@ -291,6 +292,44 @@ async function updateDraftOrderMetafields(draftOrderId, fields) {
     console.log(`✅ Metafields updated for draft ${draftOrderId}`, Object.keys(fields));
   } catch (err) {
     console.error('❌ Metafield update failed for draft', draftOrderId, ':', err.response?.data || err.message);
+  }
+}
+
+// Order-level metafield writer (mirrors updateDraftOrderMetafields for the `orders` resource). Used to
+// FREEZE reproducible values on the order (gross_value / discount_applied / voucher_value) that the tax
+// invoice and reconciliation read after the draft is gone. Accepts an optional token to reuse a webhook's.
+async function updateOrderMetafields(orderId, fields, tokenArg) {
+  try {
+    const token = tokenArg || await getShopifyToken();
+    const headers = { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' };
+    const { data: existing } = await axios.get(
+      `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/orders/${orderId}/metafields.json`,
+      { headers: { 'X-Shopify-Access-Token': token }, timeout: 10000 }
+    );
+    const existingById = {};
+    for (const mf of (existing.metafields || [])) {
+      if (mf.namespace === 'custom') existingById[mf.key] = mf.id;
+    }
+    for (const [key, value] of Object.entries(fields)) {
+      if (value === null || value === undefined || String(value).trim() === '') continue;
+      const existingId = existingById[key];
+      if (existingId) {
+        await axios.put(
+          `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/metafields/${existingId}.json`,
+          { metafield: { id: existingId, value: String(value), type: getMetafieldType(key) } },
+          { headers, timeout: 10000 }
+        );
+      } else {
+        await axios.post(
+          `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/orders/${orderId}/metafields.json`,
+          { metafield: { namespace: 'custom', key, value: String(value), type: getMetafieldType(key) } },
+          { headers, timeout: 10000 }
+        );
+      }
+    }
+    console.log(`✅ Metafields updated for order ${orderId}`, Object.keys(fields));
+  } catch (err) {
+    console.error('❌ Metafield update failed for order', orderId, ':', err.response?.data || err.message);
   }
 }
 
@@ -2903,20 +2942,82 @@ app.post('/api/serial/cancel-by-code', async (req, res) => {
   }
 });
 
+// Freeze an online-redeemed VOUCHER as a POST-tax adjustment on the order.
+// A voucher is a Shopify discount CODE (needed for online self-redemption + Shopify single-use/expiry).
+// At checkout Shopify applies it through discount_allocations, reducing the SUBTOTAL (pre-tax) — but our
+// prices are GST-inclusive and a voucher is a credit instrument, so it must be POST-tax. We reclassify:
+// freeze the VCH-identity discount into custom.voucher_value (post-tax), fold every OTHER discount
+// (ordinary promo) into custom.discount_applied (pre-tax), and freeze custom.gross_value (full,
+// pre-discount) so the tax invoice reproduces GST as (gross − discount_applied)/1.03 then − voucher.
+// Online orders are already paid at checkout and never enter the draft/deposit collection path, so this
+// re-classification is for invoice/recon reproducibility only — it does NOT re-subtract money.
+// Reads NATIVE discount objects on the webhook body (line props are absent online / flaky offline).
+// Only touches orders carrying a VCH code (offline vouchers are metafields, not codes); idempotent.
+async function freezeOnlineVoucher(order, token) {
+  const codes = order.discount_codes || [];
+  if (!codes.some(c => /^VCH/i.test(String(c.code || '')))) return; // no online voucher here
+
+  const { data: mfData } = await axios.get(
+    `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/orders/${order.id}/metafields.json`,
+    { headers: { 'X-Shopify-Access-Token': token }, timeout: 10000 }
+  );
+  const frozen = (mfData.metafields || []).find(m => m.namespace === 'custom' && m.key === 'voucher_value');
+  if (frozen && parseFloat(frozen.value) > 0) return; // already frozen
+
+  const lines = order.line_items || [];
+  const apps  = order.discount_applications || [];
+  const grossValue = lines.reduce((s, li) => s + parseFloat(li.price || 0) * (li.quantity || 0), 0);
+
+  let voucherValue = 0, discountApplied = 0;
+  apps.forEach((app, i) => {
+    let amt = 0;
+    for (const li of lines) for (const alloc of (li.discount_allocations || [])) {
+      if (Number(alloc.discount_application_index) === i) amt += parseFloat(alloc.amount || 0);
+    }
+    if (amt <= 0) return;
+    const ident = String(app.code || app.title || '');
+    if (/^VCH/i.test(ident)) voucherValue += amt; else discountApplied += amt;
+  });
+
+  // Fallback when allocations are missing: classify straight off discount_codes amounts.
+  if (voucherValue === 0 && discountApplied === 0) {
+    for (const c of codes) {
+      const amt = parseFloat(c.amount || 0);
+      if (amt <= 0) continue;
+      if (/^VCH/i.test(String(c.code || ''))) voucherValue += amt; else discountApplied += amt;
+    }
+  }
+  if (voucherValue <= 0) return; // nothing classified as a voucher — leave the order alone
+
+  await updateOrderMetafields(String(order.id), {
+    gross_value:      grossValue.toFixed(2),
+    discount_applied: discountApplied.toFixed(2),
+    voucher_value:    voucherValue.toFixed(2),
+  }, token);
+  console.log(`[voucher-freeze] order ${order.name || order.id}: gross=${grossValue.toFixed(2)} discount_applied=${discountApplied.toFixed(2)} voucher_value=${voucherValue.toFixed(2)}`);
+}
+
 // orders/create + orders/update webhook → stamp a customer_order serial on online orders
 // once staff have entered the order's custom.state_code (place of supply). Shipping province
 // is NOT used. Draft-origin orders are skipped — they're serialized on the draft and copied.
 // orders/create + orders/update → mint a customer_order serial at the ORDER level (v2 ledger).
 // Fires for BOTH online (staff set state_code on the order) and offline (state_code copied from
 // the paid draft). Mints only once store code is present; idempotent via the ledger.
+// It ALSO runs the post-tax voucher freeze (independent of the serial flag).
 app.post('/api/serial/order-serial', async (req, res) => {
   res.json({ success: true }); // ack immediately; work is fire-and-forget
-  if (!SERIAL_CUSTOMER_ORDER) return;
   const order = req.body || {};
   if (!order.id) return;
+  let token;
+  try { token = await getShopifyToken(); }
+  catch (e) { console.error(`[order-serial] token fetch failed for ${order.id}:`, e.message); return; }
+
+  // Post-tax voucher freeze — runs regardless of serial flags (only touches orders with a VCH code).
+  freezeOnlineVoucher(order, token).catch(e => console.error(`[voucher-freeze] order ${order.id}:`, e.message));
+
+  if (!SERIAL_CUSTOMER_ORDER) return;
   (async () => {
-    const deps  = SERIAL_DEPS();
-    const token = await getShopifyToken();
+    const deps = SERIAL_DEPS();
     const mf = await serialization.readSerialMetafields(deps, 'orders', String(order.id), token);
     if (mf.serial_code) return; // already numbered (v1 or prior) — NEVER re-mint, even if the ledger lacks it
     const storeCode = (mf.state_code || '').toUpperCase().trim();
@@ -3944,6 +4045,117 @@ app.post('/api/exc-void', async (req, res) => {
     return res.json({ success: true, draftId: newDraftId, excNumber, serialCancelled: !!cancelled });
   } catch (err) {
     console.error('exc-void error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ─────────────────────────────────────────
+// POST /api/voucher-redeem
+// OFFLINE voucher redemption. A voucher is a Shopify discount CODE for ONLINE self-redeem, but when
+// staff apply it at the counter we record it as a POST-tax metafield (custom.voucher_value) on the new
+// draft — exactly like an Exchange Note — so the draft total stays FULL and syncAmountToCollect nets it.
+// Staff must NOT also apply the discount code to the draft (that path is pre-tax and would double-count).
+// Body: { newDraftRef, vchNumber, vchValue, oldOrderNumber?, customerName? }. Idempotent on voucher_value.
+// The VCH serial was already minted at /api/serial/allocate. Linkage lives in tags.
+// ─────────────────────────────────────────
+app.post('/api/voucher-redeem', async (req, res) => {
+  const { newDraftRef, vchNumber, vchValue, oldOrderNumber } = req.body || {};
+  const value = parseFloat(vchValue);
+  if (!newDraftRef || !vchNumber || !(value > 0)) {
+    return res.status(400).json({ success: false, error: 'newDraftRef, vchNumber and vchValue>0 are required' });
+  }
+  try {
+    const token = await getShopifyToken();
+    const newDraftId = await resolveDraftId(newDraftRef, token);
+    if (!newDraftId) return res.status(404).json({ success: false, error: `draft "${newDraftRef}" not found` });
+    const headers = { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' };
+    const [{ data }, { data: mfData }] = await Promise.all([
+      axios.get(`${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${newDraftId}.json`, { headers, timeout: 10000 }),
+      axios.get(`${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${newDraftId}/metafields.json`, { headers, timeout: 10000 }),
+    ]);
+    const draft = data.draft_order;
+    if (!draft) return res.status(404).json({ success: false, error: `draft ${newDraftId} not found` });
+
+    // Idempotency: bail if the voucher metafield is already set (Apps Script retry-safe).
+    const alreadySet = (mfData.metafields || []).some(m =>
+      m.namespace === 'custom' && m.key === 'voucher_value' && parseFloat(m.value) > 0);
+    if (alreadySet) return res.json({ success: true, alreadyApplied: true, draftId: newDraftId, vchNumber });
+
+    const mfVal = (key) => {
+      const m = (mfData.metafields || []).find(x => x.namespace === 'custom' && x.key === key);
+      return m ? Math.abs(parseFloat(m.value) || 0) : 0;
+    };
+    // Inline net (metafield writes don't fire the draft webhook, so seed it here like exc-redeem;
+    // syncAmountToCollect re-derives the canonical value — incl. advance — on the next draft edit).
+    const adjustments  = Math.abs(value) + mfVal('exchange_note_value') + mfVal('old_gold_value');
+    const netToCollect = Math.max(0, parseFloat(draft.total_price || 0) - adjustments).toFixed(2);
+    await updateDraftOrderMetafields(newDraftId, {
+      voucher_value:          Math.abs(value).toFixed(2),
+      amount_to_be_collected: netToCollect,
+    });
+
+    const newTags = (draft.tags || '').split(',').map(t => t.trim()).filter(Boolean)
+      .concat(['vch-applied', `vch-num:${vchNumber}`, ...(oldOrderNumber ? [`vch-original:${oldOrderNumber}`] : [])]);
+    await axios.put(
+      `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${newDraftId}.json`,
+      { draft_order: { id: newDraftId, tags: [...new Set(newTags)].join(', ') } },
+      { headers, timeout: 10000 }
+    );
+    return res.json({ success: true, draftId: newDraftId, vchNumber, deducted: Math.abs(value).toFixed(2) });
+  } catch (err) {
+    console.error('voucher-redeem error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ─────────────────────────────────────────
+// POST /api/voucher-void
+// Removes an offline voucher adjustment from a (still-draft) order and cancels its ledger serial.
+// Body: { newDraftId, vchNumber }. Refuses (409) if the draft already converted. Does NOT delete the
+// Shopify discount code (managed by the voucher Apps Script / ledger).
+// ─────────────────────────────────────────
+app.post('/api/voucher-void', async (req, res) => {
+  const { newDraftId, vchNumber } = req.body || {};
+  if (!newDraftId || !vchNumber) {
+    return res.status(400).json({ success: false, error: 'newDraftId and vchNumber are required' });
+  }
+  try {
+    const token = await getShopifyToken();
+    const headers = { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' };
+    const [{ data }, { data: mfData }] = await Promise.all([
+      axios.get(`${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${newDraftId}.json`, { headers, timeout: 10000 }),
+      axios.get(`${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${newDraftId}/metafields.json`, { headers, timeout: 10000 }),
+    ]);
+    const draft = data.draft_order;
+    if (!draft) return res.status(404).json({ success: false, error: `draft ${newDraftId} not found` });
+    if (draft.status === 'completed' || draft.order_id) {
+      return res.status(409).json({ success: false, error: 'draft already completed — edit the order manually' });
+    }
+
+    const vchMf = (mfData.metafields || []).find(m => m.namespace === 'custom' && m.key === 'voucher_value');
+    if (vchMf) {
+      await axios.delete(`${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/metafields/${vchMf.id}.json`, { headers, timeout: 10000 });
+    }
+    const mfVal = (key) => {
+      const m = (mfData.metafields || []).find(x => x.namespace === 'custom' && x.key === key);
+      return m ? Math.abs(parseFloat(m.value) || 0) : 0;
+    };
+    const remaining    = mfVal('exchange_note_value') + mfVal('old_gold_value');
+    const netToCollect = Math.max(0, parseFloat(draft.total_price || 0) - remaining).toFixed(2);
+    await updateDraftOrderMetafields(newDraftId, { amount_to_be_collected: netToCollect });
+
+    const tags = (draft.tags || '').split(',').map(t => t.trim())
+      .filter(t => t && t !== 'vch-applied' && !t.startsWith('vch-num:') && !t.startsWith('vch-original:')).join(', ');
+    await axios.put(
+      `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${newDraftId}.json`,
+      { draft_order: { id: newDraftId, tags } },
+      { headers, timeout: 10000 }
+    );
+
+    const cancelled = await serialization.cancelSerial(SERIAL_DEPS(), { docType: 'voucher', resourceId: String(vchNumber) });
+    return res.json({ success: true, draftId: newDraftId, vchNumber, serialCancelled: !!cancelled });
+  } catch (err) {
+    console.error('voucher-void error:', err.message);
     return res.status(500).json({ success: false, error: err.message });
   }
 });
