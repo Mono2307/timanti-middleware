@@ -411,6 +411,28 @@ async function handleDocumentSerialTags(draft) {
   else if (tags.includes('cancel-transfer'))  await cancelDocSerial(draft, 'b2b', 'cancel-transfer');
 }
 
+// Net-to-collect base for a draft = total − ALL post-tax adjustments (exchange/voucher/old-gold/advance),
+// as frozen in custom.amount_to_be_collected by syncAmountToCollect on every draft change. Payment
+// surfaces (amount_pending, deposit balance, tags, emails) must reconcile against THIS, not the gross
+// total — otherwise a customer with adjustments is over-billed. Falls back to the raw total when the
+// field is absent (legacy drafts / webhook race / pure-online). Always returns a finite number ≥ 0.
+async function getCollectionBase(draftOrderId, fallbackTotal) {
+  const fallback = parseFloat(fallbackTotal) || 0;
+  try {
+    const token = await getShopifyToken();
+    const { data } = await axios.get(
+      `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}/metafields.json`,
+      { headers: { 'X-Shopify-Access-Token': token }, timeout: 10000 }
+    );
+    const m = (data.metafields || []).find(x => x.namespace === 'custom' && x.key === 'amount_to_be_collected');
+    const v = m ? parseFloat(m.value) : NaN;
+    return Number.isFinite(v) && v >= 0 ? v : fallback;
+  } catch (e) {
+    console.error(`getCollectionBase(${draftOrderId}) failed: ${e.message} — using raw total ${fallback}`);
+    return fallback;
+  }
+}
+
 async function handlePaymentCompletion(transaction, overrides = {}) {
   if (!transaction.shopify_draft_id) return;
   const { utr = null, paymentSource = 'pine', paymentModeOverride = null } = overrides;
@@ -454,10 +476,14 @@ async function handlePaymentCompletion(transaction, overrides = {}) {
 
     const installmentType  = deposit.payment_status === 'unpaid' ? 'advance' : 'final';
     const newAmountPaid    = parseFloat(deposit.amount_paid) + amountPaidRupees;
-    const newAmountPending = parseFloat(deposit.total_amount) - newAmountPaid;
+    // Reconcile against the net-to-collect (refreshed here so adjustments applied AFTER the deposit
+    // row was created still land), never the gross total.
+    const collectionBase   = await getCollectionBase(transaction.shopify_draft_id, deposit.total_amount);
+    const newAmountPending = collectionBase - newAmountPaid;
     const newStatus        = newAmountPending <= 0.01 ? 'paid' : 'partial';
 
     await supabase.from('store_deposits').update({
+      total_amount:   collectionBase,
       amount_paid:    newAmountPaid,
       amount_pending: Math.max(0, newAmountPending),
       payment_status: newStatus,
@@ -1279,10 +1305,14 @@ async function handleCashPaymentTag(draft) {
 
   const installmentType  = deposit.payment_status === 'unpaid' ? 'advance' : 'final';
   const newAmountPaid    = parseFloat(deposit.amount_paid) + amountRupees;
-  const newAmountPending = parseFloat(deposit.total_amount) - newAmountPaid;
+  // Reconcile against the net-to-collect (refreshed here so adjustments applied AFTER the deposit
+  // row was created still land), never the gross total.
+  const collectionBase   = await getCollectionBase(draftOrderId, deposit.total_amount);
+  const newAmountPending = collectionBase - newAmountPaid;
   const newStatus        = newAmountPending <= 0.01 ? 'paid' : 'partial';
 
   await supabase.from('store_deposits').update({
+    total_amount:   collectionBase,
     amount_paid:    newAmountPaid,
     amount_pending: Math.max(0, newAmountPending),
     payment_status: newStatus,
@@ -2040,7 +2070,7 @@ async function handlePaymentMetafieldSync(draft) {
 }
 
 // Universal net-to-collect: custom.amount_to_be_collected = draft total − ALL post-tax adjustments
-// (exchange_note_value + voucher_value + old_gold_value). Runs on every draft create/update so the
+// (exchange_note_value + voucher_value + old_gold_value + advance). Runs on every draft create/update so the
 // field is correct in EVERY scenario (plain sale, discount, voucher, exchange, old-gold), not just
 // exchange. Change-guarded so it never loops or writes a no-op. Metafield writes don't fire the
 // draft webhook, so there's no recursion.
@@ -2075,7 +2105,7 @@ async function syncAmountToCollect(draft) {
     }
   }
 
-  const net = Math.max(0, total - adj('exchange_note_value') - adj('voucher_value') - oldGoldVal);
+  const net = Math.max(0, total - adj('exchange_note_value') - adj('voucher_value') - oldGoldVal - adj('advance'));
   const current = mf('amount_to_be_collected');
   if (current === null || Math.abs(parseFloat(current) - net) >= 0.005) patch.amount_to_be_collected = net.toFixed(2);
   if (Object.keys(patch).length === 0) return; // nothing changed → skip (no-op guard)
