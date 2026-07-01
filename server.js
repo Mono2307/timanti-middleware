@@ -4428,6 +4428,73 @@ app.get('/api/recon-ledger', async (req, res) => {
   }
 });
 
+// ─────────────────────────────────────────
+// GET /api/adjustment-report?from=YYYY-MM-DD&to=YYYY-MM-DD&format=json|csv
+// Per-order SALES breakdown over a date range, read live off orders + their frozen custom metafields
+// (gross · discount · voucher · exchange · old-gold · advance · net-to-collect · paid). Complements the
+// credit-instrument /api/recon-ledger (that tracks each credit's lifecycle; this shows what was sold and
+// what adjusted it). Uses GraphQL to pull orders + metafields in pages (efficient, low store volume).
+// ─────────────────────────────────────────
+app.get('/api/adjustment-report', async (req, res) => {
+  const { from, to } = req.query;
+  if (!from || !to) return res.status(400).json({ success: false, error: 'from and to (YYYY-MM-DD) are required' });
+  const num = (v) => (parseFloat(v) || 0);
+  try {
+    const token = await getShopifyToken();
+    const search = `created_at:>=${from} created_at:<=${to}`;
+    const rows = [];
+    let cursor = null, page = 0;
+    do {
+      const query = `query($q:String!,$after:String){ orders(first:100, query:$q, after:$after, sortKey:CREATED_AT){ pageInfo{hasNextPage endCursor} edges{ node{ name createdAt customer{displayName} subtotalPriceSet{shopMoney{amount}} totalPriceSet{shopMoney{amount}} metafields(namespace:"custom", first:40){edges{node{key value}}} } } } }`;
+      const { data } = await axios.post(
+        `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/graphql.json`,
+        { query, variables: { q: search, after: cursor } },
+        { headers: { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' }, timeout: 30000 }
+      );
+      const conn = data && data.data && data.data.orders;
+      if (!conn) return res.status(502).json({ success: false, error: 'Shopify GraphQL error', detail: data && data.errors });
+      for (const e of conn.edges) {
+        const n = e.node; const mf = {};
+        for (const me of n.metafields.edges) mf[me.node.key] = me.node.value;
+        const gross = mf.gross_value != null ? num(mf.gross_value) : num(n.subtotalPriceSet.shopMoney.amount);
+        rows.push({
+          name: n.name, created_at: n.createdAt, customer: (n.customer && n.customer.displayName) || '',
+          gross_value:            gross.toFixed(2),
+          discount_applied:       num(mf.discount_applied).toFixed(2),
+          voucher_value:          num(mf.voucher_value).toFixed(2),
+          exchange_note_value:    num(mf.exchange_note_value).toFixed(2),
+          old_gold_value:         num(mf.old_gold_value).toFixed(2),
+          advance:                num(mf.advance).toFixed(2),
+          amount_to_be_collected: (mf.amount_to_be_collected != null ? num(mf.amount_to_be_collected) : num(n.totalPriceSet.shopMoney.amount)).toFixed(2),
+          amount_paid:            num(mf.amount_paid).toFixed(2),
+          total_price:            num(n.totalPriceSet.shopMoney.amount).toFixed(2),
+        });
+      }
+      cursor = conn.pageInfo.hasNextPage ? conn.pageInfo.endCursor : null;
+    } while (cursor && ++page < 50);
+
+    const sumKeys = ['gross_value','discount_applied','voucher_value','exchange_note_value','old_gold_value','advance','amount_to_be_collected','amount_paid','total_price'];
+    const totals = { name: 'TOTAL', created_at: '', customer: `${rows.length} orders` };
+    for (const k of sumKeys) totals[k] = rows.reduce((s, r) => s + num(r[k]), 0).toFixed(2);
+
+    if ((req.query.format || '').toLowerCase() === 'csv') {
+      const cols = ['name','created_at','customer', ...sumKeys];
+      const all = rows.concat([totals]);
+      const csv = [cols.join(',')].concat(all.map(r => cols.map(c => {
+        const v = r[c] == null ? '' : String(r[c]);
+        return /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
+      }).join(','))).join('\n');
+      res.setHeader('Content-Type', 'text/csv');
+      res.setHeader('Content-Disposition', `attachment; filename="adjustment-report-${from}_${to}.csv"`);
+      return res.send(csv);
+    }
+    return res.json({ success: true, count: rows.length, totals, rows });
+  } catch (err) {
+    console.error('adjustment-report error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 registerRepairRoutes(app, getShopifyToken);
 
 // ─────────────────────────────────────────

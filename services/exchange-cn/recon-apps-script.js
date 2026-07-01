@@ -34,6 +34,7 @@ function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu('📒 Recon')
     .addItem('Generate Report', 'generateReconReport')
+    .addItem('Adjustment Report (sales breakdown)', 'generateAdjustmentReport')
     .addItem('Set Up Input Cells', 'setupReconInputCells')
     .addSeparator()
     .addItem('Backfill Ledger from Logs', 'backfillLedgerFromLogs')
@@ -90,6 +91,37 @@ function generateReconReport() {
   const matrix = rows.map(function (r) { return cols.map(function (c) { return r[c] != null ? r[c] : ''; }); });
   sh.getRange(OUTPUT_START_ROW + 1, 1, matrix.length, cols.length).setValues(matrix);
   ui.alert('Report complete — ' + rows.length + ' row(s). View: ' + view);
+}
+
+// Per-order sales breakdown over B3..B4 (from/to) → GET /api/adjustment-report. Writes rows + a TOTAL.
+const ADJ_COLS = ['name','created_at','customer','gross_value','discount_applied','voucher_value',
+                  'exchange_note_value','old_gold_value','advance','amount_to_be_collected','amount_paid','total_price'];
+
+function generateAdjustmentReport() {
+  const ui = SpreadsheetApp.getUi();
+  const sh = SpreadsheetApp.getActiveSheet();
+  const from = fmtDate_(sh.getRange('B3').getValue());
+  const to   = fmtDate_(sh.getRange('B4').getValue());
+  if (!from || !to) { ui.alert('Fill From (B3) and To (B4) dates first.'); return; }
+
+  let body;
+  try {
+    const res = UrlFetchApp.fetch(MIDDLEWARE_URL + '/api/adjustment-report?from=' + from + '&to=' + to, { method: 'get', muteHttpExceptions: true });
+    if (res.getResponseCode() !== 200) { ui.alert('Report failed: ' + res.getResponseCode() + '\n' + res.getContentText()); return; }
+    body = JSON.parse(res.getContentText());
+  } catch (e) { ui.alert('Report failed: ' + e.message); return; }
+
+  const rows = (body && body.rows) || [];
+  const lastRow = sh.getLastRow();
+  if (lastRow >= OUTPUT_START_ROW) sh.getRange(OUTPUT_START_ROW, 1, lastRow - OUTPUT_START_ROW + 1, ADJ_COLS.length).clearContent();
+  sh.getRange(OUTPUT_START_ROW, 1, 1, ADJ_COLS.length).setValues([ADJ_COLS]).setFontWeight('bold');
+  if (!rows.length) { sh.getRange(OUTPUT_START_ROW + 1, 1).setValue('No orders in range.'); ui.alert('0 orders.'); return; }
+
+  const all = rows.concat([body.totals]);
+  const matrix = all.map(function (r) { return ADJ_COLS.map(function (c) { return r[c] != null ? r[c] : ''; }); });
+  sh.getRange(OUTPUT_START_ROW + 1, 1, matrix.length, ADJ_COLS.length).setValues(matrix);
+  sh.getRange(OUTPUT_START_ROW + matrix.length, 1, 1, ADJ_COLS.length).setFontWeight('bold'); // TOTAL row
+  ui.alert('Adjustment report complete — ' + rows.length + ' order(s).');
 }
 
 // dd-MM-yyyy → ISO string (midnight IST-agnostic), or '' if unparseable.
