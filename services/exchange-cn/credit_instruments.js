@@ -19,6 +19,7 @@ async function upsertIssued(supabase, p) {
     source_order_name: p.sourceOrderName || null,
     state_code:        p.stateCode || null,
     expires_at:        p.expiresAt || null,
+    price_rule_id:     p.priceRuleId != null ? String(p.priceRuleId) : null,
     status:            'open',
     updated_at:        new Date().toISOString(),
   };

@@ -4210,8 +4210,9 @@ app.post('/api/voucher-redeem', async (req, res) => {
     // Validity + single-use gate against the ledger. If the voucher was recorded at issue, enforce it's
     // still open and unexpired; a redemption on a DIFFERENT draft is rejected (single-use). No ledger
     // row (legacy / issue-hook not wired) → can't verify → allow.
+    let inst = null;
     try {
-      const inst = await creditInstruments.getBySerial(supabase, { instrumentType: 'voucher', serialCode: vchNumber });
+      inst = await creditInstruments.getBySerial(supabase, { instrumentType: 'voucher', serialCode: vchNumber });
       if (inst) {
         const expired = inst.expires_at && new Date(inst.expires_at).getTime() < Date.now();
         if (inst.status === 'voided')
@@ -4248,7 +4249,18 @@ app.post('/api/voucher-redeem', async (req, res) => {
         instrumentType: 'voucher', serialCode: vchNumber, targetDraftId: newDraftId, value: Math.abs(value),
       });
     } catch (e) { console.error('[ledger] voucher-redeem:', e.message); }
-    return res.json({ success: true, draftId: newDraftId, vchNumber, deducted: Math.abs(value).toFixed(2) });
+    // Cross-channel single-use: delete the online Shopify discount code so it can't ALSO be used at
+    // checkout (Shopify's usage_limit doesn't see this metafield redemption). Needs price_rule_id,
+    // recorded on the ledger at issue.
+    let onlineCodeKilled = false;
+    if (inst && inst.price_rule_id) {
+      try {
+        await axios.delete(`${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/price_rules/${inst.price_rule_id}.json`, { headers, timeout: 10000 });
+        onlineCodeKilled = true;
+        console.log(`[voucher-redeem] deleted online price rule ${inst.price_rule_id} for ${vchNumber}`);
+      } catch (e) { console.error('[voucher-redeem] price-rule delete:', e.message); }
+    }
+    return res.json({ success: true, draftId: newDraftId, vchNumber, deducted: Math.abs(value).toFixed(2), onlineCodeKilled });
   } catch (err) {
     console.error('voucher-redeem error:', err.message);
     return res.status(500).json({ success: false, error: err.message });
@@ -4327,7 +4339,7 @@ app.post('/api/credit-instrument/issue', async (req, res) => {
       instrumentType: b.instrumentType, serialCode: b.serialCode, value: parseFloat(b.value),
       customerId: b.customerId, customerName: b.customerName,
       sourceOrderId: b.sourceOrderId, sourceOrderName: b.sourceOrderName,
-      stateCode: b.stateCode, expiresAt: b.expiresAt,
+      stateCode: b.stateCode, expiresAt: b.expiresAt, priceRuleId: b.priceRuleId,
     });
     if (b.status === 'redeemed') await creditInstruments.redeem(supabase, { instrumentType: b.instrumentType, serialCode: b.serialCode, targetOrderName: b.targetOrderName, value: parseFloat(b.value) });
     if (b.status === 'voided')   await creditInstruments.voidInstrument(supabase, { instrumentType: b.instrumentType, serialCode: b.serialCode });

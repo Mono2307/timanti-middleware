@@ -22,6 +22,7 @@ create table if not exists credit_instruments (
   expires_at        timestamptz,                   -- vouchers: issued+1y; exchange notes: null
   voided_at         timestamptz,
   state_code        text,
+  price_rule_id     text,                          -- Shopify price rule id (voucher); deleted on redeem
   created_at        timestamptz not null default now(),
   updated_at        timestamptz not null default now(),
   constraint credit_instruments_serial_unique unique (instrument_type, serial_code)
