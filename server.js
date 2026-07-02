@@ -2282,6 +2282,61 @@ async function handleAdvanceRedeem(draft) {
   }
 }
 
+// Apply a voucher from the metafield-manager admin action. Staff add an `apply-voucher:<code>` tag;
+// this looks the voucher up in the ledger (value + validity — staff never type the amount), applies it
+// POST-tax on the draft (voucher_value + net), records the redemption, deletes the online price rule,
+// and removes the trigger tag. On failure it leaves a `voucher-invalid:<reason>` tag for the staff.
+// Never throws into the webhook chain; stripping the trigger tag re-fires the webhook harmlessly.
+async function handleApplyVoucherTag(draft) {
+  try {
+    const draftOrderId = draft.id.toString();
+    const tags = (draft.tags || '').split(',').map(t => t.trim());
+    const trigger = tags.find(t => /^apply-voucher:/i.test(t));
+    if (!trigger) return;
+    const vchNumber = trigger.slice(trigger.indexOf(':') + 1).trim();
+    const base = process.env.SHOPIFY_STORE_URL;
+    const token = await getShopifyToken();
+    const headers = { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' };
+
+    // Strip the trigger (+ any stale invalid note); optionally add fresh linkage/invalid tags. One PUT.
+    const finishTags = async (extra = []) => {
+      const kept = tags.filter(t => t && !/^apply-voucher:/i.test(t) && !/^voucher-invalid:/i.test(t)).concat(extra);
+      await axios.put(`${base}/admin/api/2024-01/draft_orders/${draftOrderId}.json`,
+        { draft_order: { id: draftOrderId, tags: [...new Set(kept)].join(', ') } }, { headers, timeout: 10000 });
+    };
+    if (!vchNumber) { await finishTags(); return; }
+
+    const inst = await creditInstruments.getBySerial(supabase, { instrumentType: 'voucher', serialCode: vchNumber });
+    if (!inst)                    { await finishTags([`voucher-invalid: ${vchNumber} not found`]); return; }
+    const value = parseFloat(inst.value);
+    if (!(value > 0))             { await finishTags([`voucher-invalid: ${vchNumber} no value`]); return; }
+    const expired = inst.expires_at && new Date(inst.expires_at).getTime() < Date.now();
+    if (inst.status === 'voided') { await finishTags([`voucher-invalid: ${vchNumber} voided`]); return; }
+    if (inst.status === 'expired' || (inst.status === 'open' && expired)) { await finishTags([`voucher-invalid: ${vchNumber} expired`]); return; }
+    if (inst.status === 'redeemed' && String(inst.target_draft_id || '') !== String(draftOrderId)) {
+      await finishTags([`voucher-invalid: ${vchNumber} already used`]); return;
+    }
+
+    const { data: mfData } = await axios.get(`${base}/admin/api/2024-01/draft_orders/${draftOrderId}/metafields.json`, { headers, timeout: 10000 });
+    const mfVal = (key) => { const m = (mfData.metafields || []).find(x => x.namespace === 'custom' && x.key === key); return m ? Math.abs(parseFloat(m.value) || 0) : 0; };
+    if (mfVal('voucher_value') > 0) { await finishTags(['vch-applied', `vch-num:${vchNumber}`]); return; } // already applied
+    const adjustments  = value + mfVal('exchange_note_value') + mfVal('old_gold_value');
+    const netToCollect = Math.max(0, parseFloat(draft.total_price || 0) - adjustments).toFixed(2);
+    await updateDraftOrderMetafields(draftOrderId, { voucher_value: value.toFixed(2), amount_to_be_collected: netToCollect });
+    await finishTags(['vch-applied', `vch-num:${vchNumber}`]);
+
+    try { await creditInstruments.redeem(supabase, { instrumentType: 'voucher', serialCode: vchNumber, targetDraftId: draftOrderId, value }); }
+    catch (e) { console.error('[apply-voucher] ledger:', e.message); }
+    if (inst.price_rule_id) {
+      try { await axios.delete(`${base}/admin/api/2024-01/price_rules/${inst.price_rule_id}.json`, { headers, timeout: 10000 }); }
+      catch (e) { console.error('[apply-voucher] price-rule delete:', e.message); }
+    }
+    console.log(`[apply-voucher] ${vchNumber} (${value}) applied to draft ${draft.name || draftOrderId}`);
+  } catch (e) {
+    console.error(`[apply-voucher] failed for draft ${draft?.id}:`, e.message);
+  }
+}
+
 // ─────────────────────────────────────────
 // Pricing Engine — routes
 // ─────────────────────────────────────────
@@ -2335,6 +2390,7 @@ app.post('/api/shopify-draft-updated', async (req, res) => {
     await handlePaymentMetafieldSync(draft);
     await handleAdvanceCapture(draft);          // CAD: stamp advance metafields once a payment lands
     await handleAdvanceRedeem(draft);           // CAD: apply a referenced advance (Path B), gates + refs
+    await handleApplyVoucherTag(draft);         // admin action: apply-voucher:<code> → redeem from ledger
     await handleRepairDraftUpdate(draft, getShopifyToken, assignRepairSerial);
     await handleDocumentSerialTags(draft);      // PO/memo/transfer tags added after creation
     await syncAmountToCollect(draft);           // recompute net-to-collect after any change
