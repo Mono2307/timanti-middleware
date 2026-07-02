@@ -4536,6 +4536,27 @@ app.get('/api/adjustment-report', async (req, res) => {
   }
 });
 
+// POST /api/recompute-payment { draftOrderId } | { orderId }
+// Recomputes Amount Pending + Payment Status off the NET-to-collect and persists them. Called directly
+// by the metafield-manager admin action right after it saves amount_paid, so the balance updates
+// WITHOUT a sync-payment tag / webhook (metafield saves don't fire the draft webhook). Idempotent.
+app.post('/api/recompute-payment', async (req, res) => {
+  const { draftOrderId, orderId } = req.body || {};
+  if (!draftOrderId && !orderId) {
+    return res.status(400).json({ success: false, error: 'draftOrderId or orderId is required' });
+  }
+  try {
+    const token = await getShopifyToken();
+    const applied = draftOrderId
+      ? await applyPaymentTagsToDraftOrder(String(draftOrderId), token)
+      : await applyPaymentTagsToOrder(String(orderId), token);
+    return res.json({ success: true, applied: !!applied });
+  } catch (err) {
+    console.error('recompute-payment error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 registerRepairRoutes(app, getShopifyToken);
 
 // ─────────────────────────────────────────
