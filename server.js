@@ -548,7 +548,7 @@ async function handlePaymentCompletion(transaction, overrides = {}) {
     await tagShopifyDraftOrder(transaction.shopify_draft_id, newAmountPaid, Math.max(0, newAmountPending), newStatus, paymentMode, installmentType);
 
     const metafieldUpdate = {
-      payment_status:  newStatus === 'paid' ? 'full' : 'partial',
+      payment_status:  newStatus === 'paid' ? 'Full' : 'Partial',  // choice-list values: Partial|Full|None
       amount_paid:     newAmountPaid.toFixed(2),
       amount_pending:  Math.max(0, newAmountPending).toFixed(2)
     };
@@ -1397,7 +1397,7 @@ async function handleCashPaymentTag(draft) {
   );
 
   const metafieldUpdate = {
-    payment_status:  newStatus === 'paid' ? 'full' : 'partial',
+    payment_status:  newStatus === 'paid' ? 'Full' : 'Partial',  // choice-list values: Partial|Full|None
     amount_paid:     newAmountPaid.toFixed(2),
     amount_pending:  Math.max(0, newAmountPending).toFixed(2)
   };
@@ -2009,7 +2009,7 @@ async function applyPaymentTagsToOrder(orderId, token) {
   const netRaw  = parseFloat(mf('amount_to_be_collected'));
   const netBase = Number.isFinite(netRaw) && netRaw >= 0 ? netRaw : totalPrice;
   const amountPending = Math.max(0, netBase - amountPaid);
-  const isFull    = isFinalized || paymentStatus === 'full' || (netBase > 0 && amountPaid > 0 && amountPending < 1);
+  const isFull    = isFinalized || String(paymentStatus || '').toLowerCase() === 'full' || (netBase > 0 && amountPaid > 0 && amountPending < 1);
   const isPartial = !isFull && amountPaid > 0;
 
   // Persist the derived balance + status on the order so re-downloads/reporting read them.
@@ -2017,7 +2017,7 @@ async function applyPaymentTagsToOrder(orderId, token) {
     const patch = {};
     const curPending = mf('amount_pending');
     if (curPending === null || Math.abs(parseFloat(curPending) - amountPending) >= 0.5) patch.amount_pending = amountPending.toFixed(2);
-    const wantStatus = isFull ? 'full' : 'partial';
+    const wantStatus = isFull ? 'Full' : 'Partial';  // choice-list values: Partial|Full|None
     if (paymentStatus !== wantStatus) patch.payment_status = wantStatus;
     if (isFull && !isFinalized) patch.is_finalized = 'true';
     if (Object.keys(patch).length) await updateOrderMetafields(orderId, patch, token);
@@ -2081,7 +2081,7 @@ async function applyPaymentTagsToDraftOrder(draftOrderId, token) {
   const netRaw  = parseFloat(mf('amount_to_be_collected'));
   const netBase = Number.isFinite(netRaw) && netRaw >= 0 ? netRaw : totalPrice;
   const amountPending = Math.max(0, netBase - amountPaid);
-  const isFull    = isFinalized || paymentStatus === 'full' || (netBase > 0 && amountPaid > 0 && amountPending < 1);
+  const isFull    = isFinalized || String(paymentStatus || '').toLowerCase() === 'full' || (netBase > 0 && amountPaid > 0 && amountPending < 1);
   const isPartial = !isFull && amountPaid > 0;
 
   // Persist the derived balance + status so the invoice/collection surfaces read them (not just tags).
@@ -2090,7 +2090,7 @@ async function applyPaymentTagsToDraftOrder(draftOrderId, token) {
     const patch = {};
     const curPending = mf('amount_pending');
     if (curPending === null || Math.abs(parseFloat(curPending) - amountPending) >= 0.5) patch.amount_pending = amountPending.toFixed(2);
-    const wantStatus = isFull ? 'full' : 'partial';
+    const wantStatus = isFull ? 'Full' : 'Partial';  // choice-list values: Partial|Full|None
     if (paymentStatus !== wantStatus) patch.payment_status = wantStatus;
     if (isFull && !isFinalized) patch.is_finalized = 'true';
     if (Object.keys(patch).length) await updateDraftOrderMetafields(draftOrderId, patch);
