@@ -2009,7 +2009,7 @@ async function applyPaymentTagsToOrder(orderId, token) {
   const netRaw  = parseFloat(mf('amount_to_be_collected'));
   const netBase = Number.isFinite(netRaw) && netRaw >= 0 ? netRaw : totalPrice;
   const amountPending = Math.max(0, netBase - amountPaid);
-  const isFull    = isFinalized || String(paymentStatus || '').toLowerCase() === 'full' || (netBase > 0 && amountPaid > 0 && amountPending < 1);
+  const isFull    = isFinalized || String(paymentStatus || '').toLowerCase() === 'full' || (amountPaid > 0 && amountPending < 1);
   const isPartial = !isFull && amountPaid > 0;
 
   // Persist the derived balance + status on the order so re-downloads/reporting read them.
@@ -2081,7 +2081,7 @@ async function applyPaymentTagsToDraftOrder(draftOrderId, token) {
   const netRaw  = parseFloat(mf('amount_to_be_collected'));
   const netBase = Number.isFinite(netRaw) && netRaw >= 0 ? netRaw : totalPrice;
   const amountPending = Math.max(0, netBase - amountPaid);
-  const isFull    = isFinalized || String(paymentStatus || '').toLowerCase() === 'full' || (netBase > 0 && amountPaid > 0 && amountPending < 1);
+  const isFull    = isFinalized || String(paymentStatus || '').toLowerCase() === 'full' || (amountPaid > 0 && amountPending < 1);
   const isPartial = !isFull && amountPaid > 0;
 
   // Persist the derived balance + status so the invoice/collection surfaces read them (not just tags).
