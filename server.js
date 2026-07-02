@@ -2001,14 +2001,27 @@ async function applyPaymentTagsToOrder(orderId, token) {
   const paymentStatus = mf('payment_status');
   const isFinalized   = mf('is_finalized') === 'true';
   const amountPaid    = parseFloat(mf('amount_paid')    || 0);
-  const amountPending = parseFloat(mf('amount_pending') || 0);
   const modeAdvance   = mf('payment_mode_advance');
   const modeFinal     = mf('payment_mode_final');
 
-  // Allow up to 1 rupee rounding difference when comparing paid vs total
-  const paidCoversTotal = totalPrice > 0 && (totalPrice - amountPaid) <= 1 && amountPending < 1;
-  const isFull    = isFinalized || paymentStatus === 'full' || paidCoversTotal;
+  // Balance reconciles against the NET-to-collect (total − post-tax adjustments), never gross.
+  // amount_pending is DERIVED. Fallback to gross when the net field is absent.
+  const netRaw  = parseFloat(mf('amount_to_be_collected'));
+  const netBase = Number.isFinite(netRaw) && netRaw >= 0 ? netRaw : totalPrice;
+  const amountPending = Math.max(0, netBase - amountPaid);
+  const isFull    = isFinalized || paymentStatus === 'full' || (netBase > 0 && amountPaid > 0 && amountPending < 1);
   const isPartial = !isFull && amountPaid > 0;
+
+  // Persist the derived balance + status on the order so re-downloads/reporting read them.
+  if (isFull || isPartial) {
+    const patch = {};
+    const curPending = mf('amount_pending');
+    if (curPending === null || Math.abs(parseFloat(curPending) - amountPending) >= 0.5) patch.amount_pending = amountPending.toFixed(2);
+    const wantStatus = isFull ? 'full' : 'partial';
+    if (paymentStatus !== wantStatus) patch.payment_status = wantStatus;
+    if (isFull && !isFinalized) patch.is_finalized = 'true';
+    if (Object.keys(patch).length) await updateOrderMetafields(orderId, patch, token);
+  }
   if (!isFull && !isPartial) return false;
 
   const isInstallmentComplete = isFull && !!modeAdvance;
@@ -2059,13 +2072,29 @@ async function applyPaymentTagsToDraftOrder(draftOrderId, token) {
   const paymentStatus = mf('payment_status');
   const isFinalized   = mf('is_finalized') === 'true';
   const amountPaid    = parseFloat(mf('amount_paid')    || 0);
-  const amountPending = parseFloat(mf('amount_pending') || 0);
   const modeAdvance   = mf('payment_mode_advance');
   const modeFinal     = mf('payment_mode_final');
 
-  const paidCoversTotal = totalPrice > 0 && (totalPrice - amountPaid) <= 1 && amountPending < 1;
-  const isFull    = isFinalized || paymentStatus === 'full' || paidCoversTotal;
+  // Balance reconciles against the NET-to-collect (total − post-tax adjustments, frozen by
+  // syncAmountToCollect), never the gross total. amount_pending is DERIVED here (staff set amount_paid,
+  // not pending). Fallback to gross when the net field is absent (legacy/online).
+  const netRaw  = parseFloat(mf('amount_to_be_collected'));
+  const netBase = Number.isFinite(netRaw) && netRaw >= 0 ? netRaw : totalPrice;
+  const amountPending = Math.max(0, netBase - amountPaid);
+  const isFull    = isFinalized || paymentStatus === 'full' || (netBase > 0 && amountPaid > 0 && amountPending < 1);
   const isPartial = !isFull && amountPaid > 0;
+
+  // Persist the derived balance + status so the invoice/collection surfaces read them (not just tags).
+  // Metafield writes don't fire the draft webhook → no loop.
+  if (isFull || isPartial) {
+    const patch = {};
+    const curPending = mf('amount_pending');
+    if (curPending === null || Math.abs(parseFloat(curPending) - amountPending) >= 0.5) patch.amount_pending = amountPending.toFixed(2);
+    const wantStatus = isFull ? 'full' : 'partial';
+    if (paymentStatus !== wantStatus) patch.payment_status = wantStatus;
+    if (isFull && !isFinalized) patch.is_finalized = 'true';
+    if (Object.keys(patch).length) await updateDraftOrderMetafields(draftOrderId, patch);
+  }
   if (!isFull && !isPartial) return false;
 
   const existingTags = (draft.tags || '').split(',').map(t => t.trim()).filter(Boolean);
