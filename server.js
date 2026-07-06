@@ -2337,6 +2337,58 @@ async function handleApplyVoucherTag(draft) {
   }
 }
 
+// Apply/reference an Exchange Note from the metafield-manager admin action. Staff add an
+// `apply-exc:<number>` tag; this looks the note up in the credit-instrument ledger (value + validity —
+// staff never type the amount), applies it POST-tax on the draft (exchange_note_value + net), records
+// the redemption, and removes the trigger tag. On failure it leaves an `exc-invalid:<reason>` tag.
+// Mirrors handleApplyVoucherTag; exchange notes carry no online price rule, so there's none to delete.
+// syncAmountToCollect re-derives amount_to_be_collected right after, so the net is authoritative there.
+async function handleApplyExcTag(draft) {
+  try {
+    const draftOrderId = draft.id.toString();
+    const tags = (draft.tags || '').split(',').map(t => t.trim());
+    const trigger = tags.find(t => /^apply-exc:/i.test(t));
+    if (!trigger) return;
+    const excNumber = trigger.slice(trigger.indexOf(':') + 1).trim();
+    const base = process.env.SHOPIFY_STORE_URL;
+    const token = await getShopifyToken();
+    const headers = { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' };
+
+    // Strip the trigger (+ any stale invalid note); optionally add fresh linkage/invalid tags. One PUT.
+    const finishTags = async (extra = []) => {
+      const kept = tags.filter(t => t && !/^apply-exc:/i.test(t) && !/^exc-invalid:/i.test(t)).concat(extra);
+      await axios.put(`${base}/admin/api/2024-01/draft_orders/${draftOrderId}.json`,
+        { draft_order: { id: draftOrderId, tags: [...new Set(kept)].join(', ') } }, { headers, timeout: 10000 });
+    };
+    if (!excNumber) { await finishTags(); return; }
+
+    const inst = await creditInstruments.getBySerial(supabase, { instrumentType: 'exchange_note', serialCode: excNumber });
+    if (!inst)                    { await finishTags([`exc-invalid: ${excNumber} not found`]); return; }
+    const value = parseFloat(inst.value);
+    if (!(value > 0))             { await finishTags([`exc-invalid: ${excNumber} no value`]); return; }
+    const expired = inst.expires_at && new Date(inst.expires_at).getTime() < Date.now();
+    if (inst.status === 'voided') { await finishTags([`exc-invalid: ${excNumber} voided`]); return; }
+    if (inst.status === 'expired' || (inst.status === 'open' && expired)) { await finishTags([`exc-invalid: ${excNumber} expired`]); return; }
+    if (inst.status === 'redeemed' && String(inst.target_draft_id || '') !== String(draftOrderId)) {
+      await finishTags([`exc-invalid: ${excNumber} already used`]); return;
+    }
+
+    const { data: mfData } = await axios.get(`${base}/admin/api/2024-01/draft_orders/${draftOrderId}/metafields.json`, { headers, timeout: 10000 });
+    const mfVal = (key) => { const m = (mfData.metafields || []).find(x => x.namespace === 'custom' && x.key === key); return m ? Math.abs(parseFloat(m.value) || 0) : 0; };
+    if (mfVal('exchange_note_value') > 0) { await finishTags(['exc-applied', `exc-num:${excNumber}`]); return; } // already applied
+    const adjustments  = value + mfVal('voucher_value') + mfVal('old_gold_value') + mfVal('advance');
+    const netToCollect = Math.max(0, parseFloat(draft.total_price || 0) - adjustments).toFixed(2);
+    await updateDraftOrderMetafields(draftOrderId, { exchange_note_value: value.toFixed(2), amount_to_be_collected: netToCollect });
+    await finishTags(['exc-applied', `exc-num:${excNumber}`]);
+
+    try { await creditInstruments.redeem(supabase, { instrumentType: 'exchange_note', serialCode: excNumber, targetDraftId: draftOrderId, value }); }
+    catch (e) { console.error('[apply-exc] ledger:', e.message); }
+    console.log(`[apply-exc] ${excNumber} (${value}) applied to draft ${draft.name || draftOrderId}`);
+  } catch (e) {
+    console.error(`[apply-exc] failed for draft ${draft?.id}:`, e.message);
+  }
+}
+
 // ─────────────────────────────────────────
 // Pricing Engine — routes
 // ─────────────────────────────────────────
@@ -2387,13 +2439,17 @@ app.post('/api/shopify-draft-updated', async (req, res) => {
     await handleCashPaymentTag(draft);
     await handleRecalculatePriceTag(draft, { force: false });
     await handleRecalculatePriceTag(draft, { force: true });
-    await handlePaymentMetafieldSync(draft);
     await handleAdvanceCapture(draft);          // CAD: stamp advance metafields once a payment lands
     await handleAdvanceRedeem(draft);           // CAD: apply a referenced advance (Path B), gates + refs
     await handleApplyVoucherTag(draft);         // admin action: apply-voucher:<code> → redeem from ledger
+    await handleApplyExcTag(draft);             // admin action: apply-exc:<number> → redeem exchange note from ledger
     await handleRepairDraftUpdate(draft, getShopifyToken, assignRepairSerial);
     await handleDocumentSerialTags(draft);      // PO/memo/transfer tags added after creation
-    await syncAmountToCollect(draft);           // recompute net-to-collect after any change
+    // Balance ordering matters: net-to-collect must be recomputed AFTER every adjustment above
+    // (voucher / advance / exchange / old-gold), and amount_pending is DERIVED off that fresh net —
+    // so the payment sync runs LAST. (Previously it ran before the adjustments, leaving pending stale.)
+    await syncAmountToCollect(draft);           // recompute net-to-collect after ALL adjustments above
+    await handlePaymentMetafieldSync(draft);    // derive amount_pending off the FRESH net (must run last)
 
     console.log(`Draft updated webhook: #${draft.name} — tag handlers complete`);
   } catch (err) {
