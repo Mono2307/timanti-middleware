@@ -13,6 +13,7 @@ const { createPaymentLink: createGokwikLink, cancelPaymentLink: cancelGokwikLink
 const { sendSMS } = require('./services/sms');
 const { registerRepairRoutes, handleRepairPayment, handleRepairDraftUpdate } = require('./services/repairs');
 const serialization = require('./services/serialization');
+const creditInstruments = require('./services/exchange-cn/credit_instruments');
 const { handleTypeformWebhook } = require('./services/typeform');
 
 const app = express();
@@ -249,9 +250,11 @@ function getMetafieldType(key) {
   if (key === 'gold_rate') return 'single_line_text_field';
   if (key === 'amount_paid' || key === 'amount_pending' ||
       key === 'exchange_note_value' || key === 'voucher_value' || key === 'amount_to_be_collected' ||
-      key === 'old_gold_value' || key === 'old_gold_weight' || key === 'old_gold_purity') return 'number_decimal';
+      key === 'old_gold_value' || key === 'old_gold_weight' || key === 'old_gold_purity' ||
+      key === 'gross_value' || key === 'discount_applied' || key === 'advance') return 'number_decimal';
   if (key === 'is_finalized') return 'boolean';
   if (key === 'gold_rate_date') return 'date_time';
+  if (key === 'advance_date') return 'date';
   if (key === 'serial_no') return 'number_integer';
   return 'single_line_text_field';
 }
@@ -291,6 +294,44 @@ async function updateDraftOrderMetafields(draftOrderId, fields) {
     console.log(`✅ Metafields updated for draft ${draftOrderId}`, Object.keys(fields));
   } catch (err) {
     console.error('❌ Metafield update failed for draft', draftOrderId, ':', err.response?.data || err.message);
+  }
+}
+
+// Order-level metafield writer (mirrors updateDraftOrderMetafields for the `orders` resource). Used to
+// FREEZE reproducible values on the order (gross_value / discount_applied / voucher_value) that the tax
+// invoice and reconciliation read after the draft is gone. Accepts an optional token to reuse a webhook's.
+async function updateOrderMetafields(orderId, fields, tokenArg) {
+  try {
+    const token = tokenArg || await getShopifyToken();
+    const headers = { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' };
+    const { data: existing } = await axios.get(
+      `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/orders/${orderId}/metafields.json`,
+      { headers: { 'X-Shopify-Access-Token': token }, timeout: 10000 }
+    );
+    const existingById = {};
+    for (const mf of (existing.metafields || [])) {
+      if (mf.namespace === 'custom') existingById[mf.key] = mf.id;
+    }
+    for (const [key, value] of Object.entries(fields)) {
+      if (value === null || value === undefined || String(value).trim() === '') continue;
+      const existingId = existingById[key];
+      if (existingId) {
+        await axios.put(
+          `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/metafields/${existingId}.json`,
+          { metafield: { id: existingId, value: String(value), type: getMetafieldType(key) } },
+          { headers, timeout: 10000 }
+        );
+      } else {
+        await axios.post(
+          `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/orders/${orderId}/metafields.json`,
+          { metafield: { namespace: 'custom', key, value: String(value), type: getMetafieldType(key) } },
+          { headers, timeout: 10000 }
+        );
+      }
+    }
+    console.log(`✅ Metafields updated for order ${orderId}`, Object.keys(fields));
+  } catch (err) {
+    console.error('❌ Metafield update failed for order', orderId, ':', err.response?.data || err.message);
   }
 }
 
@@ -411,6 +452,28 @@ async function handleDocumentSerialTags(draft) {
   else if (tags.includes('cancel-transfer'))  await cancelDocSerial(draft, 'b2b', 'cancel-transfer');
 }
 
+// Net-to-collect base for a draft = total − ALL post-tax adjustments (exchange/voucher/old-gold/advance),
+// as frozen in custom.amount_to_be_collected by syncAmountToCollect on every draft change. Payment
+// surfaces (amount_pending, deposit balance, tags, emails) must reconcile against THIS, not the gross
+// total — otherwise a customer with adjustments is over-billed. Falls back to the raw total when the
+// field is absent (legacy drafts / webhook race / pure-online). Always returns a finite number ≥ 0.
+async function getCollectionBase(draftOrderId, fallbackTotal) {
+  const fallback = parseFloat(fallbackTotal) || 0;
+  try {
+    const token = await getShopifyToken();
+    const { data } = await axios.get(
+      `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}/metafields.json`,
+      { headers: { 'X-Shopify-Access-Token': token }, timeout: 10000 }
+    );
+    const m = (data.metafields || []).find(x => x.namespace === 'custom' && x.key === 'amount_to_be_collected');
+    const v = m ? parseFloat(m.value) : NaN;
+    return Number.isFinite(v) && v >= 0 ? v : fallback;
+  } catch (e) {
+    console.error(`getCollectionBase(${draftOrderId}) failed: ${e.message} — using raw total ${fallback}`);
+    return fallback;
+  }
+}
+
 async function handlePaymentCompletion(transaction, overrides = {}) {
   if (!transaction.shopify_draft_id) return;
   const { utr = null, paymentSource = 'pine', paymentModeOverride = null } = overrides;
@@ -454,10 +517,14 @@ async function handlePaymentCompletion(transaction, overrides = {}) {
 
     const installmentType  = deposit.payment_status === 'unpaid' ? 'advance' : 'final';
     const newAmountPaid    = parseFloat(deposit.amount_paid) + amountPaidRupees;
-    const newAmountPending = parseFloat(deposit.total_amount) - newAmountPaid;
+    // Reconcile against the net-to-collect (refreshed here so adjustments applied AFTER the deposit
+    // row was created still land), never the gross total.
+    const collectionBase   = await getCollectionBase(transaction.shopify_draft_id, deposit.total_amount);
+    const newAmountPending = collectionBase - newAmountPaid;
     const newStatus        = newAmountPending <= 0.01 ? 'paid' : 'partial';
 
     await supabase.from('store_deposits').update({
+      total_amount:   collectionBase,
       amount_paid:    newAmountPaid,
       amount_pending: Math.max(0, newAmountPending),
       payment_status: newStatus,
@@ -481,7 +548,7 @@ async function handlePaymentCompletion(transaction, overrides = {}) {
     await tagShopifyDraftOrder(transaction.shopify_draft_id, newAmountPaid, Math.max(0, newAmountPending), newStatus, paymentMode, installmentType);
 
     const metafieldUpdate = {
-      payment_status:  newStatus === 'paid' ? 'full' : 'partial',
+      payment_status:  newStatus === 'paid' ? 'Full' : 'Partial',  // choice-list values: Partial|Full|None
       amount_paid:     newAmountPaid.toFixed(2),
       amount_pending:  Math.max(0, newAmountPending).toFixed(2)
     };
@@ -1279,10 +1346,14 @@ async function handleCashPaymentTag(draft) {
 
   const installmentType  = deposit.payment_status === 'unpaid' ? 'advance' : 'final';
   const newAmountPaid    = parseFloat(deposit.amount_paid) + amountRupees;
-  const newAmountPending = parseFloat(deposit.total_amount) - newAmountPaid;
+  // Reconcile against the net-to-collect (refreshed here so adjustments applied AFTER the deposit
+  // row was created still land), never the gross total.
+  const collectionBase   = await getCollectionBase(draftOrderId, deposit.total_amount);
+  const newAmountPending = collectionBase - newAmountPaid;
   const newStatus        = newAmountPending <= 0.01 ? 'paid' : 'partial';
 
   await supabase.from('store_deposits').update({
+    total_amount:   collectionBase,
     amount_paid:    newAmountPaid,
     amount_pending: Math.max(0, newAmountPending),
     payment_status: newStatus,
@@ -1326,7 +1397,7 @@ async function handleCashPaymentTag(draft) {
   );
 
   const metafieldUpdate = {
-    payment_status:  newStatus === 'paid' ? 'full' : 'partial',
+    payment_status:  newStatus === 'paid' ? 'Full' : 'Partial',  // choice-list values: Partial|Full|None
     amount_paid:     newAmountPaid.toFixed(2),
     amount_pending:  Math.max(0, newAmountPending).toFixed(2)
   };
@@ -1407,8 +1478,10 @@ async function fetchItemMeta(item, token) {
 // Bootstraps _gold_rate from variant if not already locked. Does NOT change price.
 async function hydrateItemFromVariant(item, token) {
   const { varMf, prodMf } = await fetchItemMeta(item, token);
-  const grossWt    = parseFloat(varMf.gross_wt   || 0);
-  const netWt      = parseFloat(varMf.net_wt      || 0);
+  // Variant weight metafields: catalog uses net_metal_weight_g / total_metal_weight_g.
+  // Keep the legacy net_wt / gross_wt keys as fallbacks for any older variants.
+  const grossWt    = parseFloat(varMf.gross_wt || varMf.total_metal_weight_g || 0);
+  const netWt      = parseFloat(varMf.net_wt   || varMf.net_metal_weight_g   || 0);
   const diaCts     = parseFloat(prodMf.totaldiamondweight || 0);
   const gemCts     = parseFloat(prodMf.gemstone_weight    || 0);
   const goldVal    = parseFloat(varMf.price_breakup_gold    || 0) * item.quantity;
@@ -1587,7 +1660,7 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
           const iProps = {};
           for (const p of (item.properties || [])) iProps[p.name] = p.value;
 
-          const varNetWt   = parseFloat(vMf.net_wt || 0);
+          const varNetWt   = parseFloat(vMf.net_wt || vMf.net_metal_weight_g || 0);
           const varGoldPbp = parseFloat(vMf.price_breakup_gold || 0) * item.quantity;
           const varRate    = parseFloat(vMf.gold_rate || 0);
           const lockedGold = parseFloat((iProps['Gold'] || '').replace('Rs', '').trim()) || 0;
@@ -1928,14 +2001,27 @@ async function applyPaymentTagsToOrder(orderId, token) {
   const paymentStatus = mf('payment_status');
   const isFinalized   = mf('is_finalized') === 'true';
   const amountPaid    = parseFloat(mf('amount_paid')    || 0);
-  const amountPending = parseFloat(mf('amount_pending') || 0);
   const modeAdvance   = mf('payment_mode_advance');
   const modeFinal     = mf('payment_mode_final');
 
-  // Allow up to 1 rupee rounding difference when comparing paid vs total
-  const paidCoversTotal = totalPrice > 0 && (totalPrice - amountPaid) <= 1 && amountPending < 1;
-  const isFull    = isFinalized || paymentStatus === 'full' || paidCoversTotal;
+  // Balance reconciles against the NET-to-collect (total − post-tax adjustments), never gross.
+  // amount_pending is DERIVED. Fallback to gross when the net field is absent.
+  const netRaw  = parseFloat(mf('amount_to_be_collected'));
+  const netBase = Number.isFinite(netRaw) && netRaw >= 0 ? netRaw : totalPrice;
+  const amountPending = Math.max(0, netBase - amountPaid);
+  const isFull    = isFinalized || String(paymentStatus || '').toLowerCase() === 'full' || (amountPaid > 0 && amountPending < 1);
   const isPartial = !isFull && amountPaid > 0;
+
+  // Persist the derived balance + status on the order so re-downloads/reporting read them.
+  if (isFull || isPartial) {
+    const patch = {};
+    const curPending = mf('amount_pending');
+    if (curPending === null || Math.abs(parseFloat(curPending) - amountPending) >= 0.5) patch.amount_pending = amountPending.toFixed(2);
+    const wantStatus = isFull ? 'Full' : 'Partial';  // choice-list values: Partial|Full|None
+    if (paymentStatus !== wantStatus) patch.payment_status = wantStatus;
+    if (isFull && !isFinalized) patch.is_finalized = 'true';
+    if (Object.keys(patch).length) await updateOrderMetafields(orderId, patch, token);
+  }
   if (!isFull && !isPartial) return false;
 
   const isInstallmentComplete = isFull && !!modeAdvance;
@@ -1986,13 +2072,29 @@ async function applyPaymentTagsToDraftOrder(draftOrderId, token) {
   const paymentStatus = mf('payment_status');
   const isFinalized   = mf('is_finalized') === 'true';
   const amountPaid    = parseFloat(mf('amount_paid')    || 0);
-  const amountPending = parseFloat(mf('amount_pending') || 0);
   const modeAdvance   = mf('payment_mode_advance');
   const modeFinal     = mf('payment_mode_final');
 
-  const paidCoversTotal = totalPrice > 0 && (totalPrice - amountPaid) <= 1 && amountPending < 1;
-  const isFull    = isFinalized || paymentStatus === 'full' || paidCoversTotal;
+  // Balance reconciles against the NET-to-collect (total − post-tax adjustments, frozen by
+  // syncAmountToCollect), never the gross total. amount_pending is DERIVED here (staff set amount_paid,
+  // not pending). Fallback to gross when the net field is absent (legacy/online).
+  const netRaw  = parseFloat(mf('amount_to_be_collected'));
+  const netBase = Number.isFinite(netRaw) && netRaw >= 0 ? netRaw : totalPrice;
+  const amountPending = Math.max(0, netBase - amountPaid);
+  const isFull    = isFinalized || String(paymentStatus || '').toLowerCase() === 'full' || (amountPaid > 0 && amountPending < 1);
   const isPartial = !isFull && amountPaid > 0;
+
+  // Persist the derived balance + status so the invoice/collection surfaces read them (not just tags).
+  // Metafield writes don't fire the draft webhook → no loop.
+  if (isFull || isPartial) {
+    const patch = {};
+    const curPending = mf('amount_pending');
+    if (curPending === null || Math.abs(parseFloat(curPending) - amountPending) >= 0.5) patch.amount_pending = amountPending.toFixed(2);
+    const wantStatus = isFull ? 'Full' : 'Partial';  // choice-list values: Partial|Full|None
+    if (paymentStatus !== wantStatus) patch.payment_status = wantStatus;
+    if (isFull && !isFinalized) patch.is_finalized = 'true';
+    if (Object.keys(patch).length) await updateDraftOrderMetafields(draftOrderId, patch);
+  }
   if (!isFull && !isPartial) return false;
 
   const existingTags = (draft.tags || '').split(',').map(t => t.trim()).filter(Boolean);
@@ -2038,7 +2140,7 @@ async function handlePaymentMetafieldSync(draft) {
 }
 
 // Universal net-to-collect: custom.amount_to_be_collected = draft total − ALL post-tax adjustments
-// (exchange_note_value + voucher_value + old_gold_value). Runs on every draft create/update so the
+// (exchange_note_value + voucher_value + old_gold_value + advance). Runs on every draft create/update so the
 // field is correct in EVERY scenario (plain sale, discount, voucher, exchange, old-gold), not just
 // exchange. Change-guarded so it never loops or writes a no-op. Metafield writes don't fire the
 // draft webhook, so there's no recursion.
@@ -2073,12 +2175,218 @@ async function syncAmountToCollect(draft) {
     }
   }
 
-  const net = Math.max(0, total - adj('exchange_note_value') - adj('voucher_value') - oldGoldVal);
+  const net = Math.max(0, total - adj('exchange_note_value') - adj('voucher_value') - oldGoldVal - adj('advance'));
   const current = mf('amount_to_be_collected');
   if (current === null || Math.abs(parseFloat(current) - net) >= 0.005) patch.amount_to_be_collected = net.toFixed(2);
   if (Object.keys(patch).length === 0) return; // nothing changed → skip (no-op guard)
   await updateDraftOrderMetafields(draftOrderId, patch);
   console.log(`Draft ${draftOrderId}: amount_to_be_collected = ${net.toFixed(2)} (total ${total} − adjustments)`);
+}
+
+// A draft carries a CAD advance if it has a "CAD Advance" line item (one product, fixed-price variants).
+function hasCadAdvanceLine(draft) {
+  return (draft.line_items || []).some(li =>
+    /cad advance/i.test(String(li.title || '')) || /^CAD-ADV/i.test(String(li.sku || '')));
+}
+
+// CAD Advance CAPTURE (draft update): a draft carrying a CAD-Advance line + a recorded payment → stamp
+// custom.advance / advance_date (starts the 365-day clock) / advance_status='open'. The draft stays open;
+// syncAmountToCollect nets `advance` post-tax. Idempotent once advance_status is set. Never throws into
+// the webhook chain.
+async function handleAdvanceCapture(draft) {
+  try {
+    if (!hasCadAdvanceLine(draft)) return;
+    const draftOrderId = draft.id.toString();
+    const token = await getShopifyToken();
+    const { data: mfData } = await axios.get(
+      `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}/metafields.json`,
+      { headers: { 'X-Shopify-Access-Token': token }, timeout: 10000 }
+    );
+    const mf = (key) => { const m = (mfData.metafields || []).find(x => x.namespace === 'custom' && x.key === key); return m ? m.value : null; };
+    if (mf('advance_status')) return;                       // already captured
+    if (!(parseFloat(mf('amount_paid') || 0) > 0)) return;  // advance is money collected, not intent
+    const advanceAmount = (draft.line_items || [])
+      .filter(li => /cad advance/i.test(String(li.title || '')) || /^CAD-ADV/i.test(String(li.sku || '')))
+      .reduce((s, li) => s + parseFloat(li.price || 0) * (li.quantity || 0), 0);
+    if (!(advanceAmount > 0)) return;
+    const today = new Date().toISOString().slice(0, 10);
+    await updateDraftOrderMetafields(draftOrderId, {
+      advance: advanceAmount.toFixed(2), advance_date: today, advance_status: 'open',
+    });
+    console.log(`[cad-advance] captured ${advanceAmount.toFixed(2)} on draft ${draft.name || draftOrderId} (date ${today})`);
+  } catch (e) {
+    console.error(`[cad-advance] capture failed for draft ${draft?.id}:`, e.message);
+  }
+}
+
+// CAD Advance REDEEM (Path B): staff put the advance order # in intake.advance_ref on a NEW sale draft.
+// Resolve it, gate (advance_status==='open' AND ≤365 days from advance_date), then apply the advance
+// POST-tax on the new draft (custom.advance → netted by syncAmountToCollect), mark the SOURCE order
+// advance_status='redeemed' + redeemed_against, and clear the ref. On failure, tag advance-invalid:<why>.
+// Transient lookup errors leave the ref in place to retry; never throws into the chain.
+async function handleAdvanceRedeem(draft) {
+  try {
+    const draftOrderId = draft.id.toString();
+    const base = process.env.SHOPIFY_STORE_URL;
+    const token = await getShopifyToken();
+    const headers = { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' };
+    const { data: mfData } = await axios.get(
+      `${base}/admin/api/2024-01/draft_orders/${draftOrderId}/metafields.json`, { headers, timeout: 10000 });
+    const findMf = (ns, key) => (mfData.metafields || []).find(x => x.namespace === ns && x.key === key) || null;
+    const refMf = findMf('intake', 'advance_ref');
+    const ref = refMf ? String(refMf.value || '').trim() : '';
+    if (!ref) return;
+
+    const delRef = async () => {
+      try { await axios.delete(`${base}/admin/api/2024-01/metafields/${refMf.id}.json`, { headers, timeout: 10000 }); }
+      catch (e) { console.error(`[cad-advance] clear ref: ${e.message}`); }
+    };
+    const failTag = async (reason) => {
+      const tags = (draft.tags || '').split(',').map(t => t.trim()).filter(Boolean).concat([`advance-invalid: ${reason}`]);
+      await axios.put(`${base}/admin/api/2024-01/draft_orders/${draftOrderId}.json`,
+        { draft_order: { id: draftOrderId, tags: [...new Set(tags)].join(', ') } }, { headers, timeout: 10000 });
+      console.warn(`[cad-advance] ${draft.name || draftOrderId}: ${reason}`);
+    };
+
+    // Idempotent: advance already applied on this draft → just clear the ref.
+    const already = findMf('custom', 'advance');
+    if (already && parseFloat(already.value) > 0) { await delRef(); return; }
+
+    // Resolve the advance ORDER by name ("#1042" or "1042"). Transient failure → keep ref, retry later.
+    const name = ref.startsWith('#') ? ref : '#' + ref;
+    let advOrder = null, lookupFailed = false;
+    try {
+      const { data } = await axios.get(
+        `${base}/admin/api/2024-01/orders.json?status=any&name=${encodeURIComponent(name)}`, { headers, timeout: 15000 });
+      advOrder = (data.orders || []).find(o => o.name === name) || (data.orders || [])[0] || null;
+    } catch (e) { lookupFailed = true; console.error(`[cad-advance] resolve ${ref}: ${e.message}`); }
+    if (lookupFailed) return;
+    if (!advOrder) { await failTag(`not found ${ref}`); await delRef(); return; }
+
+    const { data: aMfData } = await axios.get(
+      `${base}/admin/api/2024-01/orders/${advOrder.id}/metafields.json`, { headers, timeout: 10000 });
+    const a = {}; for (const m of (aMfData.metafields || [])) if (m.namespace === 'custom') a[m.key] = m.value;
+    const advVal = parseFloat(a.advance || 0);
+    if (!(advVal > 0))               { await failTag(`no advance on ${ref}`); await delRef(); return; }
+    if (a.advance_status !== 'open') { await failTag(`already ${a.advance_status || 'used'}`); await delRef(); return; }
+    const days = a.advance_date ? (Date.now() - new Date(a.advance_date).getTime()) / 864e5 : 1e9;
+    if (days > 365)                  { await failTag(`expired ${a.advance_date}`); await delRef(); return; }
+
+    // PASS — apply on the new draft, mark the source redeemed, clear the ref.
+    await updateDraftOrderMetafields(draftOrderId, { advance: advVal.toFixed(2) });
+    await updateOrderMetafields(String(advOrder.id), { advance_status: 'redeemed', redeemed_against: draft.name || draftOrderId }, token);
+    await delRef();
+    console.log(`[cad-advance] redeemed ${advVal.toFixed(2)} from ${ref} → ${draft.name || draftOrderId}`);
+  } catch (e) {
+    console.error(`[cad-advance] redeem failed for draft ${draft?.id}:`, e.message);
+  }
+}
+
+// Apply a voucher from the metafield-manager admin action. Staff add an `apply-voucher:<code>` tag;
+// this looks the voucher up in the ledger (value + validity — staff never type the amount), applies it
+// POST-tax on the draft (voucher_value + net), records the redemption, deletes the online price rule,
+// and removes the trigger tag. On failure it leaves a `voucher-invalid:<reason>` tag for the staff.
+// Never throws into the webhook chain; stripping the trigger tag re-fires the webhook harmlessly.
+async function handleApplyVoucherTag(draft) {
+  try {
+    const draftOrderId = draft.id.toString();
+    const tags = (draft.tags || '').split(',').map(t => t.trim());
+    const trigger = tags.find(t => /^apply-voucher:/i.test(t));
+    if (!trigger) return;
+    const vchNumber = trigger.slice(trigger.indexOf(':') + 1).trim();
+    const base = process.env.SHOPIFY_STORE_URL;
+    const token = await getShopifyToken();
+    const headers = { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' };
+
+    // Strip the trigger (+ any stale invalid note); optionally add fresh linkage/invalid tags. One PUT.
+    const finishTags = async (extra = []) => {
+      const kept = tags.filter(t => t && !/^apply-voucher:/i.test(t) && !/^voucher-invalid:/i.test(t)).concat(extra);
+      await axios.put(`${base}/admin/api/2024-01/draft_orders/${draftOrderId}.json`,
+        { draft_order: { id: draftOrderId, tags: [...new Set(kept)].join(', ') } }, { headers, timeout: 10000 });
+    };
+    if (!vchNumber) { await finishTags(); return; }
+
+    const inst = await creditInstruments.getBySerial(supabase, { instrumentType: 'voucher', serialCode: vchNumber });
+    if (!inst)                    { await finishTags([`voucher-invalid: ${vchNumber} not found`]); return; }
+    const value = parseFloat(inst.value);
+    if (!(value > 0))             { await finishTags([`voucher-invalid: ${vchNumber} no value`]); return; }
+    const expired = inst.expires_at && new Date(inst.expires_at).getTime() < Date.now();
+    if (inst.status === 'voided') { await finishTags([`voucher-invalid: ${vchNumber} voided`]); return; }
+    if (inst.status === 'expired' || (inst.status === 'open' && expired)) { await finishTags([`voucher-invalid: ${vchNumber} expired`]); return; }
+    if (inst.status === 'redeemed' && String(inst.target_draft_id || '') !== String(draftOrderId)) {
+      await finishTags([`voucher-invalid: ${vchNumber} already used`]); return;
+    }
+
+    const { data: mfData } = await axios.get(`${base}/admin/api/2024-01/draft_orders/${draftOrderId}/metafields.json`, { headers, timeout: 10000 });
+    const mfVal = (key) => { const m = (mfData.metafields || []).find(x => x.namespace === 'custom' && x.key === key); return m ? Math.abs(parseFloat(m.value) || 0) : 0; };
+    if (mfVal('voucher_value') > 0) { await finishTags(['vch-applied', `vch-num:${vchNumber}`]); return; } // already applied
+    const adjustments  = value + mfVal('exchange_note_value') + mfVal('old_gold_value');
+    const netToCollect = Math.max(0, parseFloat(draft.total_price || 0) - adjustments).toFixed(2);
+    await updateDraftOrderMetafields(draftOrderId, { voucher_value: value.toFixed(2), amount_to_be_collected: netToCollect });
+    await finishTags(['vch-applied', `vch-num:${vchNumber}`]);
+
+    try { await creditInstruments.redeem(supabase, { instrumentType: 'voucher', serialCode: vchNumber, targetDraftId: draftOrderId, value }); }
+    catch (e) { console.error('[apply-voucher] ledger:', e.message); }
+    if (inst.price_rule_id) {
+      try { await axios.delete(`${base}/admin/api/2024-01/price_rules/${inst.price_rule_id}.json`, { headers, timeout: 10000 }); }
+      catch (e) { console.error('[apply-voucher] price-rule delete:', e.message); }
+    }
+    console.log(`[apply-voucher] ${vchNumber} (${value}) applied to draft ${draft.name || draftOrderId}`);
+  } catch (e) {
+    console.error(`[apply-voucher] failed for draft ${draft?.id}:`, e.message);
+  }
+}
+
+// Apply/reference an Exchange Note from the metafield-manager admin action. Staff add an
+// `apply-exc:<number>` tag; this looks the note up in the credit-instrument ledger (value + validity —
+// staff never type the amount), applies it POST-tax on the draft (exchange_note_value + net), records
+// the redemption, and removes the trigger tag. On failure it leaves an `exc-invalid:<reason>` tag.
+// Mirrors handleApplyVoucherTag; exchange notes carry no online price rule, so there's none to delete.
+// syncAmountToCollect re-derives amount_to_be_collected right after, so the net is authoritative there.
+async function handleApplyExcTag(draft) {
+  try {
+    const draftOrderId = draft.id.toString();
+    const tags = (draft.tags || '').split(',').map(t => t.trim());
+    const trigger = tags.find(t => /^apply-exc:/i.test(t));
+    if (!trigger) return;
+    const excNumber = trigger.slice(trigger.indexOf(':') + 1).trim();
+    const base = process.env.SHOPIFY_STORE_URL;
+    const token = await getShopifyToken();
+    const headers = { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' };
+
+    // Strip the trigger (+ any stale invalid note); optionally add fresh linkage/invalid tags. One PUT.
+    const finishTags = async (extra = []) => {
+      const kept = tags.filter(t => t && !/^apply-exc:/i.test(t) && !/^exc-invalid:/i.test(t)).concat(extra);
+      await axios.put(`${base}/admin/api/2024-01/draft_orders/${draftOrderId}.json`,
+        { draft_order: { id: draftOrderId, tags: [...new Set(kept)].join(', ') } }, { headers, timeout: 10000 });
+    };
+    if (!excNumber) { await finishTags(); return; }
+
+    const inst = await creditInstruments.getBySerial(supabase, { instrumentType: 'exchange_note', serialCode: excNumber });
+    if (!inst)                    { await finishTags([`exc-invalid: ${excNumber} not found`]); return; }
+    const value = parseFloat(inst.value);
+    if (!(value > 0))             { await finishTags([`exc-invalid: ${excNumber} no value`]); return; }
+    const expired = inst.expires_at && new Date(inst.expires_at).getTime() < Date.now();
+    if (inst.status === 'voided') { await finishTags([`exc-invalid: ${excNumber} voided`]); return; }
+    if (inst.status === 'expired' || (inst.status === 'open' && expired)) { await finishTags([`exc-invalid: ${excNumber} expired`]); return; }
+    if (inst.status === 'redeemed' && String(inst.target_draft_id || '') !== String(draftOrderId)) {
+      await finishTags([`exc-invalid: ${excNumber} already used`]); return;
+    }
+
+    const { data: mfData } = await axios.get(`${base}/admin/api/2024-01/draft_orders/${draftOrderId}/metafields.json`, { headers, timeout: 10000 });
+    const mfVal = (key) => { const m = (mfData.metafields || []).find(x => x.namespace === 'custom' && x.key === key); return m ? Math.abs(parseFloat(m.value) || 0) : 0; };
+    if (mfVal('exchange_note_value') > 0) { await finishTags(['exc-applied', `exc-num:${excNumber}`]); return; } // already applied
+    const adjustments  = value + mfVal('voucher_value') + mfVal('old_gold_value') + mfVal('advance');
+    const netToCollect = Math.max(0, parseFloat(draft.total_price || 0) - adjustments).toFixed(2);
+    await updateDraftOrderMetafields(draftOrderId, { exchange_note_value: value.toFixed(2), amount_to_be_collected: netToCollect });
+    await finishTags(['exc-applied', `exc-num:${excNumber}`]);
+
+    try { await creditInstruments.redeem(supabase, { instrumentType: 'exchange_note', serialCode: excNumber, targetDraftId: draftOrderId, value }); }
+    catch (e) { console.error('[apply-exc] ledger:', e.message); }
+    console.log(`[apply-exc] ${excNumber} (${value}) applied to draft ${draft.name || draftOrderId}`);
+  } catch (e) {
+    console.error(`[apply-exc] failed for draft ${draft?.id}:`, e.message);
+  }
 }
 
 // ─────────────────────────────────────────
@@ -2131,10 +2439,17 @@ app.post('/api/shopify-draft-updated', async (req, res) => {
     await handleCashPaymentTag(draft);
     await handleRecalculatePriceTag(draft, { force: false });
     await handleRecalculatePriceTag(draft, { force: true });
-    await handlePaymentMetafieldSync(draft);
+    await handleAdvanceCapture(draft);          // CAD: stamp advance metafields once a payment lands
+    await handleAdvanceRedeem(draft);           // CAD: apply a referenced advance (Path B), gates + refs
+    await handleApplyVoucherTag(draft);         // admin action: apply-voucher:<code> → redeem from ledger
+    await handleApplyExcTag(draft);             // admin action: apply-exc:<number> → redeem exchange note from ledger
     await handleRepairDraftUpdate(draft, getShopifyToken, assignRepairSerial);
     await handleDocumentSerialTags(draft);      // PO/memo/transfer tags added after creation
-    await syncAmountToCollect(draft);           // recompute net-to-collect after any change
+    // Balance ordering matters: net-to-collect must be recomputed AFTER every adjustment above
+    // (voucher / advance / exchange / old-gold), and amount_pending is DERIVED off that fresh net —
+    // so the payment sync runs LAST. (Previously it ran before the adjustments, leaving pending stale.)
+    await syncAmountToCollect(draft);           // recompute net-to-collect after ALL adjustments above
+    await handlePaymentMetafieldSync(draft);    // derive amount_pending off the FRESH net (must run last)
 
     console.log(`Draft updated webhook: #${draft.name} — tag handlers complete`);
   } catch (err) {
@@ -2871,20 +3186,93 @@ app.post('/api/serial/cancel-by-code', async (req, res) => {
   }
 });
 
+// Freeze an online-redeemed VOUCHER as a POST-tax adjustment on the order.
+// A voucher is a Shopify discount CODE (needed for online self-redemption + Shopify single-use/expiry).
+// At checkout Shopify applies it through discount_allocations, reducing the SUBTOTAL (pre-tax) — but our
+// prices are GST-inclusive and a voucher is a credit instrument, so it must be POST-tax. We reclassify:
+// freeze the VCH-identity discount into custom.voucher_value (post-tax), fold every OTHER discount
+// (ordinary promo) into custom.discount_applied (pre-tax), and freeze custom.gross_value (full,
+// pre-discount) so the tax invoice reproduces GST as (gross − discount_applied)/1.03 then − voucher.
+// Online orders are already paid at checkout and never enter the draft/deposit collection path, so this
+// re-classification is for invoice/recon reproducibility only — it does NOT re-subtract money.
+// Reads NATIVE discount objects on the webhook body (line props are absent online / flaky offline).
+// Only touches orders carrying a VCH code (offline vouchers are metafields, not codes); idempotent.
+async function freezeOnlineVoucher(order, token) {
+  const codes = order.discount_codes || [];
+  if (!codes.some(c => /^VCH/i.test(String(c.code || '')))) return; // no online voucher here
+
+  const { data: mfData } = await axios.get(
+    `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/orders/${order.id}/metafields.json`,
+    { headers: { 'X-Shopify-Access-Token': token }, timeout: 10000 }
+  );
+  const frozen = (mfData.metafields || []).find(m => m.namespace === 'custom' && m.key === 'voucher_value');
+  if (frozen && parseFloat(frozen.value) > 0) return; // already frozen
+
+  const lines = order.line_items || [];
+  const apps  = order.discount_applications || [];
+  const grossValue = lines.reduce((s, li) => s + parseFloat(li.price || 0) * (li.quantity || 0), 0);
+
+  let voucherValue = 0, discountApplied = 0;
+  apps.forEach((app, i) => {
+    let amt = 0;
+    for (const li of lines) for (const alloc of (li.discount_allocations || [])) {
+      if (Number(alloc.discount_application_index) === i) amt += parseFloat(alloc.amount || 0);
+    }
+    if (amt <= 0) return;
+    const ident = String(app.code || app.title || '');
+    if (/^VCH/i.test(ident)) voucherValue += amt; else discountApplied += amt;
+  });
+
+  // Fallback when allocations are missing: classify straight off discount_codes amounts.
+  if (voucherValue === 0 && discountApplied === 0) {
+    for (const c of codes) {
+      const amt = parseFloat(c.amount || 0);
+      if (amt <= 0) continue;
+      if (/^VCH/i.test(String(c.code || ''))) voucherValue += amt; else discountApplied += amt;
+    }
+  }
+  if (voucherValue <= 0) return; // nothing classified as a voucher — leave the order alone
+
+  await updateOrderMetafields(String(order.id), {
+    gross_value:      grossValue.toFixed(2),
+    discount_applied: discountApplied.toFixed(2),
+    voucher_value:    voucherValue.toFixed(2),
+  }, token);
+  console.log(`[voucher-freeze] order ${order.name || order.id}: gross=${grossValue.toFixed(2)} discount_applied=${discountApplied.toFixed(2)} voucher_value=${voucherValue.toFixed(2)}`);
+
+  // Record the online voucher redemption in the credit-instrument ledger.
+  const vchCode = (codes.find(c => /^VCH/i.test(String(c.code || ''))) || {}).code;
+  if (vchCode) {
+    try {
+      await creditInstruments.redeem(supabase, {
+        instrumentType: 'voucher', serialCode: vchCode,
+        targetOrderId: order.id, targetOrderName: order.name, value: voucherValue,
+      });
+    } catch (e) { console.error('[ledger] online voucher redeem:', e.message); }
+  }
+}
+
 // orders/create + orders/update webhook → stamp a customer_order serial on online orders
 // once staff have entered the order's custom.state_code (place of supply). Shipping province
 // is NOT used. Draft-origin orders are skipped — they're serialized on the draft and copied.
 // orders/create + orders/update → mint a customer_order serial at the ORDER level (v2 ledger).
 // Fires for BOTH online (staff set state_code on the order) and offline (state_code copied from
 // the paid draft). Mints only once store code is present; idempotent via the ledger.
+// It ALSO runs the post-tax voucher freeze (independent of the serial flag).
 app.post('/api/serial/order-serial', async (req, res) => {
   res.json({ success: true }); // ack immediately; work is fire-and-forget
-  if (!SERIAL_CUSTOMER_ORDER) return;
   const order = req.body || {};
   if (!order.id) return;
+  let token;
+  try { token = await getShopifyToken(); }
+  catch (e) { console.error(`[order-serial] token fetch failed for ${order.id}:`, e.message); return; }
+
+  // Post-tax voucher freeze — runs regardless of serial flags (only touches orders with a VCH code).
+  freezeOnlineVoucher(order, token).catch(e => console.error(`[voucher-freeze] order ${order.id}:`, e.message));
+
+  if (!SERIAL_CUSTOMER_ORDER) return;
   (async () => {
-    const deps  = SERIAL_DEPS();
-    const token = await getShopifyToken();
+    const deps = SERIAL_DEPS();
     const mf = await serialization.readSerialMetafields(deps, 'orders', String(order.id), token);
     if (mf.serial_code) return; // already numbered (v1 or prior) — NEVER re-mint, even if the ledger lacks it
     const storeCode = (mf.state_code || '').toUpperCase().trim();
@@ -3765,13 +4153,18 @@ async function resolveDraftId(ref, token) {
   if (!raw) return null;
   if (/^\d+$/.test(raw)) return raw;
   const name = raw.startsWith('#') ? raw : '#' + raw;
-  const q = `query($q:String!){ draftOrders(first:1, query:$q){ nodes{ id } } }`;
-  const resp = await axios.post(
-    `${process.env.SHOPIFY_STORE_URL}/admin/api/2025-01/graphql.json`,
-    { query: q, variables: { q: `name:${name}` } },
-    { headers: { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' }, timeout: 10000 }
-  );
-  const node = resp.data?.data?.draftOrders?.nodes?.[0];
+  // GraphQL name: search is fuzzy/unreliable with "#" (it matched "#D1" for "#D139"). Scan OPEN
+  // drafts via REST and EXACT-match the name — deterministic. Exchange targets are always open.
+  const headers = { 'X-Shopify-Access-Token': token };
+  let url = `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders.json?limit=250&status=open`;
+  let node = null;
+  while (url && !node) {
+    const resp = await axios.get(url, { headers, timeout: 30000 });
+    node = (resp.data.draft_orders || []).find(d => d.name === name) || null;
+    const link = resp.headers['link'] || '';
+    const m = link.match(/<([^>]*page_info=[^>&"]+[^>]*)>;\s*rel="next"/);
+    url = (!node && m) ? m[1] : null;
+  }
   return node ? String(node.id).split('/').pop() : null;
 }
 
@@ -3848,7 +4241,17 @@ app.post('/api/exc-redeem', async (req, res) => {
       { headers, timeout: 10000 }
     );
 
-    // NOTE: the ledger row was already minted at /api/serial/allocate — do NOT mint again here.
+    // NOTE: the serial was already minted at /api/serial/allocate — do NOT mint again here.
+    // Record the exchange note in the credit-instrument ledger (issue + immediate redemption).
+    try {
+      await creditInstruments.upsertIssued(supabase, {
+        instrumentType: 'exchange_note', serialCode: excNumber, value: Math.abs(value),
+        customerName: req.body.customerName, sourceOrderName: oldOrderNumber || null,
+      });
+      await creditInstruments.redeem(supabase, {
+        instrumentType: 'exchange_note', serialCode: excNumber, targetDraftId: newDraftId, value: Math.abs(value),
+      });
+    } catch (e) { console.error('[ledger] exc-redeem:', e.message); }
     return res.json({ success: true, draftId: newDraftId, excNumber, deducted: Math.abs(value).toFixed(2) });
   } catch (err) {
     console.error('exc-redeem error:', err.message);
@@ -3904,9 +4307,364 @@ app.post('/api/exc-void', async (req, res) => {
     // Cancel the ledger serial by its full code (resource_id). seq is no longer unique now that the
     // exchange_note counter resets per FY, so EXC-27-0001 must be matched whole, not by seq alone.
     const cancelled = await serialization.cancelSerial(SERIAL_DEPS(), { docType: 'exchange_note', resourceId: String(excNumber) });
+    try { await creditInstruments.voidInstrument(supabase, { instrumentType: 'exchange_note', serialCode: excNumber }); }
+    catch (e) { console.error('[ledger] exc-void:', e.message); }
     return res.json({ success: true, draftId: newDraftId, excNumber, serialCancelled: !!cancelled });
   } catch (err) {
     console.error('exc-void error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ─────────────────────────────────────────
+// POST /api/voucher-redeem
+// OFFLINE voucher redemption. A voucher is a Shopify discount CODE for ONLINE self-redeem, but when
+// staff apply it at the counter we record it as a POST-tax metafield (custom.voucher_value) on the new
+// draft — exactly like an Exchange Note — so the draft total stays FULL and syncAmountToCollect nets it.
+// Staff must NOT also apply the discount code to the draft (that path is pre-tax and would double-count).
+// Body: { newDraftRef, vchNumber, vchValue, oldOrderNumber?, customerName? }. Idempotent on voucher_value.
+// The VCH serial was already minted at /api/serial/allocate. Linkage lives in tags.
+// ─────────────────────────────────────────
+app.post('/api/voucher-redeem', async (req, res) => {
+  const { newDraftRef, vchNumber, vchValue, oldOrderNumber } = req.body || {};
+  const value = parseFloat(vchValue);
+  if (!newDraftRef || !vchNumber || !(value > 0)) {
+    return res.status(400).json({ success: false, error: 'newDraftRef, vchNumber and vchValue>0 are required' });
+  }
+  try {
+    const token = await getShopifyToken();
+    const newDraftId = await resolveDraftId(newDraftRef, token);
+    if (!newDraftId) return res.status(404).json({ success: false, error: `draft "${newDraftRef}" not found` });
+    const headers = { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' };
+    const [{ data }, { data: mfData }] = await Promise.all([
+      axios.get(`${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${newDraftId}.json`, { headers, timeout: 10000 }),
+      axios.get(`${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${newDraftId}/metafields.json`, { headers, timeout: 10000 }),
+    ]);
+    const draft = data.draft_order;
+    if (!draft) return res.status(404).json({ success: false, error: `draft ${newDraftId} not found` });
+
+    // Idempotency: bail if the voucher metafield is already set (Apps Script retry-safe).
+    const alreadySet = (mfData.metafields || []).some(m =>
+      m.namespace === 'custom' && m.key === 'voucher_value' && parseFloat(m.value) > 0);
+    if (alreadySet) return res.json({ success: true, alreadyApplied: true, draftId: newDraftId, vchNumber });
+
+    // Validity + single-use gate against the ledger. If the voucher was recorded at issue, enforce it's
+    // still open and unexpired; a redemption on a DIFFERENT draft is rejected (single-use). No ledger
+    // row (legacy / issue-hook not wired) → can't verify → allow.
+    let inst = null;
+    try {
+      inst = await creditInstruments.getBySerial(supabase, { instrumentType: 'voucher', serialCode: vchNumber });
+      if (inst) {
+        const expired = inst.expires_at && new Date(inst.expires_at).getTime() < Date.now();
+        if (inst.status === 'voided')
+          return res.status(409).json({ success: false, error: `voucher ${vchNumber} was voided` });
+        if (inst.status === 'expired' || (inst.status === 'open' && expired))
+          return res.status(409).json({ success: false, error: `voucher ${vchNumber} expired` });
+        if (inst.status === 'redeemed' && String(inst.target_draft_id || '') !== String(newDraftId))
+          return res.status(409).json({ success: false, error: `voucher ${vchNumber} already redeemed on ${inst.target_order_name || inst.target_draft_id || 'another order'}` });
+      }
+    } catch (e) { console.error('[voucher-redeem] ledger check:', e.message); }
+
+    const mfVal = (key) => {
+      const m = (mfData.metafields || []).find(x => x.namespace === 'custom' && x.key === key);
+      return m ? Math.abs(parseFloat(m.value) || 0) : 0;
+    };
+    // Inline net (metafield writes don't fire the draft webhook, so seed it here like exc-redeem;
+    // syncAmountToCollect re-derives the canonical value — incl. advance — on the next draft edit).
+    const adjustments  = Math.abs(value) + mfVal('exchange_note_value') + mfVal('old_gold_value');
+    const netToCollect = Math.max(0, parseFloat(draft.total_price || 0) - adjustments).toFixed(2);
+    await updateDraftOrderMetafields(newDraftId, {
+      voucher_value:          Math.abs(value).toFixed(2),
+      amount_to_be_collected: netToCollect,
+    });
+
+    const newTags = (draft.tags || '').split(',').map(t => t.trim()).filter(Boolean)
+      .concat(['vch-applied', `vch-num:${vchNumber}`, ...(oldOrderNumber ? [`vch-original:${oldOrderNumber}`] : [])]);
+    await axios.put(
+      `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${newDraftId}.json`,
+      { draft_order: { id: newDraftId, tags: [...new Set(newTags)].join(', ') } },
+      { headers, timeout: 10000 }
+    );
+    try {
+      await creditInstruments.redeem(supabase, {
+        instrumentType: 'voucher', serialCode: vchNumber, targetDraftId: newDraftId, value: Math.abs(value),
+      });
+    } catch (e) { console.error('[ledger] voucher-redeem:', e.message); }
+    // Cross-channel single-use: delete the online Shopify discount code so it can't ALSO be used at
+    // checkout (Shopify's usage_limit doesn't see this metafield redemption). Needs price_rule_id,
+    // recorded on the ledger at issue.
+    let onlineCodeKilled = false;
+    if (inst && inst.price_rule_id) {
+      try {
+        await axios.delete(`${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/price_rules/${inst.price_rule_id}.json`, { headers, timeout: 10000 });
+        onlineCodeKilled = true;
+        console.log(`[voucher-redeem] deleted online price rule ${inst.price_rule_id} for ${vchNumber}`);
+      } catch (e) { console.error('[voucher-redeem] price-rule delete:', e.message); }
+    }
+    return res.json({ success: true, draftId: newDraftId, vchNumber, deducted: Math.abs(value).toFixed(2), onlineCodeKilled });
+  } catch (err) {
+    console.error('voucher-redeem error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ─────────────────────────────────────────
+// POST /api/voucher-void
+// Removes an offline voucher adjustment from a (still-draft) order and cancels its ledger serial.
+// Body: { newDraftId, vchNumber }. Refuses (409) if the draft already converted. Does NOT delete the
+// Shopify discount code (managed by the voucher Apps Script / ledger).
+// ─────────────────────────────────────────
+app.post('/api/voucher-void', async (req, res) => {
+  const { newDraftId, vchNumber } = req.body || {};
+  if (!newDraftId || !vchNumber) {
+    return res.status(400).json({ success: false, error: 'newDraftId and vchNumber are required' });
+  }
+  try {
+    const token = await getShopifyToken();
+    const headers = { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' };
+    const [{ data }, { data: mfData }] = await Promise.all([
+      axios.get(`${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${newDraftId}.json`, { headers, timeout: 10000 }),
+      axios.get(`${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${newDraftId}/metafields.json`, { headers, timeout: 10000 }),
+    ]);
+    const draft = data.draft_order;
+    if (!draft) return res.status(404).json({ success: false, error: `draft ${newDraftId} not found` });
+    if (draft.status === 'completed' || draft.order_id) {
+      return res.status(409).json({ success: false, error: 'draft already completed — edit the order manually' });
+    }
+
+    const vchMf = (mfData.metafields || []).find(m => m.namespace === 'custom' && m.key === 'voucher_value');
+    if (vchMf) {
+      await axios.delete(`${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/metafields/${vchMf.id}.json`, { headers, timeout: 10000 });
+    }
+    const mfVal = (key) => {
+      const m = (mfData.metafields || []).find(x => x.namespace === 'custom' && x.key === key);
+      return m ? Math.abs(parseFloat(m.value) || 0) : 0;
+    };
+    const remaining    = mfVal('exchange_note_value') + mfVal('old_gold_value');
+    const netToCollect = Math.max(0, parseFloat(draft.total_price || 0) - remaining).toFixed(2);
+    await updateDraftOrderMetafields(newDraftId, { amount_to_be_collected: netToCollect });
+
+    const tags = (draft.tags || '').split(',').map(t => t.trim())
+      .filter(t => t && t !== 'vch-applied' && !t.startsWith('vch-num:') && !t.startsWith('vch-original:')).join(', ');
+    await axios.put(
+      `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${newDraftId}.json`,
+      { draft_order: { id: newDraftId, tags } },
+      { headers, timeout: 10000 }
+    );
+
+    const cancelled = await serialization.cancelSerial(SERIAL_DEPS(), { docType: 'voucher', resourceId: String(vchNumber) });
+    try { await creditInstruments.voidInstrument(supabase, { instrumentType: 'voucher', serialCode: vchNumber }); }
+    catch (e) { console.error('[ledger] voucher-void:', e.message); }
+    return res.json({ success: true, draftId: newDraftId, vchNumber, serialCancelled: !!cancelled });
+  } catch (err) {
+    console.error('voucher-void error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ─────────────────────────────────────────
+// Credit-instrument ledger — issue / open-lookup / reconciliation
+// ─────────────────────────────────────────
+
+// POST /api/credit-instrument/issue — record an issued instrument (called by the voucher Apps Script
+// at creation, and by the log-backfill). Idempotent. Body: { instrumentType, serialCode, value,
+// customerId?, customerName?, sourceOrderId?, sourceOrderName?, stateCode?, expiresAt?, status?,
+// targetOrderName? }. status='redeemed'|'voided' lets the backfill replay historical states.
+app.post('/api/credit-instrument/issue', async (req, res) => {
+  const b = req.body || {};
+  if (!b.instrumentType || !b.serialCode || !(parseFloat(b.value) > 0)) {
+    return res.status(400).json({ success: false, error: 'instrumentType, serialCode and value>0 are required' });
+  }
+  try {
+    await creditInstruments.upsertIssued(supabase, {
+      instrumentType: b.instrumentType, serialCode: b.serialCode, value: parseFloat(b.value),
+      customerId: b.customerId, customerName: b.customerName,
+      sourceOrderId: b.sourceOrderId, sourceOrderName: b.sourceOrderName,
+      stateCode: b.stateCode, expiresAt: b.expiresAt, priceRuleId: b.priceRuleId,
+    });
+    if (b.status === 'redeemed') await creditInstruments.redeem(supabase, { instrumentType: b.instrumentType, serialCode: b.serialCode, targetOrderName: b.targetOrderName, value: parseFloat(b.value) });
+    if (b.status === 'voided')   await creditInstruments.voidInstrument(supabase, { instrumentType: b.instrumentType, serialCode: b.serialCode });
+    return res.json({ success: true, serialCode: b.serialCode });
+  } catch (err) {
+    console.error('credit-instrument/issue error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// GET /api/credit-instrument/open?customerId=&type= — open instruments for a customer (drives the
+// offline "pick a voucher" dropdown). type defaults to voucher.
+app.get('/api/credit-instrument/open', async (req, res) => {
+  try {
+    const rows = await creditInstruments.listOpenForCustomer(supabase, {
+      customerId: req.query.customerId, instrumentType: req.query.type || 'voucher',
+    });
+    return res.json({ success: true, count: rows.length, rows });
+  } catch (err) {
+    console.error('credit-instrument/open error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// GET /api/recon-ledger?view=summary|outstanding|tieout&type=&from=&to=&format=json|csv
+// The joinable reconciliation report over credit_instruments. (Distinct from the ad-hoc /api/recon
+// CSV tool.) summary: issued = redeemed + outstanding + voided + expired per type/month. outstanding:
+// the open-credit liability register. tieout: redeemed instruments and their target order.
+app.get('/api/recon-ledger', async (req, res) => {
+  try {
+    const view = (req.query.view || 'summary').toLowerCase();
+    const rows = await creditInstruments.fetchAll(supabase, {
+      from: req.query.from, to: req.query.to, instrumentType: req.query.type,
+    });
+    const now = Date.now();
+    let out = [];
+
+    if (view === 'summary') {
+      const groups = {};
+      for (const r of rows) {
+        const month = String(r.issued_at || '').slice(0, 7);
+        const key = `${r.instrument_type}|${month}`;
+        const g = groups[key] || (groups[key] = {
+          instrument_type: r.instrument_type, month,
+          issued_count: 0, issued_value: 0, redeemed_count: 0, redeemed_value: 0,
+          outstanding_count: 0, outstanding_value: 0, voided_count: 0, voided_value: 0,
+          expired_count: 0, expired_value: 0,
+        });
+        const val = parseFloat(r.value) || 0;
+        g.issued_count++; g.issued_value += val;
+        const st = creditInstruments.effectiveStatus(r, now);
+        if (st === 'redeemed')      { g.redeemed_count++;    g.redeemed_value    += val; }
+        else if (st === 'voided')   { g.voided_count++;      g.voided_value      += val; }
+        else if (st === 'expired')  { g.expired_count++;     g.expired_value     += val; }
+        else                        { g.outstanding_count++; g.outstanding_value += val; }
+      }
+      out = Object.values(groups).map(g => ({
+        ...g,
+        issued_value: g.issued_value.toFixed(2), redeemed_value: g.redeemed_value.toFixed(2),
+        outstanding_value: g.outstanding_value.toFixed(2), voided_value: g.voided_value.toFixed(2),
+        expired_value: g.expired_value.toFixed(2),
+        balances: (g.redeemed_count + g.outstanding_count + g.voided_count + g.expired_count) === g.issued_count,
+      })).sort((a, b) => (a.instrument_type + a.month).localeCompare(b.instrument_type + b.month));
+
+    } else if (view === 'outstanding') {
+      out = rows.filter(r => creditInstruments.effectiveStatus(r, now) === 'open').map(r => ({
+        instrument_type: r.instrument_type, serial_code: r.serial_code, value: parseFloat(r.value).toFixed(2),
+        customer_name: r.customer_name || '', source_order_name: r.source_order_name || '',
+        issued_at: r.issued_at, expires_at: r.expires_at || '',
+        days_to_expiry: r.expires_at ? Math.round((new Date(r.expires_at).getTime() - now) / 864e5) : '',
+      })).sort((a, b) => String(a.expires_at).localeCompare(String(b.expires_at)));
+
+    } else if (view === 'tieout') {
+      out = rows.filter(r => creditInstruments.effectiveStatus(r, now) === 'redeemed').map(r => ({
+        instrument_type: r.instrument_type, serial_code: r.serial_code, value: parseFloat(r.value).toFixed(2),
+        customer_name: r.customer_name || '', source_order_name: r.source_order_name || '',
+        target_order_name: r.target_order_name || '', target_draft_id: r.target_draft_id || '',
+        redeemed_at: r.redeemed_at || '',
+      }));
+    } else {
+      return res.status(400).json({ success: false, error: `unknown view: ${view}` });
+    }
+
+    if ((req.query.format || '').toLowerCase() === 'csv') {
+      const cols = out.length ? Object.keys(out[0]) : [];
+      const csv = [cols.join(',')].concat(out.map(r => cols.map(c => {
+        const v = r[c] == null ? '' : String(r[c]);
+        return /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
+      }).join(','))).join('\n');
+      res.setHeader('Content-Type', 'text/csv');
+      res.setHeader('Content-Disposition', `attachment; filename="recon-ledger-${view}.csv"`);
+      return res.send(csv);
+    }
+    return res.json({ success: true, view, count: out.length, rows: out });
+  } catch (err) {
+    console.error('recon-ledger error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ─────────────────────────────────────────
+// GET /api/adjustment-report?from=YYYY-MM-DD&to=YYYY-MM-DD&format=json|csv
+// Per-order SALES breakdown over a date range, read live off orders + their frozen custom metafields
+// (gross · discount · voucher · exchange · old-gold · advance · net-to-collect · paid). Complements the
+// credit-instrument /api/recon-ledger (that tracks each credit's lifecycle; this shows what was sold and
+// what adjusted it). Uses GraphQL to pull orders + metafields in pages (efficient, low store volume).
+// ─────────────────────────────────────────
+app.get('/api/adjustment-report', async (req, res) => {
+  const { from, to } = req.query;
+  if (!from || !to) return res.status(400).json({ success: false, error: 'from and to (YYYY-MM-DD) are required' });
+  const num = (v) => (parseFloat(v) || 0);
+  try {
+    const token = await getShopifyToken();
+    const search = `created_at:>=${from} created_at:<=${to}`;
+    const rows = [];
+    let cursor = null, page = 0;
+    do {
+      const query = `query($q:String!,$after:String){ orders(first:100, query:$q, after:$after, sortKey:CREATED_AT){ pageInfo{hasNextPage endCursor} edges{ node{ name createdAt customer{displayName} subtotalPriceSet{shopMoney{amount}} totalPriceSet{shopMoney{amount}} metafields(namespace:"custom", first:40){edges{node{key value}}} } } } }`;
+      const { data } = await axios.post(
+        `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/graphql.json`,
+        { query, variables: { q: search, after: cursor } },
+        { headers: { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' }, timeout: 30000 }
+      );
+      const conn = data && data.data && data.data.orders;
+      if (!conn) return res.status(502).json({ success: false, error: 'Shopify GraphQL error', detail: data && data.errors });
+      for (const e of conn.edges) {
+        const n = e.node; const mf = {};
+        for (const me of n.metafields.edges) mf[me.node.key] = me.node.value;
+        const gross = mf.gross_value != null ? num(mf.gross_value) : num(n.subtotalPriceSet.shopMoney.amount);
+        rows.push({
+          name: n.name, created_at: n.createdAt, customer: (n.customer && n.customer.displayName) || '',
+          gross_value:            gross.toFixed(2),
+          discount_applied:       num(mf.discount_applied).toFixed(2),
+          voucher_value:          num(mf.voucher_value).toFixed(2),
+          exchange_note_value:    num(mf.exchange_note_value).toFixed(2),
+          old_gold_value:         num(mf.old_gold_value).toFixed(2),
+          advance:                num(mf.advance).toFixed(2),
+          amount_to_be_collected: (mf.amount_to_be_collected != null ? num(mf.amount_to_be_collected) : num(n.totalPriceSet.shopMoney.amount)).toFixed(2),
+          amount_paid:            num(mf.amount_paid).toFixed(2),
+          total_price:            num(n.totalPriceSet.shopMoney.amount).toFixed(2),
+        });
+      }
+      cursor = conn.pageInfo.hasNextPage ? conn.pageInfo.endCursor : null;
+    } while (cursor && ++page < 50);
+
+    const sumKeys = ['gross_value','discount_applied','voucher_value','exchange_note_value','old_gold_value','advance','amount_to_be_collected','amount_paid','total_price'];
+    const totals = { name: 'TOTAL', created_at: '', customer: `${rows.length} orders` };
+    for (const k of sumKeys) totals[k] = rows.reduce((s, r) => s + num(r[k]), 0).toFixed(2);
+
+    if ((req.query.format || '').toLowerCase() === 'csv') {
+      const cols = ['name','created_at','customer', ...sumKeys];
+      const all = rows.concat([totals]);
+      const csv = [cols.join(',')].concat(all.map(r => cols.map(c => {
+        const v = r[c] == null ? '' : String(r[c]);
+        return /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
+      }).join(','))).join('\n');
+      res.setHeader('Content-Type', 'text/csv');
+      res.setHeader('Content-Disposition', `attachment; filename="adjustment-report-${from}_${to}.csv"`);
+      return res.send(csv);
+    }
+    return res.json({ success: true, count: rows.length, totals, rows });
+  } catch (err) {
+    console.error('adjustment-report error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST /api/recompute-payment { draftOrderId } | { orderId }
+// Recomputes Amount Pending + Payment Status off the NET-to-collect and persists them. Called directly
+// by the metafield-manager admin action right after it saves amount_paid, so the balance updates
+// WITHOUT a sync-payment tag / webhook (metafield saves don't fire the draft webhook). Idempotent.
+app.post('/api/recompute-payment', async (req, res) => {
+  const { draftOrderId, orderId } = req.body || {};
+  if (!draftOrderId && !orderId) {
+    return res.status(400).json({ success: false, error: 'draftOrderId or orderId is required' });
+  }
+  try {
+    const token = await getShopifyToken();
+    const applied = draftOrderId
+      ? await applyPaymentTagsToDraftOrder(String(draftOrderId), token)
+      : await applyPaymentTagsToOrder(String(orderId), token);
+    return res.json({ success: true, applied: !!applied });
+  } catch (err) {
+    console.error('recompute-payment error:', err.message);
     return res.status(500).json({ success: false, error: err.message });
   }
 });

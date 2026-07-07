@@ -21,6 +21,7 @@ import { useEffect, useRef, useState } from "preact/hooks";
 const SECTION_ORDER = [
   "Order Details",
   "Payments",
+  "Adjustments",
   "Pricing",
   "Exchange",
   "Credit Note",
@@ -36,10 +37,11 @@ const SECTION_ORDER = [
 // ahead of (and removed from) their topical sections below. Ordering here is
 // the source of truth for the required tier — editability still comes from
 // FIELD_CONFIG.
+// Staff-fill only. payment_status / amount_pending were removed — they are now SYSTEM-computed
+// (net-based) and shown read-only, so staff can't hand-type a wrong balance.
 const REQUIRED_FIELDS = [
   "order_type",
   "channel",
-  "payment_status",
   "payment_mode_advance",
   "amount_paid",
 ];
@@ -50,21 +52,30 @@ const FIELD_CONFIG = {
   order_type: { section: "Order Details", label: "Order Type", editable: true, applies: "both" },
   channel: { section: "Order Details", label: "Channel", editable: true, applies: "both" },
 
-  payment_status: { section: "Payments", label: "Payment Status", editable: true, applies: "both" },
+  // System-computed (net-based) — read-only so staff never hand-type a balance.
+  payment_status: { section: "Payments", label: "Payment Status", editable: false, applies: "both" },
   payment_mode_advance: { section: "Payments", label: "Advance Payment Mode", editable: true, applies: "both" },
   payment_mode_final: { section: "Payments", label: "Final Payment Mode", editable: true, applies: "both" },
   amount_paid: { section: "Payments", label: "Amount Paid", editable: true, applies: "both" },
-  amount_pending: { section: "Payments", label: "Amount Pending", editable: true, applies: "both" },
+  amount_pending: { section: "Payments", label: "Amount Pending", editable: false, applies: "both" },
   amount_to_be_collected: { section: "Payments", label: "Amount To Be Collected", editable: false, applies: "both" },
 
   gold_rate: { section: "Pricing", label: "Gold Rate", editable: true, applies: "both" },
   gold_rate_date: { section: "Pricing", label: "Gold Rate Date", editable: true, applies: "both" },
+  gross_value: { section: "Pricing", label: "Gross Value (pre-discount)", editable: false, applies: "both" },
+  discount_applied: { section: "Pricing", label: "Discount Applied (pre-tax)", editable: false, applies: "both" },
 
-  old_gold_weight: { section: "Exchange", label: "Old Gold Weight", editable: true, applies: "both" },
-  old_gold_value: { section: "Exchange", label: "Old Gold Value", editable: true, applies: "both" },
-  old_gold_purity: { section: "Exchange", label: "Old Gold Purity (karat)", editable: true, applies: "draft" },
-  exchange_note_value: { section: "Exchange", label: "Exchange Note Value", editable: false, applies: "both" },
-  voucher_value: { section: "Exchange", label: "Voucher Value", editable: false, applies: "draft" },
+  // Adjustments — old gold (staff enter weight+purity, system values it), exchange/voucher (system),
+  // and CAD design advance. advance_ref is the one staff-fill here (redeem a past advance, Path B).
+  old_gold_weight: { section: "Adjustments", label: "Old Gold Weight (g)", editable: true, applies: "both" },
+  old_gold_purity: { section: "Adjustments", label: "Old Gold Purity (karat)", editable: true, applies: "draft" },
+  old_gold_value: { section: "Adjustments", label: "Old Gold Value (auto; override optional)", editable: true, applies: "both" },
+  exchange_note_value: { section: "Adjustments", label: "Exchange Note Value (auto from Apply; override optional)", editable: true, applies: "both" },
+  voucher_value: { section: "Adjustments", label: "Voucher Value", editable: false, applies: "both" },
+  advance: { section: "Adjustments", label: "Design Advance", editable: false, applies: "both" },
+  advance_ref: { section: "Adjustments", label: "Advance Ref — order # to redeem", editable: true, applies: "both" },
+  advance_status: { section: "Adjustments", label: "Advance Status", editable: false, applies: "both" },
+  redeemed_against: { section: "Adjustments", label: "Advance Redeemed Against", editable: false, applies: "both" },
 
   cn_number: { section: "Credit Note", label: "Credit Note Number", editable: false, applies: "order" },
   cn_value: { section: "Credit Note", label: "Credit Note Value", editable: false, applies: "order" },
@@ -216,6 +227,33 @@ const DELETE_MUTATION = `
   }
 `;
 
+// Adding a tag fires the resource's update webhook (a metafield save does NOT). We use this to nudge the
+// middleware: `sync-payment` recomputes the balance off the net; `apply-voucher:<code>` redeems a
+// voucher from the ledger. The middleware strips these trigger tags after processing.
+const TAGS_ADD_MUTATION = `
+  mutation AddWorkflowTags($id: ID!, $tags: [String!]!) {
+    tagsAdd(id: $id, tags: $tags) { userErrors { field message } }
+  }
+`;
+const PAYMENT_TRIGGER_KEYS = ["amount_paid", "payment_mode_advance", "payment_mode_final"];
+
+// A metafield save alone never fires the resource webhook, so the middleware never recomputes on its
+// own. We add trigger tags for what changed so it does (the middleware strips them after processing):
+//  - `reprice`      → re-run the line-item price calc (gold rate × net weight, discount, GST).
+//  - `sync-payment` → recompute net-to-collect (amount_to_be_collected) + balance (amount_pending);
+//                     also runs syncAmountToCollect, which re-reads every adjustment metafield.
+// Gold rate / jewel weights drive a full reprice; adjustment + payment fields drive a balance recompute.
+const REPRICE_TRIGGER_KEYS = [
+  "gold_rate", "gold_rate_date",
+  "jewelcode_net_weight", "jewelcode_gross_weight",
+  "jewelcode_diamond_carats", "jewelcode_gemstone_weight",
+];
+const RECOMPUTE_TRIGGER_KEYS = [
+  ...PAYMENT_TRIGGER_KEYS,
+  "old_gold_weight", "old_gold_purity", "old_gold_value",
+  "exchange_note_value", "voucher_value", "advance", "advance_ref",
+];
+
 function collectErrors(result, mutationField) {
   const errs = (result?.errors ?? []).map((e) => e.message);
   for (const e of result?.data?.[mutationField]?.userErrors ?? []) {
@@ -244,6 +282,14 @@ export default function MetafieldManager({ surface = "block" } = {}) {
   const [error, setError] = useState(""); // save error
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [voucherCode, setVoucherCode] = useState("");
+  const [voucherBusy, setVoucherBusy] = useState(false);
+  const [voucherNote, setVoucherNote] = useState("");
+  const [excCode, setExcCode] = useState("");
+  const [excBusy, setExcBusy] = useState(false);
+  const [excNote, setExcNote] = useState("");
+  const [refreshTick, setRefreshTick] = useState(0); // bumped after a save to re-pull server-recomputed values
+  const [recalcNote, setRecalcNote] = useState(""); // transient "recalculating…" hint after a trigger tag
   const baselineRef = useRef({});
   const editsRef = useRef({});
 
@@ -295,9 +341,18 @@ export default function MetafieldManager({ surface = "block" } = {}) {
       if (!active) return;
       setDefs(defsByKey);
       setValues(valuesByKey);
-      setEdits(editable);
+      // On a post-save refresh the user may have started typing again — keep those in-progress edits and
+      // don't clobber them; adopt fresh server values as the new baseline for everything else.
+      const priorEdits = editsRef.current || {};
+      const priorBaseline = baselineRef.current || {};
+      const merged = {};
+      for (const key of Object.keys(editable)) {
+        const userDirty = (priorEdits[key] ?? "").trim() !== (priorBaseline[key] ?? "").trim();
+        merged[key] = userDirty ? priorEdits[key] : editable[key];
+      }
+      setEdits(merged);
       baselineRef.current = { ...editable };
-      editsRef.current = { ...editable };
+      editsRef.current = { ...merged };
       setNotice(warnings.join(" • "));
     }
 
@@ -305,7 +360,7 @@ export default function MetafieldManager({ surface = "block" } = {}) {
     return () => {
       active = false;
     };
-  }, [ownerId]);
+  }, [ownerId, refreshTick]);
 
   function setField(key, value) {
     editsRef.current = { ...editsRef.current, [key]: value };
@@ -331,8 +386,9 @@ export default function MetafieldManager({ surface = "block" } = {}) {
       const toSet = [];
       const toDelete = [];
       const missing = [];
+      const changed = changedKeys();
 
-      for (const key of changedKeys()) {
+      for (const key of changed) {
         const def = defs[key];
         if (!def?.namespace || !def?.type) {
           missing.push(key);
@@ -360,17 +416,133 @@ export default function MetafieldManager({ surface = "block" } = {}) {
         if (errs.length) throw new Error(errs.join("; "));
       }
 
+      // A metafield save never fires the resource webhook, so the middleware won't recompute on its own.
+      // Add trigger tags for what actually changed: `reprice` re-runs the price calc (gold rate × weight,
+      // discount, GST); `sync-payment` recomputes net-to-collect + balance. Best-effort (non-blocking).
+      const triggerTags = [];
+      if (changed.some((k) => REPRICE_TRIGGER_KEYS.includes(k))) triggerTags.push("reprice");
+      if (changed.some((k) => RECOMPUTE_TRIGGER_KEYS.includes(k))) triggerTags.push("sync-payment");
+      if (triggerTags.length) {
+        try {
+          await shopify.query(TAGS_ADD_MUTATION, { variables: { id: ownerId, tags: triggerTags } });
+        } catch { /* non-blocking */ }
+      }
+
       const nextValues = { ...values };
       for (const key of Object.keys(editsRef.current)) nextValues[key] = editsRef.current[key];
       baselineRef.current = { ...editsRef.current };
       setValues(nextValues);
       setSaved(true);
+
+      // The recompute happens server-side after the trigger tag fires. Re-pull values shortly after so the
+      // computed read-only fields (Amount To Be Collected, Amount Pending, Payment Status, prices) refresh
+      // instead of looking frozen. Non-editable values only — in-progress edits are preserved by the loader.
+      if (triggerTags.length) {
+        setRecalcNote("Recalculating balance & pricing… values refresh in a moment.");
+        setTimeout(() => { setRefreshTick((t) => t + 1); setRecalcNote(""); }, 2500);
+      }
     } catch (e) {
       setError(e?.message || String(e));
     } finally {
       setSaving(false);
     }
   }
+
+  // Apply a voucher: staff type the code, we drop an `apply-voucher:<code>` tag. The middleware looks up
+  // the value + validity in the ledger, applies it post-tax, cancels the online code, and (on failure)
+  // leaves a `voucher-invalid:<reason>` tag. Staff never type an amount.
+  async function applyVoucher() {
+    const code = voucherCode.trim();
+    if (!ownerId || !code) return;
+    setVoucherBusy(true);
+    setVoucherNote("");
+    try {
+      const res = await shopify.query(TAGS_ADD_MUTATION, { variables: { id: ownerId, tags: [`apply-voucher:${code}`] } });
+      const errs = collectErrors(res, "tagsAdd");
+      if (errs.length) throw new Error(errs.join("; "));
+      setVoucherCode("");
+      setVoucherNote(`Applying ${code}… the balance updates in a few seconds. If it's invalid, a "voucher-invalid" tag will appear with the reason.`);
+      setTimeout(() => setRefreshTick((t) => t + 1), 3000);
+    } catch (e) {
+      setVoucherNote(`Couldn't apply: ${e?.message || e}`);
+    } finally {
+      setVoucherBusy(false);
+    }
+  }
+
+  // Apply/reference an exchange note by its number: staff type the code, we drop an `apply-exc:<number>`
+  // tag. The middleware looks up the value + validity in the ledger, applies it post-tax, and (on failure)
+  // leaves an `exc-invalid:<reason>` tag. Staff never type an amount (the Exchange Note Value field is a
+  // manual override for notes not in the ledger). Mirrors applyVoucher.
+  async function applyExc() {
+    const code = excCode.trim();
+    if (!ownerId || !code) return;
+    setExcBusy(true);
+    setExcNote("");
+    try {
+      const res = await shopify.query(TAGS_ADD_MUTATION, { variables: { id: ownerId, tags: [`apply-exc:${code}`] } });
+      const errs = collectErrors(res, "tagsAdd");
+      if (errs.length) throw new Error(errs.join("; "));
+      setExcCode("");
+      setExcNote(`Applying ${code}… the balance updates in a few seconds. If it's invalid, an "exc-invalid" tag will appear with the reason.`);
+      setTimeout(() => setRefreshTick((t) => t + 1), 3000);
+    } catch (e) {
+      setExcNote(`Couldn't apply: ${e?.message || e}`);
+    } finally {
+      setExcBusy(false);
+    }
+  }
+
+  const renderExcApply = () => (
+    <s-section heading="Apply an Exchange Note">
+      <s-stack direction="block" gap="base">
+        <s-text tone="subdued">
+          Type the exchange-note number (e.g. EXC27-KAHSR-0001). The system verifies it's valid and unused
+          in the ledger and applies it after tax. You never enter the amount here. For a note that isn't in
+          the ledger, use the Exchange Note Value field below to override manually.
+        </s-text>
+        <s-text-field
+          label="Exchange Note Number"
+          value={excCode}
+          disabled={excBusy ? "" : undefined}
+          onChange={(e) => setExcCode(e.target.value ?? "")}
+        />
+        <s-button
+          onClick={applyExc}
+          loading={excBusy ? "" : undefined}
+          disabled={!excCode.trim() || excBusy ? "" : undefined}
+        >
+          Apply Exchange Note
+        </s-button>
+        {excNote ? <s-text>{excNote}</s-text> : null}
+      </s-stack>
+    </s-section>
+  );
+
+  const renderVoucherApply = () => (
+    <s-section heading="Apply a Voucher">
+      <s-stack direction="block" gap="base">
+        <s-text tone="subdued">
+          Type the voucher code (e.g. VCH27-KAHSR-0001). The system verifies it's valid and unused, applies
+          it after tax, and cancels its online code. You never enter the amount.
+        </s-text>
+        <s-text-field
+          label="Voucher Code"
+          value={voucherCode}
+          disabled={voucherBusy ? "" : undefined}
+          onChange={(e) => setVoucherCode(e.target.value ?? "")}
+        />
+        <s-button
+          onClick={applyVoucher}
+          loading={voucherBusy ? "" : undefined}
+          disabled={!voucherCode.trim() || voucherBusy ? "" : undefined}
+        >
+          Apply Voucher
+        </s-button>
+        {voucherNote ? <s-text>{voucherNote}</s-text> : null}
+      </s-stack>
+    </s-section>
+  );
 
   const sections = buildSections(ctx.scope);
 
@@ -390,6 +562,11 @@ export default function MetafieldManager({ surface = "block" } = {}) {
       {notice ? (
         <s-banner tone="warning" heading="Some data may be incomplete" dismissible>
           {notice}
+        </s-banner>
+      ) : null}
+      {recalcNote ? (
+        <s-banner tone="info" heading="Recalculating">
+          {recalcNote}
         </s-banner>
       ) : null}
     </>
@@ -426,6 +603,8 @@ export default function MetafieldManager({ surface = "block" } = {}) {
       <s-admin-action heading="Jewellery Workspace — all fields">
         <s-stack direction="block" gap="large-100">
           {renderBanners()}
+          {renderVoucherApply()}
+          {renderExcApply()}
           {renderSections()}
         </s-stack>
         <s-button
