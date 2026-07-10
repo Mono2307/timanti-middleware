@@ -41,6 +41,9 @@ const DEFAULT_REGISTRY = {
   b2b:              { scope: 'store',  start: 1, pad: 4, fy: false, code: 'AURA-{CODE}-{SEQ}',   display: 'AURA-{CODE}-{SEQ}' },
   // Delivery challan (was memo). Origin only in the serial; destination lives in custom.delivery_code.
   delivery_challan: { scope: 'store',  start: 1, pad: 4, fy: false, code: 'DC-{CODE}-{SEQ}',     display: 'DC-{CODE}-{SEQ}' },
+  // Custom-priced memo (make-memo-custom) — line items charged on GOLD + MAKING only (diamond excluded).
+  // Own per-store counter, no FY reset, origin-only in the serial. MEMO-KAHSR-0001.
+  memo_custom:      { scope: 'store',  start: 1, pad: 4, fy: false, code: 'MEMO-{CODE}-{SEQ}',   display: 'MEMO-{CODE}-{SEQ}' },
   po:               { scope: 'store',  start: 1, pad: 5, fy: false, code: 'PO-{CODE}-{SEQ}',     display: 'PO-{CODE}-{SEQ}' },
   // Adjustments — per-store now, reset per FY. EXC27-KAHSR-0001 / VCH27-KAHSR-0001.
   voucher:          { scope: 'store',  start: 1, pad: 4, fy: true,  code: 'VCH{FY}-{CODE}-{SEQ}', display: 'VCH{FY}-{CODE}-{SEQ}' },
@@ -339,11 +342,52 @@ async function allocateAndStamp(deps, { docType, stateCode, shopifyLocationId, s
 async function mintSerial(deps, { docType, storeCode, deliveryCode, resourceType, resourceId, resourceName, stamp = false, resourceIdFromCode = false }) {
   let ridStr = resourceId != null ? String(resourceId) : null;
 
-  // 1. Idempotency: already minted for this resource?
+  // Mirror the serial onto the Shopify resource (shared by the fresh-mint and re-issue paths).
+  const stampIfNeeded = async (alloc) => {
+    if (!(stamp && resourceType && ridStr)) return [];
+    const token = await deps.getShopifyToken();
+    const fields = { document_type: docType, serial_no: alloc.seq, serial_code: alloc.code, serial_display: alloc.display };
+    const res = resourceType === 'order' ? 'orders' : 'draft_orders';
+    const w = await stampSerial(deps, res, ridStr, fields, token);
+    return w.errors || [];
+  };
+
+  // 1. Existing serial for this resource?
   if (ridStr) {
     const { data: existing } = await deps.supabase.from('serial_ledger')
       .select('*').eq('doc_type', docType).eq('resource_id', ridStr).maybeSingle();
-    if (existing) return { ...existing, minted: false };
+    if (existing) {
+      // The counter key the CURRENT inputs would use (mirror allocateSerial's key derivation).
+      const registry = await getRegistry(deps);
+      const reg = registry[docType];
+      const isGlobal = reg && reg.scope === 'global';
+      const code = isGlobal ? GLOBAL : deriveStateCode(storeCode);
+      const expectedKey = reg && reg.fy ? `${fyEnd()}|${code}` : code;
+
+      // Same store AND still active → true idempotency: the number is stable across every draft edit.
+      if (existing.status === 'active' && existing.store_code === expectedKey) {
+        return { ...existing, minted: false };
+      }
+
+      // Otherwise the store code was corrected (wrong-store fix) or the serial was cancelled —
+      // RE-ISSUE so a human mistake never permanently locks a draft to a bad/dead number.
+      // First reclaim the abandoned number: if it is still the tip of its store's counter, roll
+      // that counter back one so the number is reused (no gap, no waste). The conditional WHERE
+      // (current_value = existing.seq) makes this a no-op when other docs were issued after it.
+      await deps.supabase.from('serial_counters')
+        .update({ current_value: existing.seq - 1, updated_at: new Date().toISOString() })
+        .eq('doc_type', docType).eq('state_code', existing.store_code).eq('current_value', existing.seq);
+
+      // Allocate the correct number for the current store and repurpose THIS ledger row in place —
+      // one row per resource, so no (doc_type, resource_id) unique-constraint conflict, no migration.
+      const alloc = await allocateSerial(deps, { docType, stateCode: storeCode, deliveryCode });
+      const { data: updated } = await deps.supabase.from('serial_ledger')
+        .update({ store_code: alloc.counterKey, seq: alloc.seq, serial_code: alloc.code, status: 'active', cancelled_at: null })
+        .eq('id', existing.id).select().single();
+      const stampErrors = await stampIfNeeded(alloc);
+      console.log(`[serial] ${docType} ${ridStr}: re-issued ${existing.serial_code} (${existing.store_code}) → ${alloc.code} (${alloc.counterKey})`);
+      return { ...updated, minted: true, reissued: true, superseded: existing.serial_code, stampErrors };
+    }
   }
 
   // 2. Atomic next number via the existing counter.
@@ -370,15 +414,7 @@ async function mintSerial(deps, { docType, storeCode, deliveryCode, resourceType
   }
 
   // 4. Optionally mirror onto the Shopify resource.
-  let stampErrors = [];
-  if (stamp && resourceType && ridStr) {
-    const token = await deps.getShopifyToken();
-    const fields = { document_type: docType, serial_no: alloc.seq, serial_code: alloc.code, serial_display: alloc.display };
-    const res = resourceType === 'order' ? 'orders' : 'draft_orders';
-    const w = await stampSerial(deps, res, ridStr, fields, token);
-    stampErrors = w.errors;
-  }
-
+  const stampErrors = await stampIfNeeded(alloc);
   return { ...row, minted: true, stampErrors };
 }
 

@@ -440,16 +440,20 @@ async function cancelDocSerial(draft, docType, removeTag = null) {
 }
 
 // Detects draft-document trigger tags and mints/retires the matching serial.
-//   make-challan  → delivery_challan (DC-…),  retire on cancel-challan
-//   make-transfer → b2b (AURA-… ; B2B tax invoice == inter-store transfer == sale), retire on cancel-transfer
+//   make-challan     → delivery_challan (DC-…),  retire on cancel-challan
+//   make-transfer    → b2b (AURA-… ; B2B tax invoice == inter-store transfer == sale), retire on cancel-transfer
+//   make-memo-custom → memo_custom (MEMO-… ; gold+making-only custom memo), retire on cancel-memo-custom
 // (PO is no longer minted here — it mints at HQ acknowledge in handlePoAction.)
+// Pricing for make-memo-custom and make-transfer is applied separately by handleWeightedDocReprice (runs earlier in the webhook).
 async function handleDocumentSerialTags(draft) {
   if (!SERIAL_MEMO_TRANSFER) return;
   const tags = (draft.tags || '').split(',').map(t => t.trim().toLowerCase());
   if (tags.includes('make-challan'))          await assignDocSerial(draft, 'delivery_challan', 'make-challan');
   else if (tags.includes('make-transfer'))    await assignDocSerial(draft, 'b2b', 'make-transfer');
+  else if (tags.includes('make-memo-custom')) await assignDocSerial(draft, 'memo_custom', 'make-memo-custom');
   else if (tags.includes('cancel-challan'))   await cancelDocSerial(draft, 'delivery_challan', 'cancel-challan');
   else if (tags.includes('cancel-transfer'))  await cancelDocSerial(draft, 'b2b', 'cancel-transfer');
+  else if (tags.includes('cancel-memo-custom')) await cancelDocSerial(draft, 'memo_custom', 'cancel-memo-custom');
 }
 
 // Net-to-collect base for a draft = total − ALL post-tax adjustments (exchange/voucher/old-gold/advance),
@@ -1928,6 +1932,114 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
   }
 }
 
+// Weighted document reprice for make-memo-custom and make-transfer. Reprices each product line to a
+// weighted sum of its components — gold×G% + diamond×D% + making×M% — and overwrites the Gross Value /
+// Taxable Value / GST / Discount Applied props and the Shopify line price, so the printed document
+// (which sums Gross Value) and the order total both reflect it, with no template math change. Reads the
+// existing Gold / Diamond / Making props, falling back to the variant metafields custom.price_breakup_gold
+// / _diamond / _making (per-unit × qty). No jewelcode net-weight metafields required. Percentages:
+//   make-memo-custom → gold 100%, diamond 0%, making 100% (metal + labour only).
+//   make-transfer    → per-draft custom.transfer_pct_gold / _dia / _making (each ≥0, in %, default 100).
+// The Gold / Diamond / Making breakdown props are left intact for reference; only the totals change. The
+// trigger tag is stripped in the same GraphQL write (loop prevention); the MEMO-/AURA- serial is minted
+// separately by handleDocumentSerialTags. Gated on SERIAL_MEMO_TRANSFER so pricing + serial toggle together.
+async function handleWeightedDocReprice(draft) {
+  if (!SERIAL_MEMO_TRANSFER) return;
+  const tags  = (draft.tags || '').split(',').map(t => t.trim());
+  const lower = tags.map(t => t.toLowerCase());
+  const isMemo     = lower.includes('make-memo-custom');
+  const isTransfer = lower.includes('make-transfer');
+  if (!isMemo && !isTransfer) return;
+  const triggerTag = isMemo ? 'make-memo-custom' : 'make-transfer';
+
+  try {
+    const draftOrderId = draft.id;
+    const token = await getShopifyToken();
+    const rs = (v) => parseFloat(String(v || '0').replace('Rs', '').replace(/,/g, '').trim()) || 0;
+
+    // Component weights (fractions). memo = gold+making only; transfer = per-draft % overrides (default 100).
+    let pctGold = 1, pctDia = isMemo ? 0 : 1, pctMaking = 1;
+    if (isTransfer) {
+      const { data: mfData } = await axios.get(
+        `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}/metafields.json`,
+        { headers: { 'X-Shopify-Access-Token': token }, timeout: 10000 }
+      );
+      const mf = {};
+      for (const m of (mfData.metafields || [])) if (m.namespace === 'custom') mf[m.key] = m.value;
+      const pctOf = (key) => { const v = parseFloat(mf[key]); return (isFinite(v) && v >= 0) ? v / 100 : 1; };
+      pctGold = pctOf('transfer_pct_gold'); pctDia = pctOf('transfer_pct_dia'); pctMaking = pctOf('transfer_pct_making');
+    }
+
+    // Product lines only — skip EXC trade-in lines and negative discount lines; everything else is
+    // re-sent verbatim below.
+    const productItems = (draft.line_items || []).filter(item =>
+      !isExcLine(item) &&
+      !((item.title || '').toLowerCase().includes('discount') && parseFloat(item.price) < 0) &&
+      ((item.properties || []).some(p => p.name === 'Gold') || !!item.variant_id)
+    );
+
+    // Resolve gold / diamond / making per item: prop → variant metafield (per-unit × qty).
+    const resolved = await Promise.all(productItems.map(async (item) => {
+      const props = {};
+      for (const p of (item.properties || [])) props[p.name] = p.value;
+      let gold   = rs(props['Gold']);
+      let dia    = rs(props['Diamond']);
+      let making = rs(props['Making'] || props['Making Charges']);
+      if (!gold || !making || (!dia && pctDia > 0)) {
+        const { varMf } = await fetchItemMeta(item, token);
+        if (!gold)   gold   = parseFloat(varMf.price_breakup_gold    || 0) * (item.quantity || 1);
+        if (!dia)    dia    = parseFloat(varMf.price_breakup_diamond || 0) * (item.quantity || 1);
+        if (!making) making = parseFloat(varMf.price_breakup_making  || 0) * (item.quantity || 1);
+      }
+      const basis = gold * pctGold + dia * pctDia + making * pctMaking;
+      return { item, basis };
+    }));
+
+    const totalBasis    = resolved.reduce((sum, r) => sum + r.basis, 0);
+    const totalDiscount = parseFloat(draft.applied_discount?.amount || 0);
+
+    const repricedMap = new Map();
+    for (const { item, basis } of resolved) {
+      // Prorate any order-level discount by this item's share of the weighted basis.
+      const itemDiscount = totalBasis > 0 ? totalDiscount * (basis / totalBasis) : 0;
+      const finalValue   = Math.max(0, basis - itemDiscount);   // tax-inclusive
+      const taxableValue = finalValue / 1.03;
+      const gst          = taxableValue * 0.03;
+
+      const OVERWRITE = new Set(['Gross Value', 'Taxable Value', 'GST', 'Discount Applied']);
+      const updatedProps = (item.properties || []).filter(p => !OVERWRITE.has(p.name));
+      updatedProps.push(
+        { name: 'Gross Value',      value: `Rs${basis.toFixed(2)}` },
+        { name: 'Taxable Value',    value: `Rs${taxableValue.toFixed(2)}` },
+        { name: 'GST',              value: `Rs${gst.toFixed(2)}` },
+        { name: 'Discount Applied', value: `Rs${itemDiscount.toFixed(2)}` },
+      );
+      repricedMap.set(item.id, {
+        variant_id: item.variant_id || undefined,
+        quantity: item.quantity,
+        price: (finalValue / (item.quantity || 1)).toFixed(2),
+        properties: updatedProps,
+      });
+    }
+
+    const allLineItems = (draft.line_items || []).map(item => {
+      const r = repricedMap.get(item.id);
+      // else-branch re-sends non-product / EXC lines verbatim.
+      return r
+        ? { variant_id: r.variant_id, quantity: r.quantity, price: r.price, properties: r.properties, title: item.title }
+        : { variant_id: item.variant_id || undefined, quantity: item.quantity, price: item.price, properties: item.properties || [], title: item.title };
+    });
+
+    // Strip the trigger tag here (loop prevention). handleDocumentSerialTags still mints off the
+    // in-memory draft.tags in the same webhook pass, then no-op removes the (already gone) tag.
+    const tagsWithout = tags.filter(t => t && t.toLowerCase() !== triggerTag).join(', ');
+    await gqlSetDraftLineItems(draftOrderId, allLineItems, token, { tags: tagsWithout, clearDiscount: true });
+    console.log(`✅ Draft ${draftOrderId}: ${triggerTag} reprice — G${Math.round(pctGold*100)}/D${Math.round(pctDia*100)}/M${Math.round(pctMaking*100)}%, ${repricedMap.size} item(s), basis=Rs${totalBasis.toFixed(2)}`);
+  } catch (err) {
+    console.error(`weighted reprice (${triggerTag}) failed for draft ${draft.id}:`, err.message);
+  }
+}
+
 // Reads payment metafields and writes corresponding payment tags.
 // Copies all custom metafields from a completed draft order to its resulting order.
 async function copyDraftMetafieldsToOrder(draftOrderId, orderId, token) {
@@ -2402,6 +2514,7 @@ app.post('/api/shopify-draft-updated', async (req, res) => {
     // Auto-hydrate line item properties from variant metafields on creation
     if ((req.headers['x-shopify-topic'] || '') === 'draft_orders/create') {
       await handleDraftCreated(draft);
+      await handleWeightedDocReprice(draft);      // memo-custom / transfer weighted pricing (before serial + net-to-collect)
       await handleDocumentSerialTags(draft);      // PO/memo/transfer present at creation
       await syncAmountToCollect(draft);           // establish net-to-collect on every new draft
       return;
@@ -2439,6 +2552,7 @@ app.post('/api/shopify-draft-updated', async (req, res) => {
     await handleCashPaymentTag(draft);
     await handleRecalculatePriceTag(draft, { force: false });
     await handleRecalculatePriceTag(draft, { force: true });
+    await handleWeightedDocReprice(draft);      // memo-custom / transfer weighted pricing (before serial + net-to-collect)
     await handleAdvanceCapture(draft);          // CAD: stamp advance metafields once a payment lands
     await handleAdvanceRedeem(draft);           // CAD: apply a referenced advance (Path B), gates + refs
     await handleApplyVoucherTag(draft);         // admin action: apply-voucher:<code> → redeem from ledger
