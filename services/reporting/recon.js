@@ -318,11 +318,31 @@ function determineRole(amount, entity) {
   return 'overpayment';
 }
 
+// ── GST (order-level) ───────────────────────────────────────────────────────
+// Mirrors templates/tax-invoice.liquid: flat 3% on a tax-inclusive total (taxable = total/1.03),
+// intra-state → CGST+SGST 1.5% each, inter-state → IGST 3%. Duplicated (not imported from reports.js)
+// to avoid a circular require, since reports.js requires this module.
+
+function supplierState(stateCode) { return String(stateCode || '').split('-')[0].trim().toUpperCase() || 'KA'; }
+function gstSplit(taxable, supplier, dest) {
+  const sup = supplierState(supplier);
+  const d   = String(dest || '').trim().toUpperCase() || sup;
+  const t   = Math.round(taxable * 100) / 100;
+  return d === sup
+    ? { igst: 0,         cgst: +(t * 0.015).toFixed(2), sgst: +(t * 0.015).toFixed(2) }
+    : { igst: +(t * 0.03).toFixed(2), cgst: 0,          sgst: 0 };
+}
+
 // ── Row builder ───────────────────────────────────────────────────────────────
 
 function buildRow(txn, mr) {
   const m = mr.match;
   const amount = txn.amount;
+  // GST on the matched order total. ShippingState/CustomSerial are enriched later (a Shopify lookup
+  // for matched refs); the split defaults to intra-state (KA) until the shipping state is known.
+  const orderTotal = m ? m.total : 0;
+  const taxable = orderTotal > 0 ? Math.round((orderTotal / 1.03) * 100) / 100 : 0;
+  const gst = gstSplit(taxable, m && m.state, '');
   return {
     _vpa:    txn.vpa || txn.name || '',
     _entity: m,
@@ -339,6 +359,12 @@ function buildRow(txn, mr) {
     SettlementUTR:  txn.utr || '',
     OrderRef:       m ? m.ref : (mr.method === 'AMBIGUOUS' ? 'AMBIGUOUS' : 'UNLINKED'),
     OrderTotal:     m ? m.total.toFixed(2) : '',
+    TaxableValue:   m ? taxable.toFixed(2) : '',
+    IGST:           m ? gst.igst.toFixed(2) : '',
+    SGST:           m ? gst.sgst.toFixed(2) : '',
+    CGST:           m ? gst.cgst.toFixed(2) : '',
+    ShippingState:  '',
+    CustomSerial:   '',
     Customer:       m ? m.customer : '',
     EntityType:     m ? m.type : '',
     MatchMethod:    mr.method,
@@ -346,6 +372,29 @@ function buildRow(txn, mr) {
     Role:           determineRole(amount, m),
     Notes:          mr.notes || '',
   };
+}
+
+// ── Shopify enrichment: shipping province + serial code for matched order refs ──
+// Bounded to the DISTINCT matched order names (low volume). Drafts (#D…) are skipped — their serial
+// isn't minted until completion. Failures degrade gracefully (columns stay blank).
+async function enrichOrderMeta(refs, storeUrl, token) {
+  const map = {};
+  const orderRefs = [...new Set(refs.filter(r => /^#\d+$/.test(r)))];
+  for (const ref of orderRefs) {
+    try {
+      const query = `query($q:String!){ orders(first:1, query:$q){ edges{ node{ shippingAddress{provinceCode} serial: metafield(namespace:"custom", key:"serial_code"){value} } } } }`;
+      const resp = await fetch(`${storeUrl}/admin/api/2024-01/graphql.json`, {
+        method: 'POST',
+        headers: { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query, variables: { q: `name:${ref}` } }),
+      });
+      if (!resp.ok) continue;
+      const j = await resp.json();
+      const node = j?.data?.orders?.edges?.[0]?.node;
+      if (node) map[ref] = { shippingState: node.shippingAddress?.provinceCode || '', serial: node.serial?.value || '' };
+    } catch (_) { /* leave blank */ }
+  }
+  return map;
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
@@ -454,6 +503,20 @@ async function runRecon({ dir, storeUrl, token }) {
         row.Notes         = 'Matched via shared VPA/UPI ID';
         break;
       }
+    }
+  }
+
+  // ── Enrich matched orders with shipping state + serial, then refine the GST split ──
+  const meta = await enrichOrderMeta(rows.map(r => r.OrderRef), storeUrl, token);
+  for (const row of rows) {
+    const e = meta[row.OrderRef];
+    if (!e) continue;
+    row.ShippingState = e.shippingState || '';
+    row.CustomSerial  = e.serial || '';
+    if (row.OrderTotal && e.shippingState) {
+      const taxable = parseFloat(row.TaxableValue) || 0;
+      const gst = gstSplit(taxable, row._entity && row._entity.state, e.shippingState);
+      row.IGST = gst.igst.toFixed(2); row.SGST = gst.sgst.toFixed(2); row.CGST = gst.cgst.toFixed(2);
     }
   }
 
