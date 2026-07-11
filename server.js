@@ -1507,7 +1507,7 @@ async function hydrateItemFromVariant(item, token) {
     if (goldVal > 0)   hydratedProps['Gold']         = `Rs${goldVal.toFixed(2)}`;
     if (diaVal > 0)    hydratedProps['Diamond']      = `Rs${diaVal.toFixed(2)}`;
     if (makingVal > 0) hydratedProps['Making']       = `Rs${makingVal.toFixed(2)}`;
-    if (grossVal > 0)  hydratedProps['Gross Value']  = `Rs${grossVal.toFixed(2)}`;
+    if (grossVal > 0)  hydratedProps['Gross Value']  = `Rs${(grossVal * 1.03).toFixed(2)}`;  // tax-inclusive (components + 3% GST), matches the charged catalog price
   }
   const updatedProps = (item.properties || [])
     .filter(p => !(p.name in hydratedProps))
@@ -1787,7 +1787,9 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
       return { item, idx, skip: true };
     }
 
-    const oldNetWt = oldGold / goldRate;
+    // Prefer the stored net weight (what the current values were priced at) over back-deriving oldGold/goldRate,
+    // which is wrong when the gold rate was changed — keeps the delta threshold and making fallback stable.
+    const oldNetWt = parseFloat(props['_net_wt']) || (oldGold / goldRate);
     const delta    = Math.abs(newNetWt - oldNetWt) / oldNetWt;
 
     // Old stone carats from product metafields (fixed design spec)
@@ -1800,23 +1802,35 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
     const newGemCts   = gemWtArr[idx]  ?? oldGemCts;
     const totalNewCts = (newDiaCts || 0) + (newGemCts || 0);
 
-    // Gold
+    // Gold: net weight × gold rate — already variant/rate-anchored (never re-derived from the moving Gold prop).
     const newGoldValue = newNetWt * goldRate;
 
-    // Diamond+gemstone: derive per-carat rate from old combined cts; safe for dia-only, gem-only, mixed
-    const oldDiamondValue   = parseFloat((props['Diamond'] || '0').replace('Rs', '').trim());
-    const varDiamondValue   = parseFloat(varMf.price_breakup_diamond || 0) * (item.quantity || 1);
-    const effectiveDiaValue = oldDiamondValue || varDiamondValue;
-    const perCtRate         = totalOldCts > 0 ? effectiveDiaValue / totalOldCts : 0;
-    const newDiamondValue   = totalOldCts > 0 ? perCtRate * totalNewCts : effectiveDiaValue;
+    // Diamond+gemstone: the per-carat rate ALWAYS comes from the variant/product design spec
+    // (price_breakup_diamond ÷ design carats), scaled to the entered carats. It is NEVER re-derived from
+    // the moving Diamond prop — doing so compounds the value down (÷ product cts, × entered cts) on every
+    // reprice. Falls back to the prop only when the variant carries no diamond breakup.
+    const varDiamondValue = parseFloat(varMf.price_breakup_diamond || 0) * (item.quantity || 1);
+    const oldDiamondValue = parseFloat((props['Diamond'] || '0').replace('Rs', '').trim());
+    const stoneRateBasis  = varDiamondValue || oldDiamondValue;
+    const perCtRate       = totalOldCts > 0 ? stoneRateBasis / totalOldCts : 0;
+    const newDiamondValue = totalOldCts > 0 ? perCtRate * totalNewCts : stoneRateBasis;
 
-    // Making: scale by net wt ratio
-    const oldMakingValue  = parseFloat((props['Making'] || props['Making Charges'] || '0').replace('Rs', '').trim());
-    const varMakingValue  = parseFloat(varMf.price_breakup_making || 0) * (item.quantity || 1);
-    const effectiveMaking = oldMakingValue || varMakingValue;
-    const newMakingValue  = oldNetWt > 0 ? (newNetWt * effectiveMaking / oldNetWt) : effectiveMaking;
+    // Making: making-per-gram ALWAYS from the variant design spec (price_breakup_making ÷ variant net weight),
+    // scaled to the entered net weight — never re-derived from the moving Making prop or a rate-dependent old
+    // net weight (which drifts when the gold rate changes). Falls back to the legacy prop-ratio only when the
+    // variant lacks making/net-weight data.
+    const varNetWt       = parseFloat(varMf.net_metal_weight_g || varMf.net_wt || 0);
+    const varMakingValue = parseFloat(varMf.price_breakup_making || 0) * (item.quantity || 1);
+    const oldMakingValue = parseFloat((props['Making'] || props['Making Charges'] || '0').replace('Rs', '').trim());
+    let   newMakingValue;
+    if (varNetWt > 0 && varMakingValue > 0) {
+      newMakingValue = (varMakingValue / varNetWt) * newNetWt;
+    } else {
+      newMakingValue = oldNetWt > 0 ? (newNetWt * oldMakingValue / oldNetWt) : oldMakingValue;
+    }
 
-    const newGrossValue = newGoldValue + newDiamondValue + newMakingValue;
+    // Gross = components, made GST-inclusive (unified convention: components + 3% GST, same as the catalog price).
+    const newGrossValue = (newGoldValue + newDiamondValue + newMakingValue) * 1.03;
 
     return {
       item, idx, skip: false, hydrate: false,
@@ -1991,7 +2005,7 @@ async function handleWeightedDocReprice(draft) {
         if (!dia)    dia    = parseFloat(varMf.price_breakup_diamond || 0) * (item.quantity || 1);
         if (!making) making = parseFloat(varMf.price_breakup_making  || 0) * (item.quantity || 1);
       }
-      const basis = gold * pctGold + dia * pctDia + making * pctMaking;
+      const basis = (gold * pctGold + dia * pctDia + making * pctMaking) * 1.03;  // GST-inclusive, same convention as reprice/catalog
       return { item, basis };
     }));
 
