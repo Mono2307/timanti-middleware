@@ -9,7 +9,6 @@ fly.toml
 # metafield-manager is a SEPARATE Shopify app whose pnpm node_modules symlinks
 # break `archive/tar: unknown file mode` during the build context upload.
 metafield-manager
-Recon Test
 .claude
 **/__pycache__
 ~$*
@@ -17,3 +16,8 @@ Recon Test
 *.patch
 *.csv
 *.xlsx
+
+# EXCEPT the recon inputs — /api/recon reads these at runtime from /app/Recon Test.
+# Negations come last so they override the *.csv / *.xlsx excludes above.
+!Recon Test/
+!Recon Test/**
