@@ -318,6 +318,14 @@ export default function MetafieldManager({ surface = "block" } = {}) {
   const [excCode, setExcCode] = useState("");
   const [excBusy, setExcBusy] = useState(false);
   const [excNote, setExcNote] = useState("");
+  // Unified adjustments selector + discount inputs.
+  const [adjType, setAdjType] = useState(""); // "" | "exchange" | "voucher" | "discount"
+  const [discountSubmode, setDiscountSubmode] = useState("code"); // "code" | "custom"
+  const [discountCode, setDiscountCode] = useState("");
+  const [discountValue, setDiscountValue] = useState("");
+  const [discountMode, setDiscountMode] = useState("pct"); // "pct" | "flat"
+  const [discountBusy, setDiscountBusy] = useState(false);
+  const [discountNote, setDiscountNote] = useState("");
   const [refreshTick, setRefreshTick] = useState(0); // bumped after a save to re-pull server-recomputed values
   const [recalcNote, setRecalcNote] = useState(""); // transient "recalculating…" hint after a trigger tag
   const baselineRef = useRef({});
@@ -528,6 +536,38 @@ export default function MetafieldManager({ surface = "block" } = {}) {
     }
   }
 
+  // Apply a pre-tax, diamond-only discount: staff pick a real Shopify code or a custom %/₹. We drop an
+  // `apply-discount:<code>` or `apply-discount:custom:<v>:<pct|flat>` tag; the middleware resolves the
+  // amount against the diamond value, writes custom.discount_applied, and reprices dia-only pre-tax.
+  async function applyDiscount() {
+    if (!ownerId) return;
+    let tag;
+    if (discountSubmode === "code") {
+      const code = discountCode.trim();
+      if (!code) return;
+      tag = `apply-discount:${code}`;
+    } else {
+      const v = parseFloat(discountValue);
+      if (!(v > 0)) return;
+      tag = `apply-discount:custom:${v}:${discountMode}`;
+    }
+    setDiscountBusy(true);
+    setDiscountNote("");
+    try {
+      const res = await shopify.query(TAGS_ADD_MUTATION, { variables: { id: ownerId, tags: [tag] } });
+      const errs = collectErrors(res, "tagsAdd");
+      if (errs.length) throw new Error(errs.join("; "));
+      setDiscountCode("");
+      setDiscountValue("");
+      setDiscountNote(`Applying discount… the diamond value, line prices and balance update in a few seconds. If it can't be resolved, a "discount-invalid" tag appears with the reason.`);
+      setTimeout(() => setRefreshTick((t) => t + 1), 3000);
+    } catch (e) {
+      setDiscountNote(`Couldn't apply: ${e?.message || e}`);
+    } finally {
+      setDiscountBusy(false);
+    }
+  }
+
   const renderExcApply = () => (
     <s-section heading="Apply an Exchange Note">
       <s-stack direction="block" gap="base">
@@ -577,6 +617,85 @@ export default function MetafieldManager({ surface = "block" } = {}) {
         {voucherNote ? <s-text>{voucherNote}</s-text> : null}
       </s-stack>
     </s-section>
+  );
+
+  const renderDiscountApply = () => (
+    <s-section heading="Apply a Discount">
+      <s-stack direction="block" gap="base">
+        <s-text tone="subdued">
+          Discounts reduce the DIAMOND value pre-tax (order-level). Use a real Shopify discount code, or a
+          custom % / ₹ amount. Taxable value, GST, line price and amount-to-collect all update automatically.
+        </s-text>
+        <s-select
+          label="Discount source"
+          value={discountSubmode}
+          onChange={(e) => setDiscountSubmode(e.target.value ?? "code")}
+        >
+          <s-option value="code">Discount code</s-option>
+          <s-option value="custom">Custom</s-option>
+        </s-select>
+        {discountSubmode === "code" ? (
+          <s-text-field
+            label="Discount code (e.g. FNF5)"
+            value={discountCode}
+            disabled={discountBusy ? "" : undefined}
+            onChange={(e) => setDiscountCode(e.target.value ?? "")}
+          />
+        ) : (
+          <s-stack direction="inline" gap="base">
+            <s-text-field
+              label="Value"
+              value={discountValue}
+              disabled={discountBusy ? "" : undefined}
+              onChange={(e) => setDiscountValue(e.target.value ?? "")}
+            />
+            <s-select
+              label="Type"
+              value={discountMode}
+              onChange={(e) => setDiscountMode(e.target.value ?? "pct")}
+            >
+              <s-option value="pct">% of diamond</s-option>
+              <s-option value="flat">₹ flat</s-option>
+            </s-select>
+          </s-stack>
+        )}
+        <s-button
+          onClick={applyDiscount}
+          loading={discountBusy ? "" : undefined}
+          disabled={
+            (discountSubmode === "code" ? !discountCode.trim() : !(parseFloat(discountValue) > 0)) || discountBusy
+              ? ""
+              : undefined
+          }
+        >
+          Apply Discount
+        </s-button>
+        {discountNote ? <s-text>{discountNote}</s-text> : null}
+      </s-stack>
+    </s-section>
+  );
+
+  // Unified adjustments selector: pick one to reveal its panel (Exchange / Voucher / Discount).
+  const renderAdjustmentSelector = () => (
+    <>
+      <s-section heading="Adjustments">
+        <s-stack direction="block" gap="base">
+          <s-select
+            label="Add adjustment"
+            value={adjType}
+            onChange={(e) => setAdjType(e.target.value ?? "")}
+          >
+            <s-option value="">Select an adjustment to apply…</s-option>
+            <s-option value="exchange">Exchange Note</s-option>
+            <s-option value="voucher">Voucher</s-option>
+            <s-option value="discount">Discount</s-option>
+          </s-select>
+        </s-stack>
+      </s-section>
+      {adjType === "exchange" ? renderExcApply() : null}
+      {adjType === "voucher" ? renderVoucherApply() : null}
+      {adjType === "discount" ? renderDiscountApply() : null}
+    </>
   );
 
   const sections = buildSections(ctx.scope);
@@ -638,8 +757,7 @@ export default function MetafieldManager({ surface = "block" } = {}) {
       <s-admin-action heading="Jewellery Workspace — all fields">
         <s-stack direction="block" gap="large-100">
           {renderBanners()}
-          {renderVoucherApply()}
-          {renderExcApply()}
+          {renderAdjustmentSelector()}
           {renderSections()}
         </s-stack>
         <s-button
