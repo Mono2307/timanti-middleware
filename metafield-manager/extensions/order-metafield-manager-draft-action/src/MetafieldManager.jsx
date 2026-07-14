@@ -18,16 +18,17 @@ import { useEffect, useRef, useState } from "preact/hooks";
  * Mirrors middleware metafield_governance.csv. Namespace/type are never
  * hardcoded — they come from the live definitions at save time.
  */
+// Founder flow: identity header (top, read-only) → Required Inputs → Payments →
+// Pricing (incl. discounts) → Product Metadata → Adjustments (selector + values) →
+// Repair → Credit Note → Manufacturing → System. "Order Details" is gone (its
+// fields are Required), "Exchange" was always dead, "Procurement" PO fields removed.
 const SECTION_ORDER = [
-  "Order Details",
   "Payments",
-  "Adjustments",
   "Pricing",
-  "Exchange",
-  "Credit Note",
   "Product Metadata",
-  "Procurement",
+  "Adjustments",
   "Repair",
+  "Credit Note",
   "Manufacturing",
   "System",
 ];
@@ -42,11 +43,27 @@ const SECTION_ORDER = [
 const REQUIRED_FIELDS = [
   "order_type",
   "channel",
+  "state_code",
   "payment_mode_advance",
   "amount_paid",
 ];
 const REQUIRED_SET = new Set(REQUIRED_FIELDS);
 const REQUIRED_SECTION = "Required Inputs";
+
+// Read-only identity block promoted ABOVE Required Inputs (document type + serials).
+// These are auto-stamped by the middleware; staff only read them.
+const IDENTITY_FIELDS = [
+  "document_type",
+  "serial_display",
+  "serial_code",
+  "serial_no",
+  "serial_state",
+  "order_name",
+  "source_order_id",
+  "action_token",
+];
+const IDENTITY_SET = new Set(IDENTITY_FIELDS);
+const IDENTITY_SECTION = "Document / Identity";
 
 const FIELD_CONFIG = {
   order_type: { section: "Order Details", label: "Order Type", editable: true, applies: "both" },
@@ -71,8 +88,8 @@ const FIELD_CONFIG = {
   old_gold_purity: { section: "Adjustments", label: "Old Gold Purity (karat)", editable: true, applies: "draft" },
   old_gold_value: { section: "Adjustments", label: "Old Gold Value (auto; override optional)", editable: true, applies: "both" },
   exchange_note_value: { section: "Adjustments", label: "Exchange Note Value (auto from Apply; override optional)", editable: true, applies: "both" },
-  voucher_value: { section: "Adjustments", label: "Voucher Value", editable: false, applies: "both" },
-  advance: { section: "Adjustments", label: "Design Advance", editable: false, applies: "both" },
+  voucher_value: { section: "Adjustments", label: "Voucher Value (auto from Apply; override optional)", editable: true, applies: "both" },
+  advance: { section: "Adjustments", label: "Design Advance (auto from reference; override optional)", editable: true, applies: "both" },
   advance_ref: { section: "Adjustments", label: "Advance Ref — order # to redeem", editable: true, applies: "both" },
   advance_status: { section: "Adjustments", label: "Advance Status", editable: false, applies: "both" },
   redeemed_against: { section: "Adjustments", label: "Advance Redeemed Against", editable: false, applies: "both" },
@@ -94,15 +111,19 @@ const FIELD_CONFIG = {
   net_wt: { section: "Product Metadata", label: "Net Weight (legacy)", editable: false, applies: "draft" },
   diamond_cts: { section: "Product Metadata", label: "Diamond Carats (legacy)", editable: false, applies: "draft" },
 
+  // Read-only PO display fields (po_status/po_type/po_routing/batch_*) are intentionally
+  // left in the now-unlisted "Procurement" section so they no longer render in this panel
+  // (redundant here; still set/used server-side and in PO-ops). The EDITABLE staff inputs
+  // below are relocated to "Manufacturing" so they survive.
   po_status: { section: "Procurement", label: "PO Status", editable: false, applies: "draft" },
   po_type: { section: "Procurement", label: "PO Type", editable: false, applies: "draft" },
   po_routing: { section: "Procurement", label: "PO Routing (JSON)", editable: false, applies: "both" },
   batch_id: { section: "Procurement", label: "PO Batch ID", editable: false, applies: "draft" },
   batch_date: { section: "Procurement", label: "PO Batch Date", editable: false, applies: "draft" },
-  delivery_code: { section: "Procurement", label: "Delivery / Store Code", editable: true, applies: "draft" },
-  replenishment_comments: { section: "Procurement", label: "Replenishment Notes", editable: true, applies: "both" },
-  po_replenishment_variants: { section: "Procurement", label: "Replenishment Variants", editable: true, applies: "order" },
-  po_mto_variants: { section: "Procurement", label: "MTO Variants", editable: true, applies: "order" },
+  delivery_code: { section: "Manufacturing", label: "Delivery / Store Code", editable: true, applies: "draft" },
+  replenishment_comments: { section: "Manufacturing", label: "Replenishment Notes", editable: true, applies: "both" },
+  po_replenishment_variants: { section: "Manufacturing", label: "Replenishment Variants", editable: true, applies: "order" },
+  po_mto_variants: { section: "Manufacturing", label: "MTO Variants", editable: true, applies: "order" },
 
   repair_order_reference: { section: "Repair", label: "Linked Repair Order", editable: true, applies: "draft" },
   repair_intake_at: { section: "Repair", label: "Repair Intake At", editable: false, applies: "draft" },
@@ -115,7 +136,7 @@ const FIELD_CONFIG = {
 
   state_code: { section: "System", label: "Store / State Code", editable: true, applies: "both" },
   invoice_date: { section: "System", label: "Invoice Date", editable: true, applies: "both" },
-  is_finalized: { section: "System", label: "Finalized", editable: true, applies: "both" },
+  is_finalized: { section: "System", label: "Finalized", editable: false, applies: "both" },
   order_name: { section: "System", label: "Linked Order Name", editable: false, applies: "draft" },
   source_order_id: { section: "System", label: "Source Order ID", editable: false, applies: "draft" },
   document_type: { section: "System", label: "Document Type", editable: false, applies: "both" },
@@ -148,6 +169,14 @@ function buildSections(scope) {
   const inScope = fieldsForScope(scope);
   const inScopeSet = new Set(inScope);
 
+  // Read-only identity block → single section promoted ABOVE everything, in
+  // IDENTITY_FIELDS order (document type + serials). Always rendered read-only.
+  const identityFields = IDENTITY_FIELDS.filter((key) => inScopeSet.has(key)).map((key) => ({
+    key,
+    label: FIELD_CONFIG[key].label,
+    editable: false,
+  }));
+
   // Required staff inputs → single top section, in REQUIRED_FIELDS priority order.
   const requiredFields = REQUIRED_FIELDS.filter((key) => inScopeSet.has(key)).map((key) => ({
     key,
@@ -156,11 +185,11 @@ function buildSections(scope) {
     required: true,
   }));
 
-  // Everything else stays in its topical section (required keys are removed here
-  // since they've been promoted above).
+  // Everything else stays in its topical section (required + identity keys are
+  // removed here since they've been promoted above).
   const bySection = {};
   for (const key of inScope) {
-    if (REQUIRED_SET.has(key)) continue;
+    if (REQUIRED_SET.has(key) || IDENTITY_SET.has(key)) continue;
     const cfg = FIELD_CONFIG[key];
     (bySection[cfg.section] ||= []).push({ key, label: cfg.label, editable: cfg.editable });
   }
@@ -170,6 +199,7 @@ function buildSections(scope) {
   }));
 
   const sections = [];
+  if (identityFields.length) sections.push({ title: IDENTITY_SECTION, fields: identityFields });
   if (requiredFields.length) sections.push({ title: REQUIRED_SECTION, fields: requiredFields });
   return sections.concat(topical);
 }
@@ -333,9 +363,14 @@ export default function MetafieldManager({ surface = "block" } = {}) {
       // Fall back to each metafield's own namespace/type where no definition.
       // (values query already carried them; merge in.)
 
+      const todayISO = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
       const editable = {};
       for (const key of fieldsForScope(ctx.scope)) {
-        if (FIELD_CONFIG[key].editable) editable[key] = valuesByKey[key] ?? "";
+        if (!FIELD_CONFIG[key].editable) continue;
+        let v = valuesByKey[key] ?? "";
+        // invoice_date auto-fills to today when blank, but stays editable (staff can override).
+        if (key === "invoice_date" && !v) v = todayISO;
+        editable[key] = v;
       }
 
       if (!active) return;
