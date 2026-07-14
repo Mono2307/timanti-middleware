@@ -2419,6 +2419,37 @@ async function handleAdvanceRedeem(draft) {
   }
 }
 
+// Strip a voucher / exchange-note adjustment off a draft — delete its value metafield, remove its tags,
+// and recompute net-to-collect — WITHOUT touching the ledger. Used by the apply handlers for "latest-one-
+// wins": an instrument re-applied to a new draft is removed from the one it was on. Never touches a
+// converted order. Best-effort; callers wrap in try/catch.
+async function stripInstrumentFromDraft(draftId, type, token) {
+  const base = process.env.SHOPIFY_STORE_URL;
+  const headers = { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' };
+  const valueKey   = type === 'voucher' ? 'voucher_value' : 'exchange_note_value';
+  const appliedTag = type === 'voucher' ? 'vch-applied'   : 'exc-applied';
+  const numPrefix  = type === 'voucher' ? 'vch-num:'      : 'exc-num:';
+  const [{ data }, { data: mfData }] = await Promise.all([
+    axios.get(`${base}/admin/api/2024-01/draft_orders/${draftId}.json`, { headers, timeout: 10000 }),
+    axios.get(`${base}/admin/api/2024-01/draft_orders/${draftId}/metafields.json`, { headers, timeout: 10000 }),
+  ]);
+  const draft = data.draft_order;
+  if (!draft || draft.status === 'completed' || draft.order_id) return; // never touch a converted order
+  const mfs = mfData.metafields || [];
+  const valMf = mfs.find(m => m.namespace === 'custom' && m.key === valueKey);
+  if (valMf) await axios.delete(`${base}/admin/api/2024-01/metafields/${valMf.id}.json`, { headers, timeout: 10000 });
+  const adj = (key) => { const m = mfs.find(x => x.namespace === 'custom' && x.key === key); return m ? Math.abs(parseFloat(m.value) || 0) : 0; };
+  const remaining = ['exchange_note_value', 'voucher_value', 'old_gold_value', 'advance']
+    .filter(k => k !== valueKey).reduce((s, k) => s + adj(k), 0);
+  const net = Math.max(0, parseFloat(draft.total_price || 0) - remaining).toFixed(2);
+  await updateDraftOrderMetafields(draftId, { amount_to_be_collected: net });
+  const tags = (draft.tags || '').split(',').map(t => t.trim())
+    .filter(t => t && t !== appliedTag && !t.startsWith(numPrefix)).join(', ');
+  await axios.put(`${base}/admin/api/2024-01/draft_orders/${draftId}.json`,
+    { draft_order: { id: Number(draftId), tags } }, { headers, timeout: 10000 });
+  console.log(`[${type}] latest-one-wins: stripped off prior draft ${draftId}`);
+}
+
 // Apply a voucher from the metafield-manager admin action. Staff add an `apply-voucher:<code>` tag;
 // this looks the voucher up in the ledger (value + validity — staff never type the amount), applies it
 // POST-tax on the draft (voucher_value + net), records the redemption, deletes the online price rule,
@@ -2451,11 +2482,16 @@ async function handleApplyVoucherTag(draft) {
     if (inst.status === 'voided') { await finishTags([`voucher-invalid: ${vchNumber} voided`]); return; }
     if (inst.status === 'expired' || (inst.status === 'open' && expired)) { await finishTags([`voucher-invalid: ${vchNumber} expired`]); return; }
     // Lock-on-conversion: a voucher is only unusable once REDEEMED against a real (converted) order.
-    // While merely 'applied' to a draft, or 'open', it can still be written to other drafts — the single-
-    // use lock happens when a draft converts (see the draft-completed handler, which redeems by code and
-    // guards against double-spend). This lets staff put the same voucher on multiple in-progress drafts.
+    // Until then it can move between drafts freely — the single-use lock happens at conversion.
     if (inst.status === 'redeemed') {
       await finishTags([`voucher-invalid: ${vchNumber} already redeemed on ${inst.target_order_name || inst.target_order_id || 'an order'}`]); return;
+    }
+    // Latest-one-wins: hold on ONE draft at a time. If it's currently applied to a DIFFERENT draft, strip
+    // it off that draft first (tags + metafield + net recompute) so it can never be live on two drafts —
+    // no double-spend. The apply() below re-points the ledger to this draft.
+    if (inst.status === 'applied' && inst.target_draft_id && String(inst.target_draft_id) !== String(draftOrderId)) {
+      try { await stripInstrumentFromDraft(inst.target_draft_id, 'voucher', token); }
+      catch (e) { console.error(`[apply-voucher] strip prior draft ${inst.target_draft_id}:`, e.message); }
     }
 
     const { data: mfData } = await axios.get(`${base}/admin/api/2024-01/draft_orders/${draftOrderId}/metafields.json`, { headers, timeout: 10000 });
@@ -2511,9 +2547,14 @@ async function handleApplyExcTag(draft) {
     if (inst.status === 'voided') { await finishTags([`exc-invalid: ${excNumber} voided`]); return; }
     if (inst.status === 'expired' || (inst.status === 'open' && expired)) { await finishTags([`exc-invalid: ${excNumber} expired`]); return; }
     // Lock-on-conversion (mirrors handleApplyVoucherTag): an exchange note only blocks once REDEEMED on a
-    // converted order. While 'applied'/'open' it can sit on multiple drafts; conversion locks it.
+    // converted order. Latest-one-wins between drafts; conversion locks it.
     if (inst.status === 'redeemed') {
       await finishTags([`exc-invalid: ${excNumber} already redeemed on ${inst.target_order_name || inst.target_order_id || 'an order'}`]); return;
+    }
+    // Latest-one-wins: strip off any prior draft it was applied to, so it holds on one draft at a time.
+    if (inst.status === 'applied' && inst.target_draft_id && String(inst.target_draft_id) !== String(draftOrderId)) {
+      try { await stripInstrumentFromDraft(inst.target_draft_id, 'exchange_note', token); }
+      catch (e) { console.error(`[apply-exc] strip prior draft ${inst.target_draft_id}:`, e.message); }
     }
 
     const { data: mfData } = await axios.get(`${base}/admin/api/2024-01/draft_orders/${draftOrderId}/metafields.json`, { headers, timeout: 10000 });
@@ -4574,7 +4615,7 @@ app.post('/api/exc-redeem', async (req, res) => {
 // Body: { newDraftId, excNumber }. Refuses (409) if the draft has already converted to an order.
 // ─────────────────────────────────────────
 app.post('/api/exc-void', async (req, res) => {
-  const { newDraftId, excNumber, free } = req.body || {};
+  const { newDraftId, excNumber, hardVoid } = req.body || {};
   if (!newDraftId || !excNumber) {
     return res.status(400).json({ success: false, error: 'newDraftId and excNumber are required' });
   }
@@ -4615,9 +4656,9 @@ app.post('/api/exc-void', async (req, res) => {
 
     // Cancel the ledger serial by its full code (resource_id). seq is no longer unique now that the
     // exchange_note counter resets per FY, so EXC-27-0001 must be matched whole, not by seq alone.
-    // free:true → return the note to the pool (reopen, keep serial). Default → TRUE void (retire the
-    // serial counter + void the ledger) so a mis-issued note can never be used again.
-    if (free) {
+    // Default = FREE the note (reopen to 'open', keep serial). hardVoid:true = TRUE void (retire the serial
+    // counter + void the ledger) — rare, only to cancel a note that must never exist.
+    if (!hardVoid) {
       try { await creditInstruments.reopen(supabase, { instrumentType: 'exchange_note', serialCode: excNumber }); }
       catch (e) { console.error('[ledger] exc-reopen:', e.message); }
       return res.json({ success: true, draftId: newDraftId, excNumber, freed: true });
@@ -4736,7 +4777,7 @@ app.post('/api/voucher-redeem', async (req, res) => {
 // voucher can't be freed/voided by editing a draft). Does NOT delete the Shopify discount code.
 // ─────────────────────────────────────────
 app.post('/api/voucher-void', async (req, res) => {
-  const { newDraftId, vchNumber, free } = req.body || {};
+  const { newDraftId, vchNumber, hardVoid } = req.body || {};
   if (!newDraftId || !vchNumber) {
     return res.status(400).json({ success: false, error: 'newDraftId and vchNumber are required' });
   }
@@ -4773,9 +4814,10 @@ app.post('/api/voucher-void', async (req, res) => {
       { headers, timeout: 10000 }
     );
 
-    // free:true → return the voucher to the pool (reopen, keep serial). Default → TRUE void (retire the
-    // serial counter + void the ledger) so a mis-issued voucher can never be used again.
-    if (free) {
+    // Default = FREE the voucher (reopen to 'open', keep serial — available + re-addable). hardVoid:true =
+    // TRUE void (retire the serial counter + void the ledger) — rare, only to cancel a credit that must
+    // never exist (issued in error / refunded another way / fraud).
+    if (!hardVoid) {
       try { await creditInstruments.reopen(supabase, { instrumentType: 'voucher', serialCode: vchNumber }); }
       catch (e) { console.error('[ledger] voucher-reopen:', e.message); }
       return res.json({ success: true, draftId: newDraftId, vchNumber, freed: true });
