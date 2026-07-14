@@ -30,7 +30,7 @@ const REPORTS = {
       { label: 'State (opt)',       param: 'state' },
       { label: 'Stage (opt)',       param: 'paymentStatus' },
     ],
-    cols: ['stage','draft_name','order_name','day','customer','place_of_supply','shipping_state',
+    cols: ['stage','payment_type','draft_name','order_name','day','customer','place_of_supply','shipping_state',
            'product_title','variant_title','sku','hsn','qty','gross_sales','discount','net_sales',
            'taxable_value','igst','sgst','cgst','custom_serial','amount_paid','amount_pending',
            'net_to_collect','payment_mode'],
@@ -43,7 +43,8 @@ const REPORTS = {
     ],
     cols: ['name','created_at','customer','place_of_supply','shipping_state','custom_serial','hsn',
            'qty','gross_value','discount_applied','taxable_value','igst','sgst','cgst','voucher_value',
-           'exchange_note_value','old_gold_value','advance','amount_to_be_collected','amount_paid','total_price'],
+           'exchange_note_value','old_gold_value','advance','amount_to_be_collected','amount_paid','total_price',
+           'instruments_issued','instruments_redeemed'],
   },
   recon: {
     tab: 'Payment Recon', endpoint: '/api/recon', extraQp: 'format=json',
@@ -52,7 +53,7 @@ const REPORTS = {
   ledger: {
     tab: 'Credit Ledger', endpoint: '/api/recon-ledger',
     filters: [
-      { label: 'View (summary|outstanding|tieout)', param: 'view' },
+      { label: 'View (detail|summary|outstanding|tieout)', param: 'view' },
       { label: 'Type (opt)', param: 'type' },
       { label: 'From (opt)', param: 'from' },
       { label: 'To (opt)',   param: 'to' },

@@ -4681,10 +4681,11 @@ app.get('/api/credit-instrument/open', async (req, res) => {
   }
 });
 
-// GET /api/recon-ledger?view=summary|outstanding|tieout&type=&from=&to=&format=json|csv
+// GET /api/recon-ledger?view=detail|summary|outstanding|tieout&type=&from=&to=&format=json|csv
 // The joinable reconciliation report over credit_instruments. (Distinct from the ad-hoc /api/recon
-// CSV tool.) summary: issued = redeemed + outstanding + voided + expired per type/month. outstanding:
-// the open-credit liability register. tieout: redeemed instruments and their target order.
+// CSV tool.) detail: EVERY instrument, one row, with its state + both order refs (issued-against /
+// redeemed-against). summary: issued = redeemed + outstanding + voided + expired per type/month.
+// outstanding: the open-credit liability register. tieout: redeemed instruments and their target order.
 app.get('/api/recon-ledger', async (req, res) => {
   try {
     const view = (req.query.view || 'summary').toLowerCase();
@@ -4694,7 +4695,26 @@ app.get('/api/recon-ledger', async (req, res) => {
     const now = Date.now();
     let out = [];
 
-    if (view === 'summary') {
+    if (view === 'detail' || view === 'all') {
+      // One row per instrument, every state, with both order references — the full breakup.
+      out = rows.map(r => {
+        const st = creditInstruments.effectiveStatus(r, now);
+        return {
+          instrument_type:  r.instrument_type,
+          serial_code:      r.serial_code,
+          state:            st === 'open' ? 'outstanding' : st,   // outstanding|redeemed|voided|expired
+          value:            parseFloat(r.value).toFixed(2),
+          customer_name:    r.customer_name || '',
+          issued_against:   r.source_order_name || '',            // order it was generated on
+          redeemed_against: r.target_order_name || '',            // order it was used on
+          issued_at:        r.issued_at || '',
+          redeemed_at:      r.redeemed_at || '',
+          voided_at:        r.voided_at || '',
+          expires_at:       r.expires_at || '',
+        };
+      }).sort((a, b) => (a.instrument_type + a.serial_code).localeCompare(b.instrument_type + b.serial_code));
+
+    } else if (view === 'summary') {
       const groups = {};
       for (const r of rows) {
         const month = String(r.issued_at || '').slice(0, 7);
@@ -4772,6 +4792,22 @@ app.get('/api/adjustment-report', async (req, res) => {
     const token = await getShopifyToken();
     const search = `created_at:>=${from} created_at:<=${to}`;
     const rows = [];
+
+    // Instrument lifecycle join: show BOTH sides — a voucher/exchange-note ISSUED against an order
+    // and REDEEMED against another. Fetch all instruments once, index by the order they were issued
+    // on (source) and redeemed on (target), tagging each with its state + the counterpart order.
+    const nowMs = Date.now();
+    const bySource = {}, byTarget = {};
+    for (const r of await creditInstruments.fetchAll(supabase, {})) {
+      const st = creditInstruments.effectiveStatus(r, nowMs);
+      const stateLbl = st === 'open' ? 'outstanding' : st;
+      const money = `₹${(parseFloat(r.value) || 0).toFixed(0)}`;
+      if (r.source_order_name) (bySource[r.source_order_name] = bySource[r.source_order_name] || [])
+        .push(`${r.serial_code} ${money} [${stateLbl}]${r.target_order_name ? ' → ' + r.target_order_name : ''}`);
+      if (r.target_order_name) (byTarget[r.target_order_name] = byTarget[r.target_order_name] || [])
+        .push(`${r.serial_code} ${money} [${stateLbl}]${r.source_order_name ? ' ← ' + r.source_order_name : ''}`);
+    }
+
     let cursor = null, page = 0;
     do {
       const query = `query($q:String!,$after:String){ orders(first:50, query:$q, after:$after, sortKey:CREATED_AT){ pageInfo{hasNextPage endCursor} edges{ node{ name createdAt customer{displayName} shippingAddress{provinceCode} subtotalPriceSet{shopMoney{amount}} totalPriceSet{shopMoney{amount}} metafields(namespace:"custom", first:40){edges{node{key value}}} lineItems(first:50){edges{node{ quantity product{ hsn: metafield(namespace:"custom", key:"hsn_code"){value} } }}} } } } }`;
@@ -4815,6 +4851,8 @@ app.get('/api/adjustment-report', async (req, res) => {
           amount_to_be_collected: (mf.amount_to_be_collected != null ? num(mf.amount_to_be_collected) : num(n.totalPriceSet.shopMoney.amount)).toFixed(2),
           amount_paid:            num(mf.amount_paid).toFixed(2),
           total_price:            num(n.totalPriceSet.shopMoney.amount).toFixed(2),
+          instruments_issued:     (bySource[n.name] || []).join(' | '),   // credits generated on this order
+          instruments_redeemed:   (byTarget[n.name] || []).join(' | '),   // credits used on this order
         });
       }
       cursor = conn.pageInfo.hasNextPage ? conn.pageInfo.endCursor : null;
@@ -4825,7 +4863,7 @@ app.get('/api/adjustment-report', async (req, res) => {
     for (const k of sumKeys) totals[k] = rows.reduce((s, r) => s + num(r[k]), 0).toFixed(2);
 
     if ((req.query.format || '').toLowerCase() === 'csv') {
-      const cols = ['name','created_at','customer','place_of_supply','shipping_state','custom_serial','hsn', ...sumKeys];
+      const cols = ['name','created_at','customer','place_of_supply','shipping_state','custom_serial','hsn', ...sumKeys, 'instruments_issued','instruments_redeemed'];
       const all = rows.concat([totals]);
       const csv = [cols.join(',')].concat(all.map(r => cols.map(c => {
         const v = r[c] == null ? '' : String(r[c]);

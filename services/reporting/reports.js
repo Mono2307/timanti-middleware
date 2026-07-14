@@ -105,6 +105,11 @@ async function collectOrders(deps, { from, to }, rows) {
       const isFull  = mf.is_finalized === 'true' || String(mf.payment_status || '').toLowerCase() === 'full' || (paid > 0 && pending < 1);
       const stage   = isFull ? 'completed-paid' : (paid > 0 ? 'partial' : 'unpaid');
       const pmode   = [mf.payment_mode_advance, mf.payment_mode_final].filter(Boolean).join(' / ');
+      // For completed orders, distinguish a single full payment from an advance-then-final settlement
+      // (both advance & final payment modes recorded ⇒ it was paid in installments).
+      const bothModes = !!(mf.payment_mode_advance && mf.payment_mode_final);
+      const paymentType = isFull ? (bothModes ? 'full: advance+final' : 'full: one-time')
+                                 : (paid > 0 ? 'partial' : 'unpaid');
 
       const lines = n.lineItems.edges.map(le => le.node);
       lines.forEach((li, idx) => {
@@ -118,6 +123,7 @@ async function collectOrders(deps, { from, to }, rows) {
         });
         rows.push({
           stage,
+          payment_type:  paymentType,
           draft_name:   '',
           order_name:   n.name || '',
           day:          fmtDay(n.createdAt),
@@ -168,7 +174,11 @@ async function collectDrafts(deps, { from, to }, rows) {
         const paid    = num((tag('paid:') || '').replace(/Rs/i, ''));
         const pending = num((tag('pending:') || '').replace(/Rs/i, ''));
         const total   = num((tag('total:') || '').replace(/Rs/i, '')) || r2(paid + pending);
+        // Sales report only counts drafts with a RECORDED payment (an advance/partial or a full
+        // pre-payment) — plain open/unpaid drafts are not sales yet, so skip them.
+        if (!(paid > 0 || deposit === 'partial' || deposit === 'fully-paid')) continue;
         const stage   = deposit === 'fully-paid' ? 'draft-paid' : (paid > 0 ? 'partial' : 'open-draft');
+        const paymentType = deposit === 'fully-paid' ? 'full: paid-in-advance' : 'partial';
         const pmode   = [tag('pmode-advance:'), tag('pmode-final:')].filter(Boolean).join(' / ');
 
         const shipState  = d.shipping_address?.province_code || '';
@@ -194,6 +204,7 @@ async function collectDrafts(deps, { from, to }, rows) {
           });
           rows.push({
             stage,
+            payment_type: paymentType,
             draft_name:  d.name || '',
             order_name:  '',
             day:         fmtDay(d.created_at),
@@ -222,7 +233,7 @@ async function collectDrafts(deps, { from, to }, rows) {
 }
 
 const SALES_COLS = [
-  'stage', 'draft_name', 'order_name', 'day', 'customer', 'place_of_supply', 'shipping_state',
+  'stage', 'payment_type', 'draft_name', 'order_name', 'day', 'customer', 'place_of_supply', 'shipping_state',
   'product_title', 'variant_title', 'sku', 'hsn', 'qty',
   'gross_sales', 'discount', 'net_sales', 'taxable_value', 'igst', 'sgst', 'cgst',
   'custom_serial', 'amount_paid', 'amount_pending', 'net_to_collect', 'payment_mode',
