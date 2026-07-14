@@ -61,6 +61,54 @@ async function redeem(supabase, p) {
   return true;
 }
 
+// Mark an instrument APPLIED to a draft (pending, reversible) — NOT a true redemption yet. A voucher/
+// exchange note applied to a draft reserves it; it becomes 'redeemed' only when the draft converts to
+// an order (promoteApplied). Lazily inserts an applied row if none exists (mirrors redeem's fallback).
+async function apply(supabase, p) {
+  const now = new Date().toISOString();
+  const patch = { status: 'applied', applied_at: now, updated_at: now };
+  if (p.targetDraftId) patch.target_draft_id = String(p.targetDraftId);
+
+  const { data, error } = await supabase.from(TABLE).update(patch)
+    .eq('instrument_type', p.instrumentType).eq('serial_code', p.serialCode).select('id');
+  if (error) throw new Error(`apply ${p.serialCode}: ${error.message}`);
+  if (data && data.length) return true;
+
+  const value = Number(p.value) > 0 ? Number(p.value) : null;
+  if (value == null) { console.warn(`[ledger] apply ${p.serialCode}: no issued row and no value — skipped`); return false; }
+  const { error: insErr } = await supabase.from(TABLE).insert({
+    instrument_type: p.instrumentType, serial_code: p.serialCode, value,
+    status: 'applied', target_draft_id: p.targetDraftId ? String(p.targetDraftId) : null,
+    applied_at: now, updated_at: now,
+  });
+  if (insErr) throw new Error(`apply-insert ${p.serialCode}: ${insErr.message}`);
+  return true;
+}
+
+// Promote every instrument APPLIED to a draft to a TRUE redemption once that draft converts to an
+// order. Returns the serials promoted. Only touches status='applied' rows for the draft.
+async function promoteApplied(supabase, { targetDraftId, targetOrderId, targetOrderName }) {
+  const now = new Date().toISOString();
+  const patch = { status: 'redeemed', redeemed_at: now, updated_at: now };
+  if (targetOrderId)   patch.target_order_id   = String(targetOrderId);
+  if (targetOrderName) patch.target_order_name = targetOrderName;
+  const { data, error } = await supabase.from(TABLE).update(patch)
+    .eq('status', 'applied').eq('target_draft_id', String(targetDraftId)).select('serial_code');
+  if (error) throw new Error(`promoteApplied draft ${targetDraftId}: ${error.message}`);
+  return (data || []).map(r => r.serial_code);
+}
+
+// Revert instruments APPLIED to a draft back to 'open' (draft deleted/abandoned or voucher removed) —
+// so a reservation that never converted stops counting as used. Returns the serials reverted.
+async function revertApplied(supabase, { targetDraftId }) {
+  const now = new Date().toISOString();
+  const { data, error } = await supabase.from(TABLE)
+    .update({ status: 'open', target_draft_id: null, applied_at: null, updated_at: now })
+    .eq('status', 'applied').eq('target_draft_id', String(targetDraftId)).select('serial_code');
+  if (error) throw new Error(`revertApplied draft ${targetDraftId}: ${error.message}`);
+  return (data || []).map(r => r.serial_code);
+}
+
 // Mark an instrument VOIDED.
 async function voidInstrument(supabase, p) {
   const now = new Date().toISOString();
@@ -109,4 +157,4 @@ function effectiveStatus(row, nowMs) {
   return row.status;
 }
 
-module.exports = { upsertIssued, redeem, voidInstrument, getBySerial, listOpenForCustomer, fetchAll, effectiveStatus };
+module.exports = { upsertIssued, apply, promoteApplied, revertApplied, redeem, voidInstrument, getBySerial, listOpenForCustomer, fetchAll, effectiveStatus };

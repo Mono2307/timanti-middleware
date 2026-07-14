@@ -2439,7 +2439,7 @@ async function handleApplyVoucherTag(draft) {
     const expired = inst.expires_at && new Date(inst.expires_at).getTime() < Date.now();
     if (inst.status === 'voided') { await finishTags([`voucher-invalid: ${vchNumber} voided`]); return; }
     if (inst.status === 'expired' || (inst.status === 'open' && expired)) { await finishTags([`voucher-invalid: ${vchNumber} expired`]); return; }
-    if (inst.status === 'redeemed' && String(inst.target_draft_id || '') !== String(draftOrderId)) {
+    if (inst.status === 'redeemed' || (inst.status === 'applied' && String(inst.target_draft_id || '') !== String(draftOrderId))) {
       await finishTags([`voucher-invalid: ${vchNumber} already used`]); return;
     }
 
@@ -2451,7 +2451,7 @@ async function handleApplyVoucherTag(draft) {
     await updateDraftOrderMetafields(draftOrderId, { voucher_value: value.toFixed(2), amount_to_be_collected: netToCollect });
     await finishTags(['vch-applied', `vch-num:${vchNumber}`]);
 
-    try { await creditInstruments.redeem(supabase, { instrumentType: 'voucher', serialCode: vchNumber, targetDraftId: draftOrderId, value }); }
+    try { await creditInstruments.apply(supabase, { instrumentType: 'voucher', serialCode: vchNumber, targetDraftId: draftOrderId, value }); }
     catch (e) { console.error('[apply-voucher] ledger:', e.message); }
     if (inst.price_rule_id) {
       try { await axios.delete(`${base}/admin/api/2024-01/price_rules/${inst.price_rule_id}.json`, { headers, timeout: 10000 }); }
@@ -2495,7 +2495,7 @@ async function handleApplyExcTag(draft) {
     const expired = inst.expires_at && new Date(inst.expires_at).getTime() < Date.now();
     if (inst.status === 'voided') { await finishTags([`exc-invalid: ${excNumber} voided`]); return; }
     if (inst.status === 'expired' || (inst.status === 'open' && expired)) { await finishTags([`exc-invalid: ${excNumber} expired`]); return; }
-    if (inst.status === 'redeemed' && String(inst.target_draft_id || '') !== String(draftOrderId)) {
+    if (inst.status === 'redeemed' || (inst.status === 'applied' && String(inst.target_draft_id || '') !== String(draftOrderId))) {
       await finishTags([`exc-invalid: ${excNumber} already used`]); return;
     }
 
@@ -2507,7 +2507,7 @@ async function handleApplyExcTag(draft) {
     await updateDraftOrderMetafields(draftOrderId, { exchange_note_value: value.toFixed(2), amount_to_be_collected: netToCollect });
     await finishTags(['exc-applied', `exc-num:${excNumber}`]);
 
-    try { await creditInstruments.redeem(supabase, { instrumentType: 'exchange_note', serialCode: excNumber, targetDraftId: draftOrderId, value }); }
+    try { await creditInstruments.apply(supabase, { instrumentType: 'exchange_note', serialCode: excNumber, targetDraftId: draftOrderId, value }); }
     catch (e) { console.error('[apply-exc] ledger:', e.message); }
     console.log(`[apply-exc] ${excNumber} (${value}) applied to draft ${draft.name || draftOrderId}`);
   } catch (e) {
@@ -2544,6 +2544,15 @@ app.post('/api/shopify-draft-updated', async (req, res) => {
         const copied = await copyDraftMetafieldsToOrder(draftOrderId, orderId, token);
         console.log(`Draft completed: copied ${copied} metafields → order ${orderId}`);
         await applyPaymentTagsToOrder(orderId, token);
+        // Promote any credit instruments APPLIED to this draft to a true redemption now it's a real order.
+        try {
+          const { data: od } = await axios.get(
+            `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/orders/${orderId}.json?fields=name`,
+            { headers: { 'X-Shopify-Access-Token': token }, timeout: 10000 });
+          const promoted = await creditInstruments.promoteApplied(supabase, {
+            targetDraftId: draftOrderId, targetOrderId: orderId, targetOrderName: od?.order?.name || '' });
+          if (promoted.length) console.log(`Draft completed: promoted ${promoted.join(', ')} → redeemed on ${od?.order?.name || orderId}`);
+        } catch (e) { console.error('[ledger] promote applied → redeemed:', e.message); }
       } catch (err) {
         console.error('Draft completed handler error:', err.message);
       }
@@ -3249,6 +3258,10 @@ app.post('/api/po-webhook', async (req, res) => {
   } else if (topic === 'draft_orders/delete' && req.body?.id) {
     removeDraftFromSheet(req.body.id)
       .catch(e => console.error('[SYNC] delete webhook error:', e.message));
+    // Draft abandoned → free any credit instruments that were only APPLIED to it (never converted).
+    creditInstruments.revertApplied(supabase, { targetDraftId: String(req.body.id) })
+      .then(r => { if (r.length) console.log(`[ledger] draft ${req.body.id} deleted → reverted ${r.join(', ')} to open`); })
+      .catch(e => console.error('[ledger] revert on draft delete:', e.message));
   }
   return handlePoWebhook(req, res, deps);
 });
@@ -4424,7 +4437,7 @@ app.post('/api/exc-redeem', async (req, res) => {
         instrumentType: 'exchange_note', serialCode: excNumber, value: Math.abs(value),
         customerName: req.body.customerName, sourceOrderName: oldOrderNumber || null,
       });
-      await creditInstruments.redeem(supabase, {
+      await creditInstruments.apply(supabase, {
         instrumentType: 'exchange_note', serialCode: excNumber, targetDraftId: newDraftId, value: Math.abs(value),
       });
     } catch (e) { console.error('[ledger] exc-redeem:', e.message); }
@@ -4562,7 +4575,7 @@ app.post('/api/voucher-redeem', async (req, res) => {
       { headers, timeout: 10000 }
     );
     try {
-      await creditInstruments.redeem(supabase, {
+      await creditInstruments.apply(supabase, {
         instrumentType: 'voucher', serialCode: vchNumber, targetDraftId: newDraftId, value: Math.abs(value),
       });
     } catch (e) { console.error('[ledger] voucher-redeem:', e.message); }
@@ -4684,7 +4697,8 @@ app.get('/api/credit-instrument/open', async (req, res) => {
 // GET /api/recon-ledger?view=detail|summary|outstanding|tieout&type=&from=&to=&format=json|csv
 // The joinable reconciliation report over credit_instruments. (Distinct from the ad-hoc /api/recon
 // CSV tool.) detail: EVERY instrument, one row, with its state + both order refs (issued-against /
-// redeemed-against). summary: issued = redeemed + outstanding + voided + expired per type/month.
+// redeemed-against). state 'applied' = reserved on a draft (pending); 'redeemed' = draft converted to
+// an order (true redemption). summary: issued = redeemed + applied + outstanding + voided + expired.
 // outstanding: the open-credit liability register. tieout: redeemed instruments and their target order.
 app.get('/api/recon-ledger', async (req, res) => {
   try {
@@ -4706,8 +4720,10 @@ app.get('/api/recon-ledger', async (req, res) => {
           value:            parseFloat(r.value).toFixed(2),
           customer_name:    r.customer_name || '',
           issued_against:   r.source_order_name || '',            // order it was generated on
-          redeemed_against: r.target_order_name || '',            // order it was used on
+          applied_to_draft: r.target_draft_id || '',              // draft it's reserved on (pending)
+          redeemed_against: r.target_order_name || '',            // order it was truly redeemed on
           issued_at:        r.issued_at || '',
+          applied_at:       r.applied_at || '',
           redeemed_at:      r.redeemed_at || '',
           voided_at:        r.voided_at || '',
           expires_at:       r.expires_at || '',
@@ -4722,6 +4738,7 @@ app.get('/api/recon-ledger', async (req, res) => {
         const g = groups[key] || (groups[key] = {
           instrument_type: r.instrument_type, month,
           issued_count: 0, issued_value: 0, redeemed_count: 0, redeemed_value: 0,
+          applied_count: 0, applied_value: 0,
           outstanding_count: 0, outstanding_value: 0, voided_count: 0, voided_value: 0,
           expired_count: 0, expired_value: 0,
         });
@@ -4729,6 +4746,7 @@ app.get('/api/recon-ledger', async (req, res) => {
         g.issued_count++; g.issued_value += val;
         const st = creditInstruments.effectiveStatus(r, now);
         if (st === 'redeemed')      { g.redeemed_count++;    g.redeemed_value    += val; }
+        else if (st === 'applied')  { g.applied_count++;     g.applied_value     += val; }  // reserved on a draft (not yet a true redemption)
         else if (st === 'voided')   { g.voided_count++;      g.voided_value      += val; }
         else if (st === 'expired')  { g.expired_count++;     g.expired_value     += val; }
         else                        { g.outstanding_count++; g.outstanding_value += val; }
@@ -4736,9 +4754,10 @@ app.get('/api/recon-ledger', async (req, res) => {
       out = Object.values(groups).map(g => ({
         ...g,
         issued_value: g.issued_value.toFixed(2), redeemed_value: g.redeemed_value.toFixed(2),
+        applied_value: g.applied_value.toFixed(2),
         outstanding_value: g.outstanding_value.toFixed(2), voided_value: g.voided_value.toFixed(2),
         expired_value: g.expired_value.toFixed(2),
-        balances: (g.redeemed_count + g.outstanding_count + g.voided_count + g.expired_count) === g.issued_count,
+        balances: (g.redeemed_count + g.applied_count + g.outstanding_count + g.voided_count + g.expired_count) === g.issued_count,
       })).sort((a, b) => (a.instrument_type + a.month).localeCompare(b.instrument_type + b.month));
 
     } else if (view === 'outstanding') {
