@@ -109,6 +109,19 @@ async function revertApplied(supabase, { targetDraftId }) {
   return (data || []).map(r => r.serial_code);
 }
 
+// Reopen an instrument back to 'open' — used when a voucher/note is removed from a draft BEFORE it
+// converts, so it becomes available and re-addable again (as opposed to voidInstrument, which kills it).
+// Clears every draft/order linkage. Caller must ensure it isn't already truly redeemed on an order.
+async function reopen(supabase, p) {
+  const now = new Date().toISOString();
+  const { error } = await supabase.from(TABLE).update({
+    status: 'open', target_draft_id: null, applied_at: null,
+    redeemed_at: null, target_order_id: null, target_order_name: null, updated_at: now,
+  }).eq('instrument_type', p.instrumentType).eq('serial_code', p.serialCode);
+  if (error) throw new Error(`reopen ${p.serialCode}: ${error.message}`);
+  return true;
+}
+
 // Mark an instrument VOIDED.
 async function voidInstrument(supabase, p) {
   const now = new Date().toISOString();
@@ -157,4 +170,4 @@ function effectiveStatus(row, nowMs) {
   return row.status;
 }
 
-module.exports = { upsertIssued, apply, promoteApplied, revertApplied, redeem, voidInstrument, getBySerial, listOpenForCustomer, fetchAll, effectiveStatus };
+module.exports = { upsertIssued, apply, promoteApplied, revertApplied, reopen, redeem, voidInstrument, getBySerial, listOpenForCustomer, fetchAll, effectiveStatus };
