@@ -146,11 +146,19 @@ function loadMPR(dir) {
       if (r[col('Trxn type')] !== 'SALE') continue;
       const tid = String(r[col('Transaction Id')] || '').trim();
       if (!tid || byId[tid]) continue;
+      const pan = String(r[col('Card Pan Number')] || '').replace(/\*/g, '');
       byId[tid] = {
         fee:       parseFloat(r[col('Total Fee (including Taxes)')] || '0'),
         netPaid:   parseFloat(r[col('Paid to Merchant A/c')] || '0'),
         utr:       String(r[col('UTR No')] || '').trim(),
         settlDate: parseMPRDate(r[col('Settlement Date')]),
+        // Extra fields to reconstruct a settlement-only transaction (a SALE that
+        // settled here but is missing from the "All transactions" export).
+        txnDate:    parseMPRDate(r[col('Txn Date')]),
+        gross:      parseFloat(r[col('Gross Txn Amount')] || '0'),
+        instrument: String(r[col('Instrument Type')] || '').trim(),
+        cardLast4:  pan ? pan.slice(-4) : '',
+        vpa:        String(r[col('Payer VPA')] || '').trim(),
       };
     }
   }
@@ -345,6 +353,8 @@ function buildRow(txn, mr) {
   const gst = gstSplit(taxable, m && m.state, '');
   return {
     _vpa:    txn.vpa || txn.name || '',
+    _date:   txn.date,
+    _amount: amount,
     _entity: m,
     Source:         txn.source,
     TxnDate:        fmtDate(txn.date),
@@ -406,6 +416,31 @@ async function runRecon({ dir, storeUrl, token }) {
   for (const t of pineTxns) {
     const m = mprById[t.txnId];
     if (m) { t.fee = m.fee; t.netPaid = m.netPaid; t.settlDate = m.settlDate; t.utr = m.utr; }
+  }
+
+  // Union in settlement-only Pine transactions: a SALE that settled (present in
+  // the MPR) but is missing from the "All transactions" export is still real,
+  // collected money — reconstruct it from the MPR so recon never drops it.
+  const pineIds = new Set(pineTxns.map(t => t.txnId));
+  for (const [tid, m] of Object.entries(mprById)) {
+    if (pineIds.has(tid)) continue;
+    const amount = m.gross || (m.netPaid + m.fee);
+    if (isTest(amount)) continue;
+    pineTxns.push({
+      source:      'Pine Labs',
+      txnId:       tid,
+      date:        m.txnDate,
+      settlDate:   m.settlDate,
+      amount,
+      fee:         m.fee,
+      netPaid:     m.netPaid,
+      utr:         m.utr,
+      paymentMode: (m.instrument || 'CARD').toUpperCase(),
+      name:        '',
+      vpa:         m.vpa || '',
+      cardLast4:   m.cardLast4 || '',
+      billInvoice: '',
+    });
   }
 
   // ── Load GoKwik ──
@@ -506,6 +541,65 @@ async function runRecon({ dir, storeUrl, token }) {
     }
   }
 
+  // ── Third pass: payer-agnostic split-payment combinations ──
+  // Orders are often paid in installments across different cards / UPI IDs / dates
+  // (a deposit at draft time + the balance on delivery, weeks apart). Test whether
+  // any SUBSET of the still-unlinked legs SUMS to an order/draft total, with every
+  // leg within a window of the order date. Payer identity is NOT required.
+  // Uniqueness-guarded (the sum must match exactly one entity) and capped for cost;
+  // LOW confidence, since amounts — not identity — drive the link.
+  const SPLIT_WINDOW_DAYS = 35; // allows deposits made weeks before the order is finalised
+  const MAX_LEGS = 3;
+  const isUnlinked = row => row.OrderRef === 'UNLINKED' || row.OrderRef === 'AMBIGUOUS';
+  const comboSum   = combo => combo.reduce((s, l) => s + parseFloat(l.GrossAmount), 0);
+  const combinations = (arr, k) => {
+    const res = [];
+    const rec = (start, cur) => {
+      if (cur.length === k) { res.push(cur.slice()); return; }
+      for (let i = start; i < arr.length; i++) { cur.push(arr[i]); rec(i + 1, cur); cur.pop(); }
+    };
+    rec(0, []);
+    return res;
+  };
+
+  const entitiesByDate = [...allEntities].sort((a, b) =>
+    fmtDate(a.date).localeCompare(fmtDate(b.date)) || a.ref.localeCompare(b.ref));
+  for (const e of entitiesByDate) {
+    const pool = rows.filter(r => isUnlinked(r) && r._date && daysDiff(r._date, e.date) <= SPLIT_WINDOW_DAYS);
+    if (pool.length < 2) continue;
+    let combo = null;
+    for (let size = 2; size <= Math.min(pool.length, MAX_LEGS) && !combo; size++) {
+      for (const c of combinations(pool, size)) {
+        const s = comboSum(c);
+        // uniqueness: this sum must reconcile to exactly one entity, else skip
+        if (Math.abs(s - e.total) <= 1.5 && allEntities.filter(x => Math.abs(x.total - s) <= 1.5).length === 1) {
+          combo = c; break;
+        }
+      }
+    }
+    if (!combo) continue;
+    const total = comboSum(combo);
+    let span = 0;
+    for (const a of combo) for (const b of combo) span = Math.max(span, daysDiff(a._date, b._date));
+    const taxable = e.total > 0 ? Math.round((e.total / 1.03) * 100) / 100 : 0;
+    const gst = gstSplit(taxable, e.state, '');
+    combo.forEach((l, i) => {
+      l._entity      = e;
+      l.OrderRef     = e.ref;
+      l.OrderTotal   = e.total.toFixed(2);
+      l.TaxableValue = taxable.toFixed(2);
+      l.IGST         = gst.igst.toFixed(2);
+      l.SGST         = gst.sgst.toFixed(2);
+      l.CGST         = gst.cgst.toFixed(2);
+      l.Customer     = e.customer;
+      l.EntityType   = e.type;
+      l.MatchMethod  = 'SPLIT_PAYMENT';
+      l.Confidence   = 'LOW';
+      l.Role         = 'split_payment';
+      l.Notes        = `Leg ${i + 1}/${combo.length} of split (sum Rs${total.toFixed(2)} = ${e.ref}, legs span ${span.toFixed(0)}d)`;
+    });
+  }
+
   // ── Enrich matched orders with shipping state + serial, then refine the GST split ──
   const meta = await enrichOrderMeta(rows.map(r => r.OrderRef), storeUrl, token);
   for (const row of rows) {
@@ -521,7 +615,7 @@ async function runRecon({ dir, storeUrl, token }) {
   }
 
   // Strip internal fields
-  return rows.map(({ _vpa, _entity, ...clean }) => clean);
+  return rows.map(({ _vpa, _entity, _date, _amount, ...clean }) => clean);
 }
 
 // ── CSV serialiser ────────────────────────────────────────────────────────────

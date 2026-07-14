@@ -23,13 +23,13 @@
 const SHOPIFY_SHOP    = 'auracarat.myshopify.com';
 const CALC_SHEET_NAME = 'Exchange Calculator';
 
-// Document classification (run "Set up Document Type fields" once to build these cells).
-// Both sit on row 37 (the blank row under NET CREDIT NOTE VALUE) so no existing rows shift —
-// the script hardcodes B27/B28/B36/B43, so inserting rows would break them. setupDocTypeFields
-// aborts if these cells (or their labels) aren't empty, so a wrong guess can't overwrite data.
+// Document classification cells — must match the actual sheet layout. In the live Exchange
+// Calculator they live in section 6: Document Type dropdown at B45 (label A45), New Draft/Order #
+// at B46 (label A46). The script hardcodes B27/B28/B36/B43, so inserting rows would break them.
 // To relocate, change these two refs only — nothing else hardcodes the positions.
-const DOCTYPE_CELL    = 'B37';   // dropdown: Voucher | Exchange Note   (label in A37)
-const NEWDRAFT_CELL   = 'D37';   // new sale's draft/order # (Exchange Note only)  (label in C37)
+const DOCTYPE_CELL    = 'B45';   // dropdown: Voucher | Exchange Note   (label in A45)
+const NEWDRAFT_CELL   = 'B46';   // new sale's draft/order # (Exchange Note only)  (label in A46)
+const STORE_CODE_CELL = 'B47';   // dropdown: issuing store code (e.g. KA-HSR) — voucher/exchange are per-store now
 const VOUCHER_LOG     = 'Voucher Log';   // renamed from 'CN Log'
 const EXCHANGE_LOG    = 'Exchange Log';  // new tab for Exchange Notes
 
@@ -40,6 +40,9 @@ function onOpen() {
     .addItem('✅  Create Document (Voucher / Exchange)', 'createDocument')
     .addItem('🗑️  Void Voucher', 'voidVoucher')
     .addItem('🗑️  Void Exchange Note', 'voidExchangeNote')
+    .addSeparator()
+    .addItem('📤  Send Voucher Email (manual)', 'sendVoucherEmailManual')
+    .addItem('📧  Toggle customer emails (test mode)', 'toggleCustomerEmails')
     .addSeparator()
     .addItem('🔄  Lookup Order Now', 'lookupOrderManual')
     .addSeparator()
@@ -530,6 +533,7 @@ function createVoucher_() {
   const customerName  = calc.getRange('B4').getValue();
   const customerEmail = calc.getRange('B5').getValue();
   const orderNumber   = String(calc.getRange('B7').getValue()).trim();
+  const storeCode     = String(calc.getRange(STORE_CODE_CELL).getValue()).trim().toUpperCase();
   const netWt         = toNum(calc.getRange('B15').getValue());
   const diaWt         = toNum(calc.getRange('B16').getValue());
   const goldVal       = toNum(calc.getRange('B27').getValue());
@@ -544,13 +548,18 @@ function createVoucher_() {
     ui.alert('Missing data. Fill customer email, order number, and ensure net credit > 0.');
     return;
   }
+  if (!storeCode) {
+    ui.alert('Select the issuing store code in ' + STORE_CODE_CELL + ' (e.g. KA-HSR). Vouchers are numbered per store.');
+    return;
+  }
 
-  const year   = today.getFullYear();
-  // Serial from the central counter service (atomic, no gaps/dupes across devices).
-  // Falls back to the legacy sheet-row count if the middleware is unreachable.
-  const seq    = allocateVoucherSerial();
-  const serial = String(seq != null ? seq : log.getLastRow()).padStart(4, '0');
-  const cnNum  = 'VCH-' + year + '-' + serial;
+  // Serial from the central counter service (atomic, no gaps/dupes across devices). Use the
+  // middleware's canonical code so the display matches the ledger exactly (VCH{FY}-{CODE}-{SEQ}).
+  // Falls back to the legacy sheet-row count + local FY only if the middleware is unreachable.
+  const alloc  = allocateVoucherSerial(storeCode);
+  const cnNum  = (alloc && alloc.code)
+    ? alloc.code
+    : 'VCH' + fyEndIST_() + '-' + storeCode.replace(/-/g, '') + '-' + String(alloc && alloc.seq != null ? alloc.seq : log.getLastRow()).padStart(4, '0');
 
   const issued    = Utilities.formatDate(today, 'Asia/Kolkata', 'dd-MM-yyyy');
   const expiryFmt = Utilities.formatDate(validUntil, 'Asia/Kolkata', 'dd-MM-yyyy');
@@ -635,6 +644,7 @@ function createExchangeNote_() {
   const customerEmail = calc.getRange('B5').getValue();
   const orderNumber   = String(calc.getRange('B7').getValue()).trim();   // OLD order (item exchanged)
   const newDraftRef   = String(calc.getRange(NEWDRAFT_CELL).getValue()).trim();  // NEW sale's draft
+  const storeCode     = String(calc.getRange(STORE_CODE_CELL).getValue()).trim().toUpperCase();
   const netWt         = toNum(calc.getRange('B15').getValue());
   const diaWt         = toNum(calc.getRange('B16').getValue());
   const goldVal       = toNum(calc.getRange('B27').getValue());
@@ -650,13 +660,17 @@ function createExchangeNote_() {
              'Ring up the new item as a draft in Shopify first, then run this again.');
     return;
   }
+  if (!storeCode) {
+    ui.alert('Select the issuing store code in ' + STORE_CODE_CELL + ' (e.g. KA-HSR). Exchange Notes are numbered per store.');
+    return;
+  }
 
   const today  = new Date();
-  const year   = today.getFullYear();
-  const seq    = allocateExcSerial();
-  if (seq == null) { ui.alert('Could not allocate an Exchange Note number (middleware unreachable). Try again.'); return; }
-  const serial = String(seq).padStart(4, '0');
-  const excNum = 'EXC-' + year + '-' + serial;
+  // Exchange Note must have a real ledger number (no sheet fallback). Use the middleware's
+  // canonical code so the display matches the ledger exactly (EXC{FY}-{CODE}-{SEQ}).
+  const alloc  = allocateExcSerial(storeCode);
+  if (!alloc) { ui.alert('Could not allocate an Exchange Note number (middleware unreachable). Try again.'); return; }
+  const excNum = alloc.code || ('EXC' + fyEndIST_() + '-' + storeCode.replace(/-/g, '') + '-' + String(alloc.seq).padStart(4, '0'));
   const issued = Utilities.formatDate(today, 'Asia/Kolkata', 'dd-MM-yyyy');
 
   // Apply the deduction to the new draft via the middleware. Returns the resolved numeric draft id.
@@ -706,33 +720,103 @@ function createExchangeNote_() {
 // Exchange Note template: buildExchangeNoteHtml() via POST /api/exc-email
 const MIDDLEWARE_URL = 'https://timanti-middleware.fly.dev'; // update if URL changes
 
+// ── Customer-email kill switch (test mode) ──────────────────────────────────────
+// When Script Property CUSTOMER_EMAILS === 'off', the two customer-facing senders below skip the
+// send entirely — nothing hits /api/cn-email or /api/exc-email, so no resend reaches the customer.
+// Flip it from the menu ("Toggle customer emails"). Default: ON.
+function customerEmailsOn_() {
+  return PropertiesService.getScriptProperties().getProperty('CUSTOMER_EMAILS') !== 'off';
+}
+function toggleCustomerEmails() {
+  var props  = PropertiesService.getScriptProperties();
+  var turnOff = props.getProperty('CUSTOMER_EMAILS') !== 'off'; // currently ON → switch OFF
+  props.setProperty('CUSTOMER_EMAILS', turnOff ? 'off' : 'on');
+  SpreadsheetApp.getUi().alert('Customer emails are now ' +
+    (turnOff ? 'OFF — test mode. No voucher/Exchange-Note emails will be sent to customers.'
+             : 'ON — customers will receive voucher/Exchange-Note emails again.'));
+}
+
+// Low-level voucher send (NO kill-switch) — shared by the auto path (gated below) and the manual
+// menu trigger. Returns the middleware HTTP code.
+function postVoucherEmail_(customerName, customerEmail, cnNum, netCredit, expiryFmt, orderNumber) {
+  var res = UrlFetchApp.fetch(MIDDLEWARE_URL + '/api/cn-email', {
+    method:             'post',
+    contentType:        'application/json',
+    muteHttpExceptions: true,
+    payload:            JSON.stringify({
+      customerName:  customerName,
+      customerEmail: customerEmail,
+      cnNumber:      cnNum,
+      creditValue:   String(Math.round(netCredit)),
+      validUntil:    expiryFmt,
+      originalOrder: orderNumber
+    })
+  });
+  return res.getResponseCode();
+}
+
 function sendVoucherEmail_(customerName, customerEmail, cnNum, netCredit, expiryFmt, orderNumber) {
   if (!customerEmail) return;
+  if (!customerEmailsOn_()) { Logger.log('[test mode] voucher email suppressed for ' + cnNum); return; }
   try {
-    var res = UrlFetchApp.fetch(MIDDLEWARE_URL + '/api/cn-email', {
-      method:             'post',
-      contentType:        'application/json',
-      muteHttpExceptions: true,
-      payload:            JSON.stringify({
-        customerName:  customerName,
-        customerEmail: customerEmail,
-        cnNumber:      cnNum,
-        creditValue:   String(Math.round(netCredit)),
-        validUntil:    expiryFmt,
-        originalOrder: orderNumber
-      })
-    });
-    var code = res.getResponseCode();
-    if (code !== 200) {
-      Logger.log('Voucher email warning: middleware returned ' + code + ' — ' + res.getContentText());
-    }
+    var code = postVoucherEmail_(customerName, customerEmail, cnNum, netCredit, expiryFmt, orderNumber);
+    if (code !== 200) Logger.log('Voucher email warning: middleware returned ' + code);
   } catch (e) {
     Logger.log('Voucher email failed: ' + e.message);
   }
 }
 
+// Manual voucher-email trigger (menu). Sends/re-sends a voucher email to an address you choose —
+// e.g. yourself first to verify, then the customer. Bypasses the test-mode kill-switch (it's an
+// explicit, deliberate send) and reads the voucher's data from the Voucher Log by number, so it
+// works regardless of what the Calculator cells currently hold.
+function sendVoucherEmailManual() {
+  var ss   = SpreadsheetApp.getActiveSpreadsheet();
+  var ui   = SpreadsheetApp.getUi();
+  var calc = ss.getSheetByName(CALC_SHEET_NAME);
+  var log  = ss.getSheetByName(VOUCHER_LOG) || ss.getSheetByName('CN Log');
+  if (!log) { ui.alert('Voucher Log not found. Generate a voucher first.'); return; }
+
+  // 1. Which voucher? Default to whatever is in B43.
+  var def = calc ? String(calc.getRange('B43').getValue()).trim() : '';
+  var q = ui.prompt('Send Voucher Email',
+    'Voucher number to send' + (def ? ' (blank = ' + def + ')' : '') + ':', ui.ButtonSet.OK_CANCEL);
+  if (q.getSelectedButton() !== ui.Button.OK) return;
+  var cnNum = String(q.getResponseText()).trim() || def;
+  if (!cnNum) { ui.alert('No voucher number entered.'); return; }
+
+  // 2. Find its row in the log (col B = number). Columns: A issued, B num, C order, D name, E email,
+  //    F-I weights/values, J netCredit, K expiry, L status, M priceRuleId.
+  var data = log.getDataRange().getValues();
+  var row = null;
+  for (var i = 1; i < data.length; i++) { if (String(data[i][1]).trim() === cnNum) { row = data[i]; break; } }
+  if (!row) { ui.alert(cnNum + ' not found in ' + VOUCHER_LOG + '.'); return; }
+  var customerName  = row[3];
+  var customerEmail = String(row[4] || '').trim();
+  var netCredit     = Number(row[9]);
+  var expiryFmt     = row[10];
+  var orderNumber   = row[2];
+
+  // 3. Who to? Blank = the customer; type your own address to verify first.
+  var rp = ui.prompt('Send Voucher Email',
+    'Recipient for ' + cnNum + '.\nBlank = send to the customer (' + customerEmail + ').',
+    ui.ButtonSet.OK_CANCEL);
+  if (rp.getSelectedButton() !== ui.Button.OK) return;
+  var to = String(rp.getResponseText()).trim() || customerEmail;
+  if (!to) { ui.alert('No recipient.'); return; }
+
+  try {
+    var code = postVoucherEmail_(customerName, to, cnNum, netCredit, expiryFmt, orderNumber);
+    ui.alert(code === 200 ? '✅ Voucher ' + cnNum + ' emailed to ' + to
+                          : '⚠️ Send failed (HTTP ' + code + '). Check Apps Script logs.');
+  } catch (e) {
+    ui.alert('Send failed: ' + e.message);
+  }
+}
+
 function sendExcEmail_(customerName, customerEmail, excNum, excValue, oldOrder, newOrder) {
   if (!customerEmail) return;
+  if (!customerEmailsOn_()) { Logger.log('[test mode] EXC email suppressed for ' + excNum); return; }
   try {
     var res = UrlFetchApp.fetch(MIDDLEWARE_URL + '/api/exc-email', {
       method:             'post',
@@ -784,22 +868,31 @@ function applyExchangeNote_(newDraftRef, excNum, excValue, oldOrder, customerNam
 }
 
 // ── SERIAL — central counter via middleware ───────────────────────────────────
-// Allocates (and mints into the ledger) the next sequence number for a doc type.
-// Returns the integer seq, or null on any failure.
-function allocateSerial_(docType) {
+// 2-digit financial-year-END in IST (India FY = Apr 1 → Mar 31). Mirrors the middleware's fyEnd();
+// used only for the offline fallback code when the middleware is unreachable.
+function fyEndIST_() {
+  var ist = new Date(Date.now() + (5.5 * 60 * 60 * 1000)); // UTC+5:30
+  var y = ist.getUTCFullYear(), m = ist.getUTCMonth() + 1; // 1-12
+  return String((m >= 4) ? y + 1 : y).slice(-2);
+}
+
+// Allocates (and mints into the ledger) the next number for a doc type. Returns { seq, code }
+// from the middleware (code is the canonical serial, e.g. "VCH-27-0042"), or null on failure.
+function allocateSerial_(docType, stateCode) {
   try {
     var res = UrlFetchApp.fetch(MIDDLEWARE_URL + '/api/serial/allocate', {
       method:             'post',
       contentType:        'application/json',
       muteHttpExceptions: true,
-      payload:            JSON.stringify({ docType: docType })
+      payload:            JSON.stringify({ docType: docType, stateCode: stateCode || '' })
     });
     if (res.getResponseCode() !== 200) {
       Logger.log(docType + ' serial warning: middleware returned ' + res.getResponseCode() + ' — ' + res.getContentText());
       return null;
     }
     var body = JSON.parse(res.getContentText());
-    return (body && body.serial_no != null) ? Number(body.serial_no) : null;
+    if (!body || body.serial_no == null) return null;
+    return { seq: Number(body.serial_no), code: body.serial_code || null };
   } catch (e) {
     Logger.log(docType + ' serial failed: ' + e.message);
     return null;
@@ -808,19 +901,24 @@ function allocateSerial_(docType) {
 
 // Voucher falls back to the sheet-row count if the middleware is down; Exchange Note does not
 // (it must not be applied to an invoice without a real ledger number).
-function allocateVoucherSerial() { return allocateSerial_('voucher'); }
-function allocateExcSerial()     { return allocateSerial_('exchange_note'); }
+function allocateVoucherSerial(storeCode) { return allocateSerial_('voucher', storeCode); }
+function allocateExcSerial(storeCode)     { return allocateSerial_('exchange_note', storeCode); }
 
-// Retires a serial in the middleware ledger (status=cancelled, never reused). Identified by seq —
-// the customer-facing VCH-/EXC-YYYY-NNNN shares only the seq with the ledger. Non-throwing.
-function cancelSerialByCode_(docType, seq) {
-  if (seq == null || isNaN(seq)) return false;
+// Retires a serial in the middleware ledger (status=cancelled, never reused). Pass the FULL code
+// (e.g. "VCH-27-0042") — counters now reset per FY, so the seq alone is no longer unique. A bare
+// number is still accepted (legacy) and sent as serialNo. Non-throwing.
+function cancelSerialByCode_(docType, codeOrSeq) {
+  if (codeOrSeq == null || String(codeOrSeq).trim() === '') return false;
   try {
+    var val = String(codeOrSeq).trim();
+    var payload = /[A-Za-z\-]/.test(val)
+      ? { docType: docType, serialCode: val }          // full code → unambiguous across FYs
+      : { docType: docType, serialNo: Number(val) };   // legacy bare seq
     var res = UrlFetchApp.fetch(MIDDLEWARE_URL + '/api/serial/cancel-by-code', {
       method:             'post',
       contentType:        'application/json',
       muteHttpExceptions: true,
-      payload:            JSON.stringify({ docType: docType, serialNo: Number(seq) })
+      payload:            JSON.stringify(payload)
     });
     if (res.getResponseCode() !== 200) {
       Logger.log(docType + ' cancel warning: middleware returned ' + res.getResponseCode() + ' — ' + res.getContentText());
@@ -842,7 +940,7 @@ function voidVoucher() {
   var ui  = SpreadsheetApp.getUi();
   if (!log) { ui.alert('Log tab "' + VOUCHER_LOG + '" not found.'); return; }
 
-  var resp = ui.prompt('Void Voucher', 'Enter the voucher number to void (e.g. VCH-2026-0042):', ui.ButtonSet.OK_CANCEL);
+  var resp = ui.prompt('Void Voucher', 'Enter the full voucher number to void (e.g. VCH27-KAHSR-0042):', ui.ButtonSet.OK_CANCEL);
   if (resp.getSelectedButton() !== ui.Button.OK) return;
   var cnNum = String(resp.getResponseText()).trim();
   if (!cnNum) { ui.alert('No voucher number entered.'); return; }
@@ -881,9 +979,8 @@ function voidVoucher() {
     Logger.log('Void ' + cnNum + ': no price_rule_id on log row — skipping Shopify delete.');
   }
 
-  // 2. Retire the serial (by seq parsed from the voucher number).
-  var seq = parseInt(String(cnNum).split('-').pop(), 10);
-  var retired = cancelSerialByCode_('voucher', seq);
+  // 2. Retire the serial by its FULL code (seq is no longer unique — counters reset per FY).
+  var retired = cancelSerialByCode_('voucher', cnNum);
 
   // 3. Mark the log row voided (col L).
   log.getRange(rowIdx + 1, 12).setValue('Voided');
@@ -901,7 +998,7 @@ function voidExchangeNote() {
   var ui  = SpreadsheetApp.getUi();
   if (!log) { ui.alert('Log tab "' + EXCHANGE_LOG + '" not found.'); return; }
 
-  var resp = ui.prompt('Void Exchange Note', 'Enter the EXC number to void (e.g. EXC-2026-0042):', ui.ButtonSet.OK_CANCEL);
+  var resp = ui.prompt('Void Exchange Note', 'Enter the full EXC number to void (e.g. EXC27-KAHSR-0042):', ui.ButtonSet.OK_CANCEL);
   if (resp.getSelectedButton() !== ui.Button.OK) return;
   var excNum = String(resp.getResponseText()).trim();
   if (!excNum) { ui.alert('No EXC number entered.'); return; }

@@ -72,48 +72,15 @@
   {% if t contains "pending:rs"     and pending_amount == "" %}{% assign pending_amount = t | remove: "pending:rs"     | strip %}{% endif %}
 {% endfor %}
 
-{% comment %}── State code ──{% endcomment %}
+{% comment %}── Place of Supply = supplier store state (custom.state_code metafield, e.g. KA-HSR→KA), NOT shipping. Shipping is the delivery destination, used only for the GST inter/intra split. ──{% endcomment %}
+{% assign supplier_state = order.metafields.custom.state_code | split: "-" | first | strip | upcase %}
+{% if supplier_state == blank %}{% assign supplier_state = "KA" %}{% endif %}
 {% assign shipping_state = order.shipping_address.province_code %}
-{% if shipping_state == "JK" %}{% assign state_code = "01" %}
-{% elsif shipping_state == "HP" %}{% assign state_code = "02" %}
-{% elsif shipping_state == "PB" %}{% assign state_code = "03" %}
-{% elsif shipping_state == "CH" %}{% assign state_code = "04" %}
-{% elsif shipping_state == "UK" %}{% assign state_code = "05" %}
-{% elsif shipping_state == "HR" %}{% assign state_code = "06" %}
-{% elsif shipping_state == "DL" %}{% assign state_code = "07" %}
-{% elsif shipping_state == "RJ" %}{% assign state_code = "08" %}
-{% elsif shipping_state == "UP" %}{% assign state_code = "09" %}
-{% elsif shipping_state == "BR" %}{% assign state_code = "10" %}
-{% elsif shipping_state == "SK" %}{% assign state_code = "11" %}
-{% elsif shipping_state == "AR" %}{% assign state_code = "12" %}
-{% elsif shipping_state == "NL" %}{% assign state_code = "13" %}
-{% elsif shipping_state == "MN" %}{% assign state_code = "14" %}
-{% elsif shipping_state == "MZ" %}{% assign state_code = "15" %}
-{% elsif shipping_state == "TR" %}{% assign state_code = "16" %}
-{% elsif shipping_state == "ML" %}{% assign state_code = "17" %}
-{% elsif shipping_state == "AS" %}{% assign state_code = "18" %}
-{% elsif shipping_state == "WB" %}{% assign state_code = "19" %}
-{% elsif shipping_state == "JH" %}{% assign state_code = "20" %}
-{% elsif shipping_state == "OR" %}{% assign state_code = "21" %}
-{% elsif shipping_state == "CT" %}{% assign state_code = "22" %}
-{% elsif shipping_state == "MP" %}{% assign state_code = "23" %}
-{% elsif shipping_state == "GJ" %}{% assign state_code = "24" %}
-{% elsif shipping_state == "DN" or shipping_state == "DD" %}{% assign state_code = "26" %}
-{% elsif shipping_state == "MH" %}{% assign state_code = "27" %}
-{% elsif shipping_state == "KA" %}{% assign state_code = "29" %}
-{% elsif shipping_state == "GA" %}{% assign state_code = "30" %}
-{% elsif shipping_state == "LD" %}{% assign state_code = "31" %}
-{% elsif shipping_state == "KL" %}{% assign state_code = "32" %}
-{% elsif shipping_state == "TN" %}{% assign state_code = "33" %}
-{% elsif shipping_state == "PY" %}{% assign state_code = "34" %}
-{% elsif shipping_state == "AN" %}{% assign state_code = "35" %}
-{% elsif shipping_state == "TG" %}{% assign state_code = "36" %}
-{% elsif shipping_state == "AP" %}{% assign state_code = "37" %}
-{% elsif shipping_state == "LA" %}{% assign state_code = "38" %}
-{% else %}{% assign state_code = "99" %}{% endif %}
-
-{% assign is_same_state = false %}
-{% if shipping_state == "KA" %}{% assign is_same_state = true %}{% endif %}
+{% assign dest_state = shipping_state %}
+{% if dest_state == blank %}{% assign dest_state = supplier_state %}{% endif %}
+{% if dest_state == supplier_state %}{% assign is_same_state = true %}{% else %}{% assign is_same_state = false %}{% endif %}
+{% assign pos_state = supplier_state %}
+{% if pos_state == "JK" %}{% assign state_code = "01" %}{% assign state_name = "Jammu & Kashmir" %}{% elsif pos_state == "HP" %}{% assign state_code = "02" %}{% assign state_name = "Himachal Pradesh" %}{% elsif pos_state == "PB" %}{% assign state_code = "03" %}{% assign state_name = "Punjab" %}{% elsif pos_state == "CH" %}{% assign state_code = "04" %}{% assign state_name = "Chandigarh" %}{% elsif pos_state == "UK" %}{% assign state_code = "05" %}{% assign state_name = "Uttarakhand" %}{% elsif pos_state == "HR" %}{% assign state_code = "06" %}{% assign state_name = "Haryana" %}{% elsif pos_state == "DL" %}{% assign state_code = "07" %}{% assign state_name = "Delhi" %}{% elsif pos_state == "RJ" %}{% assign state_code = "08" %}{% assign state_name = "Rajasthan" %}{% elsif pos_state == "UP" %}{% assign state_code = "09" %}{% assign state_name = "Uttar Pradesh" %}{% elsif pos_state == "BR" %}{% assign state_code = "10" %}{% assign state_name = "Bihar" %}{% elsif pos_state == "SK" %}{% assign state_code = "11" %}{% assign state_name = "Sikkim" %}{% elsif pos_state == "AR" %}{% assign state_code = "12" %}{% assign state_name = "Arunachal Pradesh" %}{% elsif pos_state == "NL" %}{% assign state_code = "13" %}{% assign state_name = "Nagaland" %}{% elsif pos_state == "MN" %}{% assign state_code = "14" %}{% assign state_name = "Manipur" %}{% elsif pos_state == "MZ" %}{% assign state_code = "15" %}{% assign state_name = "Mizoram" %}{% elsif pos_state == "TR" %}{% assign state_code = "16" %}{% assign state_name = "Tripura" %}{% elsif pos_state == "ML" %}{% assign state_code = "17" %}{% assign state_name = "Meghalaya" %}{% elsif pos_state == "AS" %}{% assign state_code = "18" %}{% assign state_name = "Assam" %}{% elsif pos_state == "WB" %}{% assign state_code = "19" %}{% assign state_name = "West Bengal" %}{% elsif pos_state == "JH" %}{% assign state_code = "20" %}{% assign state_name = "Jharkhand" %}{% elsif pos_state == "OR" %}{% assign state_code = "21" %}{% assign state_name = "Odisha" %}{% elsif pos_state == "CT" %}{% assign state_code = "22" %}{% assign state_name = "Chhattisgarh" %}{% elsif pos_state == "MP" %}{% assign state_code = "23" %}{% assign state_name = "Madhya Pradesh" %}{% elsif pos_state == "GJ" %}{% assign state_code = "24" %}{% assign state_name = "Gujarat" %}{% elsif pos_state == "DN" or pos_state == "DD" %}{% assign state_code = "26" %}{% assign state_name = "Dadra & Nagar Haveli and Daman & Diu" %}{% elsif pos_state == "MH" %}{% assign state_code = "27" %}{% assign state_name = "Maharashtra" %}{% elsif pos_state == "KA" %}{% assign state_code = "29" %}{% assign state_name = "Karnataka" %}{% elsif pos_state == "GA" %}{% assign state_code = "30" %}{% assign state_name = "Goa" %}{% elsif pos_state == "LD" %}{% assign state_code = "31" %}{% assign state_name = "Lakshadweep" %}{% elsif pos_state == "KL" %}{% assign state_code = "32" %}{% assign state_name = "Kerala" %}{% elsif pos_state == "TN" %}{% assign state_code = "33" %}{% assign state_name = "Tamil Nadu" %}{% elsif pos_state == "PY" %}{% assign state_code = "34" %}{% assign state_name = "Puducherry" %}{% elsif pos_state == "AN" %}{% assign state_code = "35" %}{% assign state_name = "Andaman & Nicobar Islands" %}{% elsif pos_state == "TG" %}{% assign state_code = "36" %}{% assign state_name = "Telangana" %}{% elsif pos_state == "AP" %}{% assign state_code = "37" %}{% assign state_name = "Andhra Pradesh" %}{% elsif pos_state == "LA" %}{% assign state_code = "38" %}{% assign state_name = "Ladakh" %}{% else %}{% assign state_code = "99" %}{% assign state_name = "Other" %}{% endif %}
 
 <div class="container">
 
@@ -148,7 +115,7 @@
       </div>
       <div class="invoice-detail-row">
         <div class="invoice-detail-cell">
-          <strong>Place of Supply</strong>{{ state_code }} – {{ order.shipping_address.province }}
+          <strong>Place of Supply</strong>{{ state_code }} – {{ state_name }}
         </div>
         <div class="invoice-detail-cell">
           <strong>Supply Type</strong>B2C
