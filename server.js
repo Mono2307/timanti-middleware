@@ -1844,9 +1844,16 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
     };
   }));
 
-  // Total gross across all repriced items — used to prorate order-level discount
+  // Total gross across all repriced items (reference only).
   const totalNewGross = itemResults.reduce((sum, r) => sum + (r?.newGrossValue || 0), 0);
-  const totalDiscount = parseFloat(draft.applied_discount?.amount || 0);
+  // Pre-tax discount is DIAMOND-ONLY and order-level, sourced from custom.discount_applied
+  // (written by handleApplyDiscountTag from a resolved Shopify code or a custom amount). It is
+  // prorated across lines by diamond value and subtracted from the diamond component BEFORE GST —
+  // never Shopify's native applied_discount (which is cleared on every reprice). Capped at the
+  // total diamond value so it can't drive a line negative.
+  const totalNewDiamond = itemResults.reduce((sum, r) => sum + (r?.newDiamondValue || 0), 0);
+  const discountApplied = Math.abs(parseFloat(mfMap['discount_applied'] || 0)) || 0;
+  const effDiscount     = Math.min(discountApplied, totalNewDiamond);
 
   const allJewelData = [];
   const repricedMap  = new Map();
@@ -1867,8 +1874,12 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
       metal, category, jewel_code, props,
     } = result;
 
-    // Prorate order-level discount by this item's share of total gross
-    const itemDiscount = totalNewGross > 0 ? totalDiscount * (newGrossValue / totalNewGross) : 0;
+    // Prorate the diamond-only pre-tax discount by this item's share of total diamond value,
+    // subtract it from the diamond component, and rebuild the GST-inclusive gross from the
+    // discounted components (discount now sits PRE-tax, reducing the taxable base).
+    const itemDiscount       = totalNewDiamond > 0 ? effDiscount * (newDiamondValue / totalNewDiamond) : 0;
+    const discountedDiamond  = Math.max(0, newDiamondValue - itemDiscount);
+    const grossAfterDiscount = (newGoldValue + discountedDiamond + newMakingValue) * 1.03;
 
     const jewelHiddenProps = {
       '_gross_wt':     newGrossWt.toFixed(3),
@@ -1895,8 +1906,8 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
       return;
     }
 
-    // Full reprice: force=true OR delta > 5%
-    const newFinalValue   = newGrossValue - itemDiscount;
+    // Full reprice: force=true OR delta > 5%. Discount already baked into the diamond component pre-tax.
+    const newFinalValue   = grossAfterDiscount;
     const newTaxableValue = newFinalValue / 1.03;
     const newGst          = newTaxableValue * 0.03;
 
@@ -1909,9 +1920,9 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
 
     const repricedProps = {
       'Gold':             `Rs${newGoldValue.toFixed(2)}`,
-      'Diamond':          `Rs${newDiamondValue.toFixed(2)}`,
+      'Diamond':          `Rs${discountedDiamond.toFixed(2)}`,
       'Making':           `Rs${newMakingValue.toFixed(2)}`,
-      'Gross Value':      `Rs${newGrossValue.toFixed(2)}`,
+      'Gross Value':      `Rs${newFinalValue.toFixed(2)}`,
       'Taxable Value':    `Rs${newTaxableValue.toFixed(2)}`,
       'GST':              `Rs${newGst.toFixed(2)}`,
       'Discount Applied': `Rs${itemDiscount.toFixed(2)}`,
@@ -2515,6 +2526,87 @@ async function handleApplyExcTag(draft) {
   }
 }
 
+// Apply a PRE-TAX, DIAMOND-ONLY discount from the metafield-manager admin action. Staff add either:
+//   apply-discount:<code>                 → resolve a real Shopify discount code (% or fixed ₹) via Admin API
+//   apply-discount:custom:<value>:<pct|flat> → a custom order discount (% of diamond value, or flat ₹)
+// The resolved ₹ (capped at the draft's total diamond value) is written to custom.discount_applied; the
+// reprice engine (handleRecalculatePriceTag) subtracts it from the diamond component BEFORE GST, so it
+// reduces the taxable base, the tax-inclusive line price, and — via syncAmountToCollect — amount_to_be_
+// collected. We drop a `reprice` tag so the engine re-runs and bakes it in. Failure → discount-invalid tag.
+async function handleApplyDiscountTag(draft) {
+  try {
+    const draftOrderId = draft.id.toString();
+    const tags = (draft.tags || '').split(',').map(t => t.trim());
+    const trigger = tags.find(t => /^apply-discount:/i.test(t));
+    if (!trigger) return;
+    const spec = trigger.slice(trigger.indexOf(':') + 1).trim();   // "<code>" | "custom:<v>:<pct|flat>"
+    const base = process.env.SHOPIFY_STORE_URL;
+    const token = await getShopifyToken();
+    const headers = { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' };
+
+    const finishTags = async (extra = []) => {
+      const kept = tags.filter(t => t && !/^apply-discount:/i.test(t) && !/^discount-invalid:/i.test(t)).concat(extra);
+      await axios.put(`${base}/admin/api/2024-01/draft_orders/${draftOrderId}.json`,
+        { draft_order: { id: draftOrderId, tags: [...new Set(kept)].join(', ') } }, { headers, timeout: 10000 });
+    };
+    if (!spec) { await finishTags(); return; }
+
+    // Total diamond value across product lines (sum of the "Diamond" line prop, Rs). The discount base.
+    const diaProp = (item) => {
+      const p = (item.properties || []).find(x => x.name === 'Diamond');
+      return p ? Math.abs(parseFloat(String(p.value).replace(/[^0-9.]/g, '')) || 0) : 0;
+    };
+    const diamondTotal = (draft.line_items || [])
+      .filter(item => !isExcLine(item) && !((item.title || '').toLowerCase().includes('discount') && parseFloat(item.price) < 0))
+      .reduce((sum, item) => sum + diaProp(item), 0);
+    if (!(diamondTotal > 0)) { await finishTags(['discount-invalid: no diamond value to discount']); return; }
+
+    // Resolve the input to a fraction (pctFrac) or a flat ₹, then to a rupee amount on the diamond base.
+    let pctFrac = 0, flat = 0, label = '';
+    if (/^custom:/i.test(spec)) {
+      const parts = spec.split(':');                       // ["custom", "<v>", "<pct|flat>"]
+      const v = Math.abs(parseFloat(parts[1]) || 0);
+      const mode = (parts[2] || 'flat').toLowerCase();
+      if (!(v > 0)) { await finishTags(['discount-invalid: custom value missing']); return; }
+      if (mode === 'pct') { pctFrac = v / 100; label = `CUSTOM ${v}%`; }
+      else                { flat = v;          label = `CUSTOM Rs${v}`; }
+    } else {
+      // Real Shopify discount code → resolve its value via Admin GraphQL (percentage is a 0..1 fraction).
+      const code = spec;
+      const q = `query($code:String!){ codeDiscountNodeByCode(code:$code){ codeDiscount { __typename
+        ... on DiscountCodeBasic { customerGets { value { __typename
+          ... on DiscountPercentage { percentage }
+          ... on DiscountAmount { amount { amount } } } } } } } }`;
+      let node;
+      try {
+        const { data } = await axios.post(`${base}/admin/api/2024-01/graphql.json`,
+          { query: q, variables: { code } }, { headers, timeout: 10000 });
+        node = data?.data?.codeDiscountNodeByCode?.codeDiscount;
+      } catch (e) { await finishTags([`discount-invalid: ${code} lookup failed`]); return; }
+      if (!node) { await finishTags([`discount-invalid: ${code} not found`]); return; }
+      const val = node?.customerGets?.value;
+      if (val?.__typename === 'DiscountPercentage' && parseFloat(val.percentage) > 0)      pctFrac = parseFloat(val.percentage);
+      else if (val?.__typename === 'DiscountAmount' && parseFloat(val.amount?.amount) > 0) flat = parseFloat(val.amount.amount);
+      else { await finishTags([`discount-invalid: ${code} unsupported`]); return; }
+      label = code;
+    }
+
+    const raw      = pctFrac > 0 ? pctFrac * diamondTotal : flat;
+    const discount = Math.min(Math.max(0, raw), diamondTotal);   // never exceed the diamond value
+    if (!(discount > 0)) { await finishTags([`discount-invalid: ${label} zero`]); return; }
+
+    await updateDraftOrderMetafields(draftOrderId, {
+      discount_applied: discount.toFixed(2),
+      discount_code: label,
+    });
+    // Drop `reprice` so the engine re-runs and subtracts the discount dia-only pre-tax.
+    await finishTags(['discount-applied', 'reprice']);
+    console.log(`[apply-discount] ${label} → Rs${discount.toFixed(2)} on diamond base Rs${diamondTotal.toFixed(2)} — draft ${draft.name || draftOrderId}`);
+  } catch (e) {
+    console.error(`[apply-discount] failed for draft ${draft?.id}:`, e.message);
+  }
+}
+
 // ─────────────────────────────────────────
 // Pricing Engine — routes
 // ─────────────────────────────────────────
@@ -2580,6 +2672,7 @@ app.post('/api/shopify-draft-updated', async (req, res) => {
     await handleAdvanceRedeem(draft);           // CAD: apply a referenced advance (Path B), gates + refs
     await handleApplyVoucherTag(draft);         // admin action: apply-voucher:<code> → redeem from ledger
     await handleApplyExcTag(draft);             // admin action: apply-exc:<number> → redeem exchange note from ledger
+    await handleApplyDiscountTag(draft);        // admin action: apply-discount:<code>|custom → dia-only pre-tax discount (drops reprice)
     await handleRepairDraftUpdate(draft, getShopifyToken, assignRepairSerial);
     await handleDocumentSerialTags(draft);      // PO/memo/transfer tags added after creation
     // Balance ordering matters: net-to-collect must be recomputed AFTER every adjustment above
