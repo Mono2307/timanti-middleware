@@ -30,7 +30,7 @@ const REPORTS = {
       { label: 'State (opt)',       param: 'state' },
       { label: 'Stage (opt)',       param: 'paymentStatus' },
     ],
-    cols: ['stage','payment_type','draft_name','order_name','day','customer','place_of_supply','shipping_state',
+    cols: ['stage','draft_name','order_name','day','customer','place_of_supply','shipping_state',
            'product_title','variant_title','sku','hsn','qty','gross_sales','discount','net_sales',
            'taxable_value','igst','sgst','cgst','custom_serial','amount_paid','amount_pending',
            'net_to_collect','payment_mode'],
@@ -43,8 +43,7 @@ const REPORTS = {
     ],
     cols: ['name','created_at','customer','place_of_supply','shipping_state','custom_serial','hsn',
            'qty','gross_value','discount_applied','taxable_value','igst','sgst','cgst','voucher_value',
-           'exchange_note_value','old_gold_value','advance','amount_to_be_collected','amount_paid','total_price',
-           'instruments_issued','instruments_redeemed'],
+           'exchange_note_value','old_gold_value','advance','amount_to_be_collected','amount_paid','total_price'],
   },
   recon: {
     tab: 'Payment Recon', endpoint: '/api/recon', extraQp: 'format=json',
@@ -53,7 +52,7 @@ const REPORTS = {
   ledger: {
     tab: 'Credit Ledger', endpoint: '/api/recon-ledger',
     filters: [
-      { label: 'View (detail|summary|outstanding|tieout)', param: 'view' },
+      { label: 'View (summary|outstanding|tieout)', param: 'view' },
       { label: 'Type (opt)', param: 'type' },
       { label: 'From (opt)', param: 'from' },
       { label: 'To (opt)',   param: 'to' },
@@ -109,16 +108,6 @@ function fmtDate_(v) {
   return String(v).trim();
 }
 
-// Only from/to are treated as dates; everything else (state, docType, view…) stays a plain string.
-function isDateParam_(p) { return p === 'from' || p === 'to'; }
-
-// YYYY-MM-DD for N days ago (0 = today), in the sheet's timezone.
-function isoDaysAgo_(n) {
-  const d = new Date();
-  d.setDate(d.getDate() - n);
-  return Utilities.formatDate(d, Session.getScriptTimeZone() || 'Asia/Kolkata', 'yyyy-MM-dd');
-}
-
 // The generic runner: ensure the tab, lay out filter labels, read filter values, fetch, write.
 function generate_(key) {
   const cfg = REPORTS[key];
@@ -126,28 +115,16 @@ function generate_(key) {
   const ss  = SpreadsheetApp.getActiveSpreadsheet();
   const sh  = ss.getSheetByName(cfg.tab) || ss.insertSheet(cfg.tab);
 
-  // Pass 1: write EVERY filter label in col A first, so all inputs are visible at once
-  // (do not bail mid-loop, or later fields like To/State never get laid out).
-  for (let i = 0; i < cfg.filters.length; i++) {
-    sh.getRange(i + 1, 1).setValue(cfg.filters[i].label).setFontWeight('bold');
-  }
-  SpreadsheetApp.flush();
-
-  // Pass 2: read col B. Required date fields (from/to) auto-fill to a last-30-days range and are
-  // written back into the cell so the report always runs and you can see/adjust the range.
+  // Lay out filter labels in col A (idempotent) and read the values from col B.
   const params = {};
-  const missing = [];
   for (let i = 0; i < cfg.filters.length; i++) {
     const f = cfg.filters[i];
+    sh.getRange(i + 1, 1).setValue(f.label).setFontWeight('bold');
     const raw = sh.getRange(i + 1, 2).getValue();
-    let val = isDateParam_(f.param) ? fmtDate_(raw) : String(raw == null ? '' : raw).trim();
-    if (!val && f.required) {
-      if (isDateParam_(f.param)) { val = (f.param === 'from') ? isoDaysAgo_(30) : isoDaysAgo_(0); sh.getRange(i + 1, 2).setValue(val); }
-      else { missing.push(f.label + ' (cell B' + (i + 1) + ')'); }
-    }
+    const val = /date|from|to/i.test(f.param) ? fmtDate_(raw) : String(raw || '').trim();
+    if (f.required && !val) { ui.alert('Fill "' + f.label + '" (cell B' + (i + 1) + ') first.'); return; }
     if (val) params[f.param] = val;
   }
-  if (missing.length) { ui.alert('Fill these, then run again:\n• ' + missing.join('\n• ')); return; }
 
   const parts = Object.keys(params).map(function (k) { return k + '=' + encodeURIComponent(params[k]); });
   if (cfg.extraQp) parts.push(cfg.extraQp);
