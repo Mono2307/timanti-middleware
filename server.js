@@ -255,10 +255,10 @@ async function tagShopifyDraftOrder(shopifyDraftId, amountPaid, amountPending, s
 const PAID_EPSILON = 1;
 
 function getMetafieldType(key) {
-  // gold_rate is single_line_text so it can hold a positional, comma-separated list of rates
+  // gold_rate and making are single_line_text so they can hold a positional, comma-separated list
   // ("9713,10200") for multi-product reprice. Readers parseFloat each position regardless of type.
-  if (key === 'gold_rate') return 'single_line_text_field';
-  if (key === 'amount_paid' || key === 'amount_pending' ||
+  if (key === 'gold_rate' || key === 'making') return 'single_line_text_field';
+  if (key === 'amount_paid' || key === 'amount_paid_final' || key === 'amount_pending' ||
       key === 'exchange_note_value' || key === 'voucher_value' || key === 'amount_to_be_collected' ||
       key === 'old_gold_value' || key === 'old_gold_weight' || key === 'old_gold_purity' ||
       key === 'gross_value' || key === 'discount_applied' || key === 'discount_rate' ||
@@ -489,6 +489,38 @@ async function getCollectionBase(draftOrderId, fallbackTotal) {
   }
 }
 
+// The advance (first-stage) payment recorded on a draft, in Rs.
+// store_deposits tracks ONE cumulative amount_paid, but the metafields split what's been paid into
+// custom.amount_paid (advance) + custom.amount_paid_final (final). A deposit-driven payment therefore
+// has to know the advance so it can write the remainder into amount_paid_final and preserve the
+// invariant `advance + final === the DB cumulative` — otherwise the two stages double-count.
+async function getAdvancePaid(draftOrderId) {
+  try {
+    const token = await getShopifyToken();
+    const { data } = await axios.get(
+      `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}/metafields.json`,
+      { headers: { 'X-Shopify-Access-Token': token }, timeout: 10000 }
+    );
+    const m = (data.metafields || []).find(x => x.namespace === 'custom' && x.key === 'amount_paid');
+    const v = m ? parseFloat(m.value) : NaN;
+    return Number.isFinite(v) && v >= 0 ? v : 0;
+  } catch (e) {
+    console.error(`getAdvancePaid(${draftOrderId}) failed: ${e.message} — assuming 0`);
+    return 0;
+  }
+}
+
+// Split a store_deposits cumulative total across the two staged payment metafields.
+// advance stage → it IS the advance; final stage → whatever is left once the advance is accounted for
+// (so a 3rd+ payment accumulates into final rather than overwriting it).
+async function stagedPaidPatch(draftOrderId, installmentType, cumulativePaid) {
+  if (installmentType === 'advance') {
+    return { amount_paid: cumulativePaid.toFixed(2), amount_paid_final: '0' };
+  }
+  const advance = await getAdvancePaid(draftOrderId);
+  return { amount_paid_final: Math.max(0, cumulativePaid - advance).toFixed(2) };
+}
+
 async function handlePaymentCompletion(transaction, overrides = {}) {
   if (!transaction.shopify_draft_id) return;
   const { utr = null, paymentSource = 'pine', paymentModeOverride = null } = overrides;
@@ -564,7 +596,9 @@ async function handlePaymentCompletion(transaction, overrides = {}) {
 
     const metafieldUpdate = {
       payment_status:  newStatus === 'paid' ? 'Full' : 'Partial',  // choice-list values: Partial|Full|None
-      amount_paid:     newAmountPaid.toFixed(2),
+      // Land this payment in its own stage field (advance vs final) rather than overwriting the single
+      // cumulative amount_paid — advance + final must reconcile to the deposit's cumulative.
+      ...(await stagedPaidPatch(transaction.shopify_draft_id, installmentType, newAmountPaid)),
       amount_pending:  Math.max(0, newAmountPending).toFixed(2)
     };
     if (installmentType === 'advance') {
@@ -1414,7 +1448,8 @@ async function handleCashPaymentTag(draft) {
 
   const metafieldUpdate = {
     payment_status:  newStatus === 'paid' ? 'Full' : 'Partial',  // choice-list values: Partial|Full|None
-    amount_paid:     newAmountPaid.toFixed(2),
+    // Land this payment in its own stage field (advance vs final) — see stagedPaidPatch.
+    ...(await stagedPaidPatch(draftOrderId, installmentType, newAmountPaid)),
     amount_pending:  Math.max(0, newAmountPending).toFixed(2)
   };
   if (installmentType === 'advance') metafieldUpdate.payment_mode_advance = 'cash';
@@ -1681,6 +1716,19 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
     return (r && r > 0) ? r : null;
   };
 
+  // Making (labour) override: custom.making sets a FLAT labour amount in Rs, replacing the variant's
+  // price_breakup_making. Same positional-CSV convention as gold_rate: "1900,2500" → item[0]=Rs1900,
+  // item[1]=Rs2500; a single value applies to every product; a blank position ("1900,") leaves that item
+  // on the variant spec. It is the whole labour for the line (already × qty) — not a per-gram rate and
+  // not per-unit — so it is used verbatim. 0 is a legitimate value (labour waived), which is why this
+  // returns null-vs-number rather than falsy-checking.
+  const makingArr = csvF('making');
+  const makingForIdx = (idx) => {
+    if (!makingArr.some(v => v !== null && v >= 0)) return null;
+    const v = makingArr.length === 1 ? makingArr[0] : (makingArr[idx] ?? null);
+    return (v !== null && v >= 0) ? v : null;
+  };
+
   const netWtArr   = csvF('jewelcode_net_weight');
   const grossWtArr = csvF('jewelcode_gross_weight');
   const diaCtsArr  = csvF('jewelcode_diamond_carats');
@@ -1740,7 +1788,11 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
     // 3. locked item Gold / _gold_rate (written by a previous reprice)
     const itemRecalc = productItems.map((item, idx) => {
           const rateForItem = goldRateForIdx(idx);
-          if (!rateForItem) return null;
+          // A making override is a repricing trigger in its own right — staff can set labour on a draft
+          // with no weights and no gold-rate change, and the line must still reprice. When only making
+          // moved, gold is held at its locked value rather than re-derived.
+          const mkOverride  = makingForIdx(idx);
+          if (!rateForItem && mkOverride == null) return null;
           const vMf    = hydratedBase[idx].varMf || {};
           const iProps = {};
           for (const p of (item.properties || [])) iProps[p.name] = p.value;
@@ -1766,12 +1818,18 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
           else if (varGoldPbp > 0 && varRate > 0)       netWt = varGoldPbp / varRate;
           else if (lockedGold > 0 && effectiveRate > 0) netWt = lockedGold / effectiveRate;
 
-          if (netWt <= 0) return null;
+          if (netWt <= 0 && rateForItem) return null;
 
           const diaVal = parseFloat((iProps['Diamond'] || '').replace('Rs', '').trim()) || parseFloat(vMf.price_breakup_diamond || 0) * item.quantity;
-          const mkgVal = parseFloat((iProps['Making'] || iProps['Making Charges'] || '').replace('Rs', '').trim()) || parseFloat(vMf.price_breakup_making || 0) * item.quantity;
+          // custom.making wins; else the variant spec; else whatever the line already carries. Flat either
+          // way — labour is never scaled by weight here (same rule as the weights path).
+          const mkgVal = mkOverride != null
+            ? mkOverride
+            : (parseFloat((iProps['Making'] || iProps['Making Charges'] || '').replace('Rs', '').trim()) || parseFloat(vMf.price_breakup_making || 0) * item.quantity);
 
-          const newGold = r2(netWt * rateForItem);
+          // Gold: recompute only when a rate was given; otherwise hold the locked value.
+          const newGold = rateForItem ? r2(netWt * rateForItem) : r2(lockedGold);
+          if (!(newGold > 0)) return null;
           return { newPreTaxGross: r2(newGold + diaVal + mkgVal), newGold };
         });
     const anyGoldRecalc = itemRecalc.some(r => r !== null);
@@ -1913,19 +1971,20 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
     const perCtRate       = totalOldCts > 0 ? stoneRateBasis / totalOldCts : 0;
     const newDiamondValue = totalOldCts > 0 ? perCtRate * totalNewCts : stoneRateBasis;
 
-    // Making: making-per-gram ALWAYS from the variant design spec (price_breakup_making ÷ variant net weight),
-    // scaled to the entered net weight — never re-derived from the moving Making prop or a rate-dependent old
-    // net weight (which drifts when the gold rate changes). Falls back to the legacy prop-ratio only when the
-    // variant lacks making/net-weight data.
-    const varNetWt       = parseFloat(varMf.net_metal_weight_g || varMf.net_wt || 0);
+    // Making (labour) is FLAT — it does NOT scale with net weight. Labour is priced per piece, not per
+    // gram: a weight correction on the same design is the same bench work, so a reprice must not move it.
+    // (It previously scaled per-gram off the variant spec — price_breakup_making ÷ variant net weight ×
+    // entered net weight — so every weight tweak silently repriced labour.)
+    //
+    // Precedence:
+    //   1. custom.making  — positional CSV override, per item ("1900,2500"), the staff-set labour amount
+    //   2. the variant design spec (price_breakup_making × qty)
+    //   3. the existing Making prop (a line already priced, e.g. by the manual endpoint)
+    // Gold is still net-weight-anchored and stones still carat-anchored; only labour is held.
+    const makingOverride = makingForIdx(idx);
     const varMakingValue = parseFloat(varMf.price_breakup_making || 0) * (item.quantity || 1);
     const oldMakingValue = parseFloat((props['Making'] || props['Making Charges'] || '0').replace('Rs', '').trim());
-    let   newMakingValue;
-    if (varNetWt > 0 && varMakingValue > 0) {
-      newMakingValue = (varMakingValue / varNetWt) * newNetWt;
-    } else {
-      newMakingValue = oldNetWt > 0 ? (newNetWt * oldMakingValue / oldNetWt) : oldMakingValue;
-    }
+    const newMakingValue = makingOverride != null ? makingOverride : (varMakingValue || oldMakingValue || 0);
 
     // Gross = components, made GST-inclusive (unified convention: components + 3% GST, same as the catalog price).
     const newGrossValue = (newGoldValue + newDiamondValue + newMakingValue) * 1.03;
@@ -2254,7 +2313,10 @@ async function applyPaymentTagsToOrder(orderId, token) {
 
   const paymentStatus = mf('payment_status');
   const isFinalized   = mf('is_finalized') === 'true';
-  const amountPaid    = parseFloat(mf('amount_paid')    || 0);
+  // Staged payments — see applyPaymentTagsToDraftOrder. amount_paid = advance, amount_paid_final = final.
+  const advancePaid   = parseFloat(mf('amount_paid')       || 0) || 0;
+  const finalPaid     = parseFloat(mf('amount_paid_final') || 0) || 0;
+  const amountPaid    = advancePaid + finalPaid;
   const modeAdvance   = mf('payment_mode_advance');
   const modeFinal     = mf('payment_mode_final');
 
@@ -2329,13 +2391,19 @@ async function applyPaymentTagsToDraftOrder(draftOrderId, token) {
 
   const paymentStatus = mf('payment_status');
   const isFinalized   = mf('is_finalized') === 'true';
-  const amountPaid    = parseFloat(mf('amount_paid')    || 0);
+  // Payments are staged: custom.amount_paid is the ADVANCE (first collection) and
+  // custom.amount_paid_final is the FINAL one, each alongside its own payment_mode_*. What's been paid
+  // is their sum — a second payment is entered in its own field rather than by re-typing a running
+  // total into amount_paid, which previously just overwrote the first.
+  const advancePaid   = parseFloat(mf('amount_paid')       || 0) || 0;
+  const finalPaid     = parseFloat(mf('amount_paid_final') || 0) || 0;
+  const amountPaid    = advancePaid + finalPaid;
   const modeAdvance   = mf('payment_mode_advance');
   const modeFinal     = mf('payment_mode_final');
 
   // Balance reconciles against the NET-to-collect (total − post-tax adjustments, frozen by
-  // syncAmountToCollect), never the gross total. amount_pending is DERIVED here (staff set amount_paid,
-  // not pending). Fallback to gross when the net field is absent (legacy/online).
+  // syncAmountToCollect), never the gross total. amount_pending is DERIVED here (staff set what was
+  // paid, not what's pending). Fallback to gross when the net field is absent (legacy/online).
   const netRaw  = parseFloat(mf('amount_to_be_collected'));
   const netBase = Number.isFinite(netRaw) && netRaw >= 0 ? netRaw : totalPrice;
   const amountPending = Math.max(0, netBase - amountPaid);
@@ -5170,7 +5238,7 @@ app.get('/api/adjustment-report', async (req, res) => {
 
     let cursor = null, page = 0;
     do {
-      const query = `query($q:String!,$after:String){ orders(first:50, query:$q, after:$after, sortKey:CREATED_AT){ pageInfo{hasNextPage endCursor} edges{ node{ name createdAt customer{displayName} shippingAddress{provinceCode} subtotalPriceSet{shopMoney{amount}} totalPriceSet{shopMoney{amount}} metafields(namespace:"custom", first:40){edges{node{key value}}} lineItems(first:50){edges{node{ quantity product{ hsn: metafield(namespace:"custom", key:"hsn_code"){value} } }}} } } } }`;
+      const query = `query($q:String!,$after:String){ orders(first:50, query:$q, after:$after, sortKey:CREATED_AT){ pageInfo{hasNextPage endCursor} edges{ node{ name createdAt customer{displayName} shippingAddress{provinceCode} subtotalPriceSet{shopMoney{amount}} totalPriceSet{shopMoney{amount}} metafields(namespace:"custom", first:100){edges{node{key value}}} lineItems(first:50){edges{node{ quantity product{ hsn: metafield(namespace:"custom", key:"hsn_code"){value} } }}} } } } }`;
       const { data } = await axios.post(
         `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/graphql.json`,
         { query, variables: { q: search, after: cursor } },
@@ -5211,7 +5279,9 @@ app.get('/api/adjustment-report', async (req, res) => {
           old_gold_value:         num(mf.old_gold_value).toFixed(2),
           advance:                num(mf.advance).toFixed(2),
           amount_to_be_collected: (mf.amount_to_be_collected != null ? num(mf.amount_to_be_collected) : num(n.totalPriceSet.shopMoney.amount)).toFixed(2),
-          amount_paid:            num(mf.amount_paid).toFixed(2),
+          // Payments are staged (advance + final), so what was collected is the SUM of both fields —
+          // amount_paid alone is only the advance and would under-report every two-stage order.
+          amount_paid:            (num(mf.amount_paid) + num(mf.amount_paid_final)).toFixed(2),
           total_price:            num(n.totalPriceSet.shopMoney.amount).toFixed(2),
           instruments_issued:     (bySource[n.name] || []).join(' | '),   // credits generated on this order
           instruments_redeemed:   (byTarget[n.name] || []).join(' | '),   // credits used on this order

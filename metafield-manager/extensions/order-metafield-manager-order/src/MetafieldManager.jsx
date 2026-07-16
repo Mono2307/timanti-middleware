@@ -44,6 +44,7 @@ const REQUIRED_FIELDS = [
   "order_type",
   "channel",
   "state_code",
+  "employee_name",
   "payment_mode_advance",
   "amount_paid",
 ];
@@ -68,17 +69,25 @@ const IDENTITY_SECTION = "Document / Identity";
 const FIELD_CONFIG = {
   order_type: { section: "Order Details", label: "Order Type", editable: true, applies: "both" },
   channel: { section: "Order Details", label: "Channel", editable: true, applies: "both" },
+  employee_name: { section: "Order Details", label: "Sales Staff", editable: true, applies: "both" },
 
   // System-computed (net-based) — read-only so staff never hand-type a balance.
   payment_status: { section: "Payments", label: "Payment Status", editable: false, applies: "both" },
+  // Payments are STAGED: amount_paid is the advance, amount_paid_final the final collection, each with
+  // its own mode. A second payment goes in its own field — typing a running total into amount_paid used
+  // to just overwrite the first. Total collected = amount_paid + amount_paid_final (derived server-side).
   payment_mode_advance: { section: "Payments", label: "Advance Payment Mode", editable: true, applies: "both" },
+  amount_paid: { section: "Payments", label: "Advance Paid", editable: true, applies: "both" },
   payment_mode_final: { section: "Payments", label: "Final Payment Mode", editable: true, applies: "both" },
-  amount_paid: { section: "Payments", label: "Amount Paid", editable: true, applies: "both" },
+  amount_paid_final: { section: "Payments", label: "Final Paid", editable: true, applies: "both" },
   amount_pending: { section: "Payments", label: "Amount Pending", editable: false, applies: "both" },
   amount_to_be_collected: { section: "Payments", label: "Amount To Be Collected", editable: false, applies: "both" },
 
   gold_rate: { section: "Pricing", label: "Gold Rate", editable: true, applies: "both" },
   gold_rate_date: { section: "Pricing", label: "Gold Rate Date", editable: true, applies: "both" },
+  // Flat labour in Rs, positional per product ("1900,2500") — same CSV convention as gold_rate, hence
+  // single_line_text. Blank = use the variant design spec. Labour never scales with weight.
+  making: { section: "Pricing", label: "Making / Labour (flat Rs, per product)", editable: true, applies: "both" },
   gross_value: { section: "Pricing", label: "Gross Value (pre-discount)", editable: false, applies: "both" },
   discount_applied: { section: "Pricing", label: "Discount Applied (pre-tax)", editable: false, applies: "both" },
 
@@ -265,7 +274,7 @@ const TAGS_ADD_MUTATION = `
     tagsAdd(id: $id, tags: $tags) { userErrors { field message } }
   }
 `;
-const PAYMENT_TRIGGER_KEYS = ["amount_paid", "payment_mode_advance", "payment_mode_final"];
+const PAYMENT_TRIGGER_KEYS = ["amount_paid", "amount_paid_final", "payment_mode_advance", "payment_mode_final"];
 
 // A metafield save alone never fires the resource webhook, so the middleware never recomputes on its
 // own. We add trigger tags for what changed so it does (the middleware strips them after processing):
@@ -274,7 +283,7 @@ const PAYMENT_TRIGGER_KEYS = ["amount_paid", "payment_mode_advance", "payment_mo
 //                     also runs syncAmountToCollect, which re-reads every adjustment metafield.
 // Gold rate / jewel weights drive a full reprice; adjustment + payment fields drive a balance recompute.
 const REPRICE_TRIGGER_KEYS = [
-  "gold_rate", "gold_rate_date",
+  "gold_rate", "gold_rate_date", "making",
   "jewelcode_net_weight", "jewelcode_gross_weight",
   "jewelcode_diamond_carats", "jewelcode_gemstone_weight",
 ];
