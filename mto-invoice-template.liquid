@@ -327,9 +327,17 @@
             {% if prop_making_str != "" %}₹{{ prop_making_str | times: 100 | round | money_without_currency | remove: ',' }}{% else %}–{% endif %}
           </td>
 
-          <td class="text-right">{{ gross_paise | divided_by: 1.03 | money_without_currency | remove: ',' }}</td>
-          <td class="text-right">{{ disc_paise  | divided_by: 1.03 | money_without_currency | remove: ',' }}</td>
-          <td class="text-right">{{ gross_paise | minus: disc_paise | divided_by: 1.03 | money_without_currency | remove: ',' }}</td>
+          {% comment %}
+            "Gross Value" is PRE-discount and tax-INCLUSIVE; "Discount Applied" is already PRE-tax
+            (diamond-only), so it is NOT divided by 1.03 — only the gross is converted:
+              taxable (pre-disc)  = gross / 1.03
+              discount            = disc            <- pre-tax already
+              taxable (post-disc) = gross / 1.03 - disc
+          {% endcomment %}
+          {% assign taxable_pre_paise = gross_paise | divided_by: 1.03 %}
+          <td class="text-right">{{ taxable_pre_paise | money_without_currency | remove: ',' }}</td>
+          <td class="text-right">{{ disc_paise | money_without_currency | remove: ',' }}</td>
+          <td class="text-right">{{ taxable_pre_paise | minus: disc_paise | money_without_currency | remove: ',' }}</td>
         </tr>
       {% endfor %}
 

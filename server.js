@@ -255,7 +255,8 @@ function getMetafieldType(key) {
   if (key === 'amount_paid' || key === 'amount_pending' ||
       key === 'exchange_note_value' || key === 'voucher_value' || key === 'amount_to_be_collected' ||
       key === 'old_gold_value' || key === 'old_gold_weight' || key === 'old_gold_purity' ||
-      key === 'gross_value' || key === 'discount_applied' || key === 'advance') return 'number_decimal';
+      key === 'gross_value' || key === 'discount_applied' || key === 'discount_rate' ||
+      key === 'advance') return 'number_decimal';
   if (key === 'is_finalized') return 'boolean';
   if (key === 'gold_rate_date') return 'date_time';
   if (key === 'advance_date') return 'date';
@@ -1560,6 +1561,74 @@ async function handleDraftCreated(draft) {
   console.log(`Draft ${draftOrderId}: created — hydrated ${hydrated.filter(h => (h.properties || []).some(p => p.name === 'Gold')).length}/${productItems.length} items`);
 }
 
+// ─────────────────────────────────────────
+// Discount economics — the ONE place that resolves a discount to rupees.
+// ─────────────────────────────────────────
+// Every discount lands on the DIAMOND component only, PRE-tax. The two instruments differ only in
+// how their rupee figure is derived — never in where it lands:
+//
+//   custom (staff-entered % or flat Rs)
+//     The figure is already a reduction on the taxable diamond value. Base = PRE-tax diamond total,
+//     prorated across lines by diamond value. No 1.03 anywhere.
+//
+//   code (a real Shopify code, e.g. FNF5)
+//     Shopify computes it against TAX-INCLUSIVE prices (our prices are GST-inclusive), order-wide.
+//     So: take the figure on the tax-inclusive line totals, prorate by LINE TOTAL (mirroring Shopify's
+//     own allocation), then divide by 1.03 to convert each share into pre-tax rupees before it lands
+//     on diamond. The 1.03 here is a UNIT CONVERSION at the boundary, not a tax rule.
+//
+// Resolving from the stored RATE (not a frozen rupee amount) on every reprice is what makes the
+// discount independent of weights/carats/products: apply it before or after, the % re-derives against
+// whatever the diamond is worth now. `discount_applied` is downstream-authoritative and ALWAYS pre-tax,
+// so every reader uses one formula: taxable = gross/1.03 - discount_applied.
+//
+// lines: [{ diamond, grossIncl }] — diamond = PRE-discount diamond value, grossIncl = PRE-discount
+// tax-inclusive line total. Returns { perLine: [preTaxRs], total } capped so no line goes negative.
+function resolveDiscount({ kind, mode, rate, lines }) {
+  const zero = { perLine: lines.map(() => 0), total: 0 };
+  const r = Math.abs(parseFloat(rate) || 0);
+  if (!(r > 0) || !lines.length) return zero;
+
+  const diaTotal   = lines.reduce((s, l) => s + (l.diamond   || 0), 0);
+  const grossTotal = lines.reduce((s, l) => s + (l.grossIncl || 0), 0);
+  if (!(diaTotal > 0)) return zero;   // nothing to discount
+
+  let perLine;
+  if (kind === 'code') {
+    // Tax-inclusive basis → prorate by line total → convert each share to pre-tax.
+    const inclTotal = mode === 'pct' ? (r / 100) * grossTotal : r;
+    perLine = lines.map(l => {
+      const share = grossTotal > 0 ? inclTotal * ((l.grossIncl || 0) / grossTotal) : 0;
+      return share / 1.03;
+    });
+  } else {
+    // Pre-tax diamond basis → prorate by diamond value.
+    const preTaxTotal = mode === 'pct' ? (r / 100) * diaTotal : r;
+    perLine = lines.map(l => (diaTotal > 0 ? preTaxTotal * ((l.diamond || 0) / diaTotal) : 0));
+  }
+
+  // A discount can never exceed the diamond it lands on (per line, so no line can go negative).
+  perLine = perLine.map((d, i) => Math.min(Math.max(0, d), lines[i].diamond || 0));
+  const total = perLine.reduce((s, d) => s + d, 0);
+  return { perLine, total };
+}
+
+// Read the stored discount intent off the draft's custom metafields. Falls back to the legacy
+// frozen-rupee field (discount_applied with no rate) so drafts discounted before the rate migration
+// still resolve — treated as a pre-tax flat amount, which is what that field always meant for custom.
+function readDiscountIntent(mfMap) {
+  const rate = parseFloat(mfMap['discount_rate']);
+  if (rate > 0) {
+    return {
+      kind: (mfMap['discount_kind'] || 'custom').toLowerCase() === 'code' ? 'code' : 'custom',
+      mode: (mfMap['discount_mode'] || 'flat').toLowerCase() === 'pct' ? 'pct' : 'flat',
+      rate,
+    };
+  }
+  const legacy = Math.abs(parseFloat(mfMap['discount_applied'] || 0)) || 0;
+  return legacy > 0 ? { kind: 'custom', mode: 'flat', rate: legacy, legacy: true } : null;
+}
+
 // Tags: recalculate-price (threshold — reprice only if delta > 5%) | reprice (blanket — always reprices, or fixes discount/GST if no weights)
 // Both modes always write jewel hidden props (_net_wt, _gross_wt, _jewel_data, etc.) to the line item.
 // Gold rate override: if custom.gold_rate is set on the draft order metafields, it overrides _gold_rate and bypasses the 5% threshold.
@@ -1705,27 +1774,36 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
       itemRecalc[i] !== null ? itemRecalc[i].newPreTaxGross : r2(parseFloat(item.price) * item.quantity / 1.03)
     );
     const preTaxGrossTotal = preTaxArr.reduce((s, v) => s + v, 0);
-    const pGross = r2(preTaxGrossTotal * 1.03);
 
-    const discObj = draft.applied_discount;
-    let discAmt = 0;
-    if (discObj) {
-      const ra = parseFloat(discObj.amount || 0);
-      const rv = parseFloat(discObj.value  || 0);
-      discAmt = ra > 0 ? ra : rv;
-    }
-    const intendedFinal    = r2(Math.max(0, pGross - discAmt));
-    const taxableTotal     = r2(intendedFinal / 1.03);
-    const correctDiscTotal = r2(preTaxGrossTotal - taxableTotal);
+    // A discount does NOT depend on weights — it must resolve here exactly as it does in the weights
+    // path. (This branch previously read draft.applied_discount, which the reprice clears on every run,
+    // so it was always 0 and a discount on a weightless draft silently did nothing.) The diamond value
+    // is unchanged by this branch, so it comes straight off the line prop / variant breakup.
+    const diaArr = productItems.map((item, idx) => {
+      const iProps = {};
+      for (const p of (item.properties || [])) iProps[p.name] = p.value;
+      const vMf = hydratedBase[idx].varMf || {};
+      return parseFloat((iProps['Diamond'] || '').replace('Rs', '').trim())
+          || parseFloat(vMf.price_breakup_diamond || 0) * (item.quantity || 1)
+          || 0;
+    });
+    const discIntent = readDiscountIntent(mfMap);
+    const disc = discIntent
+      ? resolveDiscount({
+          ...discIntent,
+          lines: productItems.map((item, i) => ({ diamond: diaArr[i], grossIncl: r2(preTaxArr[i] * 1.03) })),
+        })
+      : { perLine: productItems.map(() => 0), total: 0 };
 
     const hydratedItems = productItems.map((item, idx) => {
       const h = hydratedBase[idx];
-      const proportion  = preTaxGrossTotal > 0 ? preTaxArr[idx] / preTaxGrossTotal : 1 / productItems.length;
-      const itemTaxable = r2(taxableTotal * proportion);
+      // Same convention as the weights path: Gross Value is PRE-discount tax-inclusive,
+      // Discount Applied is pre-tax rupees, Taxable = Gross/1.03 - Discount.
+      const grossValue  = r2(preTaxArr[idx] * 1.03);
+      const itemDisc    = r2(disc.perLine[idx] || 0);
+      const itemTaxable = r2(Math.max(0, preTaxArr[idx] - itemDisc));
       const itemGst     = r2(itemTaxable * 0.03);
       const itemFinal   = r2(itemTaxable + itemGst);
-      const itemDisc    = r2(correctDiscTotal * proportion);
-      const grossValue  = r2(itemFinal + itemDisc);
       const unitPrice   = r2(itemFinal / (item.quantity || 1));
       // Strip financial fields; also strip Gold for this item when we have new gold data to replace it
       const thisItemRecalc = itemRecalc[idx];
@@ -1754,7 +1832,15 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
         : { variant_id: item.variant_id || undefined, quantity: item.quantity, price: item.price, properties: item.properties || [], title: item.title };
     });
     await gqlSetDraftLineItems(draftOrderId, allUpdatedItems, token, { tags: tagsWithoutRecalc, clearDiscount: true });
-    console.log(`Draft ${draftOrderId}: reprice (no weights${anyGoldRecalc ? ', gold rate recalc' : ''}) — ${hydratedItems.length} items updated`);
+    console.log(`Draft ${draftOrderId}: reprice (no weights${anyGoldRecalc ? ', gold rate recalc' : ''}) — ${hydratedItems.length} items updated${discIntent ? `, discount Rs${disc.total.toFixed(2)}` : ''}`);
+
+    if (discIntent) {
+      const prior = Math.abs(parseFloat(mfMap['discount_applied'] || 0)) || 0;
+      if (Math.abs(prior - disc.total) >= 0.01) {
+        await updateDraftOrderMetafields(draftOrderId, { discount_applied: disc.total.toFixed(2) });
+        console.log(`Draft ${draftOrderId}: discount re-resolved — was Rs${prior.toFixed(2)}, now Rs${disc.total.toFixed(2)} (${discIntent.kind}/${discIntent.mode} rate=${discIntent.rate})`);
+      }
+    }
     return;
   }
 
@@ -1850,14 +1936,18 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
 
   // Total gross across all repriced items (reference only).
   const totalNewGross = itemResults.reduce((sum, r) => sum + (r?.newGrossValue || 0), 0);
-  // Pre-tax discount is DIAMOND-ONLY and order-level, sourced from custom.discount_applied
-  // (written by handleApplyDiscountTag from a resolved Shopify code or a custom amount). It is
-  // prorated across lines by diamond value and subtracted from the diamond component BEFORE GST —
-  // never Shopify's native applied_discount (which is cleared on every reprice). Capped at the
-  // total diamond value so it can't drive a line negative.
-  const totalNewDiamond = itemResults.reduce((sum, r) => sum + (r?.newDiamondValue || 0), 0);
-  const discountApplied = Math.abs(parseFloat(mfMap['discount_applied'] || 0)) || 0;
-  const effDiscount     = Math.min(discountApplied, totalNewDiamond);
+  // Discount: re-resolved from the stored RATE against the diamond value we just recomputed, so it
+  // tracks weight/carat/product changes instead of drifting (see resolveDiscount). Never Shopify's
+  // native applied_discount, which is cleared on every reprice.
+  const discIntent = readDiscountIntent(mfMap);
+  const discLines  = itemResults.map(r => ({
+    diamond:   r?.newDiamondValue || 0,
+    grossIncl: r?.newGrossValue   || 0,   // PRE-discount tax-inclusive line total
+  }));
+  const disc = discIntent
+    ? resolveDiscount({ ...discIntent, lines: discLines })
+    : { perLine: discLines.map(() => 0), total: 0 };
+  const discByIdx = new Map(itemResults.map((r, i) => [r?.idx, disc.perLine[i] || 0]));
 
   const allJewelData = [];
   const repricedMap  = new Map();
@@ -1878,12 +1968,8 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
       metal, category, jewel_code, props,
     } = result;
 
-    // Prorate the diamond-only pre-tax discount by this item's share of total diamond value,
-    // subtract it from the diamond component, and rebuild the GST-inclusive gross from the
-    // discounted components (discount now sits PRE-tax, reducing the taxable base).
-    const itemDiscount       = totalNewDiamond > 0 ? effDiscount * (newDiamondValue / totalNewDiamond) : 0;
-    const discountedDiamond  = Math.max(0, newDiamondValue - itemDiscount);
-    const grossAfterDiscount = (newGoldValue + discountedDiamond + newMakingValue) * 1.03;
+    // This line's share of the pre-tax, diamond-only discount (already prorated by resolveDiscount).
+    const itemDiscount = discByIdx.get(idx) || 0;
 
     const jewelHiddenProps = {
       '_gross_wt':     newGrossWt.toFixed(3),
@@ -1910,10 +1996,19 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
       return;
     }
 
-    // Full reprice: force=true OR delta > 5%. Discount already baked into the diamond component pre-tax.
-    const newFinalValue   = grossAfterDiscount;
-    const newTaxableValue = newFinalValue / 1.03;
+    // Full reprice: force=true OR delta > 5%.
+    // Convention (uniform across every path and reader):
+    //   Gross Value      = PRE-discount, tax-inclusive        = (gold + diamond + making) * 1.03
+    //   Discount Applied = pre-tax rupees, diamond-only
+    //   Taxable Value    = Gross Value / 1.03 - Discount Applied
+    //   GST              = Taxable Value * 0.03
+    //   line price       = Taxable Value * 1.03
+    // Gold/Diamond/Making stay PRE-discount so the components reconcile to Gross Value, and so
+    // handleApplyDiscountTag (which reads the Diamond prop as its base) can't compound a second
+    // discount onto an already-discounted stone.
+    const newTaxableValue = Math.max(0, newGrossValue / 1.03 - itemDiscount);
     const newGst          = newTaxableValue * 0.03;
+    const newFinalValue   = newTaxableValue + newGst;
 
     const jewel_data = JSON.stringify({
       jewel_code, gross_wt: newGrossWt, net_wt: newNetWt,
@@ -1924,9 +2019,9 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
 
     const repricedProps = {
       'Gold':             `Rs${newGoldValue.toFixed(2)}`,
-      'Diamond':          `Rs${discountedDiamond.toFixed(2)}`,
+      'Diamond':          `Rs${newDiamondValue.toFixed(2)}`,
       'Making':           `Rs${newMakingValue.toFixed(2)}`,
-      'Gross Value':      `Rs${newFinalValue.toFixed(2)}`,
+      'Gross Value':      `Rs${newGrossValue.toFixed(2)}`,
       'Taxable Value':    `Rs${newTaxableValue.toFixed(2)}`,
       'GST':              `Rs${newGst.toFixed(2)}`,
       'Discount Applied': `Rs${itemDiscount.toFixed(2)}`,
@@ -1952,6 +2047,16 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
 
   await gqlSetDraftLineItems(draftOrderId, allLineItems, token, { tags: tagsWithoutRecalc, clearDiscount: true });
   console.log(`✅ Draft ${draftOrderId}: reprice done (GraphQL) — ${repricedMap.size} item(s) updated`);
+
+  // Re-publish the resolved discount (pre-tax) so the invoice/reports read the value we just priced
+  // against, not the one resolved when staff clicked Apply.
+  if (discIntent) {
+    const prior = Math.abs(parseFloat(mfMap['discount_applied'] || 0)) || 0;
+    if (Math.abs(prior - disc.total) >= 0.01) {
+      await updateDraftOrderMetafields(draftOrderId, { discount_applied: disc.total.toFixed(2) });
+      console.log(`Draft ${draftOrderId}: discount re-resolved — was Rs${prior.toFixed(2)}, now Rs${disc.total.toFixed(2)} (${discIntent.kind}/${discIntent.mode} rate=${discIntent.rate})`);
+    }
+  }
 
   if (allJewelData.length > 0) {
     const mfValue = allJewelData.length === 1
@@ -2580,10 +2685,16 @@ async function handleApplyExcTag(draft) {
 // Apply a PRE-TAX, DIAMOND-ONLY discount from the metafield-manager admin action. Staff add either:
 //   apply-discount:<code>                 → resolve a real Shopify discount code (% or fixed ₹) via Admin API
 //   apply-discount:custom:<value>:<pct|flat> → a custom order discount (% of diamond value, or flat ₹)
-// The resolved ₹ (capped at the draft's total diamond value) is written to custom.discount_applied; the
-// reprice engine (handleRecalculatePriceTag) subtracts it from the diamond component BEFORE GST, so it
-// reduces the taxable base, the tax-inclusive line price, and — via syncAmountToCollect — amount_to_be_
-// collected. We drop a `reprice` tag so the engine re-runs and bakes it in. Failure → discount-invalid tag.
+//
+// This records the INTENT — discount_rate / discount_mode / discount_kind — and leaves the arithmetic to
+// the reprice engine, which re-resolves it against the live diamond value on every run (see resolveDiscount).
+// That is what makes the discount independent of weights: staff can discount before or after entering
+// weights/carats, or swap the products entirely, and a % stays a %. (Previously the % was multiplied out to
+// rupees here and frozen, so any later change to the diamond silently drifted the effective rate — e.g.
+// #D172 held Rs11,240 from a 10% on a Rs112,400 diamond, still Rs11,240 after the products changed the
+// diamond to Rs70,800: 15.9%.)
+//
+// We drop a `reprice` tag so the engine runs and bakes it in. Failure → discount-invalid tag.
 async function handleApplyDiscountTag(draft) {
   try {
     const draftOrderId = draft.id.toString();
@@ -2612,15 +2723,18 @@ async function handleApplyDiscountTag(draft) {
       .reduce((sum, item) => sum + diaProp(item), 0);
     if (!(diamondTotal > 0)) { await finishTags(['discount-invalid: no diamond value to discount']); return; }
 
-    // Resolve the input to a fraction (pctFrac) or a flat ₹, then to a rupee amount on the diamond base.
-    let pctFrac = 0, flat = 0, label = '';
+    // Resolve the input to a rate + mode + kind. `kind` is what tells the engine which basis the rate is
+    // quoted against: custom → pre-tax diamond; code → Shopify's tax-inclusive prices (needs the /1.03
+    // conversion). We deliberately do NOT multiply the rate out to rupees here — see the header.
+    let rate = 0, mode = '', kind = '', label = '';
     if (/^custom:/i.test(spec)) {
       const parts = spec.split(':');                       // ["custom", "<v>", "<pct|flat>"]
       const v = Math.abs(parseFloat(parts[1]) || 0);
-      const mode = (parts[2] || 'flat').toLowerCase();
+      const m = (parts[2] || 'flat').toLowerCase();
       if (!(v > 0)) { await finishTags(['discount-invalid: custom value missing']); return; }
-      if (mode === 'pct') { pctFrac = v / 100; label = `CUSTOM ${v}%`; }
-      else                { flat = v;          label = `CUSTOM Rs${v}`; }
+      kind = 'custom';
+      if (m === 'pct') { rate = v; mode = 'pct';  label = `CUSTOM ${v}%`; }
+      else             { rate = v; mode = 'flat'; label = `CUSTOM Rs${v}`; }
     } else {
       // Real Shopify discount code → resolve its value via Admin GraphQL (percentage is a 0..1 fraction).
       const code = spec;
@@ -2636,23 +2750,25 @@ async function handleApplyDiscountTag(draft) {
       } catch (e) { await finishTags([`discount-invalid: ${code} lookup failed`]); return; }
       if (!node) { await finishTags([`discount-invalid: ${code} not found`]); return; }
       const val = node?.customerGets?.value;
-      if (val?.__typename === 'DiscountPercentage' && parseFloat(val.percentage) > 0)      pctFrac = parseFloat(val.percentage);
-      else if (val?.__typename === 'DiscountAmount' && parseFloat(val.amount?.amount) > 0) flat = parseFloat(val.amount.amount);
-      else { await finishTags([`discount-invalid: ${code} unsupported`]); return; }
+      kind = 'code';
+      // percentage comes back as a 0..1 fraction; we store it as a percent so pct means the same in both kinds.
+      if (val?.__typename === 'DiscountPercentage' && parseFloat(val.percentage) > 0) {
+        rate = parseFloat(val.percentage) * 100; mode = 'pct';
+      } else if (val?.__typename === 'DiscountAmount' && parseFloat(val.amount?.amount) > 0) {
+        rate = parseFloat(val.amount.amount);    mode = 'flat';
+      } else { await finishTags([`discount-invalid: ${code} unsupported`]); return; }
       label = code;
     }
 
-    const raw      = pctFrac > 0 ? pctFrac * diamondTotal : flat;
-    const discount = Math.min(Math.max(0, raw), diamondTotal);   // never exceed the diamond value
-    if (!(discount > 0)) { await finishTags([`discount-invalid: ${label} zero`]); return; }
-
     await updateDraftOrderMetafields(draftOrderId, {
-      discount_applied: discount.toFixed(2),
+      discount_rate: rate.toFixed(2),
+      discount_mode: mode,
+      discount_kind: kind,
       discount_code: label,
     });
-    // Drop `reprice` so the engine re-runs and subtracts the discount dia-only pre-tax.
+    // Drop `reprice` so the engine resolves the rate and bakes it in dia-only, pre-tax.
     await finishTags(['discount-applied', 'reprice']);
-    console.log(`[apply-discount] ${label} → Rs${discount.toFixed(2)} on diamond base Rs${diamondTotal.toFixed(2)} — draft ${draft.name || draftOrderId}`);
+    console.log(`[apply-discount] ${label} recorded (${kind}/${mode} rate=${rate}) on diamond base Rs${diamondTotal.toFixed(2)} — draft ${draft.name || draftOrderId}`);
   } catch (e) {
     console.error(`[apply-discount] failed for draft ${draft?.id}:`, e.message);
   }
@@ -3497,8 +3613,9 @@ app.post('/api/serial/cancel-by-code', async (req, res) => {
 // At checkout Shopify applies it through discount_allocations, reducing the SUBTOTAL (pre-tax) — but our
 // prices are GST-inclusive and a voucher is a credit instrument, so it must be POST-tax. We reclassify:
 // freeze the VCH-identity discount into custom.voucher_value (post-tax), fold every OTHER discount
-// (ordinary promo) into custom.discount_applied (pre-tax), and freeze custom.gross_value (full,
-// pre-discount) so the tax invoice reproduces GST as (gross − discount_applied)/1.03 then − voucher.
+// (ordinary promo) into custom.discount_applied (pre-tax — see the /1.03 conversion below), and freeze
+// custom.gross_value (full, pre-discount, tax-inclusive) so the tax invoice reproduces GST as
+// gross/1.03 − discount_applied, then − voucher.
 // Online orders are already paid at checkout and never enter the draft/deposit collection path, so this
 // re-classification is for invoice/recon reproducibility only — it does NOT re-subtract money.
 // Reads NATIVE discount objects on the webhook body (line props are absent online / flaky offline).
@@ -3539,12 +3656,17 @@ async function freezeOnlineVoucher(order, token) {
   }
   if (voucherValue <= 0) return; // nothing classified as a voucher — leave the order alone
 
+  // Shopify allocates a promo against our GST-INCLUSIVE prices, so `discountApplied` is tax-inclusive
+  // rupees. custom.discount_applied is pre-tax by definition (every reader does gross/1.03 − discount),
+  // so convert at this boundary. The voucher is a post-tax credit instrument and stays as-is.
+  const discountPreTax = discountApplied / 1.03;
+
   await updateOrderMetafields(String(order.id), {
     gross_value:      grossValue.toFixed(2),
-    discount_applied: discountApplied.toFixed(2),
+    discount_applied: discountPreTax.toFixed(2),
     voucher_value:    voucherValue.toFixed(2),
   }, token);
-  console.log(`[voucher-freeze] order ${order.name || order.id}: gross=${grossValue.toFixed(2)} discount_applied=${discountApplied.toFixed(2)} voucher_value=${voucherValue.toFixed(2)}`);
+  console.log(`[voucher-freeze] order ${order.name || order.id}: gross=${grossValue.toFixed(2)} discount_applied=${discountPreTax.toFixed(2)} (incl ${discountApplied.toFixed(2)}) voucher_value=${voucherValue.toFixed(2)}`);
 
   // Record the online voucher redemption in the credit-instrument ledger.
   const vchCode = (codes.find(c => /^VCH/i.test(String(c.code || ''))) || {}).code;
@@ -5037,10 +5159,12 @@ app.get('/api/adjustment-report', async (req, res) => {
         for (const me of n.metafields.edges) mf[me.node.key] = me.node.value;
         const gross = mf.gross_value != null ? num(mf.gross_value) : num(n.subtotalPriceSet.shopMoney.amount);
         const discount = num(mf.discount_applied);
-        // GST ties to the tax invoice: taxable = (gross − discount)/1.03, flat 3% split by supplier
-        // store state (custom.state_code) vs shipping province.
+        // GST ties to the tax invoice: gross is tax-INCLUSIVE and pre-discount; discount_applied is
+        // PRE-tax rupees (normalized at every writer), so taxable = gross/1.03 − discount. Do NOT divide
+        // the discount too — it is already pre-tax, and doing so under-applies it by 2.91% of its value.
+        // Flat 3% split by supplier store state (custom.state_code) vs shipping province.
         const shipState = n.shippingAddress?.provinceCode || '';
-        const taxable   = Math.round(((gross - discount) / 1.03) * 100) / 100;
+        const taxable   = Math.round(Math.max(0, gross / 1.03 - discount) * 100) / 100;
         const gst       = reports.gstSplit(taxable, mf.state_code || '', shipState);
         const lines     = (n.lineItems?.edges || []).map(le => le.node);
         const totalQty  = lines.reduce((s, li) => s + (li.quantity || 0), 0);
