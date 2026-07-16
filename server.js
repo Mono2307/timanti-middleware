@@ -248,6 +248,12 @@ async function tagShopifyDraftOrder(shopifyDraftId, amountPaid, amountPending, s
   }
 }
 
+// Rupees of outstanding balance below which an order counts as fully paid. ONE definition — the
+// "fully paid" test used to differ by caller (<= 0.01 on the store_deposits path, < 1 on the
+// metafield path, plus a "payment_status already says Full" latch), so the same order could be
+// simultaneously fully paid and partially paid depending on which surface you asked.
+const PAID_EPSILON = 1;
+
 function getMetafieldType(key) {
   // gold_rate is single_line_text so it can hold a positional, comma-separated list of rates
   // ("9713,10200") for multi-product reprice. Readers parseFloat each position regardless of type.
@@ -530,7 +536,7 @@ async function handlePaymentCompletion(transaction, overrides = {}) {
     // row was created still land), never the gross total.
     const collectionBase   = await getCollectionBase(transaction.shopify_draft_id, deposit.total_amount);
     const newAmountPending = collectionBase - newAmountPaid;
-    const newStatus        = newAmountPending <= 0.01 ? 'paid' : 'partial';
+    const newStatus        = newAmountPending < PAID_EPSILON ? 'paid' : 'partial';
 
     await supabase.from('store_deposits').update({
       total_amount:   collectionBase,
@@ -565,7 +571,8 @@ async function handlePaymentCompletion(transaction, overrides = {}) {
       metafieldUpdate.payment_mode_advance = paymentMode;
     }
     if (installmentType === 'final') metafieldUpdate.payment_mode_final = paymentMode;
-    if (newStatus === 'paid')        metafieldUpdate.is_finalized = 'true';
+    // Track the balance both ways — is_finalized drives is_fully_paid on the tax invoice.
+    metafieldUpdate.is_finalized = newStatus === 'paid' ? 'true' : 'false';
     await updateDraftOrderMetafields(transaction.shopify_draft_id, metafieldUpdate);
 
     const { data: updatedDeposit } = await supabase
@@ -1359,7 +1366,7 @@ async function handleCashPaymentTag(draft) {
   // row was created still land), never the gross total.
   const collectionBase   = await getCollectionBase(draftOrderId, deposit.total_amount);
   const newAmountPending = collectionBase - newAmountPaid;
-  const newStatus        = newAmountPending <= 0.01 ? 'paid' : 'partial';
+  const newStatus        = newAmountPending < PAID_EPSILON ? 'paid' : 'partial';
 
   await supabase.from('store_deposits').update({
     total_amount:   collectionBase,
@@ -1412,7 +1419,8 @@ async function handleCashPaymentTag(draft) {
   };
   if (installmentType === 'advance') metafieldUpdate.payment_mode_advance = 'cash';
   if (installmentType === 'final')   metafieldUpdate.payment_mode_final   = 'cash';
-  if (newStatus === 'paid')          metafieldUpdate.is_finalized          = 'true';
+  // Track the balance both ways — is_finalized drives is_fully_paid on the tax invoice.
+  metafieldUpdate.is_finalized = newStatus === 'paid' ? 'true' : 'false';
   await updateDraftOrderMetafields(draftOrderId, metafieldUpdate);
 
   console.log(`✅ Cash Rs${amountRupees} (${installmentType}) recorded for draft ${draftOrderId} — ${newStatus}`);
@@ -2255,7 +2263,9 @@ async function applyPaymentTagsToOrder(orderId, token) {
   const netRaw  = parseFloat(mf('amount_to_be_collected'));
   const netBase = Number.isFinite(netRaw) && netRaw >= 0 ? netRaw : totalPrice;
   const amountPending = Math.max(0, netBase - amountPaid);
-  const isFull    = isFinalized || String(paymentStatus || '').toLowerCase() === 'full' || (amountPaid > 0 && amountPending < 1);
+  // "Fully paid" is ARITHMETIC ONLY — see the draft variant for why payment_status/is_finalized must
+  // never feed back in as inputs here (one-way latch).
+  const isFull    = amountPaid > 0 && amountPending < PAID_EPSILON;
   const isPartial = !isFull && amountPaid > 0;
 
   // Persist the derived balance + status on the order so re-downloads/reporting read them.
@@ -2265,7 +2275,9 @@ async function applyPaymentTagsToOrder(orderId, token) {
     if (curPending === null || Math.abs(parseFloat(curPending) - amountPending) >= 0.5) patch.amount_pending = amountPending.toFixed(2);
     const wantStatus = isFull ? 'Full' : 'Partial';  // choice-list values: Partial|Full|None
     if (paymentStatus !== wantStatus) patch.payment_status = wantStatus;
-    if (isFull && !isFinalized) patch.is_finalized = 'true';
+    // is_finalized drives is_fully_paid on the tax invoice, so it must track the balance BOTH ways —
+    // a top-up that reopens a balance has to clear it, or the invoice keeps printing "fully paid".
+    if (isFull !== isFinalized) patch.is_finalized = isFull ? 'true' : 'false';
     if (Object.keys(patch).length) await updateOrderMetafields(orderId, patch, token);
   }
   if (!isFull && !isPartial) return false;
@@ -2327,7 +2339,16 @@ async function applyPaymentTagsToDraftOrder(draftOrderId, token) {
   const netRaw  = parseFloat(mf('amount_to_be_collected'));
   const netBase = Number.isFinite(netRaw) && netRaw >= 0 ? netRaw : totalPrice;
   const amountPending = Math.max(0, netBase - amountPaid);
-  const isFull    = isFinalized || String(paymentStatus || '').toLowerCase() === 'full' || (amountPaid > 0 && amountPending < 1);
+  // "Fully paid" is ARITHMETIC ONLY: what is owed vs what is paid, right now.
+  //
+  // It previously read `isFinalized || payment_status === 'full' || ...`, which made payment_status
+  // both an input and an output of its own derivation (it is written back as `isFull ? 'Full' :
+  // 'Partial'` below) — a one-way latch. Any single moment of amountPending < 1 (e.g. amount_paid
+  // entered while amount_to_be_collected was still 0 on a half-built draft) pinned the draft to Full
+  // forever, and the is_finalized write below then sealed it. amount_pending kept correcting itself
+  // while the status could not, which is how #D172 ended up reading Full at 10,000 paid of 47,573.19
+  // owed — and why a later payment never re-registered as partial vs final.
+  const isFull    = amountPaid > 0 && amountPending < PAID_EPSILON;
   const isPartial = !isFull && amountPaid > 0;
 
   // Persist the derived balance + status so the invoice/collection surfaces read them (not just tags).
@@ -2338,7 +2359,10 @@ async function applyPaymentTagsToDraftOrder(draftOrderId, token) {
     if (curPending === null || Math.abs(parseFloat(curPending) - amountPending) >= 0.5) patch.amount_pending = amountPending.toFixed(2);
     const wantStatus = isFull ? 'Full' : 'Partial';  // choice-list values: Partial|Full|None
     if (paymentStatus !== wantStatus) patch.payment_status = wantStatus;
-    if (isFull && !isFinalized) patch.is_finalized = 'true';
+    // is_finalized drives is_fully_paid on the tax invoice (mto-invoice-template.liquid), so it must
+    // track the balance in BOTH directions — otherwise a draft that reopens a balance (top-up, price
+    // change, adjustment removed) keeps printing "fully paid" on a customer-facing invoice.
+    if (isFull !== isFinalized) patch.is_finalized = isFull ? 'true' : 'false';
     if (Object.keys(patch).length) await updateDraftOrderMetafields(draftOrderId, patch);
   }
   if (!isFull && !isPartial) return false;
