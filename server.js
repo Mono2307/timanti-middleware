@@ -39,6 +39,10 @@ const SERIAL_REPAIR         = flagOn(process.env.SERIAL_REPAIR);
 const SERIAL_MEMO_TRANSFER  = flagOn(process.env.SERIAL_MEMO_TRANSFER);
 const SERIAL_PO             = flagOn(process.env.SERIAL_PO);
 
+// Customer-order serials only mint for orders created on/after this cutoff (IST).
+// Overridable via env; default = 1 Aug 2026 so July (and earlier) orders are never auto-numbered.
+const SERIAL_CUSTOMER_ORDER_START = process.env.SERIAL_CUSTOMER_ORDER_START || '2026-08-01T00:00:00+05:30';
+
 // Typeform in-store customer capture -> Shopify customer + metafields.
 app.post('/api/webhooks/typeform/customer-capture',
   (req, res) => handleTypeformWebhook(req, res, { supabase, getShopifyToken }));
@@ -3573,6 +3577,16 @@ app.post('/api/serial/order-serial', async (req, res) => {
   freezeOnlineVoucher(order, token).catch(e => console.error(`[voucher-freeze] order ${order.id}:`, e.message));
 
   if (!SERIAL_CUSTOMER_ORDER) return;
+
+  // Date gate: only number orders created on/after the cutoff (default 1 Aug 2026 IST).
+  // Keeps July (and earlier) orders unnumbered even if they are edited after the cutoff.
+  const _serialCutoff  = new Date(SERIAL_CUSTOMER_ORDER_START);
+  const _orderCreated  = order.created_at ? new Date(order.created_at) : null;
+  if (_orderCreated && !isNaN(_serialCutoff.getTime()) && _orderCreated < _serialCutoff) {
+    console.log(`[serial] order ${order.name || order.id} created ${order.created_at} < start ${SERIAL_CUSTOMER_ORDER_START} — skip mint`);
+    return;
+  }
+
   (async () => {
     const deps = SERIAL_DEPS();
     const mf = await serialization.readSerialMetafields(deps, 'orders', String(order.id), token);
