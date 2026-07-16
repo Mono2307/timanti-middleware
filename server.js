@@ -489,35 +489,59 @@ async function getCollectionBase(draftOrderId, fallbackTotal) {
   }
 }
 
-// The advance (first-stage) payment recorded on a draft, in Rs.
-// store_deposits tracks ONE cumulative amount_paid, but the metafields split what's been paid into
-// custom.amount_paid (advance) + custom.amount_paid_final (final). A deposit-driven payment therefore
-// has to know the advance so it can write the remainder into amount_paid_final and preserve the
-// invariant `advance + final === the DB cumulative` — otherwise the two stages double-count.
-async function getAdvancePaid(draftOrderId) {
+// What a draft has been paid, per stage, in Rs — read from the metafields.
+// store_deposits tracks ONE cumulative amount_paid, but the metafields split it into
+// custom.amount_paid (advance) + custom.amount_paid_final (final). The metafields are the surface
+// staff type into and the invoice reads, so they are the union of every payment route: the panel
+// writes them directly, and the cash/gateway paths write them too.
+async function getStagedPaid(draftOrderId) {
+  const num = (m) => { const v = m ? parseFloat(m.value) : NaN; return Number.isFinite(v) && v >= 0 ? v : 0; };
   try {
     const token = await getShopifyToken();
     const { data } = await axios.get(
       `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}/metafields.json`,
       { headers: { 'X-Shopify-Access-Token': token }, timeout: 10000 }
     );
-    const m = (data.metafields || []).find(x => x.namespace === 'custom' && x.key === 'amount_paid');
-    const v = m ? parseFloat(m.value) : NaN;
-    return Number.isFinite(v) && v >= 0 ? v : 0;
+    const at = (k) => (data.metafields || []).find(x => x.namespace === 'custom' && x.key === k);
+    const advance = num(at('amount_paid'));
+    const final   = num(at('amount_paid_final'));
+    return { advance, final, total: advance + final };
   } catch (e) {
-    console.error(`getAdvancePaid(${draftOrderId}) failed: ${e.message} — assuming 0`);
-    return 0;
+    console.error(`getStagedPaid(${draftOrderId}) failed: ${e.message} — assuming 0`);
+    return { advance: 0, final: 0, total: 0 };
   }
 }
 
-// Split a store_deposits cumulative total across the two staged payment metafields.
+// Reconcile a store_deposits row against the metafields BEFORE recording a new payment.
+//
+// The panel writes amount_paid straight to the metafield and never touches Supabase, so a
+// staff-entered payment is invisible to the deposit row. Without this, a draft with a panel-entered
+// Rs10,000 advance and no deposit row would take a Rs37,573.19 cash payment, create the row at
+// amount_paid 0, label the payment 'advance' (payment_status === 'unpaid'), and overwrite the
+// staff-entered advance — silently destroying Rs10,000 of recorded collection.
+//
+// We take the HIGHER of the two as the base: money that either surface believes was collected is
+// never dropped. A divergence means one side missed a write, so it is logged rather than swallowed.
+// installment_type follows what is ALREADY paid rather than the deposit's own status, so a payment
+// following a panel-entered advance is correctly the final one.
+async function reconcileDepositPaid(draftOrderId, deposit) {
+  const dbPaid = parseFloat(deposit?.amount_paid) || 0;
+  const { total: mfPaid } = await getStagedPaid(draftOrderId);
+  const basePaid = Math.max(dbPaid, mfPaid);
+  if (Math.abs(dbPaid - mfPaid) >= 0.5) {
+    console.warn(`[payments] draft ${draftOrderId}: deposit/metafield divergence — store_deposits=Rs${dbPaid.toFixed(2)} metafields=Rs${mfPaid.toFixed(2)} → using Rs${basePaid.toFixed(2)}`);
+  }
+  return { basePaid, installmentType: basePaid > 0 ? 'final' : 'advance' };
+}
+
+// Split a cumulative paid total across the two staged payment metafields.
 // advance stage → it IS the advance; final stage → whatever is left once the advance is accounted for
 // (so a 3rd+ payment accumulates into final rather than overwriting it).
 async function stagedPaidPatch(draftOrderId, installmentType, cumulativePaid) {
   if (installmentType === 'advance') {
     return { amount_paid: cumulativePaid.toFixed(2), amount_paid_final: '0' };
   }
-  const advance = await getAdvancePaid(draftOrderId);
+  const { advance } = await getStagedPaid(draftOrderId);
   return { amount_paid_final: Math.max(0, cumulativePaid - advance).toFixed(2) };
 }
 
@@ -562,8 +586,9 @@ async function handlePaymentCompletion(transaction, overrides = {}) {
 
     if (!deposit) { console.error(`Could not find or create store_deposits for draft ${transaction.shopify_draft_id}`); return; }
 
-    const installmentType  = deposit.payment_status === 'unpaid' ? 'advance' : 'final';
-    const newAmountPaid    = parseFloat(deposit.amount_paid) + amountPaidRupees;
+    // Base this payment on what EITHER surface already recorded — see reconcileDepositPaid.
+    const { basePaid, installmentType } = await reconcileDepositPaid(transaction.shopify_draft_id, deposit);
+    const newAmountPaid    = basePaid + amountPaidRupees;
     // Reconcile against the net-to-collect (refreshed here so adjustments applied AFTER the deposit
     // row was created still land), never the gross total.
     const collectionBase   = await getCollectionBase(transaction.shopify_draft_id, deposit.total_amount);
@@ -1302,10 +1327,13 @@ async function handleSendLinkTag(draft) {
   const draftOrderName = draft.name || draft.id.toString();
   const totalAmount    = parseFloat(draft.total_price) || null;
 
+  // Label the link by what is already paid across BOTH surfaces (the panel writes the metafield and
+  // never touches store_deposits), not by the deposit row's own status. Advisory only — the
+  // authoritative stage is re-derived when the payment actually completes.
   const { data: existingDeposit } = await supabase
-    .from('store_deposits').select('payment_status')
+    .from('store_deposits').select('amount_paid')
     .eq('draft_order_id', draft.id.toString()).maybeSingle();
-  const installmentType = existingDeposit?.payment_status === 'partial' ? 'final' : 'advance';
+  const { installmentType } = await reconcileDepositPaid(draft.id.toString(), existingDeposit);
 
   const { gokwikLinkId, shortUrl, expiresAt } = await createGokwikLink({
     draftOrderId: draft.id, amount, customerPhone, customerName, customerEmail
@@ -1394,8 +1422,10 @@ async function handleCashPaymentTag(draft) {
     return;
   }
 
-  const installmentType  = deposit.payment_status === 'unpaid' ? 'advance' : 'final';
-  const newAmountPaid    = parseFloat(deposit.amount_paid) + amountRupees;
+  // Base this payment on what EITHER surface already recorded — the panel writes the metafield without
+  // touching Supabase, so deposit.amount_paid alone would miss a staff-entered advance and clobber it.
+  const { basePaid, installmentType } = await reconcileDepositPaid(draftOrderId, deposit);
+  const newAmountPaid    = basePaid + amountRupees;
   // Reconcile against the net-to-collect (refreshed here so adjustments applied AFTER the deposit
   // row was created still land), never the gross total.
   const collectionBase   = await getCollectionBase(draftOrderId, deposit.total_amount);
@@ -3335,10 +3365,12 @@ app.post('/api/generate-payment-link', async (req, res) => {
     return res.status(400).json({ success: false, error: 'Missing: draftOrderId, amount, customerPhone' });
   }
   try {
+    // Label by what is already paid across BOTH surfaces — see reconcileDepositPaid. Advisory only;
+    // the authoritative stage is re-derived when the payment completes.
     const { data: existingDeposit } = await supabase
-      .from('store_deposits').select('payment_status')
+      .from('store_deposits').select('amount_paid')
       .eq('draft_order_id', draftOrderId.toString()).maybeSingle();
-    const installmentType = existingDeposit?.payment_status === 'partial' ? 'final' : 'advance';
+    const { installmentType } = await reconcileDepositPaid(draftOrderId.toString(), existingDeposit);
 
     const { gokwikLinkId, shortUrl, expiresAt } = await createGokwikLink({
       draftOrderId, amount, customerPhone, customerName, customerEmail
