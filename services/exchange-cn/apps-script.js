@@ -22,6 +22,9 @@
 
 const SHOPIFY_SHOP    = 'auracarat.myshopify.com';
 const CALC_SHEET_NAME = 'Exchange Calculator';
+// Issuing store code (state_code) — REQUIRED by /api/serial/allocate for VCH/EXC serials
+// (per-store, e.g. EXC27-KAHSR-0001). Single-store deployment = HSR, Karnataka. Change if a store is added.
+const STORE_CODE      = 'KA-HSR';
 
 // Document classification (run "Set up Document Type fields" once to build these cells).
 // Both sit on row 37 (the blank row under NET CREDIT NOTE VALUE) so no existing rows shift —
@@ -786,13 +789,14 @@ function applyExchangeNote_(newDraftRef, excNum, excValue, oldOrder, customerNam
 // ── SERIAL — central counter via middleware ───────────────────────────────────
 // Allocates (and mints into the ledger) the next sequence number for a doc type.
 // Returns the integer seq, or null on any failure.
-function allocateSerial_(docType) {
+function allocateSerial_(docType, storeCode) {
   try {
     var res = UrlFetchApp.fetch(MIDDLEWARE_URL + '/api/serial/allocate', {
       method:             'post',
       contentType:        'application/json',
       muteHttpExceptions: true,
-      payload:            JSON.stringify({ docType: docType })
+      // stateCode is REQUIRED for voucher/exchange_note serials (per-store); server 400s without it.
+      payload:            JSON.stringify({ docType: docType, stateCode: storeCode || STORE_CODE })
     });
     if (res.getResponseCode() !== 200) {
       Logger.log(docType + ' serial warning: middleware returned ' + res.getResponseCode() + ' — ' + res.getContentText());
@@ -808,8 +812,8 @@ function allocateSerial_(docType) {
 
 // Voucher falls back to the sheet-row count if the middleware is down; Exchange Note does not
 // (it must not be applied to an invoice without a real ledger number).
-function allocateVoucherSerial() { return allocateSerial_('voucher'); }
-function allocateExcSerial()     { return allocateSerial_('exchange_note'); }
+function allocateVoucherSerial() { return allocateSerial_('voucher', STORE_CODE); }
+function allocateExcSerial()     { return allocateSerial_('exchange_note', STORE_CODE); }
 
 // Retires a serial in the middleware ledger (status=cancelled, never reused). Identified by seq —
 // the customer-facing VCH-/EXC-YYYY-NNNN shares only the seq with the ledger. Non-throwing.
