@@ -153,7 +153,7 @@
 
   <div class="title-header">
     <img src="https://cdn.shopify.com/s/files/1/0775/8322/0993/files/Timanti_Logo_Black.jpg?v=1766506323" alt="Timanti Logo" class="logo">
-    <div class="title-center"><h1>Repair Note</h1></div>
+    <div class="title-center"><h1>{% if is_free %}Repair Note{% else %}Repair Tax Invoice{% endif %}</h1></div>
   </div>
 
   <div class="company-invoice-grid">
@@ -273,7 +273,8 @@
           <td class="text-right">100%</td>
           <td class="text-right">₹ 0.00</td>
         {% else %}
-          {% assign taxable_val = order.total_price | divided_by: 1.03 %}
+          {% comment %} Repair charge is 18% GST-INCLUSIVE — taxable = total / 1.18 {% endcomment %}
+          {% assign taxable_val = order.total_price | divided_by: 1.18 %}
           <td class="text-right">₹{{ taxable_val | money_without_currency | remove: ',' }}</td>
           <td class="text-right">–</td>
           <td class="text-right">₹{{ taxable_val | money_without_currency | remove: ',' }}</td>
@@ -322,8 +323,27 @@
       {% assign total_val = order.total_price | money_without_currency | remove: ',' %}
       {% if is_free %}{% assign total_val = "0.00" %}{% endif %}
 
+      {% comment %}── GST summary — paid/chargeable repairs are 18% (CGST 9% + SGST 9%), tax-inclusive ──{% endcomment %}
+      {% unless is_free %}
+        {% assign taxable_total = order.total_price | divided_by: 1.18 %}
+        {% assign cgst_amt = taxable_total | times: 0.09 %}
+        {% assign sgst_amt = taxable_total | times: 0.09 %}
+        <tr class="totals-row">
+          <td colspan="11" class="text-right">Taxable Value</td>
+          <td class="text-right">&#x20B9; {{ taxable_total | money_without_currency | remove: ',' }}</td>
+        </tr>
+        <tr class="totals-row">
+          <td colspan="11" class="text-right">CGST @ 9%</td>
+          <td class="text-right">&#x20B9; {{ cgst_amt | money_without_currency | remove: ',' }}</td>
+        </tr>
+        <tr class="totals-row">
+          <td colspan="11" class="text-right">SGST @ 9%</td>
+          <td class="text-right">&#x20B9; {{ sgst_amt | money_without_currency | remove: ',' }}</td>
+        </tr>
+      {% endunless %}
+
       <tr class="total-row">
-        <td colspan="11" class="text-right"><strong>Total Value</strong></td>
+        <td colspan="11" class="text-right"><strong>Total Value {% unless is_free %}(incl. 18% GST){% endunless %}</strong></td>
         <td class="text-right"><strong>&#x20B9; {{ total_val }}</strong></td>
       </tr>
 
