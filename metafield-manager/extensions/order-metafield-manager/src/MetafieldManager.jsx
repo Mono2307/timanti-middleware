@@ -96,7 +96,12 @@ const FIELD_CONFIG = {
   old_gold_weight: { section: "Adjustments", label: "Old Gold Weight (g)", editable: true, applies: "both" },
   old_gold_purity: { section: "Adjustments", label: "Old Gold Purity (karat)", editable: true, applies: "draft" },
   old_gold_value: { section: "Adjustments", label: "Old Gold Value (auto; override optional)", editable: true, applies: "both" },
+  // The *_code fields identify WHICH instrument was applied — the value alone can't. Written by the
+  // server on apply and cleared on void/strip, so they are read-only here: editing the code without
+  // moving the ledger row would make the draft claim an instrument it does not hold.
+  exchange_note_code: { section: "Adjustments", label: "Exchange Note Applied", editable: false, applies: "both" },
   exchange_note_value: { section: "Adjustments", label: "Exchange Note Value (auto from Apply; override optional)", editable: true, applies: "both" },
+  voucher_code: { section: "Adjustments", label: "Voucher Applied", editable: false, applies: "both" },
   voucher_value: { section: "Adjustments", label: "Voucher Value (auto from Apply; override optional)", editable: true, applies: "both" },
   advance: { section: "Adjustments", label: "Design Advance (auto from reference; override optional)", editable: true, applies: "both" },
   advance_ref: { section: "Adjustments", label: "Advance Ref — order # to redeem", editable: true, applies: "both" },
@@ -684,6 +689,13 @@ export default function MetafieldManager({ surface = "block" } = {}) {
     </s-section>
   );
 
+  // Credit instruments go on DRAFTS ONLY. A converted order has a final invoice and a settled GST
+  // position; deducting a voucher afterwards would put the printed invoice and the system out of
+  // step. The server enforces this too — the apply-* tag handlers run only on the draft webhook, so
+  // on an order the tag would sit unprocessed forever with no feedback. Hiding the controls here
+  // makes that boundary visible instead of silent. Discounts are unaffected.
+  const creditsAllowed = ctx.scope !== "order";
+
   // Unified adjustments selector: pick one to reveal its panel (Exchange / Voucher / Discount).
   const renderAdjustmentSelector = () => (
     <>
@@ -695,14 +707,20 @@ export default function MetafieldManager({ surface = "block" } = {}) {
             onChange={(e) => setAdjType(e.target.value ?? "")}
           >
             <s-option value="">Select an adjustment to apply…</s-option>
-            <s-option value="exchange">Exchange Note</s-option>
-            <s-option value="voucher">Voucher</s-option>
+            {creditsAllowed ? <s-option value="exchange">Exchange Note</s-option> : null}
+            {creditsAllowed ? <s-option value="voucher">Voucher</s-option> : null}
             <s-option value="discount">Discount</s-option>
           </s-select>
+          {creditsAllowed ? null : (
+            <s-text tone="subdued">
+              Exchange notes and vouchers can only be applied to a draft order, before it is converted.
+              Apply them on the draft, then convert.
+            </s-text>
+          )}
         </s-stack>
       </s-section>
-      {adjType === "exchange" ? renderExcApply() : null}
-      {adjType === "voucher" ? renderVoucherApply() : null}
+      {creditsAllowed && adjType === "exchange" ? renderExcApply() : null}
+      {creditsAllowed && adjType === "voucher" ? renderVoucherApply() : null}
       {adjType === "discount" ? renderDiscountApply() : null}
     </>
   );

@@ -25,14 +25,20 @@ const CALC_SHEET_NAME = 'Exchange Calculator';
 // Issuing store code (state_code) — REQUIRED by /api/serial/allocate for VCH/EXC serials
 // (per-store, e.g. EXC27-KAHSR-0001). Single-store deployment = HSR, Karnataka. Change if a store is added.
 const STORE_CODE      = 'KA-HSR';
+const STORE_CODE_CELL = 'B47';   // staff-set issuing store, overrides STORE_CODE when non-blank (label in A47)
 
 // Document classification (run "Set up Document Type fields" once to build these cells).
 // Both sit on row 37 (the blank row under NET CREDIT NOTE VALUE) so no existing rows shift —
 // the script hardcodes B27/B28/B36/B43, so inserting rows would break them. setupDocTypeFields
 // aborts if these cells (or their labels) aren't empty, so a wrong guess can't overwrite data.
 // To relocate, change these two refs only — nothing else hardcodes the positions.
-const DOCTYPE_CELL    = 'B37';   // dropdown: Voucher | Exchange Note   (label in A37)
-const NEWDRAFT_CELL   = 'D37';   // new sale's draft/order # (Exchange Note only)  (label in C37)
+const DOCTYPE_CELL    = 'B45';   // dropdown: Voucher | Exchange Note   (label in A45)
+const NEWDRAFT_CELL   = 'B46';   // new sale's draft/order # (Exchange Note only)  (label in A46)
+// Customer-facing email kill-switch. FALSE while testing so test runs never mail a real customer.
+// Flip to true for go-live. Guards BOTH sendVoucherEmail_ and sendExcEmail_ — the only two send
+// paths (the middleware never mails on its own; /api/exc-redeem sends nothing).
+const SEND_CUSTOMER_EMAILS = false;
+
 const VOUCHER_LOG     = 'Voucher Log';   // renamed from 'CN Log'
 const EXCHANGE_LOG    = 'Exchange Log';  // new tab for Exchange Notes
 
@@ -156,7 +162,7 @@ function onOrderNumberEntered(sheet, allowModal) {
   if (!raw) return;
 
   // Clear all previously auto-filled cells
-  ['B4','B5','B6','B8','B10','B12','B15','B16','B19','B20','C19','C20','B27','B28'].forEach(function(ref) {
+  ['B4','B5','B6','B8','B10','B12','B15','B16','B19','B20','C19','C20','D19','B27','B28'].forEach(function(ref) {
     sheet.getRange(ref).clearContent();
   });
   sheet.getRange('B10').clearDataValidations();
@@ -206,9 +212,13 @@ function onOrderNumberEntered(sheet, allowModal) {
   const lineItems = order.line_items || [];
   if (lineItems.length === 0) return;
 
-  if (lineItems.length === 1) {
+  // Count UNITS, not lines — a single qty-2 line must still offer a picker, or staff would
+  // silently exchange one unit's worth of gold for a two-unit purchase.
+  const expanded = expandLineItems_(lineItems);
+
+  if (expanded.length === 1) {
     // Auto-select and populate immediately
-    sheet.getRange('B10').setValue(lineItems[0].sku || lineItems[0].title || '');
+    sheet.getRange('B10').setValue(expanded[0].label);
     populateFromLineItem(sheet, lineItems[0]);
     return;
   }
@@ -224,7 +234,7 @@ function onOrderNumberEntered(sheet, allowModal) {
   // Trigger path: no container.ui scope — use data validation dropdown instead.
   // User picks one SKU; onSkuSelected fires and populates that item's fields.
   // For multi-SKU aggregation use "🔄 Lookup Order Now" from the menu.
-  var skuList = lineItems.map(function(li) { return li.sku || li.title || ''; });
+  var skuList = expanded.map(function(e) { return e.label; });
   var rule = SpreadsheetApp.newDataValidation()
     .requireValueInList(skuList, true)
     .setAllowInvalid(false)
@@ -238,12 +248,35 @@ function onOrderNumberEntered(sheet, allowModal) {
   );
 }
 
+// Expands each Shopify line item into one entry PER UNIT. Shopify stores "2 of the same ring" as a
+// single line item with quantity:2 — the old code counted it once, paying out half the gold. Each
+// unit becomes its own pickable row ("SKU (1 of 2)") so staff exchange exactly the units in hand.
+// Returns [{ li, label }]; li is shared by reference (read-only downstream).
+function expandLineItems_(lineItems) {
+  var out = [];
+  (lineItems || []).forEach(function (li) {
+    var qty  = Math.max(1, parseInt(li.quantity, 10) || 1);
+    var base = li.sku || li.title || '';
+    for (var n = 1; n <= qty; n++) {
+      out.push({ li: li, label: qty > 1 ? base + ' (' + n + ' of ' + qty + ')' : base });
+    }
+  });
+  return out;
+}
+
+// Strips the " (n of q)" unit suffix added by expandLineItems_, recovering the raw SKU.
+function stripUnitSuffix_(label) {
+  return String(label || '').replace(/\s*\(\d+ of \d+\)\s*$/, '').trim();
+}
+
 // ── MULTI-SKU PROMPT (menu path — avoids showModalDialog scope restriction) ───
 // Uses ui.prompt (plain text input) which works with the same scope as alert().
 function showSkuCheckboxDialog(lineItems) {
   var ui       = SpreadsheetApp.getUi();
-  var numbered = lineItems.map(function(li, i) {
-    return (i + 1) + '. ' + (li.sku || li.title || 'Item ' + (i + 1));
+  // One row per UNIT, not per line item — a qty-2 line offers two tickable rows.
+  var expanded = expandLineItems_(lineItems);
+  var numbered = expanded.map(function(e, i) {
+    return (i + 1) + '. ' + (e.label || 'Item ' + (i + 1));
   }).join('\n');
 
   var result = ui.prompt(
@@ -257,7 +290,7 @@ function showSkuCheckboxDialog(lineItems) {
   var raw     = result.getResponseText().trim();
   var indices = raw.split(/[,\s]+/)
     .map(function(s) { return parseInt(s.trim(), 10) - 1; })
-    .filter(function(i) { return !isNaN(i) && i >= 0 && i < lineItems.length; });
+    .filter(function(i) { return !isNaN(i) && i >= 0 && i < expanded.length; });
 
   if (!indices.length) {
     ui.alert('No valid numbers entered. Use "1" for item 1, "1,2" for both.');
@@ -274,11 +307,14 @@ function applySkuSelection(selectedIndices) {
   var json = PropertiesService.getScriptProperties().getProperty('_PENDING_LINE_ITEMS');
   if (!json) throw new Error('Session expired — re-enter the order number and try again.');
 
+  // Rebuild the per-unit expansion rather than storing it — duplicated line-item objects would
+  // push the stored JSON toward the 9 KB Script Properties limit that already bit this flow once.
   var lineItems = JSON.parse(json);
-  var selected  = selectedIndices.map(function(i) { return lineItems[i]; });
+  var expanded  = expandLineItems_(lineItems);
+  var selected  = selectedIndices.map(function(i) { return expanded[i].li; });
 
   var sheet    = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CALC_SHEET_NAME);
-  var skuLabel = selected.map(function(li) { return li.sku || li.title; }).join(', ');
+  var skuLabel = selectedIndices.map(function(i) { return expanded[i].label; }).join(', ');
   sheet.getRange('B10').setValue(skuLabel);
   sheet.getRange('B10').clearDataValidations();
   sheet.getRange('B10').clearNote();
@@ -291,8 +327,13 @@ function applySkuSelection(selectedIndices) {
 }
 
 // Aggregate net wt, dia cts, gold value, and dia value across multiple SKUs.
-// B19 shows order-time rates as "X / Y", C19 shows live rates as "X / Y".
-// B27 and B28 are written as numbers (sum) so the 80%/100% formula rows stay correct.
+// B19 shows order-time rates as "X / Y", C19 shows live rates as "X / Y" (human-readable only).
+//
+// D19 carries the WEIGHTED EFFECTIVE gold rate (total gold value ÷ total weight) so B27 can stay a
+// real formula (=B15*D19) in both the single- and multi-SKU cases. Previously the multi case wrote
+// B27 as a static number — arithmetically right at the instant of selection, but frozen: editing
+// the weight afterwards left the value stale with no warning. C19 can't be used for this because
+// it holds display text like "10980 / 9500", and text can't be multiplied.
 function populateFromMultipleLineItems(sheet, lineItems) {
   var totalNetWt       = 0;
   var totalDiaCts      = 0;
@@ -301,6 +342,8 @@ function populateFromMultipleLineItems(sheet, lineItems) {
   var orderRates       = [];
   var liveRates        = [];
   var karat            = null;
+  var karats           = [];   // every distinct karat seen — a mixed lot must not silently show one
+  var ratedNetWt       = 0;    // weight of items that actually had a live rate (weighted-avg base)
   var hasNetWt         = false;
   var hasDiaCts        = false;
   var hasDiaVal        = false;
@@ -345,14 +388,17 @@ function populateFromMultipleLineItems(sheet, lineItems) {
     if (goldRateOrder !== null) orderRates.push(goldRateOrder);
     if (goldRateLive  !== null) {
       liveRates.push(goldRateLive);
-      if (netWt !== null) totalLiveGoldVal += netWt * goldRateLive;
+      if (netWt !== null) { totalLiveGoldVal += netWt * goldRateLive; ratedNetWt += netWt; }
     }
-    if (!karat) karat = extractKarat(li.sku);
+    var k = extractKarat(li.sku);
+    if (k && karats.indexOf(k) === -1) karats.push(k);
+    if (!karat) karat = k;
   });
 
   if (hasNetWt)  sheet.getRange('B15').setValue(totalNetWt);
   if (hasDiaCts) sheet.getRange('B16').setValue(totalDiaCts);
-  if (karat)     sheet.getRange('B12').setValue(karat);
+  // Mixed-karat lots show every karat ("18K / 22K") rather than silently printing the first one.
+  if (karats.length) sheet.getRange('B12').setValue(karats.join(' / '));
 
   if (orderRates.length) sheet.getRange('B19').setValue(orderRates.join(' / '));
   if (liveRates.length)  sheet.getRange('C19').setValue(liveRates.join(' / '));
@@ -362,8 +408,22 @@ function populateFromMultipleLineItems(sheet, lineItems) {
     sheet.getRange('C20').setValue(totalLiveDiaVal);
   }
 
-  if (totalLiveGoldVal > 0) sheet.getRange('B27').setValue(totalLiveGoldVal);
-  if (hasDiaVal)            sheet.getRange('B28').setValue(totalLiveDiaVal);
+  // Weighted effective rate → B27 stays a live formula. Divide by the RATED weight only, so an
+  // item with no live rate can't dilute the average; if that leaves rated < total weight the
+  // formula would over-credit the unrated grams, so warn instead of silently mispricing.
+  if (totalLiveGoldVal > 0 && ratedNetWt > 0) {
+    sheet.getRange('D19').setValue(totalLiveGoldVal / ratedNetWt);
+    sheet.getRange('D19').setNote('Weighted effective gold rate (auto). B27 = B15 × D19. Do not edit.');
+    sheet.getRange('B27').setFormula('=B15*D19');
+    if (Math.abs(ratedNetWt - totalNetWt) > 0.0001) {
+      SpreadsheetApp.getUi().alert(
+        '⚠️ Some selected items have no live gold rate.\n\n' +
+        'Rated weight: ' + ratedNetWt.toFixed(3) + ' g of ' + totalNetWt.toFixed(3) + ' g total.\n\n' +
+        'The gold value now applies the weighted rate to the FULL weight, which over-credits the ' +
+        'unrated grams. Check the variant metafields before issuing.');
+    }
+  }
+  if (hasDiaVal) sheet.getRange('B28').setFormula('=C20');
 
   SpreadsheetApp.flush();
 }
@@ -388,8 +448,9 @@ function onSkuSelected(sheet) {
   }
 
   const lineItems = data.orders[0].line_items || [];
+  const wanted    = stripUnitSuffix_(selected);   // dropdown labels carry a " (1 of 2)" unit suffix
   const li        = lineItems.find(function(item) {
-    return (item.sku || item.title) === selected;
+    return (item.sku || item.title) === wanted;
   });
 
   if (!li) {
@@ -454,10 +515,14 @@ function populateFromLineItem(sheet, lineItem) {
     // B28 driven by C20 so the 80%/100% rows stay live
     sheet.getRange('B28').setFormula('=C20');
   }
-  // B27 driven by C19 so the 80%/100% rows stay live
-  // If your B27 formula includes a karat purity factor (e.g. =B15*(18/24)*C19), adjust here.
+  // B27 driven by D19 (the effective rate) so single- and multi-SKU use ONE formula shape.
+  // Single SKU: D19 is just this item's rate. Multi: it's the weighted average. See
+  // populateFromMultipleLineItems for why C19 can't be used (it holds display text there).
+  // If your B27 formula includes a karat purity factor (e.g. =B15*(18/24)*D19), adjust here.
   if (goldRateLive !== null && netWt !== null) {
-    sheet.getRange('B27').setFormula('=B15*C19');
+    sheet.getRange('D19').setValue(goldRateLive);
+    sheet.getRange('D19').setNote('Effective gold rate (auto). B27 = B15 × D19. Do not edit.');
+    sheet.getRange('B27').setFormula('=B15*D19');
   }
 
   var karat = extractKarat(lineItem.sku);
@@ -551,9 +616,12 @@ function createVoucher_() {
   const year   = today.getFullYear();
   // Serial from the central counter service (atomic, no gaps/dupes across devices).
   // Falls back to the legacy sheet-row count if the middleware is unreachable.
-  const seq    = allocateVoucherSerial();
-  const serial = String(seq != null ? seq : log.getLastRow()).padStart(4, '0');
-  const cnNum  = 'VCH-' + year + '-' + serial;
+  // Print the ledger's own code (VCH27-KAHSR-0001) — never re-format locally. Middleware down →
+  // legacy sheet-row format so a voucher can still be issued; reconcile that number by hand after.
+  const alloc  = allocateVoucherSerial();
+  const cnNum  = (alloc && alloc.serial_code)
+                 ? alloc.serial_code
+                 : 'VCH-' + year + '-' + String(log.getLastRow()).padStart(4, '0');
 
   const issued    = Utilities.formatDate(today, 'Asia/Kolkata', 'dd-MM-yyyy');
   const expiryFmt = Utilities.formatDate(validUntil, 'Asia/Kolkata', 'dd-MM-yyyy');
@@ -595,6 +663,25 @@ function createVoucher_() {
 
   calc.getRange('B43').setValue(cnNum);
 
+  // Record the voucher in the credit-instrument ledger. WITHOUT this the voucher exists only as a
+  // Shopify discount code: handleApplyVoucherTag looks it up via getBySerial and, finding nothing,
+  // tags the draft "voucher-invalid: ... not found" and deducts nothing. The Exchange Note gets its
+  // ledger row for free inside /api/exc-redeem; the voucher has no such call, so it must issue here.
+  if (!issueCreditInstrument_({
+        instrumentType:  'voucher',
+        serialCode:      cnNum,
+        value:           netCredit,
+        customerId:      customerId ? String(customerId) : null,
+        customerName:    customerName,
+        sourceOrderName: orderNumber,
+        stateCode:       resolveStoreCode_(),
+        expiresAt:       expiryIso,
+        priceRuleId:     String(priceRuleId)
+      })) {
+    ui.alert('⚠️ ' + cnNum + ' was created in Shopify but NOT recorded in the ledger.\n\n' +
+             'It will fail to apply from the admin app ("not found"). Re-run once the middleware is reachable.');
+  }
+
   // Internal cn-* tag names kept unchanged so the existing OPP print template renders untouched.
   if (orderId) {
     addOrderTags(orderId, [
@@ -620,7 +707,8 @@ function createVoucher_() {
     'Discount Code: ' + cnNum + '\n' +
     'Value: ₹' + netCredit.toLocaleString('en-IN', { minimumFractionDigits: 2 }) + '\n' +
     'Valid Until: ' + expiryFmt + ' (1 year)\n\n' +
-    'Order ' + orderNumber + ' tagged. Email sent to ' + customerEmail + '.'
+    'Order ' + orderNumber + ' tagged. ' +
+    (SEND_CUSTOMER_EMAILS ? 'Email sent to ' + customerEmail + '.' : '✉️ Email SUPPRESSED (test mode).')
   );
 }
 
@@ -655,11 +743,11 @@ function createExchangeNote_() {
   }
 
   const today  = new Date();
-  const year   = today.getFullYear();
-  const seq    = allocateExcSerial();
-  if (seq == null) { ui.alert('Could not allocate an Exchange Note number (middleware unreachable). Try again.'); return; }
-  const serial = String(seq).padStart(4, '0');
-  const excNum = 'EXC-' + year + '-' + serial;
+  // No local-format fallback here: an Exchange Note must not hit an invoice without a real
+  // ledger number, so a failed allocation aborts rather than inventing one.
+  const alloc  = allocateExcSerial();
+  if (!alloc || !alloc.serial_code) { ui.alert('Could not allocate an Exchange Note number (middleware unreachable). Try again.'); return; }
+  const excNum = alloc.serial_code;
   const issued = Utilities.formatDate(today, 'Asia/Kolkata', 'dd-MM-yyyy');
 
   // Apply the deduction to the new draft via the middleware. Returns the resolved numeric draft id.
@@ -700,7 +788,8 @@ function createExchangeNote_() {
     'Exchange Note: ' + excNum + '\n' +
     'Deducted: ₹' + excValue.toLocaleString('en-IN', { minimumFractionDigits: 2 }) + '\n' +
     'Applied to: ' + newDraftName + '\n\n' +
-    'The new invoice total is reduced by this amount (GST unchanged). Email sent to ' + customerEmail + '.'
+    'The new invoice total is reduced by this amount (GST unchanged). ' +
+    (SEND_CUSTOMER_EMAILS ? 'Email sent to ' + customerEmail + '.' : '✉️ Email SUPPRESSED (test mode).')
   );
 }
 
@@ -711,6 +800,7 @@ const MIDDLEWARE_URL = 'https://timanti-middleware.fly.dev'; // update if URL ch
 
 function sendVoucherEmail_(customerName, customerEmail, cnNum, netCredit, expiryFmt, orderNumber) {
   if (!customerEmail) return;
+  if (!SEND_CUSTOMER_EMAILS) { Logger.log('Voucher email SUPPRESSED (SEND_CUSTOMER_EMAILS=false): ' + cnNum + ' → ' + customerEmail); return; }
   try {
     var res = UrlFetchApp.fetch(MIDDLEWARE_URL + '/api/cn-email', {
       method:             'post',
@@ -736,6 +826,7 @@ function sendVoucherEmail_(customerName, customerEmail, cnNum, netCredit, expiry
 
 function sendExcEmail_(customerName, customerEmail, excNum, excValue, oldOrder, newOrder) {
   if (!customerEmail) return;
+  if (!SEND_CUSTOMER_EMAILS) { Logger.log('EXC email SUPPRESSED (SEND_CUSTOMER_EMAILS=false): ' + excNum + ' → ' + customerEmail); return; }
   try {
     var res = UrlFetchApp.fetch(MIDDLEWARE_URL + '/api/exc-email', {
       method:             'post',
@@ -787,8 +878,10 @@ function applyExchangeNote_(newDraftRef, excNum, excValue, oldOrder, customerNam
 }
 
 // ── SERIAL — central counter via middleware ───────────────────────────────────
-// Allocates (and mints into the ledger) the next sequence number for a doc type.
-// Returns the integer seq, or null on any failure.
+// Allocates (and mints into the ledger) the next serial for a doc type.
+// Returns the full response body ({ serial_no, serial_code, serial_display }), or null on failure.
+// Callers MUST print serial_code — do not re-format locally, or the printed number drifts from
+// the ledger (the old local build produced EXC-2026-0001 while the ledger held EXC27-KAHSR-0001).
 function allocateSerial_(docType, storeCode) {
   try {
     var res = UrlFetchApp.fetch(MIDDLEWARE_URL + '/api/serial/allocate', {
@@ -803,7 +896,7 @@ function allocateSerial_(docType, storeCode) {
       return null;
     }
     var body = JSON.parse(res.getContentText());
-    return (body && body.serial_no != null) ? Number(body.serial_no) : null;
+    return (body && body.serial_no != null) ? body : null;
   } catch (e) {
     Logger.log(docType + ' serial failed: ' + e.message);
     return null;
@@ -812,11 +905,40 @@ function allocateSerial_(docType, storeCode) {
 
 // Voucher falls back to the sheet-row count if the middleware is down; Exchange Note does not
 // (it must not be applied to an invoice without a real ledger number).
-function allocateVoucherSerial() { return allocateSerial_('voucher', STORE_CODE); }
-function allocateExcSerial()     { return allocateSerial_('exchange_note', STORE_CODE); }
+function allocateVoucherSerial() { return allocateSerial_('voucher', resolveStoreCode_()); }
+function allocateExcSerial()     { return allocateSerial_('exchange_note', resolveStoreCode_()); }
 
-// Retires a serial in the middleware ledger (status=cancelled, never reused). Identified by seq —
-// the customer-facing VCH-/EXC-YYYY-NNNN shares only the seq with the ledger. Non-throwing.
+// Issuing store code from STORE_CODE_CELL, falling back to the STORE_CODE constant when the cell
+// is blank. Read per-call (not cached) so switching the cell to a test store takes effect at once.
+function resolveStoreCode_() {
+  var calc = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CALC_SHEET_NAME);
+  var cell = calc ? String(calc.getRange(STORE_CODE_CELL).getValue()).trim().toUpperCase() : '';
+  return cell || STORE_CODE;
+}
+
+// Writes a credit instrument into the ledger (credit_instruments) at ISSUE time. Idempotent
+// server-side (upsertIssued), so a retry after a partial failure is safe. Returns true on success.
+function issueCreditInstrument_(payload) {
+  try {
+    var res = UrlFetchApp.fetch(MIDDLEWARE_URL + '/api/credit-instrument/issue', {
+      method:             'post',
+      contentType:        'application/json',
+      muteHttpExceptions: true,
+      payload:            JSON.stringify(payload)
+    });
+    if (res.getResponseCode() !== 200) {
+      Logger.log('credit-instrument issue warning: ' + res.getResponseCode() + ' — ' + res.getContentText());
+      return false;
+    }
+    return true;
+  } catch (e) {
+    Logger.log('credit-instrument issue failed: ' + e.message);
+    return false;
+  }
+}
+
+// Retires a serial in the middleware ledger (status=cancelled, never reused). Identified by seq,
+// which callers parse off the trailing segment of the code (VCH27-KAHSR-0001 → 0001). Non-throwing.
 function cancelSerialByCode_(docType, seq) {
   if (seq == null || isNaN(seq)) return false;
   try {

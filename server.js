@@ -2658,6 +2658,7 @@ async function stripInstrumentFromDraft(draftId, type, token) {
   const base = process.env.SHOPIFY_STORE_URL;
   const headers = { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' };
   const valueKey   = type === 'voucher' ? 'voucher_value' : 'exchange_note_value';
+  const codeKey    = type === 'voucher' ? 'voucher_code'  : 'exchange_note_code';
   const appliedTag = type === 'voucher' ? 'vch-applied'   : 'exc-applied';
   const numPrefix  = type === 'voucher' ? 'vch-num:'      : 'exc-num:';
   const [{ data }, { data: mfData }] = await Promise.all([
@@ -2667,8 +2668,12 @@ async function stripInstrumentFromDraft(draftId, type, token) {
   const draft = data.draft_order;
   if (!draft || draft.status === 'completed' || draft.order_id) return; // never touch a converted order
   const mfs = mfData.metafields || [];
-  const valMf = mfs.find(m => m.namespace === 'custom' && m.key === valueKey);
-  if (valMf) await axios.delete(`${base}/admin/api/2024-01/metafields/${valMf.id}.json`, { headers, timeout: 10000 });
+  // Clear the code alongside the value — leaving a stale code behind would make the code-aware
+  // apply guard reject the next instrument for a voucher/note the draft no longer holds.
+  for (const k of [valueKey, codeKey]) {
+    const m = mfs.find(x => x.namespace === 'custom' && x.key === k);
+    if (m) await axios.delete(`${base}/admin/api/2024-01/metafields/${m.id}.json`, { headers, timeout: 10000 });
+  }
   const adj = (key) => { const m = mfs.find(x => x.namespace === 'custom' && x.key === key); return m ? Math.abs(parseFloat(m.value) || 0) : 0; };
   const remaining = ['exchange_note_value', 'voucher_value', 'old_gold_value', 'advance']
     .filter(k => k !== valueKey).reduce((s, k) => s + adj(k), 0);
@@ -2727,18 +2732,51 @@ async function handleApplyVoucherTag(draft) {
 
     const { data: mfData } = await axios.get(`${base}/admin/api/2024-01/draft_orders/${draftOrderId}/metafields.json`, { headers, timeout: 10000 });
     const mfVal = (key) => { const m = (mfData.metafields || []).find(x => x.namespace === 'custom' && x.key === key); return m ? Math.abs(parseFloat(m.value) || 0) : 0; };
-    if (mfVal('voucher_value') > 0) { await finishTags(['vch-applied', `vch-num:${vchNumber}`]); return; } // already applied
-    const adjustments  = value + mfVal('exchange_note_value') + mfVal('old_gold_value');
+    // Already-applied guard, code-AWARE. The old test was `voucher_value > 0` alone, which is blind
+    // to WHICH voucher is on the draft: applying VCH-B to a draft already holding VCH-A returned
+    // success and re-tagged vch-num:VCH-B while the metafield still held A's value — the draft then
+    // claimed a voucher it had not deducted, and B stayed 'open' in the ledger. One voucher per
+    // draft is the rule (voucher_value is a single scalar), so a different code must be refused.
+    // Read the code from the METAFIELD, not the tag: tags can be stripped by staff in the admin UI
+    // (which would blind this guard again) and don't survive draft→order conversion. Fall back to
+    // the tag for drafts written before voucher_code existed.
+    const mfStr = (key) => { const m = (mfData.metafields || []).find(x => x.namespace === 'custom' && x.key === key); return m ? String(m.value || '').trim() : ''; };
+    const appliedCode = mfStr('voucher_code') ||
+      tags.map(t => /^vch-num:/i.test(t) ? t.slice(t.indexOf(':') + 1).trim() : null).find(Boolean);
+    if (mfVal('voucher_value') > 0) {
+      if (!appliedCode || appliedCode.toUpperCase() === vchNumber.toUpperCase()) {
+        await finishTags(['vch-applied', `vch-num:${vchNumber}`]); return;   // same voucher re-applied: no-op
+      }
+      // Latest-one-wins WITHIN a draft, mirroring the existing across-drafts rule: applying B to a
+      // draft holding A strips A and frees it back to 'open' rather than refusing. A is only
+      // untouchable once redeemed — and a redeemed A can't be sitting on an open draft, because
+      // redemption happens at conversion and a converted draft is never modified here.
+      try {
+        await stripInstrumentFromDraft(draftOrderId, 'voucher', token);
+        await creditInstruments.reopen(supabase, { instrumentType: 'voucher', serialCode: appliedCode });
+        console.log(`[apply-voucher] swapped ${appliedCode} → ${vchNumber} on draft ${draftOrderId}; ${appliedCode} reopened`);
+      } catch (e) {
+        console.error(`[apply-voucher] swap-out ${appliedCode}:`, e.message);
+        await finishTags([`voucher-invalid: could not release ${appliedCode} — ${vchNumber} not applied`]);
+        return;
+      }
+    }
+    const adjustments  = value + mfVal('exchange_note_value') + mfVal('old_gold_value') + mfVal('advance');
     const netToCollect = Math.max(0, parseFloat(draft.total_price || 0) - adjustments).toFixed(2);
-    await updateDraftOrderMetafields(draftOrderId, { voucher_value: value.toFixed(2), amount_to_be_collected: netToCollect });
+    // voucher_code rides alongside the value so the applied instrument is identifiable from the
+    // metafields alone — the admin app renders it, the guard above reads it, and unlike a tag it
+    // survives draft→order conversion so invoices can print it.
+    await updateDraftOrderMetafields(draftOrderId, {
+      voucher_code: vchNumber, voucher_value: value.toFixed(2), amount_to_be_collected: netToCollect });
     await finishTags(['vch-applied', `vch-num:${vchNumber}`]);
 
     try { await creditInstruments.apply(supabase, { instrumentType: 'voucher', serialCode: vchNumber, targetDraftId: draftOrderId, value }); }
     catch (e) { console.error('[apply-voucher] ledger:', e.message); }
-    if (inst.price_rule_id) {
-      try { await axios.delete(`${base}/admin/api/2024-01/price_rules/${inst.price_rule_id}.json`, { headers, timeout: 10000 }); }
-      catch (e) { console.error('[apply-voucher] price-rule delete:', e.message); }
-    }
+    // The price rule is deliberately NOT deleted here. Applying to a draft is a reservation, not a
+    // sale — the draft may be abandoned or deleted. Deletion happens at draft→order conversion (see
+    // the lock-on-conversion block in the draft-completed handler), so an unconverted draft leaves
+    // the voucher fully usable. Double-spend is already prevented by the ledger: a voucher held on
+    // one draft is stripped from any other, and only the converting draft redeems it.
     console.log(`[apply-voucher] ${vchNumber} (${value}) applied to draft ${draft.name || draftOrderId}`);
   } catch (e) {
     console.error(`[apply-voucher] failed for draft ${draft?.id}:`, e.message);
@@ -2790,10 +2828,31 @@ async function handleApplyExcTag(draft) {
 
     const { data: mfData } = await axios.get(`${base}/admin/api/2024-01/draft_orders/${draftOrderId}/metafields.json`, { headers, timeout: 10000 });
     const mfVal = (key) => { const m = (mfData.metafields || []).find(x => x.namespace === 'custom' && x.key === key); return m ? Math.abs(parseFloat(m.value) || 0) : 0; };
-    if (mfVal('exchange_note_value') > 0) { await finishTags(['exc-applied', `exc-num:${excNumber}`]); return; } // already applied
+    // Code-aware guard (mirrors handleApplyVoucherTag): metafield first, tag as legacy fallback.
+    // Blind `value > 0` let EXC-B silently no-op onto a draft already holding EXC-A while re-tagging
+    // it as B — B's serial was already burnt, so its whole value was written off unnoticed.
+    const mfStr = (key) => { const m = (mfData.metafields || []).find(x => x.namespace === 'custom' && x.key === key); return m ? String(m.value || '').trim() : ''; };
+    const appliedExc = mfStr('exchange_note_code') ||
+      tags.map(t => /^exc-num:/i.test(t) ? t.slice(t.indexOf(':') + 1).trim() : null).find(Boolean);
+    if (mfVal('exchange_note_value') > 0) {
+      if (!appliedExc || appliedExc.toUpperCase() === excNumber.toUpperCase()) {
+        await finishTags(['exc-applied', `exc-num:${excNumber}`]); return;   // same note re-applied: no-op
+      }
+      // Latest-one-wins within the draft (see handleApplyVoucherTag for the rationale).
+      try {
+        await stripInstrumentFromDraft(draftOrderId, 'exchange_note', token);
+        await creditInstruments.reopen(supabase, { instrumentType: 'exchange_note', serialCode: appliedExc });
+        console.log(`[apply-exc] swapped ${appliedExc} → ${excNumber} on draft ${draftOrderId}; ${appliedExc} reopened`);
+      } catch (e) {
+        console.error(`[apply-exc] swap-out ${appliedExc}:`, e.message);
+        await finishTags([`exc-invalid: could not release ${appliedExc} — ${excNumber} not applied`]);
+        return;
+      }
+    }
     const adjustments  = value + mfVal('voucher_value') + mfVal('old_gold_value') + mfVal('advance');
     const netToCollect = Math.max(0, parseFloat(draft.total_price || 0) - adjustments).toFixed(2);
-    await updateDraftOrderMetafields(draftOrderId, { exchange_note_value: value.toFixed(2), amount_to_be_collected: netToCollect });
+    await updateDraftOrderMetafields(draftOrderId, {
+      exchange_note_code: excNumber, exchange_note_value: value.toFixed(2), amount_to_be_collected: netToCollect });
     await finishTags(['exc-applied', `exc-num:${excNumber}`]);
 
     try { await creditInstruments.apply(supabase, { instrumentType: 'exchange_note', serialCode: excNumber, targetDraftId: draftOrderId, value }); }
@@ -2952,6 +3011,17 @@ app.post('/api/shopify-draft-updated', async (req, res) => {
                 targetDraftId: draftOrderId, targetOrderId: orderId, targetOrderName: orderName, value: inst?.value,
               });
               console.log(`Draft completed: redeemed ${type} ${code} → ${orderName || orderId}`);
+              // Destroy the Shopify discount code HERE, at conversion — the moment the voucher is
+              // genuinely consumed. It used to be deleted at apply time, which stranded the credit:
+              // if the draft was then abandoned or deleted, the ledger still said 'applied' but the
+              // code was already gone, leaving the customer unable to redeem online and nothing
+              // watching for it. Exchange notes carry no price rule.
+              if (type === 'voucher' && inst && inst.price_rule_id) {
+                try {
+                  await axios.delete(`${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/price_rules/${inst.price_rule_id}.json`,
+                    { headers: { 'X-Shopify-Access-Token': token }, timeout: 10000 });
+                } catch (e) { console.error(`[ledger] price-rule delete for ${code}:`, e.message); }
+              }
             } catch (e) { console.error(`[ledger] redeem ${type} ${code} at conversion:`, e.message); }
           }
         } catch (e) { console.error('[ledger] conversion redeem:', e.message); }
@@ -4823,10 +4893,32 @@ app.post('/api/exc-redeem', async (req, res) => {
     if (!draft) return res.status(404).json({ success: false, error: `draft ${newDraftId} not found` });
 
     // 2. Idempotency: bail if the exchange-note metafield is already set (Apps Script retry-safe).
+    // Code-AWARE idempotency. Testing exchange_note_value alone was blind to WHICH note is on the
+    // draft: sending EXC-B to a draft already holding EXC-A returned success, so the caller logged
+    // B as applied and moved on while B was never deducted and its serial was already burnt at
+    // allocate time — a silent write-off of the whole note value.
+    // Prefer the metafield over the tag — tags are strippable and don't survive conversion.
+    const excCodeMf = (mfData.metafields || []).find(m => m.namespace === 'custom' && m.key === 'exchange_note_code');
+    const appliedExcTag = (excCodeMf ? String(excCodeMf.value || '').trim() : '') ||
+      (draft.tags || '').split(',').map(t => t.trim())
+        .map(t => /^exc-num:/i.test(t) ? t.slice(t.indexOf(':') + 1).trim() : null).find(Boolean);
     const alreadySet = (mfData.metafields || []).some(m =>
       m.namespace === 'custom' && m.key === 'exchange_note_value' && parseFloat(m.value) > 0);
     if (alreadySet) {
-      return res.json({ success: true, alreadyApplied: true, draftId: newDraftId, excNumber });
+      if (appliedExcTag && appliedExcTag.toUpperCase() !== String(excNumber).toUpperCase()) {
+        // Latest-one-wins: release the note already on the draft and continue with this one.
+        try {
+          await stripInstrumentFromDraft(newDraftId, 'exchange_note', token);
+          await creditInstruments.reopen(supabase, { instrumentType: 'exchange_note', serialCode: appliedExcTag });
+          console.log(`[exc-redeem] swapped ${appliedExcTag} → ${excNumber} on draft ${newDraftId}; ${appliedExcTag} reopened`);
+        } catch (e) {
+          console.error(`[exc-redeem] swap-out ${appliedExcTag}:`, e.message);
+          return res.status(409).json({ success: false, draftId: newDraftId,
+            error: `draft holds ${appliedExcTag} and it could not be released — ${excNumber} not applied` });
+        }
+      } else {
+        return res.json({ success: true, alreadyApplied: true, draftId: newDraftId, excNumber });
+      }
     }
 
     // 3. Write the post-tax adjustment as a metafield (NOT a line item — Shopify rejects negative
@@ -4835,9 +4927,10 @@ app.post('/api/exc-redeem', async (req, res) => {
       const m = (mfData.metafields || []).find(x => x.namespace === 'custom' && x.key === key);
       return m ? Math.abs(parseFloat(m.value) || 0) : 0;
     };
-    const adjustments = Math.abs(value) + mfVal('voucher_value') + mfVal('old_gold_value');
+    const adjustments = Math.abs(value) + mfVal('voucher_value') + mfVal('old_gold_value') + mfVal('advance');
     const netToCollect = Math.max(0, parseFloat(draft.total_price || 0) - adjustments).toFixed(2);
     await updateDraftOrderMetafields(newDraftId, {
+      exchange_note_code:     String(excNumber),
       exchange_note_value:    Math.abs(value).toFixed(2),
       amount_to_be_collected: netToCollect,
     });
@@ -4893,9 +4986,11 @@ app.post('/api/exc-void', async (req, res) => {
     }
 
     // Delete the exchange-note metafield, recompute net-to-collect, and strip the exc-* tags.
-    const excMf = (mfData.metafields || []).find(m => m.namespace === 'custom' && m.key === 'exchange_note_value');
-    if (excMf) {
-      await axios.delete(`${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/metafields/${excMf.id}.json`, { headers, timeout: 10000 });
+    // Clear the code with the value — a stale exchange_note_code would make the code-aware apply
+    // guard refuse the next note for one the draft no longer carries.
+    for (const k of ['exchange_note_value', 'exchange_note_code']) {
+      const m = (mfData.metafields || []).find(x => x.namespace === 'custom' && x.key === k);
+      if (m) await axios.delete(`${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/metafields/${m.id}.json`, { headers, timeout: 10000 });
     }
     const mfVal = (key) => {
       const m = (mfData.metafields || []).find(x => x.namespace === 'custom' && x.key === key);
@@ -5054,9 +5149,10 @@ app.post('/api/voucher-void', async (req, res) => {
       return res.status(409).json({ success: false, error: 'draft already completed — edit the order manually' });
     }
 
-    const vchMf = (mfData.metafields || []).find(m => m.namespace === 'custom' && m.key === 'voucher_value');
-    if (vchMf) {
-      await axios.delete(`${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/metafields/${vchMf.id}.json`, { headers, timeout: 10000 });
+    // Clear the code with the value (see the exc-void counterpart for why a stale code is harmful).
+    for (const k of ['voucher_value', 'voucher_code']) {
+      const m = (mfData.metafields || []).find(x => x.namespace === 'custom' && x.key === k);
+      if (m) await axios.delete(`${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/metafields/${m.id}.json`, { headers, timeout: 10000 });
     }
     const mfVal = (key) => {
       const m = (mfData.metafields || []).find(x => x.namespace === 'custom' && x.key === key);
@@ -5120,6 +5216,71 @@ app.post('/api/credit-instrument/issue', async (req, res) => {
     return res.status(500).json({ success: false, error: err.message });
   }
 });
+
+// ─────────────────────────────────────────
+// GET/POST /api/metafield-definitions/ensure
+// Creates the Shopify metafield DEFINITIONS for the adjustment keys, idempotently. Writing a
+// metafield does not require a definition — but without one the field is invisible in Shopify's
+// own Settings → Custom data UI, isn't filterable, and isn't available to Flow. This repo never
+// created definitions in code, so any that exist were made by hand.
+// Re-runnable: an existing definition returns userError code TAKEN, reported as 'exists'.
+// DRY RUN BY DEFAULT — pass ?apply=true to actually create.
+// ─────────────────────────────────────────
+const ADJUSTMENT_MF_DEFS = [
+  { key: 'exchange_note_code', name: 'Exchange Note Applied', type: 'single_line_text_field', description: 'Serial code of the exchange note applied to this order (e.g. EXC27-KAHSR-0001).' },
+  { key: 'voucher_code',       name: 'Voucher Applied',       type: 'single_line_text_field', description: 'Serial code of the voucher applied to this order (e.g. VCH27-KAHSR-0001).' },
+];
+
+async function runEnsureMetafieldDefinitions(req, res) {
+  const p = { ...(req.query || {}), ...(req.body || {}) };
+  const apply = (p.apply === 'true' || p.apply === true);
+  const owners = ['DRAFTORDER', 'ORDER'];
+  const planned = [];
+  for (const d of ADJUSTMENT_MF_DEFS) for (const ownerType of owners) planned.push({ ...d, ownerType, namespace: 'custom' });
+  if (!apply) {
+    return res.json({ success: true, dryRun: true, wouldCreate: planned,
+      hint: 'Re-run with ?apply=true to create these definitions.' });
+  }
+  try {
+    const token = await getShopifyToken();
+    const MUTATION = `mutation($def: MetafieldDefinitionInput!) {
+      metafieldDefinitionCreate(definition: $def) {
+        createdDefinition { id key namespace ownerType }
+        userErrors { field message code }
+      }
+    }`;
+    const results = [];
+    for (const def of planned) {
+      try {
+        const { data } = await axios.post(
+          `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/graphql.json`,
+          { query: MUTATION, variables: { def: {
+              name: def.name, namespace: def.namespace, key: def.key,
+              type: def.type, ownerType: def.ownerType, description: def.description } } },
+          { headers: { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' }, timeout: 15000 });
+        const payload = data?.data?.metafieldDefinitionCreate;
+        const errs = payload?.userErrors || [];
+        if (errs.length) {
+          // TAKEN = a definition for this namespace/key/owner already exists. Not an error for us.
+          const taken = errs.some(e => e.code === 'TAKEN');
+          results.push({ key: def.key, ownerType: def.ownerType, status: taken ? 'exists' : 'error',
+                         errors: taken ? undefined : errs });
+        } else {
+          results.push({ key: def.key, ownerType: def.ownerType, status: 'created', id: payload?.createdDefinition?.id });
+        }
+      } catch (e) {
+        results.push({ key: def.key, ownerType: def.ownerType, status: 'error', errors: [{ message: e.message }] });
+      }
+    }
+    const failed = results.filter(r => r.status === 'error');
+    return res.status(failed.length ? 207 : 200).json({ success: !failed.length, results });
+  } catch (err) {
+    console.error('metafield-definitions/ensure error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+}
+app.get('/api/metafield-definitions/ensure', runEnsureMetafieldDefinitions);
+app.post('/api/metafield-definitions/ensure', runEnsureMetafieldDefinitions);
 
 // GET /api/credit-instrument/open?customerId=&type= — open instruments for a customer (drives the
 // offline "pick a voucher" dropdown). type defaults to voucher.
