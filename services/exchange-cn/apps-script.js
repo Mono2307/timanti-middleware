@@ -34,6 +34,26 @@ const STORE_CODE_CELL = 'B47';   // staff-set issuing store, overrides STORE_COD
 // To relocate, change these two refs only — nothing else hardcodes the positions.
 const DOCTYPE_CELL    = 'B45';   // dropdown: Voucher | Exchange Note   (label in A45)
 const NEWDRAFT_CELL   = 'B46';   // new sale's draft/order # (Exchange Note only)  (label in A46)
+
+// ── Source / exchange-type / old-gold block (built by "Set up Source & Old-Gold fields") ──
+// SOURCE_CELL decides where the credit value comes from:
+//   'Purchase Exchange' (default) — existing flow: an old ORDER, its SKUs, gold+diamond calc.
+//   'Old Gold'                    — no order; staff enter weight+purity, valued off the buying table,
+//                                   issued as a VOUCHER bound to a looked-up customer (never a draft).
+// EXCHTYPE_CELL applies to Purchase Exchange + Exchange Note only:
+//   'Deduction'  (default) — today's metal+stone calc (current behaviour).
+//   'Full Value'           — credit the ORIGINAL invoice's taxable (pre-GST) value.
+const SOURCE_CELL          = 'B48';  // dropdown: Purchase Exchange | Old Gold        (label A48)
+const EXCHTYPE_CELL        = 'B49';  // dropdown: Deduction | Full Value              (label A49)
+const OG_CUSTOMER_CELL     = 'B50';  // Old Gold: phone or email to look up the customer (label A50)
+const OG_CUSTID_CELL       = 'B51';  // Old Gold: resolved "id | name" (auto, locked)    (label A51)
+const OG_WEIGHT_CELL       = 'B52';  // Old Gold: gross weight in grams                  (label A52)
+const OG_PURITY_CELL       = 'B53';  // Old Gold: purity in karat (9..24)                (label A53)
+const OG_RATE_CELL         = 'B54';  // Old Gold: buy-back rate/g (auto from table, locked) (label A54)
+const OVERRIDE_REASON_CELL = 'B55';  // reason, required when the final value (B36) is overridden (label A55)
+
+const SOURCE_OLD_GOLD      = 'old gold';   // SOURCE_CELL value (lower-cased) that triggers the old-gold flow
+const EXCHTYPE_FULL        = 'full';       // EXCHTYPE_CELL value (lower-cased prefix) for full-invoice-value
 // Customer-facing email kill-switch. FALSE while testing so test runs never mail a real customer.
 // Flip to true for go-live. Guards BOTH sendVoucherEmail_ and sendExcEmail_ — the only two send
 // paths (the middleware never mails on its own; /api/exc-redeem sends nothing).
@@ -51,8 +71,11 @@ function onOpen() {
     .addItem('🗑️  Void Exchange Note', 'voidExchangeNote')
     .addSeparator()
     .addItem('🔄  Lookup Order Now', 'lookupOrderManual')
+    .addItem('🔎  Look up Old-Gold customer', 'lookupOldGoldCustomer')
+    .addItem('⚖️  Fetch Old-Gold buy-back rate', 'fetchOldGoldRate')
     .addSeparator()
     .addItem('🧩  Set up Document Type fields', 'setupDocTypeFields')
+    .addItem('🧩  Set up Source & Old-Gold fields', 'setupSourceFields')
     .addItem('⚙️  Setup Auto-fill Triggers', 'setupTriggers')
     .addItem('🗑️  Remove Auto-fill Triggers', 'removeTriggers')
     .addSeparator()
@@ -149,6 +172,9 @@ function handleEdit(e) {
     const row = e.range.getRow();
     if (col === 2 && row === 7)  { onOrderNumberEntered(sheet); return; }
     if (col === 2 && row === 10) { onSkuSelected(sheet);        return; }
+    // Old-gold auto-fill: purity → buy-back rate; customer phone/email → resolve customer.
+    if (e.range.getA1Notation() === OG_PURITY_CELL) { try { fetchOldGoldRate(); } catch (x) {} return; }
+    if (e.range.getA1Notation() === OG_CUSTOMER_CELL) { try { lookupOldGoldCustomer(); } catch (x) {} return; }
   } catch (err) {
     SpreadsheetApp.getUi().alert('❌ Auto-fill error:\n' + err.message);
   }
@@ -579,6 +605,8 @@ function removeTriggers() {
 // "Exchange Note" (instant post-tax deduction on a new invoice).
 function createDocument() {
   const calc = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CALC_SHEET_NAME);
+  // Source wins over Document Type: Old Gold is always a voucher bound to a customer, no order.
+  if (currentSource_(calc) === SOURCE_OLD_GOLD) return createOldGoldVoucher_();
   const modality = String(calc.getRange(DOCTYPE_CELL).getValue()).trim().toLowerCase();
   if (modality.indexOf('exchange') === 0 || modality === 'exc') return createExchangeNote_();
   return createVoucher_();
@@ -712,6 +740,213 @@ function createVoucher_() {
   );
 }
 
+// ── OLD-GOLD VOUCHER — buy-back credit, no reference order, no draft ──────────────
+// Customer walks in with scrap/old gold. Staff enter weight + purity; it's valued off the same
+// buying_rate_table the middleware uses, and issued as a 1-year voucher BOUND TO THE CUSTOMER
+// (prerequisite_customer_ids). No order, no draft — the voucher stands alone and is redeemed later
+// against a future sale. The customer is resolved from OG_CUSTID_CELL (populate it via the
+// "Look up Old-Gold customer" menu item, which calls lookupCustomer_).
+function createOldGoldVoucher_() {
+  const ss   = SpreadsheetApp.getActiveSpreadsheet();
+  const calc = ss.getSheetByName(CALC_SHEET_NAME);
+  const log  = ss.getSheetByName(VOUCHER_LOG) || ss.getSheetByName('CN Log');
+  const ui   = SpreadsheetApp.getUi();
+  if (!log) { ui.alert('Log tab "' + VOUCHER_LOG + '" not found. Run the setup first.'); return; }
+
+  // Customer: "id | name" written into OG_CUSTID_CELL by the lookup. Require a resolved id — an
+  // old-gold voucher with no customer would be a bearer instrument redeemable by anyone.
+  const custRaw = String(calc.getRange(OG_CUSTID_CELL).getValue()).trim();
+  const custId  = custRaw.split('|')[0].trim();
+  const custNm  = (custRaw.split('|')[1] || '').trim() || String(calc.getRange('B4').getValue()).trim();
+  if (!custId || !/^\d+$/.test(custId)) {
+    ui.alert('No customer resolved.\n\nEnter a phone or email in ' + OG_CUSTOMER_CELL +
+             ' and run "🔎 Look up Old-Gold customer" from the menu first.');
+    return;
+  }
+
+  const weight = toNum(calc.getRange(OG_WEIGHT_CELL).getValue());
+  const purity = toNum(calc.getRange(OG_PURITY_CELL).getValue());
+  const rate   = toNum(calc.getRange(OG_RATE_CELL).getValue()) || getBuyingRate_(purity);
+  if (!(weight > 0) || !(purity > 0)) { ui.alert('Enter old-gold weight (' + OG_WEIGHT_CELL + ') and purity (' + OG_PURITY_CELL + ').'); return; }
+  if (!(rate > 0)) { ui.alert('No buy-back rate for ' + purity + 'kt. Check the buying rate table is set.'); return; }
+
+  const computed = Math.round(weight * rate * 100) / 100;
+  // The final value cell (B36) is the single overridable figure. If staff changed it away from the
+  // computed weight×rate, demand a reason (OVERRIDE_REASON_CELL) and record it.
+  const override = toNum(calc.getRange('B36').getValue());
+  var value  = computed;
+  var reason = '';
+  if (override > 0 && Math.abs(override - computed) > 1) {
+    reason = String(calc.getRange(OVERRIDE_REASON_CELL).getValue()).trim();
+    if (!reason) {
+      ui.alert('Value in B36 (₹' + override.toFixed(2) + ') differs from the computed ₹' + computed.toFixed(2) +
+               '.\n\nEnter a reason in ' + OVERRIDE_REASON_CELL + ' to use the override, or clear B36 to use the computed value.');
+      return;
+    }
+    value = override;
+  }
+
+  const today      = new Date();
+  const validUntil = new Date(today.getFullYear() + 1, today.getMonth(), today.getDate());
+  const issued     = Utilities.formatDate(today, 'Asia/Kolkata', 'dd-MM-yyyy');
+  const expiryFmt  = Utilities.formatDate(validUntil, 'Asia/Kolkata', 'dd-MM-yyyy');
+  const expiryIso  = validUntil.toISOString();
+  const year       = today.getFullYear();
+
+  const alloc = allocateVoucherSerial();
+  const cnNum = (alloc && alloc.serial_code)
+                ? alloc.serial_code
+                : 'VCH-' + year + '-' + String(log.getLastRow()).padStart(4, '0');
+
+  // Customer-bound, single-use price rule — identical shape to createVoucher_, minus the order link.
+  const priceRule = shopifyPost('price_rules.json', { price_rule: {
+    title:              cnNum,
+    target_type:        'line_item',
+    target_selection:   'all',
+    allocation_method:  'across',
+    value_type:         'fixed_amount',
+    value:              '-' + value.toFixed(2),
+    customer_selection: 'prerequisite',
+    prerequisite_customer_ids: [Number(custId)],
+    starts_at:          today.toISOString(),
+    ends_at:            expiryIso,
+    usage_limit:        1
+  }});
+  if (!priceRule || !priceRule.price_rule) { ui.alert('Failed to create the price rule in Shopify. Check token scopes.'); return; }
+  const priceRuleId = priceRule.price_rule.id;
+  const discCode = shopifyPost('price_rules/' + priceRuleId + '/discount_codes.json', { discount_code: { code: cnNum } });
+  if (!discCode || !discCode.discount_code) { ui.alert('Price rule created but discount code failed. Check Shopify.'); return; }
+
+  calc.getRange('B43').setValue(cnNum);
+
+  if (!issueCreditInstrument_({
+        instrumentType:  'voucher',
+        serialCode:      cnNum,
+        value:           value,
+        customerId:      String(custId),
+        customerName:    custNm,
+        sourceOrderName: 'OLD-GOLD ' + weight.toFixed(3) + 'g @ ' + purity + 'kt',
+        stateCode:       resolveStoreCode_(),
+        expiresAt:       expiryIso,
+        priceRuleId:     String(priceRuleId)
+      })) {
+    ui.alert('⚠️ ' + cnNum + ' created in Shopify but NOT recorded in the ledger. It will fail to apply. Re-run when the middleware is reachable.');
+  }
+
+  // Log columns match the Voucher Log header; old-gold specifics go in the weight/gold-value slots.
+  log.appendRow([issued, cnNum, 'OLD-GOLD', custNm, calc.getRange('B5').getValue(),
+                 weight, 0, computed, 0, value, expiryFmt, 'Issued', String(priceRuleId), reason]);
+
+  sendVoucherEmail_(custNm, calc.getRange('B5').getValue(), cnNum, value, expiryFmt, 'OLD-GOLD');
+
+  ui.alert(
+    '✅ Old-Gold Voucher Created\n\n' +
+    'Voucher: ' + cnNum + '\n' +
+    'Customer: ' + custNm + ' (id ' + custId + ')\n' +
+    'Old gold: ' + weight.toFixed(3) + ' g @ ' + purity + 'kt × ₹' + rate.toFixed(2) + '/g\n' +
+    'Value: ₹' + value.toLocaleString('en-IN', { minimumFractionDigits: 2 }) +
+    (reason ? '  (override: ' + reason + ')' : '') + '\n' +
+    'Valid Until: ' + expiryFmt + ' (1 year)\n\n' +
+    (SEND_CUSTOMER_EMAILS ? 'Email sent.' : '✉️ Email SUPPRESSED (test mode).')
+  );
+}
+
+// Menu action: value the old gold from purity in OG_PURITY_CELL → rate into OG_RATE_CELL (read-only).
+function fetchOldGoldRate() {
+  var calc = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CALC_SHEET_NAME);
+  var ui   = SpreadsheetApp.getUi();
+  var purity = toNum(calc.getRange(OG_PURITY_CELL).getValue());
+  if (!(purity > 0)) { ui.alert('Enter the old-gold purity (karat) in ' + OG_PURITY_CELL + ' first.'); return; }
+  var rate = getBuyingRate_(purity);
+  if (!(rate > 0)) { ui.alert('No buy-back rate for ' + purity + 'kt — check the buying rate table is set in Supabase.'); return; }
+  calc.getRange(OG_RATE_CELL).setValue(rate);
+  var weight = toNum(calc.getRange(OG_WEIGHT_CELL).getValue());
+  ui.alert('Buy-back rate for ' + purity + 'kt: ₹' + rate.toFixed(2) + '/g' +
+           (weight > 0 ? '\nValue for ' + weight.toFixed(3) + ' g: ₹' + (weight * rate).toFixed(2) : ''));
+}
+
+// One-time setup: builds the Source / Exchange-Type / Old-Gold field block below B47, and LOCKS the
+// calculated cells (weights, carats, rates, computed values) so staff can only edit the final value
+// (B36) — with a reason in OVERRIDE_REASON_CELL. Idempotent; refuses to overwrite non-ours content.
+function setupSourceFields() {
+  var ss   = SpreadsheetApp.getActiveSpreadsheet();
+  var calc = ss.getSheetByName(CALC_SHEET_NAME);
+  var ui   = SpreadsheetApp.getUi();
+  if (!calc) { ui.alert('Sheet "' + CALC_SHEET_NAME + '" not found.'); return; }
+
+  var fields = [
+    { cell: SOURCE_CELL,          label: 'Source',                 list: ['Purchase Exchange', 'Old Gold'], def: 'Purchase Exchange' },
+    { cell: EXCHTYPE_CELL,        label: 'Exchange Type',          list: ['Deduction', 'Full Value'],       def: 'Deduction' },
+    { cell: OG_CUSTOMER_CELL,     label: 'Old Gold — Customer phone/email' },
+    { cell: OG_CUSTID_CELL,       label: 'Old Gold — Customer (auto)' },
+    { cell: OG_WEIGHT_CELL,       label: 'Old Gold — Weight (g)' },
+    { cell: OG_PURITY_CELL,       label: 'Old Gold — Purity (karat)' },
+    { cell: OG_RATE_CELL,         label: 'Old Gold — Buy-back rate/g (auto)' },
+    { cell: OVERRIDE_REASON_CELL, label: 'Final value override — reason' }
+  ];
+
+  // Safety: refuse if any target cell (or its label) already holds foreign content.
+  var ours = {};
+  fields.forEach(function (f) { ours[f.label] = 1; if (f.def) ours[f.def] = 1; });
+  ['Purchase Exchange', 'Old Gold', 'Deduction', 'Full Value'].forEach(function (v) { ours[v] = 1; });
+  var blocked = [];
+  fields.forEach(function (f) {
+    var r = calc.getRange(f.cell);
+    var l = calc.getRange(r.getRow(), r.getColumn() - 1);
+    [r, l].forEach(function (g) { var v = String(g.getValue()).trim(); if (v && !ours[v]) blocked.push(g.getA1Notation() + ' = "' + v + '"'); });
+  });
+  if (blocked.length) {
+    ui.alert('Aborted — these cells are not empty:\n\n  • ' + blocked.join('\n  • ') +
+             '\n\nNothing changed. Move the *_CELL constants to a free block and re-run.');
+    return;
+  }
+
+  fields.forEach(function (f) {
+    var r = calc.getRange(f.cell);
+    calc.getRange(r.getRow(), r.getColumn() - 1).setValue(f.label);
+    if (f.list) {
+      r.setDataValidation(SpreadsheetApp.newDataValidation().requireValueInList(f.list, true).setAllowInvalid(false).build());
+      if (!String(r.getValue()).trim()) r.setValue(f.def);
+    }
+  });
+
+  // Cell gating: protect the auto-calculated cells so staff can't hand-edit weights/rates/values.
+  // Only B36 (final value) stays editable. Uses warning-only protection so it works without domain
+  // admin — a hard lock needs setDomainEdit permissions the sheet owner may not have.
+  var lockCells = ['B15','B16','B19','C19','D19','B20','C20','B27','B28', OG_RATE_CELL, OG_CUSTID_CELL];
+  lockCells.forEach(function (a1) {
+    var rng = calc.getRange(a1);
+    // Drop any prior protection we set on this cell, then re-add.
+    calc.getProtections(SpreadsheetApp.ProtectionType.RANGE).forEach(function (p) {
+      if (p.getRange().getA1Notation() === rng.getA1Notation()) p.remove();
+    });
+    var prot = rng.protect().setDescription('Auto-calculated — do not edit (Timanti CN)');
+    prot.setWarningOnly(true);
+  });
+
+  ui.alert('✅ Source & Old-Gold fields ready (B48–B55).\n\n' +
+           '• Source: Purchase Exchange | Old Gold\n' +
+           '• Exchange Type: Deduction | Full Value\n' +
+           '• Old-gold customer/weight/purity + auto rate\n' +
+           '• Locked (warn-on-edit): weights, carats, rates, computed values\n\n' +
+           'Only the final value (B36) is freely editable — put a reason in ' + OVERRIDE_REASON_CELL + ' when you override it.');
+}
+
+// Menu action: resolve the customer typed into OG_CUSTOMER_CELL and write "id | name" to OG_CUSTID_CELL.
+function lookupOldGoldCustomer() {
+  var calc = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CALC_SHEET_NAME);
+  var ui   = SpreadsheetApp.getUi();
+  var q    = String(calc.getRange(OG_CUSTOMER_CELL).getValue()).trim();
+  if (!q) { ui.alert('Enter a phone or email in ' + OG_CUSTOMER_CELL + ' first.'); return; }
+  var c = lookupCustomer_(q);
+  if (!c) { calc.getRange(OG_CUSTID_CELL).clearContent(); ui.alert('No customer found for "' + q + '".'); return; }
+  calc.getRange(OG_CUSTID_CELL).setValue(c.id + ' | ' + c.name);
+  if (c.name)  calc.getRange('B4').setValue(c.name);
+  if (c.email) calc.getRange('B5').setValue(c.email);
+  if (c.phone) calc.getRange('B6').setValue(c.phone);
+  ui.alert('✅ Customer: ' + c.name + '\nid ' + c.id + (c.email ? '\n' + c.email : ''));
+}
+
 // ── EXCHANGE NOTE — instant post-tax deduction applied to a NEW invoice ──────────
 // Staff ring up the new item (creating a Shopify draft), then enter that draft # in NEWDRAFT_CELL.
 // The middleware appends a negative custom line item (EXC-...) to that draft.
@@ -730,7 +965,23 @@ function createExchangeNote_() {
   const diaWt         = toNum(calc.getRange('B16').getValue());
   const goldVal       = toNum(calc.getRange('B27').getValue());
   const diaVal        = toNum(calc.getRange('B28').getValue());
-  const excValue      = toNum(calc.getRange('B36').getValue());
+  let   excValue      = toNum(calc.getRange('B36').getValue());
+
+  // Exchange type. 'Full Value' credits the ORIGINAL invoice's taxable (pre-GST) value instead of
+  // today's metal+stone calc. NOTE FOR ACCOUNTANT: this uses the order's post-discount, pre-tax
+  // subtotal (Shopify subtotal_price). Confirm the tax basis before relying on it — the deduction is
+  // applied POST-tax on the new invoice, so crediting a pre-GST figure post-tax is deliberate.
+  const exchType = String(calc.getRange(EXCHTYPE_CELL).getValue()).trim().toLowerCase();
+  if (exchType.indexOf(EXCHTYPE_FULL) === 0) {
+    const taxable = getOrderTaxableValue_(orderNumber);
+    if (!(taxable > 0)) {
+      ui.alert('Full Value selected but the original invoice taxable value for ' + orderNumber +
+               ' could not be read. Switch to Deduction or check the order number.');
+      return;
+    }
+    excValue = taxable;
+    calc.getRange('B36').setValue(taxable);   // show the figure being credited
+  }
 
   if (!customerEmail || !orderNumber || excValue <= 0) {
     ui.alert('Missing data. Fill customer email, old order number, and ensure exchange value > 0.');
@@ -1129,6 +1380,68 @@ function getToken() {
   const rows = JSON.parse(res.getContentText());
   if (!rows || rows.length === 0) throw new Error('shopify_access_token not found in Supabase config table');
   return rows[0].value;
+}
+
+// Reads any row from the Supabase `config` table by key. Returns the raw string value, or null if
+// absent. Same credentials/path as getToken (the token is just the shopify_access_token key).
+function getSupabaseConfig_(key) {
+  const props       = PropertiesService.getScriptProperties();
+  const supabaseUrl = props.getProperty('SUPABASE_URL');
+  const supabaseKey = props.getProperty('SUPABASE_SERVICE_KEY');
+  if (!supabaseUrl || !supabaseKey) throw new Error('Supabase credentials not set. Use "Setup Supabase Credentials".');
+  const res = UrlFetchApp.fetch(
+    supabaseUrl + '/rest/v1/config?key=eq.' + encodeURIComponent(key) + '&select=value',
+    { headers: { 'apikey': supabaseKey, 'Authorization': 'Bearer ' + supabaseKey }, muteHttpExceptions: true });
+  if (res.getResponseCode() >= 400) throw new Error('Supabase config fetch failed: ' + res.getContentText());
+  const rows = JSON.parse(res.getContentText());
+  return (rows && rows.length) ? rows[0].value : null;
+}
+
+// Old-gold buy-back rate per gram for a (possibly fractional) karat. Reads the SAME buying_rate_table
+// the middleware uses (server.js getBuyingRateTable/buyingRateFor), so the sheet and any middleware
+// re-valuation agree to the paise. Formula: karat/24 × base_24k × (1 − haircut_pct/100).
+// Returns null if the table is missing or purity is outside 0<p<=24.
+function getBuyingRate_(purity) {
+  var p = toNum(purity);
+  if (!(p > 0) || p > 24) return null;
+  var raw = getSupabaseConfig_('buying_rate_table');
+  if (!raw) return null;
+  var t;
+  try { t = JSON.parse(raw); } catch (e) { return null; }
+  if (!t || !(t.base_24k > 0)) return null;
+  return Math.round((p / 24) * t.base_24k * (1 - (t.haircut_pct || 0) / 100) * 100) / 100;
+}
+
+// Looks up a customer by phone or email via the Shopify Admin API. Returns { id, name, email, phone }
+// or null. Used by the Old Gold flow, which has no order to pull a customer from.
+function lookupCustomer_(query) {
+  var q = String(query || '').trim();
+  if (!q) return null;
+  var field = q.indexOf('@') !== -1 ? 'email' : 'phone';
+  var data = shopifyGet('customers/search.json?query=' + encodeURIComponent(field + ':' + q));
+  if (!data || !data.customers || !data.customers.length) return null;
+  var c = data.customers[0];
+  return {
+    id:    c.id,
+    name:  [c.first_name, c.last_name].filter(Boolean).join(' '),
+    email: c.email || '',
+    phone: (c.phone || (c.default_address && c.default_address.phone) || '')
+  };
+}
+
+// Reads the source mode (Purchase Exchange | Old Gold) from SOURCE_CELL, lower-cased. Blank = default.
+function currentSource_(calc) {
+  return String(calc.getRange(SOURCE_CELL).getValue()).trim().toLowerCase();
+}
+
+// Original invoice's taxable (pre-GST) value for a Full-Value exchange: Shopify's post-discount,
+// pre-tax subtotal. Returns 0 if the order can't be read. See the accountant note at the call site.
+function getOrderTaxableValue_(orderNumber) {
+  var name = String(orderNumber || '').replace('#', '').trim();
+  if (!name) return 0;
+  var data = shopifyGet('orders.json?name=%23' + name + '&status=any&fields=id,subtotal_price,total_tax,total_price');
+  if (!data || !data.orders || !data.orders.length) return 0;
+  return toNum(data.orders[0].subtotal_price);
 }
 
 // ── SHOPIFY HELPERS ───────────────────────────────────────────────────────────
