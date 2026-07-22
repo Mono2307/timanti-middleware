@@ -22,35 +22,51 @@
 
 const SHOPIFY_SHOP    = 'auracarat.myshopify.com';
 const CALC_SHEET_NAME = 'Exchange Calculator';
-// Issuing store code (state_code) — REQUIRED by /api/serial/allocate for VCH/EXC serials
-// (per-store, e.g. EXC27-KAHSR-0001). Single-store deployment = HSR, Karnataka. Change if a store is added.
-const STORE_CODE      = 'KA-HSR';
-const STORE_CODE_CELL = 'B47';   // staff-set issuing store, overrides STORE_CODE when non-blank (label in A47)
+const STORE_CODE      = 'KA-HSR';   // issuing store fallback when STORE_CODE_CELL is blank
 
-// Document classification (run "Set up Document Type fields" once to build these cells).
-// Both sit on row 37 (the blank row under NET CREDIT NOTE VALUE) so no existing rows shift —
-// the script hardcodes B27/B28/B36/B43, so inserting rows would break them. setupDocTypeFields
-// aborts if these cells (or their labels) aren't empty, so a wrong guess can't overwrite data.
-// To relocate, change these two refs only — nothing else hardcodes the positions.
-const DOCTYPE_CELL    = 'B45';   // dropdown: Voucher | Exchange Note   (label in A45)
-const NEWDRAFT_CELL   = 'B46';   // new sale's draft/order # (Exchange Note only)  (label in A46)
+// ─────────────────────────────────────────────────────────────────────────────
+// LAYOUT — controls-at-top (v2). Every cell the script reads/writes is named here;
+// there are NO hardcoded A1 refs elsewhere, so the layout is defined entirely by
+// this block. The restructureControlsToTop() migration rearranges a legacy sheet
+// to match: it inserts 14 rows at the top for the CONTROLS block, which shifts the
+// old customer/order/calc rows down by 14 (Google Sheets auto-adjusts every calc
+// formula), then re-points these constants. Data cells below are the legacy rows + 14.
+// ─────────────────────────────────────────────────────────────────────────────
 
-// ── Source / exchange-type / old-gold block (built by "Set up Source & Old-Gold fields") ──
-// SOURCE_CELL decides where the credit value comes from:
-//   'Purchase Exchange' (default) — existing flow: an old ORDER, its SKUs, gold+diamond calc.
-//   'Old Gold'                    — no order; staff enter weight+purity, valued off the buying table,
-//                                   issued as a VOUCHER bound to a looked-up customer (never a draft).
-// EXCHTYPE_CELL applies to Purchase Exchange + Exchange Note only:
-//   'Deduction'  (default) — today's metal+stone calc (current behaviour).
-//   'Full Value'           — credit the ORIGINAL invoice's taxable (pre-GST) value.
-const SOURCE_CELL          = 'B48';  // dropdown: Purchase Exchange | Old Gold        (label A48)
-const EXCHTYPE_CELL        = 'B49';  // dropdown: Deduction | Full Value              (label A49)
-const OG_CUSTOMER_CELL     = 'B50';  // Old Gold: phone or email to look up the customer (label A50)
-const OG_CUSTID_CELL       = 'B51';  // Old Gold: resolved "id | name" (auto, locked)    (label A51)
-const OG_WEIGHT_CELL       = 'B52';  // Old Gold: gross weight in grams                  (label A52)
-const OG_PURITY_CELL       = 'B53';  // Old Gold: purity in karat (9..24)                (label A53)
-const OG_RATE_CELL         = 'B54';  // Old Gold: buy-back rate/g (auto from table, locked) (label A54)
-const OVERRIDE_REASON_CELL = 'B55';  // reason, required when the final value (B36) is overridden (label A55)
+// ── CONTROLS (top block, rows 1-14) ──
+const DOCTYPE_CELL     = 'B4';   // dropdown: Voucher | Exchange Note        (label A4)
+const NEWDRAFT_CELL    = 'B6';   // new sale's draft/order # (Exchange Note)  (label A6)
+const STORE_CODE_CELL  = 'B5';   // staff-set issuing store, overrides STORE_CODE when non-blank (label A5)
+const SOURCE_CELL          = 'B2';   // dropdown: Purchase Exchange | Old Gold   (label A2)
+const EXCHTYPE_CELL        = 'B3';   // dropdown: Deduction | Full Value         (label A3)
+const OG_CUSTOMER_CELL     = 'B8';   // Old Gold: phone or email to look up the customer (label A8)
+const OG_CUSTID_CELL       = 'B9';   // Old Gold: resolved "id | name" (auto, locked)    (label A9)
+const OG_WEIGHT_CELL       = 'B10';  // Old Gold: gross weight in grams                  (label A10)
+const OG_PURITY_CELL       = 'B11';  // Old Gold: purity in karat (9..24)                (label A11)
+const OG_RATE_CELL         = 'B12';  // Old Gold: buy-back rate/g (auto, locked)         (label A12)
+const OVERRIDE_REASON_CELL = 'B13';  // reason, required when the final value is overridden (label A13)
+
+// ── DATA (customer / order / item / weights / rates / calc), rows shifted +14 ──
+const CUST_NAME_CELL   = 'B18';  // was B4
+const CUST_EMAIL_CELL  = 'B19';  // was B5
+const CUST_PHONE_CELL  = 'B20';  // was B6
+const ORDER_NUM_CELL   = 'B21';  // was B7  (drives the SKU lookup)
+const ORDER_DATE_CELL  = 'B22';  // was B8
+const SKU_CELL         = 'B24';  // was B10 (the SKU picker dropdown)
+const KARAT_CELL       = 'B26';  // was B12
+const NET_WT_CELL      = 'B29';  // was B15
+const DIA_CTS_CELL     = 'B30';  // was B16
+const GOLD_RATE_ORD_CELL  = 'B33';  // was B19 (order-time gold rate, "X / Y" for multi)
+const GOLD_RATE_LIVE_CELL = 'C33';  // was C19 (live gold rate, "X / Y" for multi)
+const GOLD_RATE_EFF_CELL  = 'D33';  // was D19 (weighted effective rate — B27 formula base)
+const LGD_RATE_CELL    = 'B34';  // was B20
+const DIA_VALUE_CELL   = 'C34';  // was C20 (variant diamond value; the '=C20' base)
+const GOLD_VAL_CELL    = 'B41';  // was B27
+const DIA_VAL_CELL     = 'B42';  // was B28
+const NET_VALUE_CELL   = 'B50';  // was B36 (NET CREDIT NOTE VALUE — the final value)
+const DOCNUM_OUT_CELL  = 'B57';  // was B43 (script writes the VCH/EXC number here)
+
+const RESTRUCTURE_ROWS = 14;     // rows inserted at top by restructureControlsToTop()
 
 const SOURCE_OLD_GOLD      = 'old gold';   // SOURCE_CELL value (lower-cased) that triggers the old-gold flow
 const EXCHTYPE_FULL        = 'full';       // EXCHTYPE_CELL value (lower-cased prefix) for full-invoice-value
@@ -61,6 +77,10 @@ const SEND_CUSTOMER_EMAILS = false;
 
 const VOUCHER_LOG     = 'Voucher Log';   // renamed from 'CN Log'
 const EXCHANGE_LOG    = 'Exchange Log';  // new tab for Exchange Notes
+
+// Row number from an A1 cell ref (e.g. 'B21' → 21). Used so onEdit/layout logic follows the
+// layout constants instead of hardcoding rows.
+function cellRow_(a1) { return Number(String(a1).replace(/^[A-Z]+/, '')); }
 
 // ── MENU ─────────────────────────────────────────────────────────────────────
 function onOpen() {
@@ -74,8 +94,7 @@ function onOpen() {
     .addItem('🔎  Look up Old-Gold customer', 'lookupOldGoldCustomer')
     .addItem('⚖️  Fetch Old-Gold buy-back rate', 'fetchOldGoldRate')
     .addSeparator()
-    .addItem('🧩  Set up Document Type fields', 'setupDocTypeFields')
-    .addItem('🧩  Set up Source & Old-Gold fields', 'setupSourceFields')
+    .addItem('🏗️  Restructure: controls to top (run once, on a copy)', 'restructureControlsToTop')
     .addItem('⚙️  Setup Auto-fill Triggers', 'setupTriggers')
     .addItem('🗑️  Remove Auto-fill Triggers', 'removeTriggers')
     .addSeparator()
@@ -170,8 +189,8 @@ function handleEdit(e) {
     if (sheet.getName() !== CALC_SHEET_NAME) return;
     const col = e.range.getColumn();
     const row = e.range.getRow();
-    if (col === 2 && row === 7)  { onOrderNumberEntered(sheet); return; }
-    if (col === 2 && row === 10) { onSkuSelected(sheet);        return; }
+    if (col === 2 && row === cellRow_(ORDER_NUM_CELL)) { onOrderNumberEntered(sheet); return; }
+    if (col === 2 && row === cellRow_(SKU_CELL))       { onSkuSelected(sheet);        return; }
     // Old-gold auto-fill: purity → buy-back rate (+ value into B36); weight → refresh value;
     // customer phone/email → resolve customer.
     if (e.range.getA1Notation() === OG_PURITY_CELL) { try { fetchOldGoldRate(); } catch (x) {} return; }
@@ -186,14 +205,16 @@ function handleEdit(e) {
 // allowModal: true when called from a menu item (has container.ui scope);
 //             false/omitted when called from the installable onEdit trigger (no UI scope).
 function onOrderNumberEntered(sheet, allowModal) {
-  const raw = String(sheet.getRange('B7').getValue()).trim();
+  const raw = String(sheet.getRange(ORDER_NUM_CELL).getValue()).trim();
   if (!raw) return;
 
   // Clear all previously auto-filled cells
-  ['B4','B5','B6','B8','B10','B12','B15','B16','B19','B20','C19','C20','D19','B27','B28'].forEach(function(ref) {
+  [CUST_NAME_CELL, CUST_EMAIL_CELL, CUST_PHONE_CELL, ORDER_DATE_CELL, SKU_CELL, KARAT_CELL,
+   NET_WT_CELL, DIA_CTS_CELL, GOLD_RATE_ORD_CELL, LGD_RATE_CELL, GOLD_RATE_LIVE_CELL,
+   DIA_VALUE_CELL, GOLD_RATE_EFF_CELL, GOLD_VAL_CELL, DIA_VAL_CELL].forEach(function(ref) {
     sheet.getRange(ref).clearContent();
   });
-  sheet.getRange('B10').clearDataValidations();
+  sheet.getRange(SKU_CELL).clearDataValidations();
 
   const orderName = raw.replace('#', '');
 
@@ -231,10 +252,10 @@ function onOrderNumberEntered(sheet, allowModal) {
     }
   } catch (_) {}
 
-  sheet.getRange('B4').setValue(name);
-  sheet.getRange('B5').setValue(email);
-  sheet.getRange('B6').setValue(phone);
-  sheet.getRange('B8').setValue(orderDate);
+  sheet.getRange(CUST_NAME_CELL).setValue(name);
+  sheet.getRange(CUST_EMAIL_CELL).setValue(email);
+  sheet.getRange(CUST_PHONE_CELL).setValue(phone);
+  sheet.getRange(ORDER_DATE_CELL).setValue(orderDate);
 
   // ── Line items ───────────────────────────────────────────────────────────
   const lineItems = order.line_items || [];
@@ -246,7 +267,7 @@ function onOrderNumberEntered(sheet, allowModal) {
 
   if (expanded.length === 1) {
     // Auto-select and populate immediately
-    sheet.getRange('B10').setValue(expanded[0].label);
+    sheet.getRange(SKU_CELL).setValue(expanded[0].label);
     populateFromLineItem(sheet, lineItems[0]);
     return;
   }
@@ -267,9 +288,9 @@ function onOrderNumberEntered(sheet, allowModal) {
     .requireValueInList(skuList, true)
     .setAllowInvalid(false)
     .build();
-  sheet.getRange('B10').clearContent();
-  sheet.getRange('B10').setDataValidation(rule);
-  sheet.getRange('B10').setNote(
+  sheet.getRange(SKU_CELL).clearContent();
+  sheet.getRange(SKU_CELL).setDataValidation(rule);
+  sheet.getRange(SKU_CELL).setNote(
     skuList.length + ' SKUs found.\n' +
     '• Pick one below for single-item rates.\n' +
     '• Use "🔄 Lookup Order Now" in the menu to select multiple SKUs.'
@@ -343,9 +364,9 @@ function applySkuSelection(selectedIndices) {
 
   var sheet    = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CALC_SHEET_NAME);
   var skuLabel = selectedIndices.map(function(i) { return expanded[i].label; }).join(', ');
-  sheet.getRange('B10').setValue(skuLabel);
-  sheet.getRange('B10').clearDataValidations();
-  sheet.getRange('B10').clearNote();
+  sheet.getRange(SKU_CELL).setValue(skuLabel);
+  sheet.getRange(SKU_CELL).clearDataValidations();
+  sheet.getRange(SKU_CELL).clearNote();
 
   if (selected.length === 1) {
     populateFromLineItem(sheet, selected[0]);
@@ -423,26 +444,26 @@ function populateFromMultipleLineItems(sheet, lineItems) {
     if (!karat) karat = k;
   });
 
-  if (hasNetWt)  sheet.getRange('B15').setValue(totalNetWt);
-  if (hasDiaCts) sheet.getRange('B16').setValue(totalDiaCts);
+  if (hasNetWt)  sheet.getRange(NET_WT_CELL).setValue(totalNetWt);
+  if (hasDiaCts) sheet.getRange(DIA_CTS_CELL).setValue(totalDiaCts);
   // Mixed-karat lots show every karat ("18K / 22K") rather than silently printing the first one.
-  if (karats.length) sheet.getRange('B12').setValue(karats.join(' / '));
+  if (karats.length) sheet.getRange(KARAT_CELL).setValue(karats.join(' / '));
 
-  if (orderRates.length) sheet.getRange('B19').setValue(orderRates.join(' / '));
-  if (liveRates.length)  sheet.getRange('C19').setValue(liveRates.join(' / '));
+  if (orderRates.length) sheet.getRange(GOLD_RATE_ORD_CELL).setValue(orderRates.join(' / '));
+  if (liveRates.length)  sheet.getRange(GOLD_RATE_LIVE_CELL).setValue(liveRates.join(' / '));
 
   if (hasDiaVal) {
-    sheet.getRange('B20').setValue(totalLiveDiaVal);
-    sheet.getRange('C20').setValue(totalLiveDiaVal);
+    sheet.getRange(LGD_RATE_CELL).setValue(totalLiveDiaVal);
+    sheet.getRange(DIA_VALUE_CELL).setValue(totalLiveDiaVal);
   }
 
   // Weighted effective rate → B27 stays a live formula. Divide by the RATED weight only, so an
   // item with no live rate can't dilute the average; if that leaves rated < total weight the
   // formula would over-credit the unrated grams, so warn instead of silently mispricing.
   if (totalLiveGoldVal > 0 && ratedNetWt > 0) {
-    sheet.getRange('D19').setValue(totalLiveGoldVal / ratedNetWt);
-    sheet.getRange('D19').setNote('Weighted effective gold rate (auto). B27 = B15 × D19. Do not edit.');
-    sheet.getRange('B27').setFormula('=B15*D19');
+    sheet.getRange(GOLD_RATE_EFF_CELL).setValue(totalLiveGoldVal / ratedNetWt);
+    sheet.getRange(GOLD_RATE_EFF_CELL).setNote('Weighted effective gold rate (auto). gold value = weight × this rate. Do not edit.');
+    sheet.getRange(GOLD_VAL_CELL).setFormula('=' + NET_WT_CELL + '*' + GOLD_RATE_EFF_CELL);
     if (Math.abs(ratedNetWt - totalNetWt) > 0.0001) {
       SpreadsheetApp.getUi().alert(
         '⚠️ Some selected items have no live gold rate.\n\n' +
@@ -451,7 +472,7 @@ function populateFromMultipleLineItems(sheet, lineItems) {
         'unrated grams. Check the variant metafields before issuing.');
     }
   }
-  if (hasDiaVal) sheet.getRange('B28').setFormula('=C20');
+  if (hasDiaVal) sheet.getRange(DIA_VAL_CELL).setFormula('=' + DIA_VALUE_CELL);
 
   SpreadsheetApp.flush();
 }
@@ -460,10 +481,10 @@ function populateFromMultipleLineItems(sheet, lineItems) {
 // Does a fresh Shopify call — avoids Script Properties 9 KB limit that caused
 // silent cache failures. Low-volume tool so the extra call is fine.
 function onSkuSelected(sheet) {
-  const selected  = String(sheet.getRange('B10').getValue()).trim();
+  const selected  = String(sheet.getRange(SKU_CELL).getValue()).trim();
   if (!selected) return;
 
-  const orderName = String(sheet.getRange('B7').getValue()).trim().replace('#', '');
+  const orderName = String(sheet.getRange(ORDER_NUM_CELL).getValue()).trim().replace('#', '');
   if (!orderName) return;
 
   const data = shopifyGet(
@@ -533,28 +554,28 @@ function populateFromLineItem(sheet, lineItem) {
     }
   }
 
-  if (netWt         !== null) sheet.getRange('B15').setValue(netWt);
-  if (diaCts        !== null) sheet.getRange('B16').setValue(diaCts);
-  if (goldRateOrder !== null) sheet.getRange('B19').setValue(goldRateOrder);
-  if (goldRateLive  !== null) sheet.getRange('C19').setValue(goldRateLive);
+  if (netWt         !== null) sheet.getRange(NET_WT_CELL).setValue(netWt);
+  if (diaCts        !== null) sheet.getRange(DIA_CTS_CELL).setValue(diaCts);
+  if (goldRateOrder !== null) sheet.getRange(GOLD_RATE_ORD_CELL).setValue(goldRateOrder);
+  if (goldRateLive  !== null) sheet.getRange(GOLD_RATE_LIVE_CELL).setValue(goldRateLive);
   if (diaValue      !== null) {
-    sheet.getRange('B20').setValue(diaValue);
-    sheet.getRange('C20').setValue(diaValue);
+    sheet.getRange(LGD_RATE_CELL).setValue(diaValue);
+    sheet.getRange(DIA_VALUE_CELL).setValue(diaValue);
     // B28 driven by C20 so the 80%/100% rows stay live
-    sheet.getRange('B28').setFormula('=C20');
+    sheet.getRange(DIA_VAL_CELL).setFormula('=' + DIA_VALUE_CELL);
   }
   // B27 driven by D19 (the effective rate) so single- and multi-SKU use ONE formula shape.
   // Single SKU: D19 is just this item's rate. Multi: it's the weighted average. See
   // populateFromMultipleLineItems for why C19 can't be used (it holds display text there).
   // If your B27 formula includes a karat purity factor (e.g. =B15*(18/24)*D19), adjust here.
   if (goldRateLive !== null && netWt !== null) {
-    sheet.getRange('D19').setValue(goldRateLive);
-    sheet.getRange('D19').setNote('Effective gold rate (auto). B27 = B15 × D19. Do not edit.');
-    sheet.getRange('B27').setFormula('=B15*D19');
+    sheet.getRange(GOLD_RATE_EFF_CELL).setValue(goldRateLive);
+    sheet.getRange(GOLD_RATE_EFF_CELL).setNote('Effective gold rate (auto). gold value = weight × this rate. Do not edit.');
+    sheet.getRange(GOLD_VAL_CELL).setFormula('=' + NET_WT_CELL + '*' + GOLD_RATE_EFF_CELL);
   }
 
   var karat = extractKarat(lineItem.sku);
-  if (karat) sheet.getRange('B12').setValue(karat);
+  if (karat) sheet.getRange(KARAT_CELL).setValue(karat);
 
   SpreadsheetApp.flush();
 }
@@ -625,14 +646,14 @@ function createVoucher_() {
   const ui   = SpreadsheetApp.getUi();
   if (!log) { ui.alert('Log tab "' + VOUCHER_LOG + '" not found. Run "Set up Document Type fields" first.'); return; }
 
-  const customerName  = calc.getRange('B4').getValue();
-  const customerEmail = calc.getRange('B5').getValue();
-  const orderNumber   = String(calc.getRange('B7').getValue()).trim();
-  const netWt         = toNum(calc.getRange('B15').getValue());
-  const diaWt         = toNum(calc.getRange('B16').getValue());
-  const goldVal       = toNum(calc.getRange('B27').getValue());
-  const diaVal        = toNum(calc.getRange('B28').getValue());
-  const netCredit     = toNum(calc.getRange('B36').getValue());
+  const customerName  = calc.getRange(CUST_NAME_CELL).getValue();
+  const customerEmail = calc.getRange(CUST_EMAIL_CELL).getValue();
+  const orderNumber   = String(calc.getRange(ORDER_NUM_CELL).getValue()).trim();
+  const netWt         = toNum(calc.getRange(NET_WT_CELL).getValue());
+  const diaWt         = toNum(calc.getRange(DIA_CTS_CELL).getValue());
+  const goldVal       = toNum(calc.getRange(GOLD_VAL_CELL).getValue());
+  const diaVal        = toNum(calc.getRange(DIA_VAL_CELL).getValue());
+  const netCredit     = toNum(calc.getRange(NET_VALUE_CELL).getValue());
 
   const today      = new Date();
   // 1-year validity (same day next year — JS rolls leap years over cleanly).
@@ -691,7 +712,7 @@ function createVoucher_() {
     return;
   }
 
-  calc.getRange('B43').setValue(cnNum);
+  calc.getRange(DOCNUM_OUT_CELL).setValue(cnNum);
 
   // Record the voucher in the credit-instrument ledger. WITHOUT this the voucher exists only as a
   // Shopify discount code: handleApplyVoucherTag looks it up via getBySerial and, finding nothing,
@@ -759,7 +780,7 @@ function createOldGoldVoucher_() {
   // old-gold voucher with no customer would be a bearer instrument redeemable by anyone.
   const custRaw = String(calc.getRange(OG_CUSTID_CELL).getValue()).trim();
   const custId  = custRaw.split('|')[0].trim();
-  const custNm  = (custRaw.split('|')[1] || '').trim() || String(calc.getRange('B4').getValue()).trim();
+  const custNm  = (custRaw.split('|')[1] || '').trim() || String(calc.getRange(CUST_NAME_CELL).getValue()).trim();
   if (!custId || !/^\d+$/.test(custId)) {
     ui.alert('No customer resolved.\n\nEnter a phone or email in ' + OG_CUSTOMER_CELL +
              ' and run "🔎 Look up Old-Gold customer" from the menu first.');
@@ -775,14 +796,14 @@ function createOldGoldVoucher_() {
   const computed = Math.round(weight * rate * 100) / 100;
   // The final value cell (B36) is the single overridable figure. If staff changed it away from the
   // computed weight×rate, demand a reason (OVERRIDE_REASON_CELL) and record it.
-  const override = toNum(calc.getRange('B36').getValue());
+  const override = toNum(calc.getRange(NET_VALUE_CELL).getValue());
   var value  = computed;
   var reason = '';
   if (override > 0 && Math.abs(override - computed) > 1) {
     reason = String(calc.getRange(OVERRIDE_REASON_CELL).getValue()).trim();
     if (!reason) {
-      ui.alert('Value in B36 (₹' + override.toFixed(2) + ') differs from the computed ₹' + computed.toFixed(2) +
-               '.\n\nEnter a reason in ' + OVERRIDE_REASON_CELL + ' to use the override, or clear B36 to use the computed value.');
+      ui.alert('Value in ' + NET_VALUE_CELL + ' (₹' + override.toFixed(2) + ') differs from the computed ₹' + computed.toFixed(2) +
+               '.\n\nEnter a reason in ' + OVERRIDE_REASON_CELL + ' to use the override, or clear ' + NET_VALUE_CELL + ' to use the computed value.');
       return;
     }
     value = override;
@@ -819,7 +840,7 @@ function createOldGoldVoucher_() {
   const discCode = shopifyPost('price_rules/' + priceRuleId + '/discount_codes.json', { discount_code: { code: cnNum } });
   if (!discCode || !discCode.discount_code) { ui.alert('Price rule created but discount code failed. Check Shopify.'); return; }
 
-  calc.getRange('B43').setValue(cnNum);
+  calc.getRange(DOCNUM_OUT_CELL).setValue(cnNum);
 
   if (!issueCreditInstrument_({
         instrumentType:  'voucher',
@@ -836,10 +857,10 @@ function createOldGoldVoucher_() {
   }
 
   // Log columns match the Voucher Log header; old-gold specifics go in the weight/gold-value slots.
-  log.appendRow([issued, cnNum, 'OLD-GOLD', custNm, calc.getRange('B5').getValue(),
+  log.appendRow([issued, cnNum, 'OLD-GOLD', custNm, calc.getRange(CUST_EMAIL_CELL).getValue(),
                  weight, 0, computed, 0, value, expiryFmt, 'Issued', String(priceRuleId), reason]);
 
-  sendVoucherEmail_(custNm, calc.getRange('B5').getValue(), cnNum, value, expiryFmt, 'OLD-GOLD');
+  sendVoucherEmail_(custNm, calc.getRange(CUST_EMAIL_CELL).getValue(), cnNum, value, expiryFmt, 'OLD-GOLD');
 
   ui.alert(
     '✅ Old-Gold Voucher Created\n\n' +
@@ -866,7 +887,7 @@ function fetchOldGoldRate() {
   var value = writeOldGoldValue_(calc);
   var weight = toNum(calc.getRange(OG_WEIGHT_CELL).getValue());
   ui.alert('Buy-back rate for ' + purity + 'kt: ₹' + rate.toFixed(2) + '/g' +
-           (weight > 0 ? '\nValue for ' + weight.toFixed(3) + ' g: ₹' + value.toFixed(2) + '  (shown in B36)' : ''));
+           (weight > 0 ? '\nValue for ' + weight.toFixed(3) + ' g: ₹' + value.toFixed(2) + '  (shown in ' + NET_VALUE_CELL + ')' : ''));
 }
 
 // Computes weight × rate and writes it into B36 (the final value cell) so the old-gold value is
@@ -876,75 +897,95 @@ function writeOldGoldValue_(calc) {
   var weight = toNum(calc.getRange(OG_WEIGHT_CELL).getValue());
   var rate   = toNum(calc.getRange(OG_RATE_CELL).getValue());
   var value  = Math.round(weight * rate * 100) / 100;
-  if (value > 0) calc.getRange('B36').setValue(value);
+  if (value > 0) calc.getRange(NET_VALUE_CELL).setValue(value);
   return value;
 }
 
 // One-time setup: builds the Source / Exchange-Type / Old-Gold field block below B47, and LOCKS the
 // calculated cells (weights, carats, rates, computed values) so staff can only edit the final value
 // (B36) — with a reason in OVERRIDE_REASON_CELL. Idempotent; refuses to overwrite non-ours content.
-function setupSourceFields() {
+// ── MIGRATION: move all controls to a block at the TOP of the sheet ──────────────
+// Legacy layout ran Customer → Item → Weights → Rates → Deductions → Calc, with the controls
+// (Doc Type, Source, Old-Gold, Store) bolted on at the bottom. This inserts a CONTROLS block at
+// the very top by inserting RESTRUCTURE_ROWS rows at row 1 — which shifts every legacy row down by
+// that amount and, crucially, lets Google Sheets AUTO-ADJUST every calculation formula (the
+// 80%/100%/deduction rows) so the numbers are preserved exactly. It then builds the control fields
+// in the new top rows and clears the now-shifted legacy control cells. The layout constants at the
+// top of this file already point at the post-migration positions, so run this ONCE.
+//
+// TEST ON A COPY FIRST (File → Make a copy). Idempotent-guarded: re-running is a no-op.
+function restructureControlsToTop() {
   var ss   = SpreadsheetApp.getActiveSpreadsheet();
   var calc = ss.getSheetByName(CALC_SHEET_NAME);
   var ui   = SpreadsheetApp.getUi();
   if (!calc) { ui.alert('Sheet "' + CALC_SHEET_NAME + '" not found.'); return; }
 
-  var fields = [
-    { cell: SOURCE_CELL,          label: 'Source',                 list: ['Purchase Exchange', 'Old Gold'], def: 'Purchase Exchange' },
-    { cell: EXCHTYPE_CELL,        label: 'Exchange Type',          list: ['Deduction', 'Full Value'],       def: 'Deduction' },
-    { cell: OG_CUSTOMER_CELL,     label: 'Old Gold — Customer phone/email' },
-    { cell: OG_CUSTID_CELL,       label: 'Old Gold — Customer (auto)' },
-    { cell: OG_WEIGHT_CELL,       label: 'Old Gold — Weight (g)' },
-    { cell: OG_PURITY_CELL,       label: 'Old Gold — Purity (karat)' },
-    { cell: OG_RATE_CELL,         label: 'Old Gold — Buy-back rate/g (auto)' },
-    { cell: OVERRIDE_REASON_CELL, label: 'Final value override — reason' }
-  ];
+  // Guard: the label to the left of SOURCE_CELL is 'Source' only after a successful migration.
+  var srcLabel = String(calc.getRange(cellRow_(SOURCE_CELL), 1).getValue()).trim();
+  if (srcLabel === 'Source') { ui.alert('Already restructured — controls are at the top. Nothing changed.'); return; }
 
-  // Safety: refuse if any target cell (or its label) already holds foreign content.
-  var ours = {};
-  fields.forEach(function (f) { ours[f.label] = 1; if (f.def) ours[f.def] = 1; });
-  ['Purchase Exchange', 'Old Gold', 'Deduction', 'Full Value'].forEach(function (v) { ours[v] = 1; });
-  var blocked = [];
-  fields.forEach(function (f) {
-    var r = calc.getRange(f.cell);
-    var l = calc.getRange(r.getRow(), r.getColumn() - 1);
-    [r, l].forEach(function (g) { var v = String(g.getValue()).trim(); if (v && !ours[v]) blocked.push(g.getA1Notation() + ' = "' + v + '"'); });
-  });
-  if (blocked.length) {
-    ui.alert('Aborted — these cells are not empty:\n\n  • ' + blocked.join('\n  • ') +
-             '\n\nNothing changed. Move the *_CELL constants to a free block and re-run.');
-    return;
+  var confirm = ui.alert('Restructure the Exchange Calculator?',
+    'This inserts a CONTROLS block at the top and shifts existing rows down by ' + RESTRUCTURE_ROWS + '.\n\n' +
+    'Run this on a COPY of the sheet first and verify the calc numbers before using it live.\n\nProceed?',
+    ui.ButtonSet.YES_NO);
+  if (confirm !== ui.Button.YES) return;
+
+  // 1. Insert the top block. Sheets auto-adjusts all calc formulas for the downward shift.
+  calc.insertRowsBefore(1, RESTRUCTURE_ROWS);
+
+  // 2. Build the control fields. Label goes in column A of the same row as the value cell.
+  function put(cellA1, label, opts) {
+    var r = calc.getRange(cellA1);
+    calc.getRange(r.getRow(), 1).setValue(label);
+    if (opts && opts.list) {
+      r.setDataValidation(SpreadsheetApp.newDataValidation().requireValueInList(opts.list, true).setAllowInvalid(false).build());
+      if (opts.def && !String(r.getValue()).trim()) r.setValue(opts.def);
+    }
+    if (opts && opts.note) r.setNote(opts.note);
+  }
+  calc.getRange('A1').setValue('0 — CONTROLS  (set these first)');
+  put(SOURCE_CELL,        'Source',        { list: ['Purchase Exchange', 'Old Gold'], def: 'Purchase Exchange' });
+  put(EXCHTYPE_CELL,      'Exchange Type', { list: ['Deduction', 'Full Value'],       def: 'Deduction' });
+  put(DOCTYPE_CELL,       'Document Type', { list: ['Voucher', 'Exchange Note'],       def: 'Voucher' });
+  put(STORE_CODE_CELL,    'Store Code',    { note: 'Issuing store, e.g. KA-HSR or KA-TEST. Blank = ' + STORE_CODE });
+  put(NEWDRAFT_CELL,      'New Draft/Order # (Exchange Note only)', { note: 'Ring up the new item as a draft first, then enter e.g. #D123.' });
+  calc.getRange(cellRow_(OG_CUSTOMER_CELL) - 1, 1).setValue('— OLD GOLD  (only when Source = Old Gold) —');
+  put(OG_CUSTOMER_CELL,     'Old Gold — Customer phone/email', { note: 'Then run "Look up Old-Gold customer" (or just type — it auto-resolves).' });
+  put(OG_CUSTID_CELL,       'Old Gold — Customer (auto)');
+  put(OG_WEIGHT_CELL,       'Old Gold — Weight (g)');
+  put(OG_PURITY_CELL,       'Old Gold — Purity (karat)');
+  put(OG_RATE_CELL,         'Old Gold — Buy-back rate/g (auto)');
+  put(OVERRIDE_REASON_CELL, 'Final value override — reason');
+
+  // 3. Clear the legacy control cells (old rows 45-55, now shifted down by RESTRUCTURE_ROWS).
+  for (var rr = 45 + RESTRUCTURE_ROWS; rr <= 55 + RESTRUCTURE_ROWS; rr++) {
+    calc.getRange(rr, 1).clearContent();
+    calc.getRange(rr, 2).clearContent();
+    calc.getRange(rr, 2).clearDataValidations();
   }
 
-  fields.forEach(function (f) {
-    var r = calc.getRange(f.cell);
-    calc.getRange(r.getRow(), r.getColumn() - 1).setValue(f.label);
-    if (f.list) {
-      r.setDataValidation(SpreadsheetApp.newDataValidation().requireValueInList(f.list, true).setAllowInvalid(false).build());
-      if (!String(r.getValue()).trim()) r.setValue(f.def);
-    }
-  });
+  // 4. Gate the calc cells (warn-on-edit) at their new positions.
+  lockCalcCells_(calc);
 
-  // Cell gating: protect the auto-calculated cells so staff can't hand-edit weights/rates/values.
-  // Only B36 (final value) stays editable. Uses warning-only protection so it works without domain
-  // admin — a hard lock needs setDomainEdit permissions the sheet owner may not have.
-  var lockCells = ['B15','B16','B19','C19','D19','B20','C20','B27','B28', OG_RATE_CELL, OG_CUSTID_CELL];
+  ui.alert('✅ Restructured.\n\n' +
+           'Controls are now at the top (rows 1-' + (RESTRUCTURE_ROWS - 1) + '). Existing rows moved down by ' +
+           RESTRUCTURE_ROWS + ' and the calc formulas auto-adjusted.\n\n' +
+           'Verify the NET value matches what it was before, then use as normal. ' +
+           'Only the final value (' + NET_VALUE_CELL + ') is freely editable.');
+}
+
+// Warn-on-edit protection on the auto-calculated cells so staff can't hand-edit weights/rates/values.
+// Warning-only works without domain-admin rights (a hard lock needs setDomainEdit the owner may lack).
+function lockCalcCells_(calc) {
+  var lockCells = [NET_WT_CELL, DIA_CTS_CELL, GOLD_RATE_ORD_CELL, GOLD_RATE_LIVE_CELL, GOLD_RATE_EFF_CELL,
+                   LGD_RATE_CELL, DIA_VALUE_CELL, GOLD_VAL_CELL, DIA_VAL_CELL, OG_RATE_CELL, OG_CUSTID_CELL];
   lockCells.forEach(function (a1) {
     var rng = calc.getRange(a1);
-    // Drop any prior protection we set on this cell, then re-add.
     calc.getProtections(SpreadsheetApp.ProtectionType.RANGE).forEach(function (p) {
       if (p.getRange().getA1Notation() === rng.getA1Notation()) p.remove();
     });
-    var prot = rng.protect().setDescription('Auto-calculated — do not edit (Timanti CN)');
-    prot.setWarningOnly(true);
+    calc.getRange(a1).protect().setDescription('Auto-calculated — do not edit (Timanti CN)').setWarningOnly(true);
   });
-
-  ui.alert('✅ Source & Old-Gold fields ready (B48–B55).\n\n' +
-           '• Source: Purchase Exchange | Old Gold\n' +
-           '• Exchange Type: Deduction | Full Value\n' +
-           '• Old-gold customer/weight/purity + auto rate\n' +
-           '• Locked (warn-on-edit): weights, carats, rates, computed values\n\n' +
-           'Only the final value (B36) is freely editable — put a reason in ' + OVERRIDE_REASON_CELL + ' when you override it.');
 }
 
 // Menu action: resolve the customer typed into OG_CUSTOMER_CELL and write "id | name" to OG_CUSTID_CELL.
@@ -956,9 +997,9 @@ function lookupOldGoldCustomer() {
   var c = lookupCustomer_(q);
   if (!c) { calc.getRange(OG_CUSTID_CELL).clearContent(); ui.alert('No customer found for "' + q + '".'); return; }
   calc.getRange(OG_CUSTID_CELL).setValue(c.id + ' | ' + c.name);
-  if (c.name)  calc.getRange('B4').setValue(c.name);
-  if (c.email) calc.getRange('B5').setValue(c.email);
-  if (c.phone) calc.getRange('B6').setValue(c.phone);
+  if (c.name)  calc.getRange(CUST_NAME_CELL).setValue(c.name);
+  if (c.email) calc.getRange(CUST_EMAIL_CELL).setValue(c.email);
+  if (c.phone) calc.getRange(CUST_PHONE_CELL).setValue(c.phone);
   ui.alert('✅ Customer: ' + c.name + '\nid ' + c.id + (c.email ? '\n' + c.email : ''));
 }
 
@@ -972,15 +1013,15 @@ function createExchangeNote_() {
   const ui   = SpreadsheetApp.getUi();
   if (!log) { ui.alert('Log tab "' + EXCHANGE_LOG + '" not found. Run "Set up Document Type fields" first.'); return; }
 
-  const customerName  = calc.getRange('B4').getValue();
-  const customerEmail = calc.getRange('B5').getValue();
-  const orderNumber   = String(calc.getRange('B7').getValue()).trim();   // OLD order (item exchanged)
+  const customerName  = calc.getRange(CUST_NAME_CELL).getValue();
+  const customerEmail = calc.getRange(CUST_EMAIL_CELL).getValue();
+  const orderNumber   = String(calc.getRange(ORDER_NUM_CELL).getValue()).trim();   // OLD order (item exchanged)
   const newDraftRef   = String(calc.getRange(NEWDRAFT_CELL).getValue()).trim();  // NEW sale's draft
-  const netWt         = toNum(calc.getRange('B15').getValue());
-  const diaWt         = toNum(calc.getRange('B16').getValue());
-  const goldVal       = toNum(calc.getRange('B27').getValue());
-  const diaVal        = toNum(calc.getRange('B28').getValue());
-  let   excValue      = toNum(calc.getRange('B36').getValue());
+  const netWt         = toNum(calc.getRange(NET_WT_CELL).getValue());
+  const diaWt         = toNum(calc.getRange(DIA_CTS_CELL).getValue());
+  const goldVal       = toNum(calc.getRange(GOLD_VAL_CELL).getValue());
+  const diaVal        = toNum(calc.getRange(DIA_VAL_CELL).getValue());
+  let   excValue      = toNum(calc.getRange(NET_VALUE_CELL).getValue());
 
   // Exchange type. 'Full Value' credits the ORIGINAL invoice's taxable (pre-GST) value instead of
   // today's metal+stone calc. NOTE FOR ACCOUNTANT: this uses the order's post-discount, pre-tax
@@ -995,7 +1036,7 @@ function createExchangeNote_() {
       return;
     }
     excValue = taxable;
-    calc.getRange('B36').setValue(taxable);   // show the figure being credited
+    calc.getRange(NET_VALUE_CELL).setValue(taxable);   // show the figure being credited
   }
 
   if (!customerEmail || !orderNumber || excValue <= 0) {
@@ -1027,7 +1068,7 @@ function createExchangeNote_() {
   const newDraftId   = result.draftId || '';
   const newDraftName = newDraftRef.indexOf('#') === 0 ? newDraftRef : ('#' + newDraftRef);
 
-  calc.getRange('B43').setValue(excNum);
+  calc.getRange(DOCNUM_OUT_CELL).setValue(excNum);
 
   // Tag the OLD order so the exchanged item is traceable to the new sale.
   const cleanOrderNum = orderNumber.replace('#', '');
@@ -1542,7 +1583,11 @@ function addOrderTags(orderId, newTags) {
 // ── DEBUG ─────────────────────────────────────────────────────────────────────
 function debugCells() {
   const calc  = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CALC_SHEET_NAME);
-  const cells = ['B4','B5','B6','B7','B8','B10','B12','B15','B16','B19','C19','B20','C20','B27','B28','B29','B36','B40','B43'];
+  const cells = [SOURCE_CELL, EXCHTYPE_CELL, DOCTYPE_CELL, STORE_CODE_CELL, NEWDRAFT_CELL,
+                 CUST_NAME_CELL, CUST_EMAIL_CELL, CUST_PHONE_CELL, ORDER_NUM_CELL, ORDER_DATE_CELL,
+                 SKU_CELL, KARAT_CELL, NET_WT_CELL, DIA_CTS_CELL, GOLD_RATE_ORD_CELL, GOLD_RATE_LIVE_CELL,
+                 GOLD_RATE_EFF_CELL, LGD_RATE_CELL, DIA_VALUE_CELL, GOLD_VAL_CELL, DIA_VAL_CELL,
+                 NET_VALUE_CELL, DOCNUM_OUT_CELL];
   const lines = cells.map(function(ref) {
     const raw = calc.getRange(ref).getValue();
     return ref + ': [' + (typeof raw) + '] ' + raw;
@@ -1554,7 +1599,7 @@ function debugCells() {
 function showLineItemProperties() {
   try {
     const calc = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CALC_SHEET_NAME);
-    const raw  = String(calc.getRange('B7').getValue()).trim();
+    const raw  = String(calc.getRange(ORDER_NUM_CELL).getValue()).trim();
     if (!raw) { SpreadsheetApp.getUi().alert('Enter an order number in B7 first.'); return; }
 
     const orderName = raw.replace('#', '');
