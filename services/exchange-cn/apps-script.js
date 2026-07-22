@@ -172,8 +172,10 @@ function handleEdit(e) {
     const row = e.range.getRow();
     if (col === 2 && row === 7)  { onOrderNumberEntered(sheet); return; }
     if (col === 2 && row === 10) { onSkuSelected(sheet);        return; }
-    // Old-gold auto-fill: purity → buy-back rate; customer phone/email → resolve customer.
+    // Old-gold auto-fill: purity → buy-back rate (+ value into B36); weight → refresh value;
+    // customer phone/email → resolve customer.
     if (e.range.getA1Notation() === OG_PURITY_CELL) { try { fetchOldGoldRate(); } catch (x) {} return; }
+    if (e.range.getA1Notation() === OG_WEIGHT_CELL) { try { writeOldGoldValue_(sheet); } catch (x) {} return; }
     if (e.range.getA1Notation() === OG_CUSTOMER_CELL) { try { lookupOldGoldCustomer(); } catch (x) {} return; }
   } catch (err) {
     SpreadsheetApp.getUi().alert('❌ Auto-fill error:\n' + err.message);
@@ -851,7 +853,8 @@ function createOldGoldVoucher_() {
   );
 }
 
-// Menu action: value the old gold from purity in OG_PURITY_CELL → rate into OG_RATE_CELL (read-only).
+// Menu action: value the old gold from purity in OG_PURITY_CELL → rate into OG_RATE_CELL (read-only),
+// then surface the value into B36 (the final value cell) so staff SEE it before issuing.
 function fetchOldGoldRate() {
   var calc = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CALC_SHEET_NAME);
   var ui   = SpreadsheetApp.getUi();
@@ -860,9 +863,21 @@ function fetchOldGoldRate() {
   var rate = getBuyingRate_(purity);
   if (!(rate > 0)) { ui.alert('No buy-back rate for ' + purity + 'kt — check the buying rate table is set in Supabase.'); return; }
   calc.getRange(OG_RATE_CELL).setValue(rate);
+  var value = writeOldGoldValue_(calc);
   var weight = toNum(calc.getRange(OG_WEIGHT_CELL).getValue());
   ui.alert('Buy-back rate for ' + purity + 'kt: ₹' + rate.toFixed(2) + '/g' +
-           (weight > 0 ? '\nValue for ' + weight.toFixed(3) + ' g: ₹' + (weight * rate).toFixed(2) : ''));
+           (weight > 0 ? '\nValue for ' + weight.toFixed(3) + ' g: ₹' + value.toFixed(2) + '  (shown in B36)' : ''));
+}
+
+// Computes weight × rate and writes it into B36 (the final value cell) so the old-gold value is
+// visible live as staff fill the block. Returns the value. Only meaningful in Old Gold mode; B36 is
+// the single figure createOldGoldVoucher_ issues against (overridable with a reason).
+function writeOldGoldValue_(calc) {
+  var weight = toNum(calc.getRange(OG_WEIGHT_CELL).getValue());
+  var rate   = toNum(calc.getRange(OG_RATE_CELL).getValue());
+  var value  = Math.round(weight * rate * 100) / 100;
+  if (value > 0) calc.getRange('B36').setValue(value);
+  return value;
 }
 
 // One-time setup: builds the Source / Exchange-Type / Old-Gold field block below B47, and LOCKS the
