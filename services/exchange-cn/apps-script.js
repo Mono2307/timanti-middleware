@@ -94,7 +94,8 @@ function onOpen() {
     .addItem('🔎  Look up Old-Gold customer', 'lookupOldGoldCustomer')
     .addItem('⚖️  Fetch Old-Gold buy-back rate', 'fetchOldGoldRate')
     .addSeparator()
-    .addItem('🏗️  Restructure: controls to top (run once, on a copy)', 'restructureControlsToTop')
+    .addItem('🏗️  Rebuild calculator (fresh, controls on top)', 'buildExchangeCalculator')
+    .addItem('🔧  Restructure existing sheet (migrate in place)', 'restructureControlsToTop')
     .addItem('⚙️  Setup Auto-fill Triggers', 'setupTriggers')
     .addItem('🗑️  Remove Auto-fill Triggers', 'removeTriggers')
     .addSeparator()
@@ -908,6 +909,121 @@ function showOldGoldValue_(calc, value) {
 // top of this file already point at the post-migration positions, so run this ONCE.
 //
 // TEST ON A COPY FIRST (File → Make a copy). Idempotent-guarded: re-running is a no-op.
+
+// ── FRESH BUILD: construct the whole Exchange Calculator from scratch, controls-on-top ────────────
+// Deterministic reset. Rebuilds every label, dropdown, and CALC FORMULA at the exact cells the layout
+// constants point to — so the sheet always matches the script and nothing can be left corrupted. Run
+// this instead of the migration if the sheet's formulas got damaged. Input cells are left blank; the
+// populate/auto-fill logic fills them from an order as normal.
+//
+// Calc convention (matches the original): Gold at 100%, Diamond at 80%, minus deductions.
+//   Gross Exchange Value = Gold Value + Diamond Value × 80%
+//   NET                  = Gross − Total Deductions
+function buildExchangeCalculator() {
+  var ss   = SpreadsheetApp.getActiveSpreadsheet();
+  var calc = ss.getSheetByName(CALC_SHEET_NAME);
+  var ui   = SpreadsheetApp.getUi();
+  if (!calc) { ui.alert('Sheet "' + CALC_SHEET_NAME + '" not found.'); return; }
+
+  var confirm = ui.alert('Rebuild the Exchange Calculator?',
+    'This rewrites all labels, dropdowns and calc formulas on the "' + CALC_SHEET_NAME + '" tab to the ' +
+    'controls-on-top layout. Input data on the tab is cleared. The log tabs are untouched.\n\nProceed?',
+    ui.ButtonSet.YES_NO);
+  if (confirm !== ui.Button.YES) return;
+
+  // Clear the working area (labels A, values B, helper cols C/D) down to the details block.
+  calc.getRange('A1:D60').clearContent().clearDataValidations().clearNote();
+  calc.getProtections(SpreadsheetApp.ProtectionType.RANGE).forEach(function (p) {
+    try { if (/Timanti CN/.test(p.getDescription())) p.remove(); } catch (e) {}
+  });
+
+  function label(a1, text) { var r = calc.getRange(a1); calc.getRange(r.getRow(), 1).setValue(text); }
+  function header(row, text) { calc.getRange(row, 1).setValue(text); }
+  function drop(a1, list, def) {
+    var r = calc.getRange(a1);
+    r.setDataValidation(SpreadsheetApp.newDataValidation().requireValueInList(list, true).setAllowInvalid(false).build());
+    if (def) r.setValue(def);
+  }
+
+  // ── CONTROLS (top) ──
+  header(1, '0 — CONTROLS  (set these first)');
+  label(SOURCE_CELL,   'Source');            drop(SOURCE_CELL,   ['Purchase Exchange', 'Old Gold'], 'Purchase Exchange');
+  label(EXCHTYPE_CELL, 'Exchange Type');     drop(EXCHTYPE_CELL, ['Deduction', 'Full Value'],       'Deduction');
+  label(DOCTYPE_CELL,  'Document Type');     drop(DOCTYPE_CELL,  ['Voucher', 'Exchange Note'],       'Voucher');
+  label(STORE_CODE_CELL, 'Store Code');      calc.getRange(STORE_CODE_CELL).setNote('e.g. KA-HSR or KA-TEST. Blank = ' + STORE_CODE);
+  label(NEWDRAFT_CELL, 'New Draft/Order # (Exchange Note only)');
+  header(cellRow_(OG_CUSTOMER_CELL) - 1, '— OLD GOLD  (only when Source = Old Gold) —');
+  label(OG_CUSTOMER_CELL, 'Old Gold — Customer phone/email');
+  label(OG_CUSTID_CELL,   'Old Gold — Customer (auto)');
+  label(OG_WEIGHT_CELL,   'Old Gold — Weight (g)');
+  label(OG_PURITY_CELL,   'Old Gold — Purity (karat)');
+  label(OG_RATE_CELL,     'Old Gold — Buy-back rate/g (auto)');
+  label(OVERRIDE_REASON_CELL, 'Final value override — reason');
+
+  // ── 1: Customer & order ──
+  header(cellRow_(CUST_NAME_CELL) - 1, '1 — CUSTOMER & ORDER DETAILS');
+  label(CUST_NAME_CELL, 'Customer Name');
+  label(CUST_EMAIL_CELL, 'Customer Email');
+  label(CUST_PHONE_CELL, 'Customer Phone');
+  label(ORDER_NUM_CELL, 'Original Order Number (e.g. #1020)');
+  label(ORDER_DATE_CELL, 'Original Order Date');
+  header(cellRow_(SKU_CELL) - 1, 'Item Being Exchanged');
+  label(SKU_CELL, 'SKU / Jewellery Code');
+  label(KARAT_CELL, 'Metal Karat');
+
+  // ── 2: Weights ──
+  header(cellRow_(NET_WT_CELL) - 1, '2 — WEIGHTS');
+  label(NET_WT_CELL, 'Net Gold Weight (g)');
+  label(DIA_CTS_CELL, 'Total Diamond Weight (cts)');
+
+  // ── 3: Rates ──
+  header(cellRow_(GOLD_RATE_ORD_CELL) - 1, '3 — TODAY\'S RATES');
+  label(GOLD_RATE_ORD_CELL, 'Gold Rate (order / live / effective →)');
+  label(LGD_RATE_CELL, 'Diamond Value (from variant →)');
+
+  // ── 4 + 5: Calculation ──
+  header(cellRow_(GOLD_VAL_CELL) - 1, '4 — CALCULATION  (auto)');
+  var gv = cellRow_(GOLD_VAL_CELL);       // 41
+  label(GOLD_VAL_CELL, 'Gold Value (100%)');            // B41  =NetWt × effRate (script writes on populate)
+  label(DIA_VAL_CELL,  'Diamond Value (raw)');          // B42  =variant diamond value
+  calc.getRange(gv + 2, 1).setValue('Gross Exchange Value (Gold + Diamond×80%)');
+  calc.getRange(gv + 2, 2).setFormula('=' + GOLD_VAL_CELL + '+' + DIA_VAL_CELL + '*0.8');   // B43
+  calc.getRange(gv + 3, 1).setValue('Less: Making / Labour');       // B44
+  calc.getRange(gv + 4, 1).setValue('Less: Shipping');              // B45
+  calc.getRange(gv + 5, 1).setValue('Less: IGI Re-Certification');  // B46
+  calc.getRange(gv + 6, 1).setValue('Less: Discount Applied');      // B47
+  calc.getRange(gv + 7, 1).setValue('Less: Custom deductions');     // B48
+  calc.getRange(gv + 8, 1).setValue('Total Deductions');            // B49
+  calc.getRange(gv + 8, 2).setFormula('=SUM(B' + (gv + 3) + ':B' + (gv + 7) + ')');
+  calc.getRange(cellRow_(NET_VALUE_CELL), 1).setValue('NET CREDIT NOTE VALUE');             // B50
+  calc.getRange(NET_VALUE_CELL).setFormula('=B' + (gv + 2) + '-B' + (gv + 8));              // =Gross − TotalDed
+
+  // ── 6: Document details ──
+  header(cellRow_(DOCNUM_OUT_CELL) - 1, '5 — CREDIT NOTE / EXCHANGE DETAILS');
+  label(DOCNUM_OUT_CELL, 'Credit Note / EXC Number (auto)');
+
+  // Gate the calc/rate cells (warn-on-edit) and ensure log tabs exist.
+  lockCalcCells_(calc);
+  ensureLogTabs_(ss);
+
+  ui.alert('✅ Exchange Calculator rebuilt (controls on top).\n\n' +
+           'NET (' + NET_VALUE_CELL + ') = Gross − Total Deductions, with Gold 100% + Diamond 80%.\n' +
+           'Enter an order number in ' + ORDER_NUM_CELL + ' to auto-fill and verify the numbers.');
+}
+
+// Creates the Voucher Log / Exchange Log tabs if missing (extracted so the fresh build can call it).
+function ensureLogTabs_(ss) {
+  if (!ss.getSheetByName(VOUCHER_LOG)) {
+    var old = ss.getSheetByName('CN Log');
+    if (old) old.setName(VOUCHER_LOG); else ss.insertSheet(VOUCHER_LOG);
+  }
+  if (!ss.getSheetByName(EXCHANGE_LOG)) {
+    var ex = ss.insertSheet(EXCHANGE_LOG);
+    ex.appendRow(['Issued', 'EXC Number', 'Old Order', 'New Draft', 'Customer', 'Email',
+                  'Net Wt', 'Dia Wt', 'Gold Val', 'Dia Val', 'Exchange Value', 'Status', 'New Draft ID']);
+  }
+}
+
 function restructureControlsToTop() {
   var ss   = SpreadsheetApp.getActiveSpreadsheet();
   var calc = ss.getSheetByName(CALC_SHEET_NAME);
