@@ -194,7 +194,7 @@ function handleEdit(e) {
     // Old-gold auto-fill: purity → buy-back rate (+ value into B36); weight → refresh value;
     // customer phone/email → resolve customer.
     if (e.range.getA1Notation() === OG_PURITY_CELL) { try { fetchOldGoldRate(); } catch (x) {} return; }
-    if (e.range.getA1Notation() === OG_WEIGHT_CELL) { try { writeOldGoldValue_(sheet); } catch (x) {} return; }
+    if (e.range.getA1Notation() === OG_WEIGHT_CELL) { try { showOldGoldValue_(sheet, oldGoldValue_(sheet)); } catch (x) {} return; }
     if (e.range.getA1Notation() === OG_CUSTOMER_CELL) { try { lookupOldGoldCustomer(); } catch (x) {} return; }
   } catch (err) {
     SpreadsheetApp.getUi().alert('❌ Auto-fill error:\n' + err.message);
@@ -793,21 +793,11 @@ function createOldGoldVoucher_() {
   if (!(weight > 0) || !(purity > 0)) { ui.alert('Enter old-gold weight (' + OG_WEIGHT_CELL + ') and purity (' + OG_PURITY_CELL + ').'); return; }
   if (!(rate > 0)) { ui.alert('No buy-back rate for ' + purity + 'kt. Check the buying rate table is set.'); return; }
 
-  const computed = Math.round(weight * rate * 100) / 100;
-  // The final value cell (B36) is the single overridable figure. If staff changed it away from the
-  // computed weight×rate, demand a reason (OVERRIDE_REASON_CELL) and record it.
-  const override = toNum(calc.getRange(NET_VALUE_CELL).getValue());
-  var value  = computed;
-  var reason = '';
-  if (override > 0 && Math.abs(override - computed) > 1) {
-    reason = String(calc.getRange(OVERRIDE_REASON_CELL).getValue()).trim();
-    if (!reason) {
-      ui.alert('Value in ' + NET_VALUE_CELL + ' (₹' + override.toFixed(2) + ') differs from the computed ₹' + computed.toFixed(2) +
-               '.\n\nEnter a reason in ' + OVERRIDE_REASON_CELL + ' to use the override, or clear ' + NET_VALUE_CELL + ' to use the computed value.');
-      return;
-    }
-    value = override;
-  }
+  // Old-gold value = weight × buy-back rate, computed here at issue time. It does NOT read or write
+  // the NET cell (that cell is the Purchase-Exchange formula; touching it would break the exchange
+  // calc). Any note typed in OVERRIDE_REASON_CELL is recorded on the log for audit.
+  const value  = Math.round(weight * rate * 100) / 100;
+  const reason = String(calc.getRange(OVERRIDE_REASON_CELL).getValue()).trim();
 
   const today      = new Date();
   const validUntil = new Date(today.getFullYear() + 1, today.getMonth(), today.getDate());
@@ -858,7 +848,7 @@ function createOldGoldVoucher_() {
 
   // Log columns match the Voucher Log header; old-gold specifics go in the weight/gold-value slots.
   log.appendRow([issued, cnNum, 'OLD-GOLD', custNm, calc.getRange(CUST_EMAIL_CELL).getValue(),
-                 weight, 0, computed, 0, value, expiryFmt, 'Issued', String(priceRuleId), reason]);
+                 weight, 0, value, 0, value, expiryFmt, 'Issued', String(priceRuleId), reason]);
 
   sendVoucherEmail_(custNm, calc.getRange(CUST_EMAIL_CELL).getValue(), cnNum, value, expiryFmt, 'OLD-GOLD');
 
@@ -874,8 +864,10 @@ function createOldGoldVoucher_() {
   );
 }
 
-// Menu action: value the old gold from purity in OG_PURITY_CELL → rate into OG_RATE_CELL (read-only),
-// then surface the value into B36 (the final value cell) so staff SEE it before issuing.
+// Menu action: value the old gold from purity in OG_PURITY_CELL → rate into OG_RATE_CELL, and show
+// the resulting value. It is deliberately NOT written to the NET cell (NET_VALUE_CELL is a live
+// formula for Purchase Exchange — writing a static number there would destroy that formula). The
+// old-gold value is computed fresh at issue time in createOldGoldVoucher_; here it's just surfaced.
 function fetchOldGoldRate() {
   var calc = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CALC_SHEET_NAME);
   var ui   = SpreadsheetApp.getUi();
@@ -884,21 +876,23 @@ function fetchOldGoldRate() {
   var rate = getBuyingRate_(purity);
   if (!(rate > 0)) { ui.alert('No buy-back rate for ' + purity + 'kt — check the buying rate table is set in Supabase.'); return; }
   calc.getRange(OG_RATE_CELL).setValue(rate);
-  var value = writeOldGoldValue_(calc);
+  var value = oldGoldValue_(calc);
+  showOldGoldValue_(calc, value);
   var weight = toNum(calc.getRange(OG_WEIGHT_CELL).getValue());
   ui.alert('Buy-back rate for ' + purity + 'kt: ₹' + rate.toFixed(2) + '/g' +
-           (weight > 0 ? '\nValue for ' + weight.toFixed(3) + ' g: ₹' + value.toFixed(2) + '  (shown in ' + NET_VALUE_CELL + ')' : ''));
+           (weight > 0 ? '\nOld-gold value for ' + weight.toFixed(3) + ' g: ₹' + value.toFixed(2) : ''));
 }
 
-// Computes weight × rate and writes it into B36 (the final value cell) so the old-gold value is
-// visible live as staff fill the block. Returns the value. Only meaningful in Old Gold mode; B36 is
-// the single figure createOldGoldVoucher_ issues against (overridable with a reason).
-function writeOldGoldValue_(calc) {
+// weight × rate, rounded to paise. Pure — reads the OG cells, writes nothing.
+function oldGoldValue_(calc) {
   var weight = toNum(calc.getRange(OG_WEIGHT_CELL).getValue());
   var rate   = toNum(calc.getRange(OG_RATE_CELL).getValue());
-  var value  = Math.round(weight * rate * 100) / 100;
-  if (value > 0) calc.getRange(NET_VALUE_CELL).setValue(value);
-  return value;
+  return Math.round(weight * rate * 100) / 100;
+}
+
+// Surface the computed old-gold value WITHOUT touching the NET formula: a note on the rate cell.
+function showOldGoldValue_(calc, value) {
+  if (value > 0) calc.getRange(OG_RATE_CELL).setNote('Old-gold value = weight × rate = ₹' + value.toFixed(2));
 }
 
 // One-time setup: builds the Source / Exchange-Type / Old-Gold field block below B47, and LOCKS the
@@ -1035,8 +1029,10 @@ function createExchangeNote_() {
                ' could not be read. Switch to Deduction or check the order number.');
       return;
     }
+    // Use the taxable figure directly; do NOT write it into the NET cell. NET_VALUE_CELL holds the
+    // Deduction-mode formula — overwriting it with a static number destroyed that formula, so a later
+    // Deduction run then read the stale full-value number. The figure is shown in the confirmation.
     excValue = taxable;
-    calc.getRange(NET_VALUE_CELL).setValue(taxable);   // show the figure being credited
   }
 
   if (!customerEmail || !orderNumber || excValue <= 0) {
