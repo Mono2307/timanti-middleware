@@ -1903,16 +1903,19 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
       const unitPrice   = r2(itemFinal / (item.quantity || 1));
       // Strip financial fields; also strip Gold for this item when we have new gold data to replace it
       const thisItemRecalc = itemRecalc[idx];
-      const FINANCIAL   = new Set(['Taxable Value', 'GST', 'Gross Value', 'Discount Applied', '_gold_rate', ...(thisItemRecalc ? ['Gold'] : [])]);
+      const FINANCIAL   = new Set(['Taxable Value', 'GST', 'Gross Value', 'Discount Applied', 'Diamond (After Discount)', '_gold_rate', ...(thisItemRecalc ? ['Gold'] : [])]);
       const filteredProps = h.properties.filter(p => !FINANCIAL.has(p.name));
       if (thisItemRecalc) {
         filteredProps.push({ name: 'Gold', value: `Rs${thisItemRecalc.newGold.toFixed(2)}` });
       }
+      // Post-discount diamond (diamond-only discount → Diamond − Discount Applied, clamped).
+      const diaAfterDisc = r2(Math.max(0, (diaArr[idx] || 0) - itemDisc));
       filteredProps.push(
         { name: 'Taxable Value',    value: `Rs${itemTaxable.toFixed(2)}` },
         { name: 'GST',             value: `Rs${itemGst.toFixed(2)}` },
         { name: 'Gross Value',      value: `Rs${grossValue.toFixed(2)}` },
         { name: 'Discount Applied', value: `Rs${itemDisc.toFixed(2)}` },
+        { name: 'Diamond (After Discount)', value: `Rs${diaAfterDisc.toFixed(2)}` },
       );
       const idxRate = goldRateForIdx(idx);
       const effectiveRate = idxRate ? String(idxRate) : ((item.properties || []).find(p => p.name === '_gold_rate')?.value || h.properties.find(p => p.name === '_gold_rate')?.value || '');
@@ -2114,16 +2117,22 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
       weight_delta_pct: parseFloat((delta * 100).toFixed(2)), repriced: true,
     });
 
+    // Post-discount diamond value as its own prop. Discounts are diamond-only, so this is exactly
+    // Diamond − Discount Applied (clamped at 0). 'Diamond' itself stays PRE-discount (the discount
+    // engine reads it as its base — see the comment above); this is a separate, display-only figure.
+    const newDiamondAfterDiscount = Math.max(0, newDiamondValue - itemDiscount);
+
     const repricedProps = {
-      'Gold':             `Rs${newGoldValue.toFixed(2)}`,
-      'Diamond':          `Rs${newDiamondValue.toFixed(2)}`,
-      'Making':           `Rs${newMakingValue.toFixed(2)}`,
-      'Gross Value':      `Rs${newGrossValue.toFixed(2)}`,
-      'Taxable Value':    `Rs${newTaxableValue.toFixed(2)}`,
-      'GST':              `Rs${newGst.toFixed(2)}`,
-      'Discount Applied': `Rs${itemDiscount.toFixed(2)}`,
+      'Gold':                   `Rs${newGoldValue.toFixed(2)}`,
+      'Diamond':                `Rs${newDiamondValue.toFixed(2)}`,
+      'Diamond (After Discount)': `Rs${newDiamondAfterDiscount.toFixed(2)}`,
+      'Making':                 `Rs${newMakingValue.toFixed(2)}`,
+      'Gross Value':            `Rs${newGrossValue.toFixed(2)}`,
+      'Taxable Value':          `Rs${newTaxableValue.toFixed(2)}`,
+      'GST':                    `Rs${newGst.toFixed(2)}`,
+      'Discount Applied':       `Rs${itemDiscount.toFixed(2)}`,
       ...jewelHiddenProps,
-      '_jewel_data':      jewel_data,
+      '_jewel_data':            jewel_data,
     };
     if (bootstrapGoldRate || goldRateOverridden) repricedProps['_gold_rate'] = goldRate.toString();
 
