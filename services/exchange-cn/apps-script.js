@@ -63,8 +63,9 @@ const LGD_RATE_CELL    = 'B34';  // was B20
 const DIA_VALUE_CELL   = 'C34';  // was C20 (variant diamond value; the '=C20' base)
 const GOLD_VAL_CELL    = 'B41';  // was B27
 const DIA_VAL_CELL     = 'B42';  // was B28
-const NET_VALUE_CELL   = 'B50';  // was B36 (NET CREDIT NOTE VALUE — the final value)
-const DOCNUM_OUT_CELL  = 'B57';  // was B43 (script writes the VCH/EXC number here)
+const NET_VALUE_CELL   = 'B50';  // NET of the Deduction calc (gold 100% + diamond 80% − deductions)
+const FINAL_ISSUE_CELL = 'B51';  // the value actually issued — reflects Source + Exchange Type live
+const DOCNUM_OUT_CELL  = 'B57';  // script writes the VCH/EXC number here
 
 const RESTRUCTURE_ROWS = 14;     // rows inserted at top by restructureControlsToTop()
 
@@ -190,13 +191,15 @@ function handleEdit(e) {
     if (sheet.getName() !== CALC_SHEET_NAME) return;
     const col = e.range.getColumn();
     const row = e.range.getRow();
-    if (col === 2 && row === cellRow_(ORDER_NUM_CELL)) { onOrderNumberEntered(sheet); return; }
+    const a1 = e.range.getA1Notation();
+    if (col === 2 && row === cellRow_(ORDER_NUM_CELL)) { onOrderNumberEntered(sheet); try { refreshFinalIssueValue_(sheet); } catch (x) {} return; }
     if (col === 2 && row === cellRow_(SKU_CELL))       { onSkuSelected(sheet);        return; }
-    // Old-gold auto-fill: purity → buy-back rate (+ value into B36); weight → refresh value;
-    // customer phone/email → resolve customer.
-    if (e.range.getA1Notation() === OG_PURITY_CELL) { try { fetchOldGoldRate(); } catch (x) {} return; }
-    if (e.range.getA1Notation() === OG_WEIGHT_CELL) { try { showOldGoldValue_(sheet, oldGoldValue_(sheet)); } catch (x) {} return; }
-    if (e.range.getA1Notation() === OG_CUSTOMER_CELL) { try { lookupOldGoldCustomer(); } catch (x) {} return; }
+    // Flipping Source or Exchange Type updates the "Value to Issue" cell live.
+    if (a1 === SOURCE_CELL || a1 === EXCHTYPE_CELL) { try { refreshFinalIssueValue_(sheet); } catch (x) {} return; }
+    // Old-gold auto-fill: purity → buy-back rate; weight → value; customer phone/email → resolve.
+    if (a1 === OG_PURITY_CELL) { try { fetchOldGoldRate(); refreshFinalIssueValue_(sheet); } catch (x) {} return; }
+    if (a1 === OG_WEIGHT_CELL) { try { showOldGoldValue_(sheet, oldGoldValue_(sheet)); refreshFinalIssueValue_(sheet); } catch (x) {} return; }
+    if (a1 === OG_CUSTOMER_CELL) { try { lookupOldGoldCustomer(); } catch (x) {} return; }
   } catch (err) {
     SpreadsheetApp.getUi().alert('❌ Auto-fill error:\n' + err.message);
   }
@@ -473,7 +476,7 @@ function populateFromMultipleLineItems(sheet, lineItems) {
         'unrated grams. Check the variant metafields before issuing.');
     }
   }
-  if (hasDiaVal) sheet.getRange(DIA_VAL_CELL).setFormula('=' + DIA_VALUE_CELL);
+  if (hasDiaVal) sheet.getRange(DIA_VAL_CELL).setFormula('=' + DIA_VALUE_CELL + '*0.8');
 
   SpreadsheetApp.flush();
 }
@@ -563,7 +566,7 @@ function populateFromLineItem(sheet, lineItem) {
     sheet.getRange(LGD_RATE_CELL).setValue(diaValue);
     sheet.getRange(DIA_VALUE_CELL).setValue(diaValue);
     // B28 driven by C20 so the 80%/100% rows stay live
-    sheet.getRange(DIA_VAL_CELL).setFormula('=' + DIA_VALUE_CELL);
+    sheet.getRange(DIA_VAL_CELL).setFormula('=' + DIA_VALUE_CELL + '*0.8');
   }
   // B27 driven by D19 (the effective rate) so single- and multi-SKU use ONE formula shape.
   // Single SKU: D19 is just this item's rate. Multi: it's the weighted average. See
@@ -654,7 +657,8 @@ function createVoucher_() {
   const diaWt         = toNum(calc.getRange(DIA_CTS_CELL).getValue());
   const goldVal       = toNum(calc.getRange(GOLD_VAL_CELL).getValue());
   const diaVal        = toNum(calc.getRange(DIA_VAL_CELL).getValue());
-  const netCredit     = toNum(calc.getRange(NET_VALUE_CELL).getValue());
+  refreshFinalIssueValue_(calc);
+  const netCredit     = toNum(calc.getRange(FINAL_ISSUE_CELL).getValue());
 
   const today      = new Date();
   // 1-year validity (same day next year — JS rolls leap years over cleanly).
@@ -950,7 +954,7 @@ function buildExchangeCalculator() {
   label(SOURCE_CELL,   'Source');            drop(SOURCE_CELL,   ['Purchase Exchange', 'Old Gold'], 'Purchase Exchange');
   label(EXCHTYPE_CELL, 'Exchange Type');     drop(EXCHTYPE_CELL, ['Deduction', 'Full Value'],       'Deduction');
   label(DOCTYPE_CELL,  'Document Type');     drop(DOCTYPE_CELL,  ['Voucher', 'Exchange Note'],       'Voucher');
-  label(STORE_CODE_CELL, 'Store Code');      calc.getRange(STORE_CODE_CELL).setNote('e.g. KA-HSR or KA-TEST. Blank = ' + STORE_CODE);
+  label(STORE_CODE_CELL, 'Store Code');      drop(STORE_CODE_CELL, ['KA-HSR', 'KA-TEST'], 'KA-HSR');
   label(NEWDRAFT_CELL, 'New Draft/Order # (Exchange Note only)');
   header(cellRow_(OG_CUSTOMER_CELL) - 1, '— OLD GOLD  (only when Source = Old Gold) —');
   label(OG_CUSTOMER_CELL, 'Old Gold — Customer phone/email');
@@ -985,9 +989,9 @@ function buildExchangeCalculator() {
   header(cellRow_(GOLD_VAL_CELL) - 1, '4 — CALCULATION  (auto)');
   var gv = cellRow_(GOLD_VAL_CELL);       // 41
   label(GOLD_VAL_CELL, 'Gold Value (100%)');            // B41  =NetWt × effRate (script writes on populate)
-  label(DIA_VAL_CELL,  'Diamond Value (raw)');          // B42  =variant diamond value
-  calc.getRange(gv + 2, 1).setValue('Gross Exchange Value (Gold + Diamond×80%)');
-  calc.getRange(gv + 2, 2).setFormula('=' + GOLD_VAL_CELL + '+' + DIA_VAL_CELL + '*0.8');   // B43
+  label(DIA_VAL_CELL,  'Diamond Value (80%)');          // B42  =variant diamond × 80% (haircut shown here)
+  calc.getRange(gv + 2, 1).setValue('Gross Exchange Value');
+  calc.getRange(gv + 2, 2).setFormula('=' + GOLD_VAL_CELL + '+' + DIA_VAL_CELL);            // B43 = Gold + Diamond(80%)
   calc.getRange(gv + 3, 1).setValue('Less: Making / Labour');       // B44
   calc.getRange(gv + 4, 1).setValue('Less: Shipping');              // B45
   calc.getRange(gv + 5, 1).setValue('Less: IGI Re-Certification');  // B46
@@ -995,8 +999,12 @@ function buildExchangeCalculator() {
   calc.getRange(gv + 7, 1).setValue('Less: Custom deductions');     // B48
   calc.getRange(gv + 8, 1).setValue('Total Deductions');            // B49
   calc.getRange(gv + 8, 2).setFormula('=SUM(B' + (gv + 3) + ':B' + (gv + 7) + ')');
-  calc.getRange(cellRow_(NET_VALUE_CELL), 1).setValue('NET CREDIT NOTE VALUE');             // B50
+  calc.getRange(cellRow_(NET_VALUE_CELL), 1).setValue('NET (Deduction calc)');              // B50
   calc.getRange(NET_VALUE_CELL).setFormula('=B' + (gv + 2) + '-B' + (gv + 8));              // =Gross − TotalDed
+  // The value actually issued — mirrors NET for Deduction, shows the original-invoice taxable for
+  // Full Value, and the weight×rate for Old Gold. Maintained live by refreshFinalIssueValue_.
+  calc.getRange(cellRow_(FINAL_ISSUE_CELL), 1).setValue('➡ VALUE TO ISSUE (auto)');
+  calc.getRange(FINAL_ISSUE_CELL).setFormula('=' + NET_VALUE_CELL);
 
   // ── 6: Document details ──
   header(cellRow_(DOCNUM_OUT_CELL) - 1, '5 — CREDIT NOTE / EXCHANGE DETAILS');
@@ -1131,24 +1139,17 @@ function createExchangeNote_() {
   const diaWt         = toNum(calc.getRange(DIA_CTS_CELL).getValue());
   const goldVal       = toNum(calc.getRange(GOLD_VAL_CELL).getValue());
   const diaVal        = toNum(calc.getRange(DIA_VAL_CELL).getValue());
-  let   excValue      = toNum(calc.getRange(NET_VALUE_CELL).getValue());
-
-  // Exchange type. 'Full Value' credits the ORIGINAL invoice's taxable (pre-GST) value instead of
-  // today's metal+stone calc. NOTE FOR ACCOUNTANT: this uses the order's post-discount, pre-tax
-  // subtotal (Shopify subtotal_price). Confirm the tax basis before relying on it — the deduction is
-  // applied POST-tax on the new invoice, so crediting a pre-GST figure post-tax is deliberate.
+  // The Value-to-Issue cell already reflects Deduction vs Full Value (maintained by
+  // refreshFinalIssueValue_ / the dropdown onEdit). Refresh once more here so a stale sheet can't
+  // issue the wrong figure, then read it. NOTE FOR ACCOUNTANT: Full Value uses the order's
+  // post-discount, pre-tax subtotal (Shopify subtotal_price); confirm the tax basis.
+  refreshFinalIssueValue_(calc);
+  const excValue = toNum(calc.getRange(FINAL_ISSUE_CELL).getValue());
   const exchType = String(calc.getRange(EXCHTYPE_CELL).getValue()).trim().toLowerCase();
-  if (exchType.indexOf(EXCHTYPE_FULL) === 0) {
-    const taxable = getOrderTaxableValue_(orderNumber);
-    if (!(taxable > 0)) {
-      ui.alert('Full Value selected but the original invoice taxable value for ' + orderNumber +
-               ' could not be read. Switch to Deduction or check the order number.');
-      return;
-    }
-    // Use the taxable figure directly; do NOT write it into the NET cell. NET_VALUE_CELL holds the
-    // Deduction-mode formula — overwriting it with a static number destroyed that formula, so a later
-    // Deduction run then read the stale full-value number. The figure is shown in the confirmation.
-    excValue = taxable;
+  if (exchType.indexOf(EXCHTYPE_FULL) === 0 && !(excValue > 0)) {
+    ui.alert('Full Value selected but the original invoice value for ' + orderNumber +
+             ' could not be read. Switch to Deduction or check the order number.');
+    return;
   }
 
   if (!customerEmail || !orderNumber || excValue <= 0) {
@@ -1600,6 +1601,28 @@ function lookupCustomer_(query) {
 // Reads the source mode (Purchase Exchange | Old Gold) from SOURCE_CELL, lower-cased. Blank = default.
 function currentSource_(calc) {
   return String(calc.getRange(SOURCE_CELL).getValue()).trim().toLowerCase();
+}
+
+// Keeps FINAL_ISSUE_CELL ("Value to Issue") in sync with the chosen mode — this is what the create
+// functions issue against, and what staff see change when they flip the dropdowns:
+//   Old Gold                 → weight × buy-back rate
+//   Purchase Exchange + Full → original invoice taxable value (Shopify subtotal, one API call)
+//   Purchase Exchange + Ded. → the live NET formula (=NET_VALUE_CELL)
+// Never writes NET_VALUE_CELL — that stays a formula.
+function refreshFinalIssueValue_(calc) {
+  var cell = calc.getRange(FINAL_ISSUE_CELL);
+  if (currentSource_(calc) === SOURCE_OLD_GOLD) {
+    cell.setValue(oldGoldValue_(calc)); cell.setNote('Old Gold: weight × buy-back rate'); return;
+  }
+  var exch = String(calc.getRange(EXCHTYPE_CELL).getValue()).trim().toLowerCase();
+  if (exch.indexOf(EXCHTYPE_FULL) === 0) {
+    var order   = String(calc.getRange(ORDER_NUM_CELL).getValue()).trim();
+    var taxable = getOrderTaxableValue_(order);
+    if (taxable > 0) { cell.setValue(taxable); cell.setNote('Full Value: original invoice taxable for ' + order); }
+    else { cell.setValue(''); cell.setNote('Full Value: could not read the original invoice for ' + order); }
+  } else {
+    cell.setFormula('=' + NET_VALUE_CELL); cell.clearNote();   // Deduction: mirror the calc NET
+  }
 }
 
 // Original invoice's taxable (pre-GST) value for a Full-Value exchange: Shopify's post-discount,
