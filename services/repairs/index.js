@@ -27,18 +27,27 @@ function repairSendEmail(opts) {
   return sendEmail({ ...opts, to: REPAIR_TEST_EMAIL, cc: undefined });
 }
 
+// Every repair action link (set-estimate, set-complete, store-approve) is signed with this.
+// Unset, crypto.createHmac throws an opaque ERR_INVALID_ARG_TYPE about an "undefined key" from
+// deep inside node:crypto — which is what a missing secret looked like in the logs. Name it.
+function repairHmacSecret() {
+  const secret = process.env.SHOPIFY_WEBHOOK_SECRET;
+  if (!secret) throw new Error('SHOPIFY_WEBHOOK_SECRET is not set — cannot sign repair action links');
+  return secret;
+}
+
 function generateEstimateToken(draftId) {
-  return crypto.createHmac('sha256', process.env.SHOPIFY_WEBHOOK_SECRET)
+  return crypto.createHmac('sha256', repairHmacSecret())
     .update(String(draftId)).digest('hex').slice(0, 32);
 }
 
 function generateCompleteToken(draftId) {
-  return crypto.createHmac('sha256', process.env.SHOPIFY_WEBHOOK_SECRET)
+  return crypto.createHmac('sha256', repairHmacSecret())
     .update(`complete:${draftId}`).digest('hex').slice(0, 32);
 }
 
 function generateStoreApproveToken(draftId) {
-  return crypto.createHmac('sha256', process.env.SHOPIFY_WEBHOOK_SECRET)
+  return crypto.createHmac('sha256', repairHmacSecret())
     .update(`store-approve:${draftId}`).digest('hex').slice(0, 32);
 }
 
@@ -234,17 +243,31 @@ async function handleRepairPayment(draft, { transactionId, gatewayRef }, getShop
 }
 
 // ── Called directly from the existing /api/shopify-draft-updated handler ──────
+// In-process lock: each of our API calls (updateTags, writeMetafields, specCopy) triggers
+// another draft_orders/update webhook, and this absorbs that burst. It is held only for as long
+// as processing actually runs — NOT for a fixed delay. It used to linger 15 seconds, which
+// silently swallowed the staff's real tag-add whenever it landed shortly after the draft was
+// created (the create cascade enters the lock a second or two in, so a tag added ~13s later was
+// dropped as a "duplicate" and never re-checked). The `*-notified` dedupe tags are what make
+// re-entry safe, so the lock only needs to cover the in-flight window.
 async function handleRepairDraftUpdate(incomingDraft, getShopifyToken, assignRepairSerial = null) {
-  // In-process lock: each of our API calls (updateTags, writeMetafields, specCopy)
-  // triggers another draft_orders/update webhook. The lock absorbs the burst so only
-  // the first invocation per draft processes; the rest are dropped for 15 seconds.
+  if (!incomingDraft?.id) return;
   if (processingDrafts.has(incomingDraft.id)) {
-    console.log(`⏭️  Skipping duplicate webhook for draft ${incomingDraft.id}`);
+    console.log(`⏭️  Skipping concurrent webhook for draft ${incomingDraft.id}`);
     return;
   }
   processingDrafts.add(incomingDraft.id);
-  setTimeout(() => processingDrafts.delete(incomingDraft.id), 15000);
+  // Backstop so a hang below can never strand the lock and wedge the draft permanently.
+  const lockBackstop = setTimeout(() => processingDrafts.delete(incomingDraft.id), 120000);
+  try {
+    return await processRepairDraftUpdate(incomingDraft, getShopifyToken, assignRepairSerial);
+  } finally {
+    clearTimeout(lockBackstop);
+    processingDrafts.delete(incomingDraft.id);
+  }
+}
 
+async function processRepairDraftUpdate(incomingDraft, getShopifyToken, assignRepairSerial = null) {
   // Re-fetch draft to get current live tags — avoids stale webhook payload causing duplicates
   let draft = incomingDraft;
   try {
@@ -263,11 +286,11 @@ async function handleRepairDraftUpdate(incomingDraft, getShopifyToken, assignRep
   // ── Trigger 0: intake → HQ notification + customer acknowledgement ────────
   if (tags.includes('repair-intake') && !tags.includes('repair-hq-notified')) {
     console.log(`Repair intake trigger: ${draft.name}`);
+    // A missing HQ_EMAIL or a failed HQ send must NOT abort the intake: the customer
+    // acknowledgement, the dedup tag, the intake timestamp and the spec copy all used to be
+    // skipped along with it, so one Resend hiccup left the draft looking untouched.
     const hqEmail = process.env.HQ_EMAIL;
-    if (!hqEmail) {
-      console.warn(`⚠️  HQ_EMAIL not set — skipping intake email for ${draft.name}`);
-      return;
-    }
+    if (!hqEmail) console.warn(`⚠️  HQ_EMAIL not set — no HQ intake email for ${draft.name}`);
     const shopifyToken    = await getShopifyToken();
     const customerName    = draft.billing_address?.name || draft.email;
     const customerEmail   = draft.email;
@@ -278,16 +301,19 @@ async function handleRepairDraftUpdate(incomingDraft, getShopifyToken, assignRep
     const serverUrl       = process.env.SERVER_URL || 'https://timanti-middleware.fly.dev';
     const approveUrl      = `${serverUrl}/repairs/set-estimate?d=${draft.id}&t=${hmacToken}`;
 
-    try {
-      await repairSendEmail({
-        to:      hqEmail,
-        cc:      process.env.HQ_CC_EMAIL,
-        subject: `New Repair Intake — ${draft.name} — ${customerName}`,
-        html:    buildRepairIntakeHtml({ customerName, customerEmail, customerPhone, draftRef: draft.name, itemDesc, notes, approveUrl })
-      });
-    } catch (err) {
-      console.error(`❌ Intake HQ email failed for ${draft.name}:`, err.message);
-      return;
+    let hqEmailFailed = !hqEmail;
+    if (hqEmail) {
+      try {
+        await repairSendEmail({
+          to:      hqEmail,
+          cc:      process.env.HQ_CC_EMAIL,
+          subject: `New Repair Intake — ${draft.name} — ${customerName}`,
+          html:    buildRepairIntakeHtml({ customerName, customerEmail, customerPhone, draftRef: draft.name, itemDesc, notes, approveUrl })
+        });
+      } catch (err) {
+        hqEmailFailed = true;
+        console.error(`❌ Intake HQ email failed for ${draft.name}:`, err.message);
+      }
     }
 
     if (customerEmail) {
@@ -302,12 +328,18 @@ async function handleRepairDraftUpdate(incomingDraft, getShopifyToken, assignRep
       }
     }
 
-    await updateDraftOrderTags(draft.id, [...tags, 'repair-hq-notified'], shopifyToken);
+    // Tag regardless, so the customer is never acknowledged twice. When the HQ leg failed nobody
+    // holds the set-estimate link, so surface that in admin instead of losing it to the logs.
+    const intakeTags = [...tags, 'repair-hq-notified'];
+    if (hqEmailFailed) intakeTags.push('repair-hq-email-failed');
+    await updateDraftOrderTags(draft.id, intakeTags, shopifyToken);
     await writeDraftOrderMetafields(draft.id, { repair_intake_at: new Date().toISOString() }, shopifyToken);
     await fetchAndCopyOriginalOrderSpecs(draft, shopifyToken);
     // NOTE: serial is NOT minted at intake (v2). It mints only at repair-complete, and never
     // for free repairs — so abandoned/free intakes never burn a number. See Trigger 3 below.
-    console.log(`✅ Repair intake: HQ notified + customer ack sent: ${draft.name}`);
+    console.log(hqEmailFailed
+      ? `⚠️  Repair intake: customer ack sent but HQ NOT notified — nobody holds the estimate link for ${draft.name}`
+      : `✅ Repair intake: HQ notified + customer ack sent: ${draft.name}`);
     return;
   }
 

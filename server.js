@@ -3051,24 +3051,30 @@ app.post('/api/shopify-draft-updated', async (req, res) => {
     );
     if (needsHydration) await handleDraftCreated(draft);
 
-    // Tag-based handlers (fire independently, each removes its own tag)
-    await handleSendLinkTag(draft);
-    await handleCashPaymentTag(draft);
-    await handleRecalculatePriceTag(draft, { force: false });
-    await handleRecalculatePriceTag(draft, { force: true });
-    await handleWeightedDocReprice(draft);      // memo-custom / transfer weighted pricing (before serial + net-to-collect)
-    await handleAdvanceCapture(draft);          // CAD: stamp advance metafields once a payment lands
-    await handleAdvanceRedeem(draft);           // CAD: apply a referenced advance (Path B), gates + refs
-    await handleApplyVoucherTag(draft);         // admin action: apply-voucher:<code> → redeem from ledger
-    await handleApplyExcTag(draft);             // admin action: apply-exc:<number> → redeem exchange note from ledger
-    await handleApplyDiscountTag(draft);        // admin action: apply-discount:<code>|custom → dia-only pre-tax discount (drops reprice)
-    await handleRepairDraftUpdate(draft, getShopifyToken, assignRepairSerial);
-    await handleDocumentSerialTags(draft);      // PO/memo/transfer tags added after creation
+    // Tag-based handlers (fire independently, each removes its own tag).
+    // Each is isolated: these handlers are unrelated to one another, so a throw in an early one
+    // must not silently skip every handler after it. Order is still preserved.
+    const step = async (name, fn) => {
+      try { await fn(); }
+      catch (err) { console.error(`Draft updated webhook — ${name} failed for #${draft.name}:`, err.message); }
+    };
+    await step('send-link',        () => handleSendLinkTag(draft));
+    await step('cash-payment',     () => handleCashPaymentTag(draft));
+    await step('recalc-price',     () => handleRecalculatePriceTag(draft, { force: false }));
+    await step('recalc-price+force', () => handleRecalculatePriceTag(draft, { force: true }));
+    await step('weighted-reprice', () => handleWeightedDocReprice(draft));   // memo-custom / transfer weighted pricing (before serial + net-to-collect)
+    await step('advance-capture',  () => handleAdvanceCapture(draft));       // CAD: stamp advance metafields once a payment lands
+    await step('advance-redeem',   () => handleAdvanceRedeem(draft));        // CAD: apply a referenced advance (Path B), gates + refs
+    await step('apply-voucher',    () => handleApplyVoucherTag(draft));      // admin action: apply-voucher:<code> → redeem from ledger
+    await step('apply-exc',        () => handleApplyExcTag(draft));          // admin action: apply-exc:<number> → redeem exchange note from ledger
+    await step('apply-discount',   () => handleApplyDiscountTag(draft));     // admin action: apply-discount:<code>|custom → dia-only pre-tax discount (drops reprice)
+    await step('repairs',          () => handleRepairDraftUpdate(draft, getShopifyToken, assignRepairSerial));
+    await step('document-serial',  () => handleDocumentSerialTags(draft));   // PO/memo/transfer tags added after creation
     // Balance ordering matters: net-to-collect must be recomputed AFTER every adjustment above
     // (voucher / advance / exchange / old-gold), and amount_pending is DERIVED off that fresh net —
     // so the payment sync runs LAST. (Previously it ran before the adjustments, leaving pending stale.)
-    await syncAmountToCollect(draft);           // recompute net-to-collect after ALL adjustments above
-    await handlePaymentMetafieldSync(draft);    // derive amount_pending off the FRESH net (must run last)
+    await step('sync-net',         () => syncAmountToCollect(draft));        // recompute net-to-collect after ALL adjustments above
+    await step('payment-sync',     () => handlePaymentMetafieldSync(draft)); // derive amount_pending off the FRESH net (must run last)
 
     console.log(`Draft updated webhook: #${draft.name} — tag handlers complete`);
   } catch (err) {
