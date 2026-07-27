@@ -4842,25 +4842,36 @@ app.post('/api/exc-email', async (req, res) => {
 });
 
 // Resolves a draft-order reference to a numeric id. Accepts a numeric id (passed through) or a
-// draft name like "#D123" / "D123" (resolved via GraphQL — REST draft_orders can't filter by name).
+// draft name like "#D123" / "D123" / "d123" (REST draft_orders can't filter by name, so we scan).
+//
+// Matching is EXACT but NORMALISED — case-insensitive, tolerant of a missing/extra "#" and of stray
+// spaces. GraphQL's `name:` search is fuzzy and unreliable with "#" (it matched "#D1" for "#D139"),
+// so we compare ourselves; but a literal `===` was too strict the other way — staff type "d186",
+// Shopify stores "#D186", and the apply died as `draft "d186" not found` with nothing else logged.
+//
+// Scans OPEN first, then INVOICE_SENT: a draft whose invoice has already been emailed is still a
+// draft and is a legitimate target for an exchange note / voucher. Only `completed` (already a real
+// order) is excluded — credits must be applied before conversion.
 async function resolveDraftId(ref, token) {
   const raw = String(ref || '').trim();
   if (!raw) return null;
   if (/^\d+$/.test(raw)) return raw;
-  const name = raw.startsWith('#') ? raw : '#' + raw;
-  // GraphQL name: search is fuzzy/unreliable with "#" (it matched "#D1" for "#D139"). Scan OPEN
-  // drafts via REST and EXACT-match the name — deterministic. Exchange targets are always open.
+  const norm = (s) => String(s || '').replace(/\s+/g, '').replace(/^#/, '').toUpperCase();
+  const want = norm(raw);
+  if (!want) return null;
   const headers = { 'X-Shopify-Access-Token': token };
-  let url = `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders.json?limit=250&status=open`;
-  let node = null;
-  while (url && !node) {
-    const resp = await axios.get(url, { headers, timeout: 30000 });
-    node = (resp.data.draft_orders || []).find(d => d.name === name) || null;
-    const link = resp.headers['link'] || '';
-    const m = link.match(/<([^>]*page_info=[^>&"]+[^>]*)>;\s*rel="next"/);
-    url = (!node && m) ? m[1] : null;
+  for (const status of ['open', 'invoice_sent']) {
+    let url = `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders.json?limit=250&status=${status}`;
+    while (url) {
+      const resp = await axios.get(url, { headers, timeout: 30000 });
+      const node = (resp.data.draft_orders || []).find(d => norm(d.name) === want);
+      if (node) return String(node.id).split('/').pop();
+      const link = resp.headers['link'] || '';
+      const m = link.match(/<([^>]*page_info=[^>&"]+[^>]*)>;\s*rel="next"/);
+      url = m ? m[1] : null;
+    }
   }
-  return node ? String(node.id).split('/').pop() : null;
+  return null;
 }
 
 // Maps a Shopify REST draft line item back to the gqlSetDraftLineItems input shape (verbatim
@@ -5070,10 +5081,26 @@ app.post('/api/voucher-redeem', async (req, res) => {
     const draft = data.draft_order;
     if (!draft) return res.status(404).json({ success: false, error: `draft ${newDraftId} not found` });
 
-    // Idempotency: bail if the voucher metafield is already set (Apps Script retry-safe).
-    const alreadySet = (mfData.metafields || []).some(m =>
-      m.namespace === 'custom' && m.key === 'voucher_value' && parseFloat(m.value) > 0);
-    if (alreadySet) return res.json({ success: true, alreadyApplied: true, draftId: newDraftId, vchNumber });
+    // Idempotency, code-AWARE — mirrors the guard in handleApplyVoucherTag. A blind `voucher_value > 0`
+    // test is blind to WHICH voucher sits on the draft: re-posting a DIFFERENT code returned success
+    // while the metafield still held the first voucher's value, so the draft claimed a voucher it had
+    // never deducted and the second one stayed 'open' in the ledger. Same code → idempotent no-op (the
+    // Apps Script may retry). Different code → refuse and name the incumbent. Read the code from the
+    // METAFIELD first (it survives draft→order conversion); fall back to the tag for older drafts.
+    const mfStr = (key) => {
+      const m = (mfData.metafields || []).find(x => x.namespace === 'custom' && x.key === key);
+      return m ? String(m.value || '').trim() : '';
+    };
+    if ((mfData.metafields || []).some(m => m.namespace === 'custom' && m.key === 'voucher_value' && parseFloat(m.value) > 0)) {
+      const appliedCode = mfStr('voucher_code') ||
+        (draft.tags || '').split(',').map(t => t.trim())
+          .map(t => /^vch-num:/i.test(t) ? t.slice(t.indexOf(':') + 1).trim() : null).find(Boolean) || '';
+      if (!appliedCode || appliedCode.toUpperCase() === String(vchNumber).trim().toUpperCase()) {
+        return res.json({ success: true, alreadyApplied: true, draftId: newDraftId, vchNumber });
+      }
+      return res.status(409).json({ success: false,
+        error: `draft ${draft.name || newDraftId} already has voucher ${appliedCode} applied — remove that one first` });
+    }
 
     // Validity + single-use gate against the ledger. If the voucher was recorded at issue, enforce it's
     // still open and unexpired; a redemption on a DIFFERENT draft is rejected (single-use). No ledger
@@ -5089,6 +5116,14 @@ app.post('/api/voucher-redeem', async (req, res) => {
           return res.status(409).json({ success: false, error: `voucher ${vchNumber} expired` });
         if (inst.status === 'redeemed' && String(inst.target_draft_id || '') !== String(newDraftId))
           return res.status(409).json({ success: false, error: `voucher ${vchNumber} already redeemed on ${inst.target_order_name || inst.target_draft_id || 'another order'}` });
+        // Applied to a DIFFERENT draft → latest-one-wins, the same rule the admin tag path follows:
+        // strip it off that draft (metafields + tags + net recompute) so it can never be live on two
+        // drafts at once. The apply() below re-points the ledger row at this draft. A voucher is only
+        // untouchable once REDEEMED (draft converted), which the check above already rejects.
+        if (inst.status === 'applied' && inst.target_draft_id && String(inst.target_draft_id) !== String(newDraftId)) {
+          try { await stripInstrumentFromDraft(inst.target_draft_id, 'voucher', token); }
+          catch (e) { console.error(`[voucher-redeem] strip prior draft ${inst.target_draft_id}:`, e.message); }
+        }
       }
     } catch (e) { console.error('[voucher-redeem] ledger check:', e.message); }
 
@@ -5100,7 +5135,11 @@ app.post('/api/voucher-redeem', async (req, res) => {
     // syncAmountToCollect re-derives the canonical value — incl. advance — on the next draft edit).
     const adjustments  = Math.abs(value) + mfVal('exchange_note_value') + mfVal('old_gold_value');
     const netToCollect = Math.max(0, parseFloat(draft.total_price || 0) - adjustments).toFixed(2);
+    // voucher_code rides alongside the value (same as the admin tag path) so the applied instrument is
+    // identifiable from the metafields alone: the admin app renders it, the code-aware guard above
+    // reads it, and unlike a tag it survives draft→order conversion so invoices can print it.
     await updateDraftOrderMetafields(newDraftId, {
+      voucher_code:           String(vchNumber).trim(),
       voucher_value:          Math.abs(value).toFixed(2),
       amount_to_be_collected: netToCollect,
     });

@@ -35,7 +35,19 @@ const STORE_CODE      = 'KA-HSR';   // issuing store fallback when STORE_CODE_CE
 
 // ── CONTROLS (top block, rows 1-14) ──
 const DOCTYPE_CELL     = 'B4';   // dropdown: Voucher | Exchange Note        (label A4)
-const NEWDRAFT_CELL    = 'B6';   // new sale's draft/order # (Exchange Note)  (label A6)
+// New sale's draft # (label A6). Applies to BOTH document types: REQUIRED for an Exchange Note
+// (which is nothing but a deduction on that invoice) and OPTIONAL for a Voucher (valid standalone
+// store credit — fill this in only to spend it on the sale you're ringing up right now).
+const NEWDRAFT_CELL    = 'B6';
+// Single source of truth for the A6 label, so the fresh build, the migration and the one-time
+// doc-type setup can never drift apart. The legacy string is still accepted by the safety guard.
+const NEWDRAFT_LABEL        = 'New Draft/Order # (optional for Voucher)';
+const NEWDRAFT_LABEL_LEGACY = 'New Draft/Order # (Exchange Note only)';
+const NEWDRAFT_NOTE    = 'Draft order number for the sale being rung up, e.g. #D123.\n\n' +
+                         '• Exchange Note — REQUIRED. The exchange value is deducted from that invoice.\n' +
+                         '• Voucher — OPTIONAL. Leave blank to issue store credit the customer spends later; ' +
+                         'fill it in to also apply the voucher to that draft now (it is deducted after tax ' +
+                         'and its online discount code is cancelled so it cannot be spent twice).';
 const STORE_CODE_CELL  = 'B5';   // staff-set issuing store, overrides STORE_CODE when non-blank (label A5)
 const SOURCE_CELL          = 'B2';   // dropdown: Purchase Exchange | Old Gold   (label A2)
 const EXCHTYPE_CELL        = 'B3';   // dropdown: Deduction | Full Value         (label A3)
@@ -83,6 +95,40 @@ const EXCHANGE_LOG    = 'Exchange Log';  // new tab for Exchange Notes
 // layout constants instead of hardcoding rows.
 function cellRow_(a1) { return Number(String(a1).replace(/^[A-Z]+/, '')); }
 
+// Label + note + gray-out state for NEWDRAFT_CELL, in ONE idempotent place. Called by the fresh
+// build, the in-place migration, the one-time doc-type setup and the standalone menu item, so an
+// existing live sheet can be brought up to date WITHOUT a destructive rebuild (a rebuild clears
+// every staff input on the tab).
+//
+// The gray-out rule is REMOVED here, never re-added. Earlier versions grayed this cell whenever
+// Document Type = Voucher, because only the Exchange Note read it — and a conditional format
+// SURVIVES a rebuild (the builders clear content and validations, not format rules), so without
+// this the cell would keep reading as "don't fill this in" long after vouchers could use it.
+function refreshNewDraftField_(calc) {
+  var r = calc.getRange(NEWDRAFT_CELL);
+  calc.getRange(r.getRow(), r.getColumn() - 1).setValue(NEWDRAFT_LABEL);
+  r.setNote(NEWDRAFT_NOTE);
+  calc.setConditionalFormatRules(calc.getConditionalFormatRules().filter(function (rule) {
+    return !rule.getRanges().some(function (g) { return g.getA1Notation() === r.getA1Notation(); });
+  }));
+}
+
+// Menu-visible wrapper: brings an EXISTING sheet up to date after the script is re-pasted, without
+// touching any data. This is the only step a live sheet needs for the "apply a voucher to a draft"
+// change — everything else is script behaviour.
+function refreshNewDraftField() {
+  var calc = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CALC_SHEET_NAME);
+  var ui   = SpreadsheetApp.getUi();
+  if (!calc) { ui.alert('Sheet "' + CALC_SHEET_NAME + '" not found.'); return; }
+  refreshNewDraftField_(calc);
+  ui.alert('✅ ' + NEWDRAFT_CELL + ' is ready for both document types.\n\n' +
+           'Label: ' + NEWDRAFT_LABEL + '\n' +
+           'The old "grays out for Voucher" highlight has been removed.\n\n' +
+           'Exchange Note → still required.\n' +
+           'Voucher → optional: fill it in to spend the voucher on that draft as it is issued, ' +
+           'or leave it blank to issue standalone store credit.');
+}
+
 // ── MENU ─────────────────────────────────────────────────────────────────────
 function onOpen() {
   SpreadsheetApp.getUi()
@@ -97,6 +143,7 @@ function onOpen() {
     .addSeparator()
     .addItem('🏗️  Rebuild calculator (fresh, controls on top)', 'buildExchangeCalculator')
     .addItem('🔧  Restructure existing sheet (migrate in place)', 'restructureControlsToTop')
+    .addItem('🔤  Refresh "New Draft #" field (no data touched)', 'refreshNewDraftField')
     .addItem('⚙️  Setup Auto-fill Triggers', 'setupTriggers')
     .addItem('🗑️  Remove Auto-fill Triggers', 'removeTriggers')
     .addSeparator()
@@ -108,9 +155,11 @@ function onOpen() {
 }
 
 // One-time structural setup: builds the Document Type dropdown (DOCTYPE_CELL) + New Draft/Order #
-// field (NEWDRAFT_CELL), labels, default, help note, and a conditional format that grays the
-// New Draft cell when "Voucher" is selected.
+// field (NEWDRAFT_CELL), labels, default and help note.
 // Safe to re-run (idempotent). Also creates the Voucher Log / Exchange Log tabs if missing.
+// NOTE: this used to gray the New Draft cell out whenever "Voucher" was selected, because only the
+// Exchange Note read it. A voucher can now be applied to a draft too, so the cell is live for both
+// document types and any leftover gray-out rule is removed on re-run.
 function setupDocTypeFields() {
   var ss   = SpreadsheetApp.getActiveSpreadsheet();
   var calc = ss.getSheetByName(CALC_SHEET_NAME);
@@ -124,8 +173,9 @@ function setupDocTypeFields() {
   // something that isn't ours. Protects the live sheet even if the row guess is off.
   var docLabelRange = calc.getRange(docTypeRange.getRow(),  docTypeRange.getColumn()  - 1);
   var drfLabelRange = calc.getRange(newDraftRange.getRow(), newDraftRange.getColumn() - 1);
-  var ours = { 'Document Type': 1, 'Voucher': 1, 'Exchange Note': 1,
-               'New Draft/Order # (Exchange Note only)': 1 };
+  var ours = { 'Document Type': 1, 'Voucher': 1, 'Exchange Note': 1 };
+  ours[NEWDRAFT_LABEL] = 1;
+  ours[NEWDRAFT_LABEL_LEGACY] = 1;   // sheets built before the voucher could be applied to a draft
   var blocked = [docLabelRange, docTypeRange, drfLabelRange, newDraftRange].filter(function (r) {
     var v = String(r.getValue()).trim();
     return v !== '' && !ours[v];
@@ -137,9 +187,9 @@ function setupDocTypeFields() {
     return;
   }
 
-  // Labels in the column immediately left of each field.
-  calc.getRange(docTypeRange.getRow(),  docTypeRange.getColumn()  - 1).setValue('Document Type');
-  calc.getRange(newDraftRange.getRow(), newDraftRange.getColumn() - 1).setValue('New Draft/Order # (Exchange Note only)');
+  // Labels in the column immediately left of each field. (NEWDRAFT_CELL's label, note and gray-out
+  // state are owned by refreshNewDraftField_, called below.)
+  calc.getRange(docTypeRange.getRow(), docTypeRange.getColumn() - 1).setValue('Document Type');
 
   // Dropdown on the Document Type cell.
   var rule = SpreadsheetApp.newDataValidation()
@@ -150,20 +200,7 @@ function setupDocTypeFields() {
   docTypeRange.setDataValidation(rule);
   if (!String(docTypeRange.getValue()).trim()) docTypeRange.setValue('Voucher');
 
-  newDraftRange.setNote('Only for Exchange Note. Enter the new sale\'s draft order number (e.g. #D123) — the exchange value is deducted from that invoice.');
-
-  // Gray out the New Draft cell whenever the doc type is Voucher (visual "not needed" cue).
-  var keep = calc.getConditionalFormatRules().filter(function (r) {
-    var rngs = r.getRanges();
-    return !rngs.some(function (g) { return g.getA1Notation() === newDraftRange.getA1Notation(); });
-  });
-  var absDocType = docTypeRange.getA1Notation().replace(/([A-Z]+)(\d+)/, '$$$1$$$2'); // B37 → $B$37
-  keep.push(SpreadsheetApp.newConditionalFormatRule()
-    .whenFormulaSatisfied('=' + absDocType + '="Voucher"')
-    .setBackground('#efefef')
-    .setRanges([newDraftRange])
-    .build());
-  calc.setConditionalFormatRules(keep);
+  refreshNewDraftField_(calc);
 
   // Ensure log tabs exist.
   if (!ss.getSheetByName(VOUCHER_LOG)) {
@@ -178,7 +215,7 @@ function setupDocTypeFields() {
 
   ui.alert('Document Type fields ready:\n\n' +
     '• ' + DOCTYPE_CELL + ' — dropdown (Voucher / Exchange Note), default Voucher\n' +
-    '• ' + NEWDRAFT_CELL + ' — New Draft/Order # (grays out for Voucher)\n\n' +
+    '• ' + NEWDRAFT_CELL + ' — New Draft/Order # (required for Exchange Note, optional for Voucher)\n\n' +
     'Tabs: "' + VOUCHER_LOG + '" and "' + EXCHANGE_LOG + '" are present.');
 }
 
@@ -738,6 +775,13 @@ function createVoucher_() {
              'It will fail to apply from the admin app ("not found"). Re-run once the middleware is reachable.');
   }
 
+  // Optionally spend the voucher on the sale being rung up right now — the voucher twin of what
+  // createExchangeNote_ has always done. NEWDRAFT_CELL used to be read ONLY by the exchange-note
+  // path, so a staff member who typed a draft number and left Document Type on "Voucher" got a
+  // voucher that silently deducted nothing from that draft and no error anywhere. Blank is still
+  // the normal case: a voucher is valid standalone store credit, spent later from the admin app.
+  const applyRes = applyVoucherIfDraftGiven_(calc, cnNum, netCredit, orderNumber, customerName);
+
   // Internal cn-* tag names kept unchanged so the existing OPP print template renders untouched.
   if (orderId) {
     addOrderTags(orderId, [
@@ -753,16 +797,17 @@ function createVoucher_() {
 
   // Last column (M) holds the Shopify price_rule_id so a later Void can delete the discount.
   log.appendRow([issued, cnNum, orderNumber, customerName, customerEmail,
-                 netWt, diaWt, goldVal, diaVal, netCredit, expiryFmt, 'Issued', String(priceRuleId)]);
+                 netWt, diaWt, goldVal, diaVal, netCredit, expiryFmt, applyRes.status, String(priceRuleId)]);
 
   sendVoucherEmail_(customerName, customerEmail, cnNum, netCredit, expiryFmt, orderNumber);
 
   ui.alert(
-    '✅ Voucher Created\n\n' +
+    (applyRes.error ? '⚠️ Voucher Created — but NOT applied\n\n' : '✅ Voucher Created\n\n') +
     'Voucher: ' + cnNum + '\n' +
     'Discount Code: ' + cnNum + '\n' +
     'Value: ₹' + netCredit.toLocaleString('en-IN', { minimumFractionDigits: 2 }) + '\n' +
     'Valid Until: ' + expiryFmt + ' (1 year)\n\n' +
+    applyRes.message +
     'Order ' + orderNumber + ' tagged. ' +
     (SEND_CUSTOMER_EMAILS ? 'Email sent to ' + customerEmail + '.' : '✉️ Email SUPPRESSED (test mode).')
   );
@@ -851,20 +896,25 @@ function createOldGoldVoucher_() {
     ui.alert('⚠️ ' + cnNum + ' created in Shopify but NOT recorded in the ledger. It will fail to apply. Re-run when the middleware is reachable.');
   }
 
+  // Same optional "spend it on this sale now" step as createVoucher_. Old gold has no originating
+  // order, so nothing is passed as the linkage reference — the draft gets vch-applied / vch-num only.
+  const applyRes = applyVoucherIfDraftGiven_(calc, cnNum, value, '', custNm);
+
   // Log columns match the Voucher Log header; old-gold specifics go in the weight/gold-value slots.
   log.appendRow([issued, cnNum, 'OLD-GOLD', custNm, calc.getRange(CUST_EMAIL_CELL).getValue(),
-                 weight, 0, value, 0, value, expiryFmt, 'Issued', String(priceRuleId), reason]);
+                 weight, 0, value, 0, value, expiryFmt, applyRes.status, String(priceRuleId), reason]);
 
   sendVoucherEmail_(custNm, calc.getRange(CUST_EMAIL_CELL).getValue(), cnNum, value, expiryFmt, 'OLD-GOLD');
 
   ui.alert(
-    '✅ Old-Gold Voucher Created\n\n' +
+    (applyRes.error ? '⚠️ Old-Gold Voucher Created — but NOT applied\n\n' : '✅ Old-Gold Voucher Created\n\n') +
     'Voucher: ' + cnNum + '\n' +
     'Customer: ' + custNm + ' (id ' + custId + ')\n' +
     'Old gold: ' + weight.toFixed(3) + ' g @ ' + purity + 'kt × ₹' + rate.toFixed(2) + '/g\n' +
     'Value: ₹' + value.toLocaleString('en-IN', { minimumFractionDigits: 2 }) +
     (reason ? '  (override: ' + reason + ')' : '') + '\n' +
     'Valid Until: ' + expiryFmt + ' (1 year)\n\n' +
+    applyRes.message +
     (SEND_CUSTOMER_EMAILS ? 'Email sent.' : '✉️ Email SUPPRESSED (test mode).')
   );
 }
@@ -955,7 +1005,7 @@ function buildExchangeCalculator() {
   label(EXCHTYPE_CELL, 'Exchange Type');     drop(EXCHTYPE_CELL, ['Deduction', 'Full Value'],       'Deduction');
   label(DOCTYPE_CELL,  'Document Type');     drop(DOCTYPE_CELL,  ['Voucher', 'Exchange Note'],       'Voucher');
   label(STORE_CODE_CELL, 'Store Code');      drop(STORE_CODE_CELL, ['KA-HSR', 'KA-TEST'], 'KA-HSR');
-  label(NEWDRAFT_CELL, 'New Draft/Order # (Exchange Note only)');
+  refreshNewDraftField_(calc);               // label + note + clears any legacy gray-out rule
   header(cellRow_(OG_CUSTOMER_CELL) - 1, '— OLD GOLD  (only when Source = Old Gold) —');
   label(OG_CUSTOMER_CELL, 'Old Gold — Customer phone/email');
   label(OG_CUSTID_CELL,   'Old Gold — Customer (auto)');
@@ -1066,7 +1116,7 @@ function restructureControlsToTop() {
   put(EXCHTYPE_CELL,      'Exchange Type', { list: ['Deduction', 'Full Value'],       def: 'Deduction' });
   put(DOCTYPE_CELL,       'Document Type', { list: ['Voucher', 'Exchange Note'],       def: 'Voucher' });
   put(STORE_CODE_CELL,    'Store Code',    { note: 'Issuing store, e.g. KA-HSR or KA-TEST. Blank = ' + STORE_CODE });
-  put(NEWDRAFT_CELL,      'New Draft/Order # (Exchange Note only)', { note: 'Ring up the new item as a draft first, then enter e.g. #D123.' });
+  refreshNewDraftField_(calc);   // label + note + clears any legacy gray-out rule
   calc.getRange(cellRow_(OG_CUSTOMER_CELL) - 1, 1).setValue('— OLD GOLD  (only when Source = Old Gold) —');
   put(OG_CUSTOMER_CELL,     'Old Gold — Customer phone/email', { note: 'Then run "Look up Old-Gold customer" (or just type — it auto-resolves).' });
   put(OG_CUSTID_CELL,       'Old Gold — Customer (auto)');
@@ -1295,6 +1345,67 @@ function applyExchangeNote_(newDraftRef, excNum, excValue, oldOrder, customerNam
   } catch (e) {
     return { success: false, error: e.message };
   }
+}
+
+// Applies a Voucher to a new sale's draft via the middleware — the voucher twin of applyExchangeNote_.
+// /api/voucher-redeem records it POST-tax in custom.voucher_value + custom.voucher_code (the draft
+// TOTAL stays full; amount_to_be_collected carries the deduction), tags the draft vch-applied /
+// vch-num:<code>, moves the ledger row to 'applied', and DELETES the online discount code so the same
+// voucher can't also be spent at checkout. Returns the parsed JSON or { success:false, error }.
+function applyVoucherToDraft_(newDraftRef, vchNumber, vchValue, oldOrder, customerName) {
+  try {
+    var res = UrlFetchApp.fetch(MIDDLEWARE_URL + '/api/voucher-redeem', {
+      method:             'post',
+      contentType:        'application/json',
+      muteHttpExceptions: true,
+      payload:            JSON.stringify({
+        newDraftRef:    newDraftRef,
+        vchNumber:      vchNumber,
+        vchValue:       vchValue,
+        oldOrderNumber: oldOrder,
+        customerName:   customerName
+      })
+    });
+    var body = {};
+    try { body = JSON.parse(res.getContentText()); } catch (e) {}
+    if (res.getResponseCode() !== 200) {
+      return { success: false, error: (body && body.error) || ('middleware ' + res.getResponseCode()) };
+    }
+    return body;
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+}
+
+// Shared tail for both voucher flows: if NEWDRAFT_CELL holds a draft ref, apply the freshly issued
+// voucher to it. Returns { status, message, error } for the Voucher Log's Status column and the
+// closing alert. A failure here NEVER discards the voucher — it exists in Shopify and the ledger
+// either way, so we surface the reason and leave it open to apply from the admin app.
+function applyVoucherIfDraftGiven_(calc, vchNumber, vchValue, oldOrder, customerName) {
+  var ref = String(calc.getRange(NEWDRAFT_CELL).getValue()).trim();
+  if (!ref) {
+    return { status: 'Issued', error: '',
+             message: 'Not applied to any draft — it is store credit the customer can spend later.\n\n' };
+  }
+  var name = ref.charAt(0) === '#' ? ref : ('#' + ref);
+  var out  = applyVoucherToDraft_(ref, vchNumber, vchValue, oldOrder, customerName);
+  if (out && out.success) {
+    // Report what the middleware actually did. onlineCodeKilled is false when the ledger row carries
+    // no price_rule_id (or the delete failed) — claiming otherwise would hide a live double-spend risk.
+    return { status: 'Issued + Applied ' + name, error: '',
+             message: (out.alreadyApplied ? 'Already applied to ' : 'Applied to ') + name + ' — ₹' +
+                      Number(vchValue).toLocaleString('en-IN', { minimumFractionDigits: 2 }) +
+                      ' deducted after tax.\n' +
+                      (out.onlineCodeKilled
+                         ? 'Its online discount code was cancelled — it cannot also be used at checkout.\n\n'
+                         : '⚠️ Its online discount code is STILL LIVE — cancel ' + vchNumber +
+                           ' under Discounts if the customer could also use it online.\n\n') };
+  }
+  var why = (out && out.error) || 'middleware error';
+  return { status: 'Issued (apply failed)', error: why,
+           message: 'Could NOT apply it to ' + name + ':\n  ' + why + '\n\n' +
+                    'The voucher is valid and still open — check the draft number and apply it from the\n' +
+                    'Shopify admin app (Adjustments → Voucher → paste ' + vchNumber + ').\n\n' };
 }
 
 // ── SERIAL — central counter via middleware ───────────────────────────────────
