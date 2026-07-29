@@ -1686,6 +1686,58 @@ function resolveDiscount({ kind, mode, rate, lines }) {
   return { perLine, total };
 }
 
+// Per-line, stackable discounts entered per line item. Stored on the draft as custom.line_discounts —
+// a JSON array indexed by product-line position; each element is an array of entries. An empty array /
+// null for a line means "no per-line discount" so the caller falls back to the order-level discount
+// (per-line replaces order-level). Tolerant of bad/empty JSON.
+//   entry = { t, m, v, src? }
+//     t (target): "dia" (diamond) | "mk" (making) | "total" (whole tax-inclusive product price)
+//     m (mode):   "pct" | "flat"
+//     v (value):  percent, or rupees (pre-tax for dia/mk which are already pre-tax; the "total" target
+//                 is a tax-inclusive figure and is converted to pre-tax by ÷1.03 here)
+//     src:        "native" for captured Shopify collection/code discounts (informational; treated same)
+function parseLineDiscounts(raw) {
+  if (!raw) return [];
+  try {
+    const arr = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    return Array.isArray(arr) ? arr : [];
+  } catch { return []; }
+}
+
+// Resolve one line's stacked per-line discounts to PRE-TAX rupees, split by target and each capped at the
+// base it lands on — dia ≤ diamond, mk ≤ making, total ≤ line taxable — so no component and no line can go
+// negative. "total" entries (native collection/order discounts, which are on the tax-inclusive product
+// price) are divided by 1.03 to reach pre-tax, matching every downstream reader. Returns null when the
+// line carries no entries, signalling the caller to use the order-level discount instead.
+//   base: { diamond, making, grossIncl } — PRE-discount component values, and the tax-inclusive line total.
+// Returns { total, diaPortion, mkPortion, totalPortion } in pre-tax Rs.
+function resolveLineDiscount(entries, { diamond = 0, making = 0, grossIncl = 0 }) {
+  if (!Array.isArray(entries) || entries.length === 0) return null;
+  const taxable = grossIncl / 1.03;
+  let diaCut = 0, mkCut = 0, totCut = 0;
+  for (const e of entries) {
+    if (!e) continue;
+    const v = Math.abs(parseFloat(e.v) || 0);
+    if (!(v > 0)) continue;
+    const pct    = String(e.m || 'flat').toLowerCase() === 'pct';
+    const target = String(e.t || 'dia').toLowerCase();
+    if (target === 'mk' || target === 'making') {
+      mkCut  += pct ? (v / 100) * making  : v;
+    } else if (target === 'total' || target === 'line' || target === 'native') {
+      // On the tax-inclusive product price → convert the resulting rupees to pre-tax.
+      totCut += (pct ? (v / 100) * grossIncl : v) / 1.03;
+    } else {
+      diaCut += pct ? (v / 100) * diamond : v;
+    }
+  }
+  const diaPortion   = Math.min(diaCut, Math.max(0, diamond));
+  const mkPortion    = Math.min(mkCut,  Math.max(0, making));
+  const totalPortion = Math.min(totCut, Math.max(0, taxable));
+  // Final clamp: component + whole-line discounts together can't exceed the line's taxable value.
+  const total = Math.min(diaPortion + mkPortion + totalPortion, Math.max(0, taxable));
+  return { total, diaPortion, mkPortion, totalPortion };
+}
+
 // Read the stored discount intent off the draft's custom metafields. Falls back to the legacy
 // frozen-rupee field (discount_applied with no rate) so drafts discounted before the rate migration
 // still resolve — treated as a pre-tax flat amount, which is what that field always meant for custom.
@@ -1735,27 +1787,28 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
   const csvI = (key) => (mfMap[key] || '').split(',').map(s => { const i = parseInt(s.trim());  return isNaN(i) ? null : i; });
 
   // Gold rate override: custom.gold_rate on the draft overrides the locked per-item _gold_rate and
-  // bypasses the 5% threshold. It is POSITIONAL per product, comma-separated, for ANY number of items:
-  //   "9713,10200" → item[0]@9713/g, item[1]@10200/g. A SINGLE value applies to every product (back-compat).
-  //   A blank position (e.g. "9713,") leaves that item on its locked _gold_rate.
-  // Enter rates WITHOUT thousands separators (comma is the item delimiter).
+  // bypasses the 5% threshold. It is STRICTLY POSITIONAL per product, comma-separated:
+  //   "9713,10200" → item[0]@9713/g, item[1]@10200/g. A single value "9713" is item[0] ONLY (i.e. "9713,")
+  //   — it does NOT broadcast to every line; other positions fall back to their locked _gold_rate. This
+  //   matches every other positional field (net/gross weight, making): absence of a comma is not "apply to
+  //   all", it's "only the first item is set". Enter rates WITHOUT thousands separators (comma = delimiter).
   const goldRateArr = csvF('gold_rate');
   const goldRateForIdx = (idx) => {
     if (!goldRateArr.some(r => r && r > 0)) return null;
-    const r = goldRateArr.length === 1 ? goldRateArr[0] : (goldRateArr[idx] ?? null);
+    const r = goldRateArr[idx] ?? null;
     return (r && r > 0) ? r : null;
   };
 
   // Making (labour) override: custom.making sets a FLAT labour amount in Rs, replacing the variant's
-  // price_breakup_making. Same positional-CSV convention as gold_rate: "1900,2500" → item[0]=Rs1900,
-  // item[1]=Rs2500; a single value applies to every product; a blank position ("1900,") leaves that item
-  // on the variant spec. It is the whole labour for the line (already × qty) — not a per-gram rate and
-  // not per-unit — so it is used verbatim. 0 is a legitimate value (labour waived), which is why this
-  // returns null-vs-number rather than falsy-checking.
+  // price_breakup_making. STRICTLY POSITIONAL per product: "1900,2500" → item[0]=Rs1900, item[1]=Rs2500;
+  // a single value "1900" is item[0] ONLY (equivalent to "1900,") and does NOT broadcast — other positions
+  // fall back to the variant spec. A blank position ("1900,") leaves that item on the variant spec. It is
+  // the whole labour for the line (already × qty) — not a per-gram rate — so it is used verbatim. 0 is a
+  // legitimate value (labour waived), which is why this returns null-vs-number rather than falsy-checking.
   const makingArr = csvF('making');
   const makingForIdx = (idx) => {
     if (!makingArr.some(v => v !== null && v >= 0)) return null;
-    const v = makingArr.length === 1 ? makingArr[0] : (makingArr[idx] ?? null);
+    const v = makingArr[idx] ?? null;
     return (v !== null && v >= 0) ? v : null;
   };
 
@@ -1851,8 +1904,9 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
           if (netWt <= 0 && rateForItem) return null;
 
           const diaVal = parseFloat((iProps['Diamond'] || '').replace('Rs', '').trim()) || parseFloat(vMf.price_breakup_diamond || 0) * item.quantity;
-          // custom.making wins; else the variant spec; else whatever the line already carries. Flat either
-          // way — labour is never scaled by weight here (same rule as the weights path).
+          // custom.making wins; else whatever the line already carries; else the variant spec. Held flat
+          // here — this is the NO-WEIGHTS branch (staff changed only the gold rate or labour), so there is
+          // no new net weight to scale against. The weights path above is where labour scales per gram.
           const mkgVal = mkOverride != null
             ? mkOverride
             : (parseFloat((iProps['Making'] || iProps['Making Charges'] || '').replace('Rs', '').trim()) || parseFloat(vMf.price_breakup_making || 0) * item.quantity);
@@ -1860,7 +1914,10 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
           // Gold: recompute only when a rate was given; otherwise hold the locked value.
           const newGold = rateForItem ? r2(netWt * rateForItem) : r2(lockedGold);
           if (!(newGold > 0)) return null;
-          return { newPreTaxGross: r2(newGold + diaVal + mkgVal), newGold };
+          // newMaking is carried out so the Making PROP is rewritten to whatever fed the price math
+          // (custom.making override, else the held value). Without this the no-weights branch moved
+          // Taxable/Gross/price to the new labour but left the stale Making prop behind.
+          return { newPreTaxGross: r2(newGold + diaVal + mkgVal), newGold, newMaking: mkgVal };
         });
     const anyGoldRecalc = itemRecalc.some(r => r !== null);
 
@@ -1890,32 +1947,57 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
           lines: productItems.map((item, i) => ({ diamond: diaArr[i], grossIncl: r2(preTaxArr[i] * 1.03) })),
         })
       : { perLine: productItems.map(() => 0), total: 0 };
+    // Per-line, stackable discounts (dia / making / native-total) — same rule as the weights path: entries
+    // REPLACE the order-level share for a line, else it falls back to the diamond-prorated amount above.
+    // A per-line making discount needs the line's making value as its base, so resolve it here too.
+    const lineDiscArr   = parseLineDiscounts(mfMap['line_discounts']);
+    const makingBaseArr = productItems.map((item, idx) => {
+      const rc = itemRecalc[idx];
+      if (rc) return rc.newMaking || 0;
+      const iProps = {};
+      for (const p of (item.properties || [])) iProps[p.name] = p.value;
+      return parseFloat((iProps['Making'] || iProps['Making Charges'] || '').replace('Rs', '').trim())
+          || parseFloat((hydratedBase[idx].varMf || {}).price_breakup_making || 0) * (item.quantity || 1)
+          || 0;
+    });
+    const discFinalByIdx = productItems.map((item, idx) => {
+      const pl = resolveLineDiscount(lineDiscArr[idx], {
+        diamond: diaArr[idx] || 0, making: makingBaseArr[idx] || 0, grossIncl: r2(preTaxArr[idx] * 1.03),
+      });
+      if (pl) return { total: pl.total, dia: pl.diaPortion, mk: pl.mkPortion, tot: pl.totalPortion };
+      const ol = disc.perLine[idx] || 0;   // order-level fallback is diamond-only
+      return { total: ol, dia: ol, mk: 0, tot: 0 };
+    });
 
     const hydratedItems = productItems.map((item, idx) => {
       const h = hydratedBase[idx];
       // Same convention as the weights path: Gross Value is PRE-discount tax-inclusive,
       // Discount Applied is pre-tax rupees, Taxable = Gross/1.03 - Discount.
       const grossValue  = r2(preTaxArr[idx] * 1.03);
-      const itemDisc    = r2(disc.perLine[idx] || 0);
+      const df          = discFinalByIdx[idx] || { total: 0, dia: 0, mk: 0, tot: 0 };
+      const itemDisc    = r2(df.total);
       const itemTaxable = r2(Math.max(0, preTaxArr[idx] - itemDisc));
       const itemGst     = r2(itemTaxable * 0.03);
       const itemFinal   = r2(itemTaxable + itemGst);
       const unitPrice   = r2(itemFinal / (item.quantity || 1));
       // Strip financial fields; also strip Gold for this item when we have new gold data to replace it
       const thisItemRecalc = itemRecalc[idx];
-      const FINANCIAL   = new Set(['Taxable Value', 'GST', 'Gross Value', 'Discount Applied', 'Diamond (After Discount)', '_gold_rate', ...(thisItemRecalc ? ['Gold'] : [])]);
+      const FINANCIAL   = new Set(['Taxable Value', 'GST', 'Gross Value', 'Discount Applied', 'Diamond (After Discount)', 'Making (After Discount)', '_gold_rate', ...(thisItemRecalc ? ['Gold', 'Making'] : [])]);
       const filteredProps = h.properties.filter(p => !FINANCIAL.has(p.name));
       if (thisItemRecalc) {
-        filteredProps.push({ name: 'Gold', value: `Rs${thisItemRecalc.newGold.toFixed(2)}` });
+        filteredProps.push({ name: 'Gold',   value: `Rs${thisItemRecalc.newGold.toFixed(2)}` });
+        filteredProps.push({ name: 'Making', value: `Rs${thisItemRecalc.newMaking.toFixed(2)}` });
       }
-      // Post-discount diamond (diamond-only discount → Diamond − Discount Applied, clamped).
-      const diaAfterDisc = r2(Math.max(0, (diaArr[idx] || 0) - itemDisc));
+      // Post-discount component values (display only); only the target-matched portion reduces each.
+      const diaAfterDisc = r2(Math.max(0, (diaArr[idx] || 0) - df.dia));
+      const mkAfterDisc  = r2(Math.max(0, (makingBaseArr[idx] || 0) - df.mk));
       filteredProps.push(
         { name: 'Taxable Value',    value: `Rs${itemTaxable.toFixed(2)}` },
         { name: 'GST',             value: `Rs${itemGst.toFixed(2)}` },
         { name: 'Gross Value',      value: `Rs${grossValue.toFixed(2)}` },
         { name: 'Discount Applied', value: `Rs${itemDisc.toFixed(2)}` },
         { name: 'Diamond (After Discount)', value: `Rs${diaAfterDisc.toFixed(2)}` },
+        { name: 'Making (After Discount)',  value: `Rs${mkAfterDisc.toFixed(2)}` },
       );
       const idxRate = goldRateForIdx(idx);
       const effectiveRate = idxRate ? String(idxRate) : ((item.properties || []).find(p => p.name === '_gold_rate')?.value || h.properties.find(p => p.name === '_gold_rate')?.value || '');
@@ -1930,14 +2012,15 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
         ? { variant_id: h.variant_id, quantity: h.quantity, price: h.price, properties: h.properties, title: item.title }
         : { variant_id: item.variant_id || undefined, quantity: item.quantity, price: item.price, properties: item.properties || [], title: item.title };
     });
+    const appliedDiscountTotal = discFinalByIdx.reduce((s, d) => s + (d.total || 0), 0);
     await gqlSetDraftLineItems(draftOrderId, allUpdatedItems, token, { tags: tagsWithoutRecalc, clearDiscount: true });
-    console.log(`Draft ${draftOrderId}: reprice (no weights${anyGoldRecalc ? ', gold rate recalc' : ''}) — ${hydratedItems.length} items updated${discIntent ? `, discount Rs${disc.total.toFixed(2)}` : ''}`);
+    console.log(`Draft ${draftOrderId}: reprice (no weights${anyGoldRecalc ? ', gold rate recalc' : ''}) — ${hydratedItems.length} items updated${(discIntent || lineDiscArr.length) ? `, discount Rs${appliedDiscountTotal.toFixed(2)}` : ''}`);
 
-    if (discIntent) {
+    if (discIntent || lineDiscArr.length) {
       const prior = Math.abs(parseFloat(mfMap['discount_applied'] || 0)) || 0;
-      if (Math.abs(prior - disc.total) >= 0.01) {
-        await updateDraftOrderMetafields(draftOrderId, { discount_applied: disc.total.toFixed(2) });
-        console.log(`Draft ${draftOrderId}: discount re-resolved — was Rs${prior.toFixed(2)}, now Rs${disc.total.toFixed(2)} (${discIntent.kind}/${discIntent.mode} rate=${discIntent.rate})`);
+      if (Math.abs(prior - appliedDiscountTotal) >= 0.01) {
+        await updateDraftOrderMetafields(draftOrderId, { discount_applied: appliedDiscountTotal.toFixed(2) });
+        console.log(`Draft ${draftOrderId}: discount re-resolved — was Rs${prior.toFixed(2)}, now Rs${appliedDiscountTotal.toFixed(2)}`);
       }
     }
     return;
@@ -2004,20 +2087,30 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
     const perCtRate       = totalOldCts > 0 ? stoneRateBasis / totalOldCts : 0;
     const newDiamondValue = totalOldCts > 0 ? perCtRate * totalNewCts : stoneRateBasis;
 
-    // Making (labour) is FLAT — it does NOT scale with net weight. Labour is priced per piece, not per
-    // gram: a weight correction on the same design is the same bench work, so a reprice must not move it.
-    // (It previously scaled per-gram off the variant spec — price_breakup_making ÷ variant net weight ×
-    // entered net weight — so every weight tweak silently repriced labour.)
+    // Making (labour) is PER-GRAM — it scales with net weight, the same way gold does. Labour is quoted
+    // per gram of metal, so a heavier piece of the same design costs more to make.
+    //
+    // The per-gram rate ALWAYS comes from the variant design spec (price_breakup_making ÷ variant net
+    // weight), scaled to the entered net weight. Like the stone rate above, it is NEVER re-derived from
+    // the moving Making prop — doing so would compound the value on every reprice (÷ catalogue weight,
+    // × entered weight, again and again). Both sides of the ratio are put on a line-total basis (× qty)
+    // so the arithmetic is dimensionally consistent for multi-quantity lines.
     //
     // Precedence:
-    //   1. custom.making  — positional CSV override, per item ("1900,2500"), the staff-set labour amount
-    //   2. the variant design spec (price_breakup_making × qty)
-    //   3. the existing Making prop (a line already priced, e.g. by the manual endpoint)
-    // Gold is still net-weight-anchored and stones still carat-anchored; only labour is held.
-    const makingOverride = makingForIdx(idx);
-    const varMakingValue = parseFloat(varMf.price_breakup_making || 0) * (item.quantity || 1);
-    const oldMakingValue = parseFloat((props['Making'] || props['Making Charges'] || '0').replace('Rs', '').trim());
-    const newMakingValue = makingOverride != null ? makingOverride : (varMakingValue || oldMakingValue || 0);
+    //   1. custom.making  — positional CSV override, per item ("1900,2500"). A FLAT rupee amount for the
+    //      line, used verbatim: it is the staff-agreed labour, not a rate, so it never scales.
+    //   2. the variant design spec, scaled per gram (the normal path)
+    //   3. the existing Making prop (a line already priced, e.g. by the manual endpoint) — held flat,
+    //      since without a catalogue weight there is no rate to scale by.
+    const makingOverride  = makingForIdx(idx);
+    const qty             = item.quantity || 1;
+    const varMakingValue  = parseFloat(varMf.price_breakup_making || 0) * qty;
+    const oldMakingValue  = parseFloat((props['Making'] || props['Making Charges'] || '0').replace('Rs', '').trim());
+    const makingBasis     = varMakingValue || oldMakingValue || 0;                       // line-total Rs
+    const catNetWtLine    = parseFloat(varMf.net_wt || varMf.net_metal_weight_g || 0) * qty; // line-total g
+    const newMakingValue  = makingOverride != null
+      ? makingOverride
+      : (catNetWtLine > 0 ? (makingBasis / catNetWtLine) * newNetWt : makingBasis);
 
     // Gross = components, made GST-inclusive (unified convention: components + 3% GST, same as the catalog price).
     const newGrossValue = (newGoldValue + newDiamondValue + newMakingValue) * 1.03;
@@ -2047,7 +2140,21 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
   const disc = discIntent
     ? resolveDiscount({ ...discIntent, lines: discLines })
     : { perLine: discLines.map(() => 0), total: 0 };
-  const discByIdx = new Map(itemResults.map((r, i) => [r?.idx, disc.perLine[i] || 0]));
+  // Per-line, stackable discounts (dia / making / native-total) REPLACE the order-level share for any line
+  // that carries entries; a line with none falls back to the order-level (diamond-prorated) amount above.
+  // Portions are kept split so the component props stay honest: only the diamond-targeted cut reduces
+  // 'Diamond (After Discount)', only the making-targeted cut reduces 'Making (After Discount)', while a
+  // native/whole-line cut reduces the line taxable without being attributed to either component.
+  const lineDiscArr = parseLineDiscounts(mfMap['line_discounts']);
+  const discByIdx = new Map(itemResults.map((r, i) => {
+    if (!r) return [undefined, { total: 0, dia: 0, mk: 0, tot: 0 }];
+    const pl = resolveLineDiscount(lineDiscArr[r.idx], {
+      diamond: r.newDiamondValue || 0, making: r.newMakingValue || 0, grossIncl: r.newGrossValue || 0,
+    });
+    if (pl) return [r.idx, { total: pl.total, dia: pl.diaPortion, mk: pl.mkPortion, tot: pl.totalPortion }];
+    const ol = disc.perLine[i] || 0;   // order-level fallback is diamond-only
+    return [r.idx, { total: ol, dia: ol, mk: 0, tot: 0 }];
+  }));
 
   const allJewelData = [];
   const repricedMap  = new Map();
@@ -2068,8 +2175,10 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
       metal, category, jewel_code, props,
     } = result;
 
-    // This line's share of the pre-tax, diamond-only discount (already prorated by resolveDiscount).
-    const itemDiscount = discByIdx.get(idx) || 0;
+    // This line's discount, split by target (see discByIdx build). itemDiscount is the pre-tax total that
+    // reduces Taxable; the dia/mk portions reduce only the component-level display props below.
+    const df = discByIdx.get(idx) || { total: 0, dia: 0, mk: 0, tot: 0 };
+    const itemDiscount = df.total;
 
     const jewelHiddenProps = {
       '_gross_wt':     newGrossWt.toFixed(3),
@@ -2117,16 +2226,18 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
       weight_delta_pct: parseFloat((delta * 100).toFixed(2)), repriced: true,
     });
 
-    // Post-discount diamond value as its own prop. Discounts are diamond-only, so this is exactly
-    // Diamond − Discount Applied (clamped at 0). 'Diamond' itself stays PRE-discount (the discount
-    // engine reads it as its base — see the comment above); this is a separate, display-only figure.
-    const newDiamondAfterDiscount = Math.max(0, newDiamondValue - itemDiscount);
+    // Post-discount component values as display-only props. Only the target-matched portion reduces each
+    // ('Diamond'/'Making' themselves stay PRE-discount — the discount engine reads Diamond as its base).
+    // A native/whole-line ('total') cut reduces Taxable but is attributed to neither component here.
+    const newDiamondAfterDiscount = Math.max(0, newDiamondValue - df.dia);
+    const newMakingAfterDiscount  = Math.max(0, newMakingValue  - df.mk);
 
     const repricedProps = {
       'Gold':                   `Rs${newGoldValue.toFixed(2)}`,
       'Diamond':                `Rs${newDiamondValue.toFixed(2)}`,
       'Diamond (After Discount)': `Rs${newDiamondAfterDiscount.toFixed(2)}`,
       'Making':                 `Rs${newMakingValue.toFixed(2)}`,
+      'Making (After Discount)': `Rs${newMakingAfterDiscount.toFixed(2)}`,
       'Gross Value':            `Rs${newGrossValue.toFixed(2)}`,
       'Taxable Value':          `Rs${newTaxableValue.toFixed(2)}`,
       'GST':                    `Rs${newGst.toFixed(2)}`,
@@ -2154,13 +2265,15 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
   await gqlSetDraftLineItems(draftOrderId, allLineItems, token, { tags: tagsWithoutRecalc, clearDiscount: true });
   console.log(`✅ Draft ${draftOrderId}: reprice done (GraphQL) — ${repricedMap.size} item(s) updated`);
 
-  // Re-publish the resolved discount (pre-tax) so the invoice/reports read the value we just priced
-  // against, not the one resolved when staff clicked Apply.
-  if (discIntent) {
+  // Re-publish the ACTUAL applied discount (pre-tax) — the sum of every line's resolved cut, whether it
+  // came from the order-level intent or per-line entries — so the invoice/reports read what we priced
+  // against, not the value resolved when staff clicked Apply.
+  const appliedDiscountTotal = [...discByIdx.values()].reduce((s, d) => s + (d.total || 0), 0);
+  if (discIntent || lineDiscArr.length) {
     const prior = Math.abs(parseFloat(mfMap['discount_applied'] || 0)) || 0;
-    if (Math.abs(prior - disc.total) >= 0.01) {
-      await updateDraftOrderMetafields(draftOrderId, { discount_applied: disc.total.toFixed(2) });
-      console.log(`Draft ${draftOrderId}: discount re-resolved — was Rs${prior.toFixed(2)}, now Rs${disc.total.toFixed(2)} (${discIntent.kind}/${discIntent.mode} rate=${discIntent.rate})`);
+    if (Math.abs(prior - appliedDiscountTotal) >= 0.01) {
+      await updateDraftOrderMetafields(draftOrderId, { discount_applied: appliedDiscountTotal.toFixed(2) });
+      console.log(`Draft ${draftOrderId}: discount re-resolved — was Rs${prior.toFixed(2)}, now Rs${appliedDiscountTotal.toFixed(2)}`);
     }
   }
 

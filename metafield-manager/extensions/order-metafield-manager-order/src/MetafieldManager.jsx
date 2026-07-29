@@ -342,6 +342,11 @@ export default function MetafieldManager({ surface = "block" } = {}) {
   const [discountNote, setDiscountNote] = useState("");
   const [refreshTick, setRefreshTick] = useState(0); // bumped after a save to re-pull server-recomputed values
   const [recalcNote, setRecalcNote] = useState(""); // transient "recalculating…" hint after a trigger tag
+  // Per-line pricing editor (draft scope): one row per line item, each with a flat making override and a
+  // stack of discounts. Serialized to custom.making (positional CSV) + custom.line_discounts (JSON).
+  const [lineRows, setLineRows] = useState([]); // [{ id, title, making, discounts:[{ t, m, v }] }]
+  const [lineBusy, setLineBusy] = useState(false);
+  const [lineNote, setLineNote] = useState("");
   const baselineRef = useRef({});
   const editsRef = useRef({});
 
@@ -385,6 +390,30 @@ export default function MetafieldManager({ surface = "block" } = {}) {
       // Fall back to each metafield's own namespace/type where no definition.
       // (values query already carried them; merge in.)
 
+      // Per-line pricing editor prefill (draft scope): one row per line item, seeded from the positional
+      // custom.making CSV and the custom.line_discounts JSON (both indexed by line position).
+      let lineRowsInit = [];
+      if (ctx.scope === "draft" && ownerId) {
+        try {
+          const liRes = await shopify.query(
+            `query LineItemsForPricing($id: ID!) { ${ctx.resourceField}(id: $id) { lineItems(first: 50) { nodes { id title name } } } }`,
+            { variables: { id: ownerId } },
+          );
+          const nodes = liRes?.data?.[ctx.resourceField]?.lineItems?.nodes ?? [];
+          const makingCsv = (valuesByKey["making"] ?? "").split(",");
+          let lineDisc = [];
+          try { lineDisc = JSON.parse(valuesByKey["line_discounts"] || "[]"); } catch { lineDisc = []; }
+          lineRowsInit = nodes.map((n, i) => ({
+            id: n.id,
+            title: n.title || n.name || `Line ${i + 1}`,
+            making: (makingCsv[i] ?? "").trim(),
+            discounts: Array.isArray(lineDisc[i])
+              ? lineDisc[i].map((e) => ({ t: e.t || "dia", m: e.m || "pct", v: String(e.v ?? "") }))
+              : [],
+          }));
+        } catch { /* non-blocking — the editor just shows no rows */ }
+      }
+
       const todayISO = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
       const editable = {};
       for (const key of fieldsForScope(ctx.scope)) {
@@ -398,6 +427,7 @@ export default function MetafieldManager({ surface = "block" } = {}) {
       if (!active) return;
       setDefs(defsByKey);
       setValues(valuesByKey);
+      setLineRows(lineRowsInit);
       // On a post-save refresh the user may have started typing again — keep those in-progress edits and
       // don't clobber them; adopt fresh server values as the new baseline for everything else.
       const priorEdits = editsRef.current || {};
@@ -582,6 +612,55 @@ export default function MetafieldManager({ surface = "block" } = {}) {
     }
   }
 
+  // Per-line pricing editor mutations.
+  const setRowMaking = (i, val) =>
+    setLineRows((rows) => rows.map((r, j) => (j === i ? { ...r, making: val } : r)));
+  const addRowDiscount = (i) =>
+    setLineRows((rows) => rows.map((r, j) => (j === i ? { ...r, discounts: [...r.discounts, { t: "dia", m: "pct", v: "" }] } : r)));
+  const setRowDiscount = (i, di, patch) =>
+    setLineRows((rows) => rows.map((r, j) => (j === i ? { ...r, discounts: r.discounts.map((d, k) => (k === di ? { ...d, ...patch } : d)) } : r)));
+  const removeRowDiscount = (i, di) =>
+    setLineRows((rows) => rows.map((r, j) => (j === i ? { ...r, discounts: r.discounts.filter((_, k) => k !== di) } : r)));
+
+  // Apply per-line pricing: serialize making → positional CSV (custom.making) and the per-line discount
+  // stacks → JSON (custom.line_discounts), write both, then drop a `reprice` tag so the middleware
+  // recomputes prices/GST/discount and folds every discount into the single pre-tax Discount Applied.
+  async function applyLinePricing() {
+    if (!ownerId || !lineRows.length) return;
+    setLineBusy(true);
+    setLineNote("");
+    try {
+      const makingCsv = lineRows.map((r) => (r.making ?? "").toString().trim()).join(",");
+      const lineDiscJson = JSON.stringify(
+        lineRows.map((r) =>
+          (r.discounts || [])
+            .filter((d) => parseFloat(d.v) > 0)
+            .map((d) => ({ t: d.t, m: d.m, v: parseFloat(d.v) })),
+        ),
+      );
+      // Definitions drive namespace/type; fall back to the known custom/* shape if a definition is absent
+      // (custom.line_discounts may not be defined yet — an unstructured JSON metafield still reads server-side).
+      const mkDef = defs["making"] || { namespace: "custom", type: "single_line_text_field" };
+      const ldDef = defs["line_discounts"] || { namespace: "custom", type: "json" };
+      const toSet = [
+        { ownerId, namespace: mkDef.namespace, key: "making", type: mkDef.type, value: makingCsv },
+        { ownerId, namespace: ldDef.namespace, key: "line_discounts", type: ldDef.type, value: lineDiscJson },
+      ];
+      const res = await shopify.query(SET_MUTATION, { variables: { metafields: toSet } });
+      const errs = collectErrors(res, "metafieldsSet");
+      if (errs.length) throw new Error(errs.join("; "));
+      try {
+        await shopify.query(TAGS_ADD_MUTATION, { variables: { id: ownerId, tags: ["reprice"] } });
+      } catch { /* non-blocking */ }
+      setLineNote("Applying per-line pricing… making + discounts saved and reprice triggered. Line prices, GST and the balance refresh in a few seconds.");
+      setTimeout(() => setRefreshTick((t) => t + 1), 3000);
+    } catch (e) {
+      setLineNote(`Couldn't apply: ${e?.message || e}`);
+    } finally {
+      setLineBusy(false);
+    }
+  }
+
   const renderExcApply = () => (
     <s-section heading="Apply an Exchange Note">
       <s-stack direction="block" gap="base">
@@ -689,6 +768,79 @@ export default function MetafieldManager({ surface = "block" } = {}) {
     </s-section>
   );
 
+  // Per-line pricing & discount editor — draft scope only (reprice runs on the draft webhook). One card
+  // per line item: a flat making override plus a stack of discounts, each targeting Diamond, Making, or the
+  // whole product (%/₹). Everything folds into the single pre-tax Discount on Taxable on the invoice.
+  const renderLinePricing = () => {
+    if (ctx.scope !== "draft" || !lineRows.length) return null;
+    return (
+      <s-section heading="Per-Line Pricing & Discounts">
+        <s-stack direction="block" gap="base">
+          <s-text tone="subdued">
+            Set making (labour ₹, whole line) per item and stack discounts on Diamond, Making, or the whole
+            product — % is of that component, ₹ is a flat amount. Each discount is capped at what it targets;
+            all fold into one pre-tax "Discount on Taxable". Applying reprices every line.
+          </s-text>
+          {lineRows.map((row, i) => (
+            <s-stack key={row.id || i} direction="block" gap="small-500">
+              <s-text>{`— ${row.title} —`}</s-text>
+              <s-number-field
+                label="Making (₹, flat for the line)"
+                value={row.making}
+                disabled={lineBusy ? "" : undefined}
+                onChange={(e) => setRowMaking(i, e.target.value ?? "")}
+              />
+              {row.discounts.map((d, di) => (
+                <s-stack key={di} direction="inline" gap="small-500" alignItems="center">
+                  <s-select
+                    label="On"
+                    value={d.t}
+                    disabled={lineBusy ? "" : undefined}
+                    onChange={(e) => setRowDiscount(i, di, { t: e.target.value ?? "dia" })}
+                  >
+                    <s-option value="dia">Diamond</s-option>
+                    <s-option value="mk">Making</s-option>
+                    <s-option value="total">Whole product</s-option>
+                  </s-select>
+                  <s-select
+                    label="Type"
+                    value={d.m}
+                    disabled={lineBusy ? "" : undefined}
+                    onChange={(e) => setRowDiscount(i, di, { m: e.target.value ?? "pct" })}
+                  >
+                    <s-option value="pct">%</s-option>
+                    <s-option value="flat">₹</s-option>
+                  </s-select>
+                  <s-number-field
+                    label="Value"
+                    value={d.v}
+                    disabled={lineBusy ? "" : undefined}
+                    onChange={(e) => setRowDiscount(i, di, { v: e.target.value ?? "" })}
+                  />
+                  <s-button onClick={() => removeRowDiscount(i, di)} disabled={lineBusy ? "" : undefined}>
+                    Remove
+                  </s-button>
+                </s-stack>
+              ))}
+              <s-button onClick={() => addRowDiscount(i)} disabled={lineBusy ? "" : undefined}>
+                + Add discount
+              </s-button>
+            </s-stack>
+          ))}
+          <s-button
+            variant="primary"
+            onClick={applyLinePricing}
+            loading={lineBusy ? "" : undefined}
+            disabled={lineBusy ? "" : undefined}
+          >
+            Apply per-line pricing
+          </s-button>
+          {lineNote ? <s-text>{lineNote}</s-text> : null}
+        </s-stack>
+      </s-section>
+    );
+  };
+
   // Credit instruments go on DRAFTS ONLY. A converted order has a final invoice and a settled GST
   // position; deducting a voucher afterwards would put the printed invoice and the system out of
   // step. The server enforces this too — the apply-* tag handlers run only on the draft webhook, so
@@ -784,6 +936,7 @@ export default function MetafieldManager({ surface = "block" } = {}) {
       <s-admin-action heading="Jewellery Workspace — all fields">
         <s-stack direction="block" gap="large-100">
           {renderBanners()}
+          {renderLinePricing()}
           {renderAdjustmentSelector()}
           {renderSections()}
         </s-stack>
@@ -816,6 +969,7 @@ export default function MetafieldManager({ surface = "block" } = {}) {
       <s-stack direction="block" gap="large-100">
         {renderBanners()}
         <s-button onClick={showAllFields}>Show all fields</s-button>
+        {renderLinePricing()}
         {renderSections()}
         <s-stack direction="inline" gap="base" alignItems="center">
           {renderSaveButton()}
