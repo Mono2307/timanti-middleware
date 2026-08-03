@@ -906,17 +906,26 @@ export default function MetafieldManager({ surface = "block" } = {}) {
   );
 
   const renderSections = () =>
-    sections.map((section) => (
-      <s-section key={section.title} heading={section.title}>
-        <s-stack direction="block" gap="base">
-          {section.fields.map((field) =>
-            field.editable
-              ? renderEditable(field, defs[field.key]?.type || "", defs[field.key]?.choices, edits[field.key] ?? "", setField, saving)
-              : renderReadOnly(field, values[field.key] ?? ""),
-          )}
-        </s-stack>
-      </s-section>
-    ));
+    sections.flatMap((section) => {
+      const block = (
+        <s-section key={section.title} heading={section.title}>
+          <s-stack direction="block" gap="base">
+            {section.fields.map((field) =>
+              field.editable
+                ? renderEditable(field, defs[field.key]?.type || "", defs[field.key]?.choices, edits[field.key] ?? "", setField, saving)
+                : renderReadOnly(field, values[field.key] ?? ""),
+            )}
+          </s-stack>
+        </s-section>
+      );
+      // The per-line pricing & discount editor belongs WITH the Pricing section (gold rate / making),
+      // so it renders right after it rather than at the top of the panel.
+      if (section.title === "Pricing") {
+        const lp = renderLinePricing();
+        if (lp) return [block, <s-stack key="line-pricing" direction="block">{lp}</s-stack>];
+      }
+      return [block];
+    });
 
   const renderSaveButton = () => (
     <s-button
@@ -936,7 +945,6 @@ export default function MetafieldManager({ surface = "block" } = {}) {
       <s-admin-action heading="Jewellery Workspace — all fields">
         <s-stack direction="block" gap="large-100">
           {renderBanners()}
-          {renderLinePricing()}
           {renderAdjustmentSelector()}
           {renderSections()}
         </s-stack>
@@ -969,7 +977,6 @@ export default function MetafieldManager({ surface = "block" } = {}) {
       <s-stack direction="block" gap="large-100">
         {renderBanners()}
         <s-button onClick={showAllFields}>Show all fields</s-button>
-        {renderLinePricing()}
         {renderSections()}
         <s-stack direction="inline" gap="base" alignItems="center">
           {renderSaveButton()}
