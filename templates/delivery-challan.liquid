@@ -1,0 +1,329 @@
+<style>
+  @page { size: A4; margin: 0.5cm; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  @media print {
+    body { padding: 5px !important; margin: 0; }
+    .container { page-break-inside: avoid !important; }
+    a { display: none !important; visibility: hidden !important; }
+  }
+  body { font-family: Arial, sans-serif; font-size: 9px; line-height: 1.35; padding: 10px; }
+  .container { max-width: 800px; margin: 0 auto; border: 2px solid #000; padding: 0; }
+  .copies-bar { display: grid; grid-template-columns: 1fr 1fr 1fr; text-align: right; border-bottom: 1px solid #000; font-size: 7px; font-style: italic; }
+  .copies-bar span { padding: 3px 8px; border-left: 1px solid #000; }
+  .copies-bar span:first-child { border-left: none; }
+  .title-header { text-align: center; padding: 8px 14px; border-bottom: 2px solid #000; min-height: 65px; display: flex; flex-direction: column; justify-content: center; align-items: center; }
+  .logo { max-width: 130px; height: auto; margin-bottom: 3px; }
+  .title-center h1 { font-size: 16px; font-weight: bold; margin: 0; }
+  .title-center p { font-size: 7.5px; color: #555; margin: 2px 0 0 0; }
+  .challan-meta { display: grid; grid-template-columns: 1fr 1fr 1fr; border-bottom: 1px solid #ccc; }
+  .meta-cell { padding: 5px 8px; font-size: 7.5px; border-right: 1px solid #ccc; }
+  .meta-cell:last-child { border-right: none; }
+  .meta-cell strong { display: block; font-size: 7px; color: #555; margin-bottom: 1px; }
+  .parties-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; border-bottom: 2px solid #000; border-top: 1px solid #ccc; }
+  .party-block { padding: 6px 8px; font-size: 7px; line-height: 1.4; border-right: 1px solid #ccc; }
+  .party-block:last-child { border-right: none; }
+  .party-block h4 { font-size: 7.5px; font-weight: bold; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; padding-bottom: 3px; border-bottom: 1px solid #ddd; }
+  .purpose-block { padding: 5px 10px; font-size: 7.5px; border-bottom: 2px solid #000; background: #fffbe6; }
+  table { width: 100%; border-collapse: collapse; }
+  .items-table { font-size: 7.5px; }
+  .items-table th { background-color: #f0f0f0; padding: 5px 4px; text-align: left; font-weight: bold; border: 1px solid #000; font-size: 7.5px; }
+  .items-table td { padding: 5px 4px; border: 1px solid #000; vertical-align: top; }
+  .text-right { text-align: right; }
+  .text-center { text-align: center; }
+  .totals-row td { font-weight: normal; padding: 4px 5px; font-size: 7.5px; }
+  .total-row td { font-weight: bold; font-size: 9px; background: #f9f9f9; }
+  .amount-words { padding: 5px 10px; font-size: 7.5px; font-weight: bold; border-top: 2px solid #000; display: flex; justify-content: space-between; }
+  .footer-note { padding: 5px 10px; font-size: 7px; color: #555; border-top: 1px solid #ccc; line-height: 1.4; }
+  .sign-section { display: grid; grid-template-columns: 1fr 1fr; border-top: 2px solid #000; min-height: 60px; }
+  .sign-block { padding: 8px 10px; font-size: 7.5px; }
+  .sign-block:first-child { border-right: 2px solid #000; }
+  .sign-block strong { display: block; margin-bottom: 8px; }
+</style>
+
+{% comment %}── Address lookup ──{% endcomment %}
+{% assign from_code = order.metafields.custom.state_code    | default: "MH-HQ" %}
+{% assign to_code   = order.metafields.custom.delivery_code | default: "KA-HSR" %}
+
+{% if from_code == "MH-HQ" %}
+  {% assign from_entity   = "Auracarat Pvt Ltd" %}
+  {% assign from_addr     = "C207 Crystal Plaza, New Link Road, Andheri (W), Mumbai – 400053 Maharashtra" %}
+  {% assign from_dispatch = "AURACARAT PRIVATE LIMITED, 408, 1 Aerocity, Safed Pul, Saki Naka, Mumbai – 400072" %}
+  {% assign from_gstin    = "27ABBCA3309B1ZB" %}
+  {% assign from_state    = "27 Maharashtra" %}
+  {% assign from_email    = "Shweta@timanti.in" %}
+  {% assign from_phone    = "9820059416" %}
+{% elsif from_code == "KA-HSR" %}
+  {% assign from_entity   = "Auracarat Private Limited (Karnataka)" %}
+  {% assign from_addr     = "No.2634, Opp. Gnan Srishti School, Haralukunte Village, Begur Hobli, 17th Main HSR Layout 2nd Sector, Bengaluru 560102" %}
+  {% assign from_dispatch = from_addr %}
+  {% assign from_gstin    = "29ABBCA3309B1Z7" %}
+  {% assign from_state    = "29 Karnataka" %}
+  {% assign from_email    = "hsrstore@timanti.in" %}
+  {% assign from_phone    = "9740465031" %}
+{% endif %}
+
+{% if to_code == "KA-HSR" %}
+  {% assign to_entity = "Auracarat Private Limited (Karnataka) — TIMANTI" %}
+  {% assign to_addr   = "No.2634, Opp. Gnan Srishti School, Haralukunte Village, Begur Hobli, 17th Main HSR Layout 2nd Sector, Bengaluru 560102" %}
+  {% assign to_gstin  = "29ABBCA3309B1Z7" %}
+  {% assign to_state  = "29 Karnataka" %}
+  {% assign to_email  = "hsrstore@timanti.in" %}
+  {% assign to_phone  = "9740465031" %}
+{% elsif to_code == "MH-HQ" %}
+  {% assign to_entity = "Auracarat Private Limited" %}
+  {% assign to_addr   = "C207 Crystal Plaza, New Link Road, Andheri (W), Mumbai – 400053" %}
+  {% assign to_gstin  = "27ABBCA3309B1ZB" %}
+  {% assign to_state  = "27 Maharashtra" %}
+  {% assign to_email  = "Shweta@timanti.in" %}
+  {% assign to_phone  = "9820059416" %}
+{% endif %}
+
+{% assign from_prefix = from_code | split: "-" | first %}
+{% assign to_prefix   = to_code   | split: "-" | first %}
+{% assign is_same_state = false %}
+{% if from_prefix == to_prefix %}{% assign is_same_state = true %}{% endif %}
+
+{% assign inv_num = order.metafields.custom.serial_code %}{% if inv_num == blank %}{% assign inv_num = order.metafields.custom.serial_display %}{% endif %}{% if inv_num == blank %}{% assign inv_num = order.name %}{% endif %}
+{% assign order_ref = order.metafields.custom.serial_no %}{% if order_ref == blank %}{% assign order_ref = order.name %}{% endif %}
+{% assign inv_date  = order.created_at | date: "%d-%m-%Y" %}
+{% if order.metafields.custom.invoice_date != blank %}{% assign inv_date = order.metafields.custom.invoice_date %}{% endif %}
+{% assign transport_mode = order.metafields.custom.transport_mode | default: "BY AIR & ROAD" %}
+{% assign vehicle_no     = order.metafields.custom.vehicle_no     | default: "—" %}
+{% assign purpose        = order.metafields.custom.movement_purpose | default: "Goods are being moved for exhibition and display, to be returned to head office within 30 days. ON APPROVAL BASIS." %}
+
+{% assign hsn_default = "71131914" %}
+{% assign sno           = 0 %}
+{% assign grand_qty     = 0 %}
+{% assign grand_value   = 0 %}
+{% assign grand_gross_g = 0 %}
+{% assign grand_net_g   = 0 %}
+
+{% comment %}
+  ── Grouping key set: karat (SKU segment 3) × HSN (product.custom.hsn_code) ──
+  Built from the data, not a fixed karat list, so an unexpected karat can never drop a line
+  silently out of the totals. "@" delimits the key list on both ends of every entry so a
+  `contains` probe can't partially match (e.g. "9~7113" inside "19~7113").
+{% endcomment %}
+{% assign group_keys = "@" %}
+{% for li in order.line_items %}
+  {% assign _sku = li.sku | split: "|" %}
+  {% assign _kt  = _sku[2] | strip %}
+  {% if _kt == blank %}{% assign _kt = "?" %}{% endif %}
+  {% assign _hsn = li.product.metafields.custom.hsn_code | default: hsn_default %}
+  {% assign _key   = _kt | append: "~" | append: _hsn %}
+  {% assign _probe = "@" | append: _key | append: "@" %}
+  {% unless group_keys contains _probe %}
+    {% assign group_keys = group_keys | append: _key | append: "@" %}
+  {% endunless %}
+{% endfor %}
+{% assign key_list = group_keys | split: "@" | sort %}
+
+<div class="container">
+
+  <div class="copies-bar">
+    <span>Original for Consignee</span>
+    <span>Duplicate for Transporter</span>
+    <span>Triplicate for Consignor</span>
+  </div>
+
+  <div class="title-header">
+    <img src="https://cdn.shopify.com/s/files/1/0775/8322/0993/files/Timanti_Logo_Black.jpg?v=1766506323" alt="Timanti Logo" class="logo">
+    <div class="title-center">
+      <h1>Delivery Challan</h1>
+      <p>(U/S-31(1) of GST Act, 2017 read with Rule 1) &nbsp;|&nbsp; ON APPROVAL BASIS</p>
+    </div>
+  </div>
+
+  <div class="challan-meta">
+    <div class="meta-cell"><strong>Delivery Challan No.</strong>{{ inv_num }}</div>
+    <div class="meta-cell"><strong>Challan Date</strong>{{ inv_date }}</div>
+    <div class="meta-cell"><strong>Transportation Mode</strong>{{ transport_mode }}</div>
+    <div class="meta-cell"><strong>State (From)</strong>{{ from_state }}</div>
+    <div class="meta-cell"><strong>Place of Supply</strong>{{ to_state }}</div>
+    <div class="meta-cell"><strong>Vehicle No.</strong>{{ vehicle_no }}</div>
+  </div>
+
+  <div class="parties-grid">
+    <div class="party-block">
+      <h4>Bill From (Consignor)</h4>
+      <strong>{{ from_entity }}</strong><br>
+      {{ from_addr }}<br>
+      <strong>State Code:</strong> {{ from_state }}<br>
+      <strong>GSTIN:</strong> {{ from_gstin }}<br>
+      <strong>Email:</strong> {{ from_email }}<br>
+      <strong>Phone:</strong> {{ from_phone }}
+    </div>
+    <div class="party-block">
+      <h4>Consignee (Delivered To)</h4>
+      <strong>{{ to_entity }}</strong><br>
+      {{ to_addr }}<br>
+      <strong>State Code:</strong> {{ to_state }}<br>
+      <strong>GSTIN:</strong> {{ to_gstin }}<br>
+      <strong>Email:</strong> {{ to_email }}<br>
+      <strong>Phone:</strong> {{ to_phone }}
+    </div>
+    <div class="party-block">
+      <h4>Dispatch From</h4>
+      <strong>AURACARAT PRIVATE LIMITED</strong><br>
+      {{ from_dispatch }}<br>
+      <strong>State Code:</strong> {{ from_state }}<br>
+      <strong>GSTIN:</strong> {{ from_gstin }}<br>
+      <strong>Email:</strong> {{ from_email }}<br>
+      <strong>Phone:</strong> {{ from_phone }}
+    </div>
+  </div>
+
+  <div class="purpose-block">
+    <strong>Purpose of Movement:</strong> {{ purpose }}
+  </div>
+
+  <table class="items-table">
+    <thead>
+      <tr>
+        <th style="width:5%;"  class="text-center">S.No.</th>
+        <th style="width:28%;">Description of Goods</th>
+        <th class="text-center" style="width:10%;">HSN of Goods</th>
+        <th class="text-center" style="width:6%;">Qty</th>
+        <th class="text-center" style="width:9%;">Gross Wt (g)</th>
+        <th class="text-center" style="width:9%;">Net Wt (g)</th>
+        <th class="text-center" style="width:9%;">Dia Wt (cts)</th>
+        <th class="text-right"  style="width:12%;">Value of Goods (₹)</th>
+        <th class="text-right"  style="width:12%;">Taxable Value (₹)</th>
+      </tr>
+    </thead>
+    <tbody>
+
+      {% for _gkey in key_list %}
+        {% if _gkey == blank %}{% continue %}{% endif %}
+        {% assign _parts = _gkey | split: "~" %}
+        {% assign g_kt  = _parts[0] %}
+        {% assign g_hsn = _parts[1] %}
+
+        {% assign g_qty=0 %}{% assign g_gross=0 %}{% assign g_net=0 %}{% assign g_dia=0 %}{% assign g_value=0 %}
+
+        {% for li in order.line_items %}
+          {% assign _sku = li.sku | split: "|" %}
+          {% assign _kt  = _sku[2] | strip %}
+          {% if _kt == blank %}{% assign _kt = "?" %}{% endif %}
+          {% unless _kt == g_kt %}{% continue %}{% endunless %}
+          {% assign _hsn = li.product.metafields.custom.hsn_code | default: hsn_default %}
+          {% unless _hsn == g_hsn %}{% continue %}{% endunless %}
+
+          {% comment %}── Physical: hidden props first, catalog metafields as fallback ──{% endcomment %}
+          {% assign _gw=0 %}{% assign _nw=0 %}{% assign _dia=0 %}{% assign _gw_from_prop=false %}
+          {% for p in li.properties %}
+            {% if p.first == "_gross_wt"    %}{% assign _gw  = p.last | plus: 0 %}{% assign _gw_from_prop = true %}{% endif %}
+            {% if p.first == "_net_wt"      %}{% assign _nw  = p.last | plus: 0 %}{% endif %}
+            {% if p.first == "_diamond_cts" %}{% assign _dia = p.last | plus: 0 %}{% endif %}
+          {% endfor %}
+          {% unless _gw_from_prop %}
+            {% if li.variant.metafields.custom.total_metal_weight_g %}{% assign _gw = li.variant.metafields.custom.total_metal_weight_g | plus: 0 | times: li.quantity %}{% elsif li.product.metafields.custom.total_metal_weight_g %}{% assign _gw = li.product.metafields.custom.total_metal_weight_g | plus: 0 | times: li.quantity %}{% endif %}
+          {% endunless %}
+          {% if _nw == 0 and li.variant.metafields.custom.net_metal_weight_g %}{% assign _nw = li.variant.metafields.custom.net_metal_weight_g | plus: 0 | times: li.quantity %}{% endif %}
+          {% if _dia == 0 and li.product.metafields.custom.totaldiamondweight %}{% assign _dia = li.product.metafields.custom.totaldiamondweight | plus: 0 | times: li.quantity %}{% endif %}
+
+          {% comment %}
+            Value = pre-discount, tax-inclusive. `Gross Value` is authoritative; the fallback
+            adds `Discount Applied` back onto the charged price so both branches agree.
+            make-memo-custom never carries a discount, so the add-back is a no-op there — it is
+            retained only to keep challan/transfer prints correct if one is ever applied.
+          {% endcomment %}
+          {% assign _disc_str="0" %}{% assign _gross_str="" %}
+          {% for p in li.properties %}
+            {% if p.first == "Discount Applied" %}{% assign _disc_str  = p.last | remove: "Rs" | strip %}{% endif %}
+            {% if p.first == "Gross Value"      %}{% assign _gross_str = p.last | remove: "Rs" | strip %}{% endif %}
+          {% endfor %}
+          {% assign _disc_p = _disc_str | times: 100 | round %}
+          {% if _gross_str != "" %}{% assign _val_p = _gross_str | times: 100 | round %}{% else %}{% assign _val_p = li.final_line_price | plus: _disc_p %}{% endif %}
+
+          {% assign g_qty   = g_qty   | plus: li.quantity %}
+          {% assign g_gross = g_gross | plus: _gw %}
+          {% assign g_net   = g_net   | plus: _nw %}
+          {% assign g_dia   = g_dia   | plus: _dia %}
+          {% assign g_value = g_value | plus: _val_p %}
+        {% endfor %}
+
+        {% assign sno           = sno           | plus: 1 %}
+        {% assign grand_qty     = grand_qty     | plus: g_qty %}
+        {% assign grand_value   = grand_value   | plus: g_value %}
+        {% assign grand_gross_g = grand_gross_g | plus: g_gross %}
+        {% assign grand_net_g   = grand_net_g   | plus: g_net %}
+        <tr>
+          <td class="text-center">{{ sno }}.</td>
+          <td>{% if g_kt == "?" %}Gold Jewellery <em>(karat not set in SKU)</em>{% else %}{{ g_kt }}Kt Gold Jewellery{% endif %}</td>
+          <td class="text-center">{{ g_hsn }}</td>
+          <td class="text-center">{{ g_qty }}</td>
+          <td class="text-center">{{ g_gross | round: 3 }}</td>
+          <td class="text-center">{{ g_net | round: 3 }}</td>
+          <td class="text-center">{% if g_dia > 0 %}{{ g_dia | round: 3 }}{% else %}—{% endif %}</td>
+          <td class="text-right">{{ g_value | money_without_currency | remove: ',' }}</td>
+          <td class="text-right">{{ g_value | divided_by: 1.03 | money_without_currency | remove: ',' }}</td>
+        </tr>
+      {% endfor %}
+
+      {% assign grand_taxable = grand_value | divided_by: 1.03 %}
+      {% assign grand_tax     = grand_taxable | times: 0.03 %}
+
+      <tr style="background:#f0f0f0; font-weight:bold;">
+        <td colspan="3" class="text-right" style="font-size:8px; padding:4px 5px;">Total</td>
+        <td class="text-center" style="font-size:8px;">{{ grand_qty }}</td>
+        <td class="text-center" style="font-size:8px;">{{ grand_gross_g | round: 3 }}</td>
+        <td class="text-center" style="font-size:8px;">{{ grand_net_g | round: 3 }}</td>
+        <td></td>
+        <td class="text-right" style="font-size:8px;">{{ grand_value | money_without_currency | remove: ',' }}</td>
+        <td class="text-right" style="font-size:8px;">{{ grand_taxable | money_without_currency | remove: ',' }}</td>
+      </tr>
+
+      {% if is_same_state %}
+        {% assign half_tax = grand_taxable | times: 0.015 %}
+        <tr class="totals-row"><td colspan="8" class="text-right">IGST</td><td class="text-right">—</td></tr>
+        <tr class="totals-row"><td colspan="8" class="text-right">CGST @ 1.5%</td><td class="text-right">₹{{ half_tax | money_without_currency | remove: ',' }}</td></tr>
+        <tr class="totals-row"><td colspan="8" class="text-right">SGST @ 1.5%</td><td class="text-right">₹{{ half_tax | money_without_currency | remove: ',' }}</td></tr>
+      {% else %}
+        <tr class="totals-row"><td colspan="8" class="text-right">IGST @ 3%</td><td class="text-right">₹{{ grand_tax | money_without_currency | remove: ',' }}</td></tr>
+        <tr class="totals-row"><td colspan="8" class="text-right">CGST @ 1.5%</td><td class="text-right">—</td></tr>
+        <tr class="totals-row"><td colspan="8" class="text-right">SGST @ 1.5%</td><td class="text-right">—</td></tr>
+      {% endif %}
+      <tr class="total-row">
+        <td colspan="8" class="text-right"><strong>Total Value</strong></td>
+        <td class="text-right"><strong>₹{{ grand_value | money_without_currency | remove: ',' }}</strong></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="amount-words">
+    <span>
+      {% assign ones = "Zero,One,Two,Three,Four,Five,Six,Seven,Eight,Nine,Ten,Eleven,Twelve,Thirteen,Fourteen,Fifteen,Sixteen,Seventeen,Eighteen,Nineteen" | split: "," %}
+      {% assign tens = "Zero,Ten,Twenty,Thirty,Forty,Fifty,Sixty,Seventy,Eighty,Ninety" | split: "," %}
+      {% assign total_int = grand_value | divided_by: 100 | floor %}{% assign words = "" %}
+      {% assign crores = total_int | divided_by: 10000000 %}{% if crores > 0 %}{% assign temp = crores | modulo: 100 %}{% if temp < 20 %}{% assign words = words | append: ones[temp] | append: " " %}{% else %}{% assign td = temp | divided_by: 10 %}{% assign od = temp | modulo: 10 %}{% assign words = words | append: tens[td] %}{% if od > 0 %}{% assign words = words | append: "-" | append: ones[od] %}{% endif %}{% assign words = words | append: " " %}{% endif %}{% assign words = words | append: "Crore " %}{% assign total_int = total_int | modulo: 10000000 %}{% endif %}
+      {% assign lakhs = total_int | divided_by: 100000 %}{% if lakhs > 0 %}{% assign temp = lakhs | modulo: 100 %}{% if temp < 20 %}{% assign words = words | append: ones[temp] | append: " " %}{% else %}{% assign td = temp | divided_by: 10 %}{% assign od = temp | modulo: 10 %}{% assign words = words | append: tens[td] %}{% if od > 0 %}{% assign words = words | append: "-" | append: ones[od] %}{% endif %}{% assign words = words | append: " " %}{% endif %}{% assign words = words | append: "Lakh " %}{% assign total_int = total_int | modulo: 100000 %}{% endif %}
+      {% assign thousands = total_int | divided_by: 1000 %}{% if thousands > 0 %}{% assign temp = thousands | modulo: 100 %}{% if temp < 20 %}{% assign words = words | append: ones[temp] | append: " " %}{% else %}{% assign td = temp | divided_by: 10 %}{% assign od = temp | modulo: 10 %}{% assign words = words | append: tens[td] %}{% if od > 0 %}{% assign words = words | append: "-" | append: ones[od] %}{% endif %}{% assign words = words | append: " " %}{% endif %}{% assign words = words | append: "Thousand " %}{% assign total_int = total_int | modulo: 1000 %}{% endif %}
+      {% assign hundreds = total_int | divided_by: 100 %}{% if hundreds > 0 %}{% assign words = words | append: ones[hundreds] | append: " Hundred " %}{% assign total_int = total_int | modulo: 100 %}{% endif %}
+      {% if total_int > 0 %}{% if total_int < 20 %}{% assign words = words | append: ones[total_int] %}{% else %}{% assign td = total_int | divided_by: 10 %}{% assign od = total_int | modulo: 10 %}{% assign words = words | append: tens[td] %}{% if od > 0 %}{% assign words = words | append: "-" | append: ones[od] %}{% endif %}{% endif %}{% endif %}
+      Total Value in Words: Rupees {{ words }} Only
+    </span>
+    <span>E. &amp; O. E.</span>
+  </div>
+
+  <div class="footer-note">
+    No E-way Bill is required to be generated as the goods covered under this challan are exempted as per serial no. 4/5 to the annexure to Rule 138(14) of the CGST Rules, 2017. &nbsp;|&nbsp; Goods are being moved on approval basis and are to be returned if not accepted.
+  </div>
+
+  <div class="sign-section">
+    <div class="sign-block">
+      <strong>For Goods Received ({{ to_entity }})</strong>
+      <p>Signature &amp; Date: ___________________________</p>
+      <p style="margin-top:5px;">Official Stamp &amp; Seal</p>
+    </div>
+    <div class="sign-block" style="text-align:right;">
+      <strong>For – Auracarat Private Limited</strong>
+      <p>Authorised Signatory</p>
+      <p style="margin-top:5px;">Official Stamp &amp; Seal</p>
+    </div>
+  </div>
+
+  <div style="border-top:2px solid #000; padding:6px 14px; font-size:7px; color:#444; text-align:center;">
+    <strong>COMPUTER GENERATED DELIVERY CHALLAN</strong> — Electronically generated and legally valid per the Information Technology Act, 2000.
+  </div>
+</div>

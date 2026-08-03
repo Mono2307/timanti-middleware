@@ -453,7 +453,7 @@ async function cancelDocSerial(draft, docType, removeTag = null) {
 // Detects draft-document trigger tags and mints/retires the matching serial.
 //   make-challan     → delivery_challan (DC-…),  retire on cancel-challan
 //   make-transfer    → b2b (AURA-… ; B2B tax invoice == inter-store transfer == sale), retire on cancel-transfer
-//   make-memo-custom → memo_custom (MEMO-… ; gold+making-only custom memo), retire on cancel-memo-custom
+//   make-memo-custom → memo_custom (MEMO-… ; gold + making + 50% diamond custom memo), retire on cancel-memo-custom
 // (PO is no longer minted here — it mints at HQ acknowledge in handlePoAction.)
 // Pricing for make-memo-custom and make-transfer is applied separately by handleWeightedDocReprice (runs earlier in the webhook).
 async function handleDocumentSerialTags(draft) {
@@ -2291,7 +2291,7 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
 // (which sums Gross Value) and the order total both reflect it, with no template math change. Reads the
 // existing Gold / Diamond / Making props, falling back to the variant metafields custom.price_breakup_gold
 // / _diamond / _making (per-unit × qty). No jewelcode net-weight metafields required. Percentages:
-//   make-memo-custom → gold 100%, diamond 0%, making 100% (metal + labour only).
+//   make-memo-custom → gold 100%, diamond 50%, making 100% (full metal + labour, half the stone value).
 //   make-transfer    → per-draft custom.transfer_pct_gold / _dia / _making (each ≥0, in %, default 100).
 // The Gold / Diamond / Making breakdown props are left intact for reference; only the totals change. The
 // trigger tag is stripped in the same GraphQL write (loop prevention); the MEMO-/AURA- serial is minted
@@ -2310,8 +2310,8 @@ async function handleWeightedDocReprice(draft) {
     const token = await getShopifyToken();
     const rs = (v) => parseFloat(String(v || '0').replace('Rs', '').replace(/,/g, '').trim()) || 0;
 
-    // Component weights (fractions). memo = gold+making only; transfer = per-draft % overrides (default 100).
-    let pctGold = 1, pctDia = isMemo ? 0 : 1, pctMaking = 1;
+    // Component weights (fractions). memo = full gold+making, half diamond; transfer = per-draft % overrides (default 100).
+    let pctGold = 1, pctDia = isMemo ? 0.5 : 1, pctMaking = 1;
     if (isTransfer) {
       const { data: mfData } = await axios.get(
         `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}/metafields.json`,

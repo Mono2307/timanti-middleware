@@ -41,7 +41,7 @@ const DEFAULT_REGISTRY = {
   b2b:              { scope: 'store',  start: 1, pad: 4, fy: false, code: 'AURA-{CODE}-{SEQ}',   display: 'AURA-{CODE}-{SEQ}' },
   // Delivery challan (was memo). Origin only in the serial; destination lives in custom.delivery_code.
   delivery_challan: { scope: 'store',  start: 1, pad: 4, fy: false, code: 'DC-{CODE}-{SEQ}',     display: 'DC-{CODE}-{SEQ}' },
-  // Custom-priced memo (make-memo-custom) — line items charged on GOLD + MAKING only (diamond excluded).
+  // Custom-priced memo (make-memo-custom) — line items charged on full GOLD + MAKING and 50% of DIAMOND.
   // Own per-store counter, no FY reset, origin-only in the serial. MEMO-KAHSR-0001.
   memo_custom:      { scope: 'store',  start: 1, pad: 4, fy: false, code: 'MEMO-{CODE}-{SEQ}',   display: 'MEMO-{CODE}-{SEQ}' },
   po:               { scope: 'store',  start: 1, pad: 5, fy: false, code: 'PO-{CODE}-{SEQ}',     display: 'PO-{CODE}-{SEQ}' },
