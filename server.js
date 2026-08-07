@@ -840,7 +840,12 @@ app.get('/api/test-db', async (req, res) => {
       shopifyUrl:          process.env.SHOPIFY_STORE_URL     ? 'SET' : 'MISSING',
       shopifyClientId:     process.env.SHOPIFY_CLIENT_ID     ? 'SET' : 'MISSING ⚠️',
       shopifyClientSecret: process.env.SHOPIFY_CLIENT_SECRET ? 'SET' : 'MISSING ⚠️',
-      resendApiKey:        process.env.RESEND_API_KEY        ? 'SET' : 'MISSING ⚠️'
+      resendApiKey:        process.env.RESEND_API_KEY        ? 'SET' : 'MISSING ⚠️',
+      // Repair wallet refunds post the voucher-issue request to the sheet, and build their own
+      // signed callback URL. Both fail SOFT (the customer sees "we're on it"), so a missing secret
+      // is invisible in production unless it is surfaced here.
+      appsScriptUrl:       process.env.APPS_SCRIPT_URL       ? 'SET' : 'MISSING ⚠️',
+      serverUrl:           process.env.SERVER_URL            ? 'SET' : 'defaulting to timanti-middleware.fly.dev'
     }
   });
 });

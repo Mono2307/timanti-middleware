@@ -13,7 +13,8 @@ const {
   buildRepairAcknowledgementHtml,
   buildRepairFreeHtml,
   buildRepairHqCompleteReadyHtml,
-  buildRepairStoreApprovedCustomerHtml
+  buildRepairStoreApprovedCustomerHtml,
+  buildRepairReadyFinalHtml
 } = require('../../emailService');
 
 const { buildRepairReceivedHtml } = require('../../emailTemplates');
@@ -71,6 +72,11 @@ function generateCompleteToken(draftId) {
 function generateStoreApproveToken(draftId) {
   return crypto.createHmac('sha256', repairHmacSecret())
     .update(`store-approve:${draftId}`).digest('hex').slice(0, 32);
+}
+
+function generateRefundWalletToken(draftId) {
+  return crypto.createHmac('sha256', repairHmacSecret())
+    .update(`refund-wallet:${draftId}`).digest('hex').slice(0, 32);
 }
 
 // Verify and update SEQUEL_TRACKING_BASE in Fly.io secrets if the URL format changes
@@ -251,7 +257,7 @@ async function handleRepairPayment(draft, { transactionId, gatewayRef }, getShop
     payment_status:        'paid',
     gokwik_transaction_id: transactionId || '',
     payment_amount:        draft.total_price,
-    payment_method:        'gokwik_link',
+    payment_method:        'online_link',
     payment_date:          new Date().toISOString()
   }, token);
 
@@ -596,6 +602,8 @@ async function processRepairDraftUpdate(incomingDraft, getShopifyToken, assignRe
     let sequelId    = null;
     let trackingUrl = null;
     let storePickup = false;
+    let paidAmount  = 0;
+    let finalCost   = 0;
     try {
       const { data: mfData } = await axios.get(
         `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draft.id}/metafields.json`,
@@ -608,9 +616,89 @@ async function processRepairDraftUpdate(incomingDraft, getShopifyToken, assignRe
           trackingUrl = `${SEQUEL_TRACKING_BASE}${sequelId}`;
         }
         if (mf.key === 'repair_store_pickup' && mf.value === 'true') storePickup = true;
+        if (mf.key === 'payment_amount')     paidAmount = parseFloat(mf.value) || 0;
+        if (mf.key === 'repair_final_cost')  finalCost  = parseFloat(mf.value) || 0;
       }
     } catch (err) {
       console.warn(`⚠️  Could not fetch metafields for ${draft.name}:`, err.message);
+    }
+
+    // ── v2 ready+final email ────────────────────────────────────────────────
+    // Only when a final cost was actually recorded on the set-complete form. Without one there is
+    // nothing to reconcile, so the original "repair is ready" email still goes out unchanged — this
+    // path adds a case, it does not replace the existing behaviour.
+    //
+    //   refund  — prepaid and the final came in LOWER  → offer wallet voucher / original method
+    //   balance — prepaid and the final came in HIGHER → offer a payment link for the difference
+    //   collect — never prepaid                        → payable on collection
+    // A prepaid repair that lands exactly on estimate has no delta and falls through to the
+    // original email, which already says the right thing.
+    const delta = Math.round(paidAmount - finalCost);
+    let readyFinalMode = null;
+    if (finalCost > 0) {
+      if (paidAmount <= 0)   readyFinalMode = 'collect';
+      else if (delta > 0)    readyFinalMode = 'refund';
+      else if (delta < 0)    readyFinalMode = 'balance';
+    }
+
+    if (readyFinalMode) {
+      const serverUrl = process.env.SERVER_URL || 'https://timanti-middleware.fly.dev';
+      let refundWalletUrl = null;
+      let payBalanceUrl   = null;
+
+      if (readyFinalMode === 'refund') {
+        refundWalletUrl = `${serverUrl}/repairs/refund-wallet?d=${draft.id}&t=${generateRefundWalletToken(draft.id)}`;
+      }
+      if (readyFinalMode === 'balance') {
+        // A link for the SHORTFALL only, not the whole repair — the customer already paid the
+        // estimate. If GoKwik is unavailable we fall back to the original email rather than send a
+        // "pay now" CTA that leads nowhere.
+        try {
+          const link = await createPaymentLink({
+            draftOrderId:  draft.id.toString(),
+            amount:        Math.abs(delta),
+            customerPhone: draft.billing_address?.phone || draft.phone || '',
+            customerName,
+            customerEmail
+          });
+          payBalanceUrl = link.shortUrl;
+        } catch (err) {
+          console.error(`❌ Balance link failed for ${draft.name}: ${err.message} — falling back to the standard completion email`);
+          readyFinalMode = null;
+        }
+      }
+
+      if (readyFinalMode) {
+        try {
+          await repairSendEmail({
+            to:      customerEmail,
+            subject: `Your Repair is Ready — ${draft.name}`,
+            html:    buildRepairReadyFinalHtml({
+              draftRef:       draft.name,
+              item:           repairItemFromDraft(draft),
+              mode:           readyFinalMode,
+              estimateAmount: Math.round(paidAmount > 0 ? paidAmount : finalCost).toString(),
+              finalAmount:    Math.round(finalCost).toString(),
+              delta:          Math.abs(delta).toString(),
+              refundWalletUrl,
+              payBalanceUrl,
+              trackingId:     sequelId,
+              trackingUrl
+            })
+          });
+        } catch (err) {
+          console.error(`❌ Resend failed (ready+final) for ${draft.name}:`, err.message);
+          return;
+        }
+
+        await updateDraftOrderTags(draft.id, [...tags, 'repair-completion-notified'], token);
+        await writeDraftOrderMetafields(draft.id, {
+          repair_completed_at: new Date().toISOString()
+        }, token);
+        if (assignRepairSerial) { try { await assignRepairSerial(draft, { free: hasFreeTag }); } catch (_) {} }
+        console.log(`✅ Repair completion notified (${readyFinalMode}): ${draft.name} — paid Rs.${paidAmount}, final Rs.${finalCost}, delta Rs.${delta}`);
+        return;
+      }
     }
 
     // Determine payment context for store-pickup email
@@ -1060,6 +1148,104 @@ function registerRepairRoutes(app, getShopifyToken) {
   });
 
   // ── Approve and pay at store ──────────────────────────────────────────────
+  // ── Refund to wallet ───────────────────────────────────────────────────────
+  // Customer clicks "Refund to my Timanti wallet" on the ready+final email.
+  //
+  // The SHEET stays the system of record: this route does not mint anything
+  // itself. It gathers what only the draft knows — store code, delta, customer,
+  // source order — and posts a voucher-issue request to Apps Script, which
+  // appends the CN Log row, allocates the VCH number and calls /api/cn-email to
+  // send the customer their voucher. Store code is custom.state_code on the
+  // draft, i.e. the store that received the repair.
+  app.get('/repairs/refund-wallet', async (req, res) => {
+    const { d: draftId, t: hmacToken } = req.query;
+    if (!draftId || hmacToken !== generateRefundWalletToken(draftId)) {
+      return res.status(400).send('<h2 style="font-family:sans-serif;padding:40px;">Invalid or expired link.</h2>');
+    }
+    const page = (title, body) => `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
+      <title>${title}</title></head>
+      <body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f4f4f4;margin:0;padding:40px 20px;">
+      <div style="background:#fff;border-radius:8px;max-width:460px;margin:0 auto;padding:32px;box-shadow:0 2px 8px rgba(0,0,0,.08);text-align:center;">
+      ${body}</div></body></html>`;
+
+    try {
+      const token = await getShopifyToken();
+      const { data } = await axios.get(
+        `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftId}.json`,
+        { headers: shopifyHeaders(token), timeout: 10000 }
+      );
+      const draft = data.draft_order;
+      const tags  = (draft.tags || '').split(',').map(t => t.trim()).filter(Boolean);
+
+      if (tags.includes('repair-refund-requested')) {
+        return res.send(page('Already requested',
+          `<h2 style="font-size:20px;margin:0 0 10px;">Already requested</h2>
+           <p style="font-size:14px;color:#555;line-height:1.6;margin:0;">We have your refund request for <strong>${draft.name}</strong> and your voucher is on its way. No need to click again.</p>`));
+      }
+
+      // Everything the sheet cannot work out on its own.
+      const { data: mfData } = await axios.get(
+        `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftId}/metafields.json`,
+        { headers: shopifyHeaders(token), timeout: 10000 }
+      );
+      const mf = {};
+      for (const m of (mfData.metafields || [])) mf[`${m.namespace}.${m.key}`] = m.value;
+
+      const paid      = parseFloat(mf['timanti.payment_amount']    || '0');
+      const finalCost = parseFloat(mf['timanti.repair_final_cost']  || '0');
+      const delta     = Math.round(paid - finalCost);
+      // Store that received the repair. Compound code, e.g. KA-HSR.
+      const storeCode = mf['custom.state_code'] || null;
+      const sourceOrder = mf['custom.repair_order_reference'] || draft.name;
+
+      if (!(delta > 0)) {
+        return res.send(page('Nothing to refund',
+          `<h2 style="font-size:20px;margin:0 0 10px;">Nothing to refund</h2>
+           <p style="font-size:14px;color:#555;line-height:1.6;margin:0;">Our records show no refundable amount on <strong>${draft.name}</strong>. Please contact us and we will check for you.</p>`));
+      }
+      if (!storeCode) {
+        console.error(`refund-wallet: no custom.state_code on ${draft.name} — cannot issue a voucher without a store code`);
+        return res.send(page('We are on it',
+          `<h2 style="font-size:20px;margin:0 0 10px;">We have your request</h2>
+           <p style="font-size:14px;color:#555;line-height:1.6;margin:0;">Our team will confirm your voucher shortly.</p>`));
+      }
+      if (!process.env.APPS_SCRIPT_URL) {
+        console.error('refund-wallet: APPS_SCRIPT_URL not set — cannot reach the voucher sheet');
+        return res.send(page('We are on it',
+          `<h2 style="font-size:20px;margin:0 0 10px;">We have your request</h2>
+           <p style="font-size:14px;color:#555;line-height:1.6;margin:0;">Our team will confirm your voucher shortly.</p>`));
+      }
+
+      await axios.post(process.env.APPS_SCRIPT_URL, {
+        action:         'issue_voucher',
+        source:         'repair-refund',
+        draft_ref:      draft.name,
+        store_code:     storeCode,
+        value:          delta,
+        customer_name:  draft.billing_address?.name || draft.email,
+        customer_email: draft.email,
+        source_order:   sourceOrder
+      }, { headers: { 'Content-Type': 'application/json' }, timeout: 15000 });
+
+      await updateDraftOrderTags(draft.id, [...tags, 'repair-refund-requested', 'repair-refund-wallet'], token);
+      await writeDraftOrderMetafields(draft.id, {
+        repair_refund_choice:       'wallet',
+        repair_refund_requested_at: new Date().toISOString()
+      }, token);
+
+      console.log(`✅ Wallet refund requested: ${draft.name} — Rs.${delta} @ ${storeCode} → sheet`);
+      return res.send(page('Refund requested',
+        `<h2 style="font-size:20px;margin:0 0 10px;">Your voucher is on its way</h2>
+         <p style="font-size:14px;color:#555;line-height:1.6;margin:0 0 12px;">We are issuing a Timanti voucher for <strong>Rs.${delta}</strong> against <strong>${draft.name}</strong>.</p>
+         <p style="font-size:13px;color:#888;line-height:1.6;margin:0;">You will receive it by email shortly. It is valid for 365 days and can be used online or in store.</p>`));
+    } catch (err) {
+      console.error('refund-wallet error:', err.response?.data || err.message);
+      return res.status(200).send(page('We are on it',
+        `<h2 style="font-size:20px;margin:0 0 10px;">We have your request</h2>
+         <p style="font-size:14px;color:#555;line-height:1.6;margin:0;">Something went wrong at our end, but your request is logged. Our team will be in touch to confirm your voucher.</p>`));
+    }
+  });
+
   app.get('/repairs/approve-store', async (req, res) => {
     const { d: draftId, t: hmacToken } = req.query;
     if (!draftId || hmacToken !== generateStoreApproveToken(draftId)) {
