@@ -496,6 +496,7 @@ async function getCollectionBase(draftOrderId, fallbackTotal) {
 // backfill script and unit tests can use the same arithmetic. See that file for the data model.
 const {
   MAX_INSTALLMENTS, readInstallments, sumInstallments, installmentModes, installmentLegPatch,
+  materializeLegacyLeg,
 } = require('./services/payment-installments/installments');
 const backfillInstallments = require('./services/payment-installments/backfill-installments');
 
@@ -559,7 +560,11 @@ async function reconcileDepositPaid(draftOrderId, deposit) {
 // engine, the adjustment report) get total + 0. Splitting the value across both fields instead
 // would make the summing readers double-count.
 function paymentLegPatch(state, { value, mode, date }, cumulativePaid) {
-  const patch = installmentLegPatch(state.rows, { value, mode, date });
+  // Fold any pre-installment balance into its own leg FIRST, so the new payment lands in the next
+  // free slot after it and the leg sum reconciles to amount_paid. Without this the older money has
+  // no leg, and the next recompute writes the balance down by exactly that amount.
+  const { rows, patch: legacyPatch } = materializeLegacyLeg(state.map, state.rows);
+  const patch = Object.assign({}, legacyPatch, installmentLegPatch(rows, { value, mode, date }));
   patch.amount_paid = cumulativePaid.toFixed(2);
   patch.amount_paid_final = '0'; // legacy field, retired at rollout step 6
   return patch;
@@ -2502,7 +2507,11 @@ async function applyPaymentTagsToOrder(orderId, token) {
   // predating the migration, which carry only the two-slot pair.
   const mfMap = {};
   for (const m of (mfData.metafields || [])) if (m.namespace === 'custom') mfMap[m.key] = m.value;
-  const legs        = readInstallments(mfMap);
+  // Fold any pre-installment balance into its own leg before trusting the leg sum — otherwise a
+  // document paid the old way has its balance written down by exactly the un-legged amount.
+  const legsRaw     = readInstallments(mfMap);
+  const legacyFold  = materializeLegacyLeg(mfMap, legsRaw);
+  const legs        = legacyFold.rows;
   const legacyPaid  = (parseFloat(mf('amount_paid') || 0) || 0) + (parseFloat(mf('amount_paid_final') || 0) || 0);
   const amountPaid  = legs.length ? sumInstallments(legs) : legacyPaid;
   const modes       = legs.length ? installmentModes(legs)
@@ -2523,7 +2532,7 @@ async function applyPaymentTagsToOrder(orderId, token) {
   // Persist the derived balance + status on the order so re-downloads/reporting read them.
   // A cad_advance-only order has amountPaid 0 by design but still has a real balance to publish.
   if (isFull || isPartial || legs.length) {
-    const patch = {};
+    const patch = Object.assign({}, legacyFold.patch);
     // amount_paid is DERIVED from the legs. The admin panel writes legs but never the total (it is
     // read-only there), and the CAD flip changes the sum without touching any leg value — so
     // re-summing here is what keeps the figure the invoice prints actually true.
@@ -2598,7 +2607,11 @@ async function applyPaymentTagsToDraftOrder(draftOrderId, token) {
   // Legacy fallback covers drafts predating the migration, which carry only the two-slot pair.
   const mfMap = {};
   for (const m of (mfData.metafields || [])) if (m.namespace === 'custom') mfMap[m.key] = m.value;
-  const legs        = readInstallments(mfMap);
+  // Fold any pre-installment balance into its own leg before trusting the leg sum — otherwise a
+  // document paid the old way has its balance written down by exactly the un-legged amount.
+  const legsRaw     = readInstallments(mfMap);
+  const legacyFold  = materializeLegacyLeg(mfMap, legsRaw);
+  const legs        = legacyFold.rows;
   const legacyPaid  = (parseFloat(mf('amount_paid') || 0) || 0) + (parseFloat(mf('amount_paid_final') || 0) || 0);
   const amountPaid  = legs.length ? sumInstallments(legs) : legacyPaid;
   const modes       = legs.length ? installmentModes(legs)
@@ -2628,7 +2641,7 @@ async function applyPaymentTagsToDraftOrder(draftOrderId, token) {
   // Metafield writes don't fire the draft webhook → no loop.
   // A cad_advance-only draft has amountPaid 0 by design but still has a real balance to publish.
   if (isFull || isPartial || legs.length) {
-    const patch = {};
+    const patch = Object.assign({}, legacyFold.patch);
     // amount_paid is DERIVED from the legs. The admin panel writes legs but never the total (it is
     // read-only there), and the CAD flip changes the sum without touching any leg value — so
     // re-summing here is what keeps the figure the invoice prints actually true.

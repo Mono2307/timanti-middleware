@@ -54,6 +54,41 @@ function installmentModes(rows) {
   return [...new Set((rows || []).map(r => r.mode).filter(Boolean))];
 }
 
+// A document paid BEFORE installments existed carries amount_paid with no legs behind it. The
+// moment one leg appears, every recompute starts trusting the leg sum — and silently writes the
+// balance down by the un-legged amount. Seen live on #D194: Rs10,000 recorded the old way, a
+// Rs5,000 leg added, and the next sync reset amount_paid from 15,000 to 5,000.
+//
+// So before anything reads the legs as authoritative, fold that residue into its own leg. The date
+// is left blank because it is genuinely unknown — inventing today's date would print a false
+// receipt date on the customer's invoice. Mode falls back to the legacy two-slot fields.
+//
+// Returns the effective rows plus the patch needed to persist the synthetic leg ({} when none).
+function materializeLegacyLeg(mfMap, rows) {
+  const recorded = parseFloat((mfMap || {}).amount_paid) || 0;
+  const residue  = recorded - sumInstallments(rows);
+  if (!(residue >= 0.5)) return { rows, patch: {} };
+
+  const used = new Set((rows || []).map(r => r.slot));
+  let slot = 0;
+  for (let n = 1; n <= MAX_INSTALLMENTS; n++) { if (!used.has(n)) { slot = n; break; } }
+  // No free slot: leave it alone. Losing the audit trail beats losing the money.
+  if (!slot) {
+    console.warn(`[payments] Rs${residue.toFixed(2)} recorded before installments has no free slot — amount_paid left as-is`);
+    return { rows, patch: {} };
+  }
+
+  const mode = String((mfMap.payment_mode_advance || mfMap.payment_mode_final || '')).trim();
+  const patch = { [`installment_${slot}_value`]: residue.toFixed(2) };
+  if (mode) patch[`installment_${slot}_mode`] = mode;
+  console.log(`[payments] folded Rs${residue.toFixed(2)} of pre-installment payment into slot ${slot}${mode ? ` (${mode})` : ''}`);
+
+  return {
+    rows: rows.concat([{ slot, value: residue, mode, date: '', type: 'payment' }]).sort((a, b) => a.slot - b.slot),
+    patch,
+  };
+}
+
 // Metafield patch placing one new leg in the next free slot.
 // Slots exhausted → fold the overflow into the last slot rather than dropping the payment; the
 // money must never disappear just because someone took a 5th instalment.
@@ -85,4 +120,5 @@ module.exports = {
   sumInstallments,
   installmentModes,
   installmentLegPatch,
+  materializeLegacyLeg,
 };

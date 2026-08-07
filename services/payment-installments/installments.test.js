@@ -1,6 +1,7 @@
 const assert = require('assert');
 const {
   MAX_INSTALLMENTS, readInstallments, sumInstallments, installmentModes, installmentLegPatch,
+  materializeLegacyLeg,
 } = require('./installments');
 
 let n = 0;
@@ -135,6 +136,46 @@ t('appending never loses money across a full 4-leg sequence', () => {
   for (const leg of legs) Object.assign(map, installmentLegPatch(readInstallments(map), leg));
   const total = legs.reduce((s, l) => s + l.value, 0);
   assert.strictEqual(sumInstallments(readInstallments(map)), total);
+});
+
+console.log(`\n${n} assertions passed`);
+
+console.log('materializeLegacyLeg — the #D194 regression');
+t('folds pre-installment money into a free slot', () => {
+  // Live shape of #D194 after one new leg: Rs10,000 recorded the old way, Rs5,000 as leg 1.
+  const map = { amount_paid: '15000', payment_mode_advance: 'card',
+                installment_1_value: '5000', installment_1_mode: 'upi', installment_1_date: '2026-08-07' };
+  const { rows, patch } = materializeLegacyLeg(map, readInstallments(map));
+  assert.strictEqual(patch.installment_2_value, '10000.00');
+  assert.strictEqual(patch.installment_2_mode, 'card');   // from the legacy two-slot field
+  assert.strictEqual(patch.installment_2_date, undefined); // unknown — never invent a receipt date
+  assert.strictEqual(sumInstallments(rows), 15000);        // reconciles to amount_paid
+});
+t('the bug it fixes: without folding, the sum understates what was collected', () => {
+  const map = { amount_paid: '15000', installment_1_value: '5000' };
+  assert.strictEqual(sumInstallments(readInstallments(map)), 5000);  // what shipped — Rs10,000 lost
+  assert.strictEqual(sumInstallments(materializeLegacyLeg(map, readInstallments(map)).rows), 15000);
+});
+t('no-op once legs already reconcile', () => {
+  const map = { amount_paid: '8000', installment_1_value: '5000', installment_2_value: '3000' };
+  const { rows, patch } = materializeLegacyLeg(map, readInstallments(map));
+  assert.deepStrictEqual(patch, {});
+  assert.strictEqual(rows.length, 2);
+});
+t('no-op on a clean draft with no payments', () => {
+  assert.deepStrictEqual(materializeLegacyLeg({}, []).patch, {});
+});
+t('never fabricates a leg when slots are full — money over audit trail', () => {
+  const map = { amount_paid: '99999' };
+  for (let i = 1; i <= 4; i++) map[`installment_${i}_value`] = '1000';
+  const { patch } = materializeLegacyLeg(map, readInstallments(map));
+  assert.deepStrictEqual(patch, {});
+});
+t('ignores a cad_advance leg when measuring the residue', () => {
+  // cad_advance is excluded from amount_paid, so it must not count as covering it.
+  const map = { amount_paid: '5000', installment_1_value: '2000', installment_1_type: 'cad_advance' };
+  const { patch } = materializeLegacyLeg(map, readInstallments(map));
+  assert.strictEqual(patch.installment_2_value, '5000.00');
 });
 
 console.log(`\n${n} assertions passed`);
