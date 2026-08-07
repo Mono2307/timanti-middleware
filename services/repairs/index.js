@@ -16,7 +16,29 @@ const {
   buildRepairStoreApprovedCustomerHtml
 } = require('../../emailService');
 
+const { buildRepairReceivedHtml } = require('../../emailTemplates');
+
 const REPAIR_TEST_EMAIL = 'monodeep.dutta@timanti.in'; // revert after testing
+
+// Build the item block for the v2 email templates from the repair draft's line-item
+// properties. These are written by fetchAndCopyOriginalOrderSpecs from the ORIGINAL
+// order — the draft's own line item is a custom one titled "repair", which is why we
+// never read draft.line_items[0].title here.
+// `freshSpecs` is what fetchAndCopyOriginalOrderSpecs just wrote. Prefer it: the
+// in-memory draft was read BEFORE that write, so its properties are stale on the
+// intake pass. Falls back to the draft's own properties on later triggers.
+function repairItemFromDraft(draft, freshSpecs) {
+  const li    = draft.line_items?.[0] || {};
+  const props = {};
+  for (const p of (li.properties || [])) props[p.name] = p.value;
+  Object.assign(props, freshSpecs || {});
+  return {
+    title:    props._item_title || li.title || 'Your jewellery',
+    qty:      li.quantity || 1,
+    variant:  props._variant_title || '',
+    imageUrl: props._image_url || null
+  };
+}
 
 // In-process lock — prevents burst of secondary webhooks (from our own API calls) re-triggering emails
 const processingDrafts = new Set();
@@ -109,7 +131,7 @@ async function fetchAndCopyOriginalOrderSpecs(draft, token) {
       { headers: shopifyHeaders(token), timeout: 10000 }
     );
     const refMf = (mfData.metafields || []).find(m => m.namespace === 'custom' && m.key === 'repair_order_reference');
-    if (!refMf?.value) return;
+    if (!refMf?.value) return false;
 
     const orderRef = refMf.value.trim();
     const { data: ordersData } = await axios.get(
@@ -117,14 +139,14 @@ async function fetchAndCopyOriginalOrderSpecs(draft, token) {
       { headers: shopifyHeaders(token), timeout: 10000 }
     );
     const origOrder = ordersData.orders?.[0];
-    if (!origOrder) { console.warn(`fetchAndCopyOriginalOrderSpecs: order ${orderRef} not found`); return; }
+    if (!origOrder) { console.warn(`fetchAndCopyOriginalOrderSpecs: order ${orderRef} not found`); return false; }
 
     const origItem = origOrder.line_items?.[0];
-    if (!origItem) return;
+    if (!origItem) return false;
 
     // Start with specs already in original line item properties
     const specs = {};
-    const SPEC_KEYS = ['_gross_wt', '_net_wt', '_diamond_cts', '_diamond_pcs', '_gemstone_cts', '_item_title', '_sku', '_variant_title'];
+    const SPEC_KEYS = ['_gross_wt', '_net_wt', '_diamond_cts', '_diamond_pcs', '_gemstone_cts', '_item_title', '_sku', '_variant_title', '_image_url'];
     for (const p of (origItem.properties || [])) {
       if (SPEC_KEYS.includes(p.name)) specs[p.name] = p.value;
     }
@@ -159,11 +181,32 @@ async function fetchAndCopyOriginalOrderSpecs(draft, token) {
       }
     }
 
-    if (Object.keys(specs).length === 0) { console.log(`fetchAndCopyOriginalOrderSpecs: no specs found on ${orderRef}`); return; }
+    // Product image for the item table. Line-item properties are text-only, so we
+    // resolve the image URL once here rather than making the email builder call
+    // Shopify at send time. Best effort — a missing image falls back to the mark.
+    if (!specs._image_url && origItem.product_id) {
+      try {
+        const { data: prod } = await axios.get(
+          `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/products/${origItem.product_id}.json?fields=id,image,images,variants`,
+          { headers: shopifyHeaders(token), timeout: 10000 }
+        );
+        let img = null;
+        if (origItem.variant_id) {
+          const v = (prod.product?.variants || []).find(x => String(x.id) === String(origItem.variant_id));
+          if (v?.image_id) img = (prod.product?.images || []).find(i => String(i.id) === String(v.image_id))?.src || null;
+        }
+        if (!img) img = prod.product?.image?.src || (prod.product?.images || [])[0]?.src || null;
+        if (img) specs._image_url = img;
+      } catch (err) {
+        console.warn(`fetchAndCopyOriginalOrderSpecs: image lookup failed for ${orderRef}:`, err.message);
+      }
+    }
+
+    if (Object.keys(specs).length === 0) { console.log(`fetchAndCopyOriginalOrderSpecs: no specs found on ${orderRef}`); return false; }
 
     // Write specs to repair draft line item properties (preserve any already set)
     const firstItem = draft.line_items?.[0];
-    if (!firstItem) return;
+    if (!firstItem) return false;
     const existingProps = (firstItem.properties || []).filter(p => !SPEC_KEYS.includes(p.name));
     const newProps = [...existingProps, ...Object.entries(specs).map(([name, value]) => ({ name, value }))];
 
@@ -176,8 +219,12 @@ async function fetchAndCopyOriginalOrderSpecs(draft, token) {
       { headers: shopifyHeaders(token), timeout: 10000 }
     );
     console.log(`✅ Copied ${Object.keys(specs).length} spec(s) from ${orderRef} → ${draft.name}: ${Object.keys(specs).join(', ')}`);
+    // Return the specs themselves, not just a flag: the caller's in-memory draft was
+    // read before this write, so it needs these values to render the item table.
+    return specs;
   } catch (err) {
     console.warn(`⚠️  fetchAndCopyOriginalOrderSpecs failed for ${draft.name}:`, err.message);
+    return false;
   }
 }
 
@@ -281,7 +328,7 @@ async function processRepairDraftUpdate(incomingDraft, getShopifyToken, assignRe
     console.warn(`handleRepairDraftUpdate: re-fetch failed for ${incomingDraft.id}, using payload:`, err.message);
   }
 
-  const tags = (draft.tags || '').split(',').map(t => t.trim()).filter(Boolean);
+  let tags = (draft.tags || '').split(',').map(t => t.trim()).filter(Boolean);
 
   // ── Trigger 0: intake → HQ notification + customer acknowledgement ────────
   if (tags.includes('repair-intake') && !tags.includes('repair-hq-notified')) {
@@ -292,6 +339,55 @@ async function processRepairDraftUpdate(incomingDraft, getShopifyToken, assignRe
     const hqEmail = process.env.HQ_EMAIL;
     if (!hqEmail) console.warn(`⚠️  HQ_EMAIL not set — no HQ intake email for ${draft.name}`);
     const shopifyToken    = await getShopifyToken();
+
+    // ── GATE: the original Timanti order reference is MANDATORY ──────────────
+    // Every customer-facing repair email shows the real piece — name, variant and
+    // image — and all of that is copied from the original order. Without the
+    // reference there is nothing to copy and the item table would render the raw
+    // custom line item, i.e. the word "repair". So we do not send at all: we tag
+    // the draft, tell HQ, and stop. Filling the metafield re-fires this webhook
+    // and the intake proceeds normally, because repair-hq-notified is never set.
+    const specsCopied = await fetchAndCopyOriginalOrderSpecs(draft, shopifyToken);
+    if (!specsCopied) {
+      if (!tags.includes('repair-missing-order-ref')) {
+        await updateDraftOrderTags(draft.id, [...tags, 'repair-missing-order-ref'], shopifyToken);
+        if (hqEmail) {
+          try {
+            await repairSendEmail({
+              to:      hqEmail,
+              cc:      process.env.HQ_CC_EMAIL,
+              subject: `Action needed — missing order reference on ${draft.name}`,
+              html:    `<div style="font-family:Arial,sans-serif;padding:24px;max-width:520px;">
+                <h2 style="font-size:18px;margin:0 0 12px;">Repair intake is on hold</h2>
+                <p style="font-size:14px;color:#444;line-height:1.6;margin:0 0 12px;">
+                  <strong>${draft.name}</strong> was tagged <code>repair-intake</code> but the metafield
+                  <code>custom.repair_order_reference</code> is empty or does not match a Shopify order.
+                </p>
+                <p style="font-size:14px;color:#444;line-height:1.6;margin:0 0 12px;">
+                  No emails have been sent to the customer. Add the original Timanti order number to the
+                  draft and save — the intake will then run automatically.
+                </p>
+                <p style="font-size:13px;color:#888;line-height:1.6;margin:0;">
+                  This gate exists because the item name, variant and image on every repair email are copied
+                  from that original order.
+                </p>
+              </div>`
+            });
+          } catch (err) {
+            console.error(`❌ Missing-order-ref HQ alert failed for ${draft.name}:`, err.message);
+          }
+        }
+      }
+      console.warn(`⛔ Repair intake HELD — no usable custom.repair_order_reference on ${draft.name}`);
+      return;
+    }
+    // Reference is good and specs are now on the line item, so the emails below
+    // can render the real piece. Clear the hold tag if it was set on an earlier pass.
+    if (tags.includes('repair-missing-order-ref')) {
+      tags = tags.filter(t => t !== 'repair-missing-order-ref');
+      await updateDraftOrderTags(draft.id, tags, shopifyToken);
+    }
+
     const customerName    = draft.billing_address?.name || draft.email;
     const customerEmail   = draft.email;
     const customerPhone   = draft.billing_address?.phone || draft.phone || '';
@@ -320,8 +416,8 @@ async function processRepairDraftUpdate(incomingDraft, getShopifyToken, assignRe
       try {
         await repairSendEmail({
           to:      customerEmail,
-          subject: `We've Received Your Item — ${draft.name}`,
-          html:    buildRepairAcknowledgementHtml({ customerName, draftRef: draft.name, itemDesc })
+          subject: `We've received your jewellery for repair`,
+          html:    buildRepairReceivedHtml({ draftRef: draft.name, item: repairItemFromDraft(draft, specsCopied) })
         });
       } catch (err) {
         console.error(`❌ Intake ack email failed for ${draft.name}:`, err.message);
@@ -334,7 +430,9 @@ async function processRepairDraftUpdate(incomingDraft, getShopifyToken, assignRe
     if (hqEmailFailed) intakeTags.push('repair-hq-email-failed');
     await updateDraftOrderTags(draft.id, intakeTags, shopifyToken);
     await writeDraftOrderMetafields(draft.id, { repair_intake_at: new Date().toISOString() }, shopifyToken);
-    await fetchAndCopyOriginalOrderSpecs(draft, shopifyToken);
+    // Specs were copied BEFORE the sends above (see the gate at the top of this trigger) so the
+    // acknowledgement can render the real piece. This used to run here, after the emails, which
+    // meant the first email always showed the raw "repair" line item with no image.
     // NOTE: serial is NOT minted at intake (v2). It mints only at repair-complete, and never
     // for free repairs — so abandoned/free intakes never burn a number. See Trigger 3 below.
     console.log(hqEmailFailed
@@ -776,6 +874,8 @@ function registerRepairRoutes(app, getShopifyToken) {
       const d = data.draft_order;
       const customerName = d.billing_address?.name || d.email || 'Customer';
       const itemDesc     = d.line_items?.[0]?.title || 'Repair service';
+      // Pre-fill the final-cost box with the estimate so "nothing changed" is a single click.
+      const estimateAmount = Math.round(parseFloat(d.total_price) || 0).toString();
 
       res.send(`<!DOCTYPE html>
 <html lang="en">
@@ -830,6 +930,10 @@ function registerRepairRoutes(app, getShopifyToken) {
         <p class="hint">Leave blank if no tracking needed.</p>
       </div>
       <hr style="border:none; border-top:1px solid #eee; margin:20px 0;">
+      <label for="finalCost">Final Repair Cost <span class="opt-label">(what the repair actually cost)</span></label>
+      <input id="finalCost" name="finalCost" type="text" inputmode="decimal" value="${estimateAmount}" placeholder="e.g. 3500">
+      <p class="hint">Pre-filled with the estimate. Leave as-is if the cost did not change. Enter on the <strong>same basis as the estimate</strong> you sent the customer (inclusive or exclusive of GST — whichever you quoted).</p>
+      <hr style="border:none; border-top:1px solid #eee; margin:20px 0;">
       <label>Post-Repair Specs <span class="opt-label">(optional — written to order metafields; pre-repair specs are unchanged)</span></label>
       <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:8px;">
         <div>
@@ -872,7 +976,7 @@ function registerRepairRoutes(app, getShopifyToken) {
 
   app.post('/repairs/set-complete', async (req, res) => {
     const body = typeof req.body === 'string' ? Object.fromEntries(new URLSearchParams(req.body)) : (req.body || {});
-    const { draftId, token: hmacToken, sequelId, storePickup, postNetWt, postGrossWt, postDiaCts, postGemCts } = body;
+    const { draftId, token: hmacToken, sequelId, storePickup, finalCost, postNetWt, postGrossWt, postDiaCts, postGemCts } = body;
     if (!draftId || hmacToken !== generateCompleteToken(draftId)) {
       return res.status(400).send('<h2 style="font-family:sans-serif;padding:40px;">Invalid or expired link.</h2>');
     }
@@ -891,6 +995,12 @@ function registerRepairRoutes(app, getShopifyToken) {
       const completeMf = {};
       if (!isStorePickup && sequelId && sequelId.trim()) completeMf.repair_tracking_id  = sequelId.trim();
       if (isStorePickup)                                  completeMf.repair_store_pickup = 'true';
+      // Final cost as entered by HQ at completion. Recorded on the SAME basis as the estimate
+      // (see the form hint), so the delta against payment_amount is a like-for-like comparison
+      // and stays correct whichever GST basis the estimate was quoted on.
+      if (finalCost && String(finalCost).trim() && !isNaN(parseFloat(finalCost))) {
+        completeMf.repair_final_cost = String(Math.round(parseFloat(finalCost)));
+      }
       if (Object.keys(completeMf).length > 0) {
         await writeDraftOrderMetafields(draft.id, completeMf, shopifyToken);
       }
