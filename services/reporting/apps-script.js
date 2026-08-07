@@ -30,7 +30,7 @@ const REPORTS = {
       { label: 'State (opt)',       param: 'state' },
       { label: 'Stage (opt)',       param: 'paymentStatus' },
     ],
-    cols: ['stage','draft_name','order_name','day','customer','place_of_supply','shipping_state',
+    cols: ['stage','payment_type','draft_name','order_name','day','customer','place_of_supply','shipping_state',
            'product_title','variant_title','sku','hsn','qty','gross_sales','discount','net_sales',
            'taxable_value','igst','sgst','cgst','custom_serial','amount_paid','amount_pending',
            'net_to_collect','payment_mode'],
@@ -43,7 +43,8 @@ const REPORTS = {
     ],
     cols: ['name','created_at','customer','place_of_supply','shipping_state','custom_serial','hsn',
            'qty','gross_value','discount_applied','taxable_value','igst','sgst','cgst','voucher_value',
-           'exchange_note_value','old_gold_value','advance','amount_to_be_collected','amount_paid','total_price'],
+           'exchange_note_value','old_gold_value','advance','amount_to_be_collected','amount_paid','total_price',
+           'instruments_issued','instruments_redeemed'],
   },
   recon: {
     tab: 'Payment Recon', endpoint: '/api/recon', extraQp: 'format=json',
@@ -52,7 +53,7 @@ const REPORTS = {
   ledger: {
     tab: 'Credit Ledger', endpoint: '/api/recon-ledger',
     filters: [
-      { label: 'View (summary|outstanding|tieout)', param: 'view' },
+      { label: 'View (detail|summary|outstanding|tieout)', param: 'view' },
       { label: 'Type (opt)', param: 'type' },
       { label: 'From (opt)', param: 'from' },
       { label: 'To (opt)',   param: 'to' },
@@ -115,11 +116,17 @@ function generate_(key) {
   const ss  = SpreadsheetApp.getActiveSpreadsheet();
   const sh  = ss.getSheetByName(cfg.tab) || ss.insertSheet(cfg.tab);
 
-  // Lay out filter labels in col A (idempotent) and read the values from col B.
+  // TWO PASSES, deliberately. Pass 1 lays out EVERY filter label; pass 2 reads and validates.
+  // Doing both in one loop meant that on a fresh tab the first required filter was empty, so it
+  // alerted and returned before the remaining labels were ever written — you had to re-run the
+  // report once per filter just to see what to fill in.
+  for (let i = 0; i < cfg.filters.length; i++) {
+    sh.getRange(i + 1, 1).setValue(cfg.filters[i].label).setFontWeight('bold');
+  }
+
   const params = {};
   for (let i = 0; i < cfg.filters.length; i++) {
     const f = cfg.filters[i];
-    sh.getRange(i + 1, 1).setValue(f.label).setFontWeight('bold');
     const raw = sh.getRange(i + 1, 2).getValue();
     const val = /date|from|to/i.test(f.param) ? fmtDate_(raw) : String(raw || '').trim();
     if (f.required && !val) { ui.alert('Fill "' + f.label + '" (cell B' + (i + 1) + ') first.'); return; }
