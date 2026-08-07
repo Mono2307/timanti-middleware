@@ -1,0 +1,3 @@
+S. No.,Transaction Type,Payment Id,Order Id,Amount,Currency,Tax,Fee,Additional Fees,Additional Tax,gokwik Deduction,Debit,Credit,Payment Method,Transaction Date,Transaction RRN,Merchant Order Id,Platform Order Id,Shopify Transaction Id,Settlement UTR,Settlement Date,Settled By,Payment Mode,Bank Code,Card Network
+1,Payment,KWIKQZ9I9GIQ2894917MP,GKMREFIRAEOORMAYADCLZ,135000.0000,INR,607.5000,3375.0000,0.0000,0.0000,0.0000,0.0000,131017.5000,cc,18/7/2026 04:38 PM,E26071812MVZRS,,,,YESF262015908554,20/7/2026 05:30 AM,easebuzz,,,MAST
+2,Payment,KWIKM23KUNPE0099468MP,GKMREFT966M2WNZF234UE,20000.0000,INR,90.0000,500.0000,0.0000,0.0000,0.0000,0.0000,19410.0000,emi-cc,26/7/2026 09:05 PM,E260726134CCRF,,,,YESF262095893161,28/7/2026 05:30 AM,easebuzz,,,VISA
