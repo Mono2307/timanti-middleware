@@ -22,8 +22,10 @@ import { useEffect, useRef, useState } from "preact/hooks";
  */
 // Founder flow: identity header (top, read-only) → Required Inputs → Installments → Payments →
 // Pricing (incl. discounts) → Product Metadata → Adjustments (selector + values) →
-// Repair → Credit Note → Manufacturing → System. "Order Details" is gone (its
-// fields are Required), "Exchange" was always dead, "Procurement" PO fields removed.
+// Repair → Credit Note → System. "Order Details" is gone (its fields are Required),
+// "Exchange" was always dead, "Procurement" and "Manufacturing" PO/notes fields removed.
+// A section named in FIELD_CONFIG but absent from this list renders nothing — that is how the
+// unused fields are hidden while keeping their config as documentation.
 //
 // Installments sits FIRST so the payment table reads as one block. Leg 1 is marked required in
 // FIELD_CONFIG rather than promoted into Required Inputs, which would split it from legs 2-4.
@@ -35,7 +37,6 @@ const SECTION_ORDER = [
   "Adjustments",
   "Repair",
   "Credit Note",
-  "Manufacturing",
   "System",
 ];
 
@@ -151,6 +152,10 @@ const FIELD_CONFIG = {
   diamond_cts: { section: "Product Metadata", label: "Diamond Carats (legacy)", editable: false, applies: "draft" },
 
   // Read-only PO display fields (po_status/po_type/po_routing/batch_*) are intentionally
+  // "Manufacturing" is now unlisted too — replenishment notes, MTO notes and the PO variant lists
+  // were never used from this panel. delivery_code was the one live field in it and has moved to
+  // System, next to state_code: it exists only to print the delivery challan raised off a draft via
+  // make-memo-custom, which is not enough to justify a section of its own.
   // left in the now-unlisted "Procurement" section so they no longer render in this panel
   // (redundant here; still set/used server-side and in PO-ops). The EDITABLE staff inputs
   // below are relocated to "Manufacturing" so they survive.
@@ -159,10 +164,9 @@ const FIELD_CONFIG = {
   po_routing: { section: "Procurement", label: "PO Routing (JSON)", editable: false, applies: "both" },
   batch_id: { section: "Procurement", label: "PO Batch ID", editable: false, applies: "draft" },
   batch_date: { section: "Procurement", label: "PO Batch Date", editable: false, applies: "draft" },
-  delivery_code: { section: "Manufacturing", label: "Delivery / Store Code", editable: true, applies: "draft" },
-  replenishment_comments: { section: "Manufacturing", label: "Replenishment Notes", editable: true, applies: "both" },
-  po_replenishment_variants: { section: "Manufacturing", label: "Replenishment Variants", editable: true, applies: "order" },
-  po_mto_variants: { section: "Manufacturing", label: "MTO Variants", editable: true, applies: "order" },
+  replenishment_comments: { section: "Procurement", label: "Replenishment Notes", editable: true, applies: "both" },
+  po_replenishment_variants: { section: "Procurement", label: "Replenishment Variants", editable: true, applies: "order" },
+  po_mto_variants: { section: "Procurement", label: "MTO Variants", editable: true, applies: "order" },
 
   repair_order_reference: { section: "Repair", label: "Linked Repair Order", editable: true, applies: "draft" },
   repair_intake_at: { section: "Repair", label: "Repair Intake At", editable: false, applies: "draft" },
@@ -170,10 +174,12 @@ const FIELD_CONFIG = {
   repair_completed_at: { section: "Repair", label: "Repair Completed At", editable: false, applies: "draft" },
   repair_store_pickup: { section: "Repair", label: "Store Pickup", editable: false, applies: "draft" },
 
-  mto_comments: { section: "Manufacturing", label: "Manufacturing Notes", editable: true, applies: "order" },
-  mto_comment: { section: "Manufacturing", label: "Manufacturing Note", editable: true, applies: "draft" },
+  mto_comments: { section: "Procurement", label: "Manufacturing Notes", editable: true, applies: "order" },
+  mto_comment: { section: "Procurement", label: "Manufacturing Note", editable: true, applies: "draft" },
 
   state_code: { section: "System", label: "Store / State Code", editable: true, applies: "both" },
+  // Draft-only, and only read when a delivery challan is raised off the draft via make-memo-custom.
+  delivery_code: { section: "System", label: "Delivery / Store Code (delivery challan)", editable: true, applies: "draft" },
   invoice_date: { section: "System", label: "Invoice Date", editable: true, applies: "both" },
   is_finalized: { section: "System", label: "Finalized", editable: false, applies: "both" },
   order_name: { section: "System", label: "Linked Order Name", editable: false, applies: "draft" },
