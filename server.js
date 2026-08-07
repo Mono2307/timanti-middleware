@@ -3785,7 +3785,7 @@ app.post('/api/gokwik-webhook', async (req, res) => {
         is_partial:         true,
         pine_ref_id:        null,
         id:                 `gk-${transaction_id}`
-      }, { utr: gateway_reference_id, paymentSource: 'gokwik', paymentModeOverride: 'gokwik_link' });
+      }, { utr: gateway_reference_id, paymentSource: 'gokwik', paymentModeOverride: 'online_link' });
     }
 
     if (status === 'cancelled' || status === 'expired') {
@@ -5553,10 +5553,10 @@ const ADJUSTMENT_MF_DEFS = [
 ];
 
 // Mode list used only when the live custom.payment_mode_advance definition carries no choices
-// validation. These mirror values already present on live records — note 'bank transfer' has a
-// space where 'gokwik_link' has an underscore. Both are real; do NOT normalise, existing records
-// depend on the exact strings.
-const PAYMENT_MODE_FALLBACK = ['upi', 'card', 'cash', 'pos', 'gokwik_link', 'bank transfer'];
+// validation. Mirrors the live enum as of 2026-08-07, plus the modes this server writes itself.
+// Note 'bank transfer' has a space where 'online_link' has an underscore — both are real, do NOT
+// normalise, existing records depend on the exact strings.
+const PAYMENT_MODE_FALLBACK = ['cash', 'upi', 'card', 'online_link', 'bank transfer', 'pos'];
 
 // Reads the authoritative payment-mode enum off the existing payment_mode_advance definition so
 // the installment mode dropdowns offer exactly the same values as the field they replace.
@@ -5623,6 +5623,16 @@ async function runEnsureMetafieldDefinitions(req, res) {
   if (group !== 'adjustments') {
     const live = await fetchPaymentModeChoices(token);
     if (live) { modeChoices = live; modeChoicesSource = 'live:custom.payment_mode_advance'; }
+    // A choices validation is enforced ON WRITE, so the enum must cover every mode this server can
+    // emit or that payment silently fails to record a leg. 'pos' is the fallback when a transaction
+    // carries no mode of its own and is not in the staff-facing list. Union rather than replace —
+    // never narrow an enum below what the writer emits.
+    const serverWrites = ['pos'];
+    const missing = serverWrites.filter(m => !modeChoices.includes(m));
+    if (missing.length) {
+      modeChoices = modeChoices.concat(missing);
+      modeChoicesSource += ` + server-written [${missing.join(', ')}]`;
+    }
   }
 
   const defs = [];

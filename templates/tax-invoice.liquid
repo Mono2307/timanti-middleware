@@ -436,7 +436,7 @@ properties (prop_*). jc_meta stays nil so its fallback branches below are simply
       {% endif %}
       {% comment %}is_finalized is a BOOLEAN metafield — compare its string form. Testing the object
       for truthiness marks every order fully paid, including the ones explicitly set to false.{% endcomment %}
-      {% assign _fin = order.metafields.custom.is_finalized.value | default: order.metafields.custom.is_finalized | append: "" | downcase %}
+      {% assign _fin = order.metafields.custom.is_finalized.value | default: order.metafields.custom.is_finalized, allow_false: true | append: "" | downcase %}
       {% if _fin == "true" %}{% assign is_fully_paid = true %}{% endif %}
       {% if order.metafields.custom.amount_paid    %}{% assign paid_amount    = order.metafields.custom.amount_paid    | round %}{% endif %}
       {% if order.metafields.custom.amount_pending %}{% assign pending_amount = order.metafields.custom.amount_pending | round %}{% endif %}

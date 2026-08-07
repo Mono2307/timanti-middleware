@@ -348,8 +348,11 @@ function paymentModeFits(txn, e) {
   const modes = [...new Set(aggregate.concat(legacy))];
   if (!modes.length) return null;
   const mode = (txn.paymentMode || '').toLowerCase();
-  if (txn.source === 'GoKwik')  return modes.some(m => /gokwik|kwik/.test(m));
-  if (/upi/.test(mode))         return modes.some(m => /upi|gokwik/.test(m));
+  // The payment-link mode was renamed gokwik_link → online_link (2026-08-07); both spellings are
+  // live in historical data, so match either. GoKwik remains the provider — only the label changed.
+  const isLink = (m) => /gokwik|kwik|online_link/.test(m);
+  if (txn.source === 'GoKwik')  return modes.some(isLink);
+  if (/upi/.test(mode))         return modes.some(m => /upi/.test(m) || isLink(m));
   if (/card/.test(mode))        return modes.some(m => /card/.test(m));
   if (/cash/.test(mode))        return modes.some(m => /cash/.test(m));
   return null;
