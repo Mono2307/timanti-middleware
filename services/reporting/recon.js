@@ -81,22 +81,50 @@ function nameSim(a, b) {
   return hits / Math.max(ta.size, tok(b).length, 1);
 }
 
-// ── File finder ────────────────────────────────────────────────────────────────
+// ── File sources ───────────────────────────────────────────────────────────────
+// Recon inputs used to be read straight off the container filesystem, which meant the
+// monthly CSVs were baked into the Docker image and refreshing them required a rebuild
+// and a deploy. The loaders now go through a source with list()/read(), so the exact
+// same matcher runs over files posted to the API. diskSource keeps the old behaviour as
+// a fallback; memorySource is what POST /api/recon uses.
 
-function findFiles(dir, keyword) {
-  return fs.readdirSync(dir)
-    .filter(f => f.toLowerCase().includes(keyword.toLowerCase()))
-    .sort();
+function diskSource(dir) {
+  return {
+    list: (keyword) => fs.readdirSync(dir)
+      .filter(f => f.toLowerCase().includes(keyword.toLowerCase()))
+      .sort(),
+    read: (fname) => fs.readFileSync(path.join(dir, fname)),
+  };
 }
+
+// files: [{ name, buffer }] or [{ name, contentBase64 }]
+function memorySource(files) {
+  const map = new Map();
+  for (const f of (files || [])) {
+    if (!f || !f.name) continue;
+    const buf = Buffer.isBuffer(f.buffer) ? f.buffer
+      : Buffer.from(f.contentBase64 || f.content || '', f.buffer ? undefined : 'base64');
+    map.set(f.name, buf);
+  }
+  return {
+    list: (keyword) => [...map.keys()]
+      .filter(n => n.toLowerCase().includes(keyword.toLowerCase()))
+      .sort(),
+    read: (fname) => map.get(fname),
+  };
+}
+
+const readCsv = (src, fname) => csvParse(src.read(fname).toString('utf8'),
+  { columns: true, skip_empty_lines: true, relax_quotes: true });
 
 // ── Pine Labs parsers ──────────────────────────────────────────────────────────
 
-function loadPineTxns(dir) {
-  const files = findFiles(dir, 'all transactions').filter(f => f.endsWith('.csv'));
+function loadPineTxns(src) {
+  const files = src.list('all transactions').filter(f => f.endsWith('.csv'));
   const seen = new Set();
   const txns = [];
   for (const fname of files) {
-    const rows = csvParse(fs.readFileSync(path.join(dir, fname), 'utf8'), { columns: true, skip_empty_lines: true, relax_quotes: true });
+    const rows = readCsv(src, fname);
     for (const r of rows) {
       if ((r['Txn Status'] || '').toLowerCase() !== 'success') continue;
       const amount = parseFloat(r['Amount'] || '0');
@@ -126,16 +154,12 @@ function loadPineTxns(dir) {
   return txns;
 }
 
-function loadMPR(dir) {
-  const files = findFiles(dir, 'mpr').filter(f => f.endsWith('.xlsx'));
+function loadMPR(src) {
+  const files = src.list('mpr').filter(f => f.endsWith('.xlsx'));
   const byId = {};
   for (const fname of files) {
-    const fpath = path.join(dir, fname);
-    // Copy to temp to avoid OneDrive lock
-    const tmp = path.join(os.tmpdir(), `mpr_${Date.now()}_${fname}`);
-    fs.copyFileSync(fpath, tmp);
-    let wb;
-    try { wb = XLSX.readFile(tmp, { cellDates: false }); } finally { try { fs.unlinkSync(tmp); } catch (_) {} }
+    // Parsed from a buffer, so no temp-copy dance and no OneDrive lock to dodge.
+    const wb = XLSX.read(src.read(fname), { type: 'buffer', cellDates: false });
     const ws = wb.Sheets['Trxn details'];
     if (!ws) continue;
     const all = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
@@ -167,12 +191,12 @@ function loadMPR(dir) {
 
 // ── GoKwik parsers ────────────────────────────────────────────────────────────
 
-function loadGKTxns(dir) {
-  const files = findFiles(dir, 'transaction-report').filter(f => f.endsWith('.csv'));
+function loadGKTxns(src) {
+  const files = src.list('transaction-report').filter(f => f.endsWith('.csv'));
   const seen = new Set();
   const txns = [];
   for (const fname of files) {
-    const rows = csvParse(fs.readFileSync(path.join(dir, fname), 'utf8'), { columns: true, skip_empty_lines: true, relax_quotes: true });
+    const rows = readCsv(src, fname);
     for (const r of rows) {
       if ((r['Status'] || '').toLowerCase() !== 'success') continue;
       const amount = parseFloat(r['Amount'] || '0');
@@ -203,11 +227,11 @@ function loadGKTxns(dir) {
   return txns;
 }
 
-function loadGKSettlement(dir) {
-  const files = findFiles(dir, 'settlement_v2').filter(f => f.endsWith('.csv'));
+function loadGKSettlement(src) {
+  const files = src.list('settlement_v2').filter(f => f.endsWith('.csv'));
   const byPid = {};
   for (const fname of files) {
-    const rows = csvParse(fs.readFileSync(path.join(dir, fname), 'utf8'), { columns: true, skip_empty_lines: true, relax_quotes: true });
+    const rows = readCsv(src, fname);
     for (const r of rows) {
       if ((r['Transaction Type'] || '').toLowerCase() !== 'payment') continue;
       const pid = (r['Payment Id'] || '').trim();
@@ -226,32 +250,41 @@ function loadGKSettlement(dir) {
 
 // ── Shopify data parsers ───────────────────────────────────────────────────────
 
-function loadShopifyOrders(dir) {
-  const file = findFiles(dir, 'accounts').find(f => f.endsWith('.csv'));
-  if (!file) return [];
-  const rows = csvParse(fs.readFileSync(path.join(dir, file), 'utf8'), { columns: true, skip_empty_lines: true, relax_quotes: true });
-  const map = {};
-  for (const r of rows) {
-    const ref = (r['Order name'] || '').trim();
-    if (!ref) continue;
-    if (!map[ref]) map[ref] = { ref, customer: (r['Customer name'] || '').trim(), date: parseShopDate(r['Day'] || ''), total: 0, type: 'order' };
-    map[ref].total += parseFloat(r['Net sales'] || '0');
+// Orders and drafts used to read a SINGLE file each (findFiles(...).find(...)), so dropping a
+// new month's export next to the previous one silently reconciled against whichever sorted
+// first — usually the older, staler file. Both now union every matching export. Totals are
+// summed per ref WITHIN a file and the ref is then replaced wholesale by any later file, so
+// re-exporting an overlapping range restates a document instead of double-counting it.
+
+function loadShopifyDocs(src, keyword, type) {
+  const merged = {};
+  for (const fname of src.list(keyword).filter(f => f.endsWith('.csv'))) {
+    const perFile = {};
+    for (const r of readCsv(src, fname)) {
+      const ref = (r['Order name'] || '').trim();
+      if (!ref) continue;
+      if (!perFile[ref]) perFile[ref] = {
+        ref, customer: (r['Customer name'] || '').trim(),
+        date: parseShopDate(r['Day'] || ''), total: 0, gross: 0, type,
+        paymentTags: r['Payment Tags'] || '',
+      };
+      perFile[ref].total += parseFloat(r['Net sales'] || '0');
+      // Gross (pre-discount) is kept because the card is sometimes swiped for the gross
+      // amount and the discount recorded afterwards — the settled figure then matches
+      // neither the order total nor its outstanding balance.
+      perFile[ref].gross += parseFloat(r['Gross sales'] || '0');
+    }
+    Object.assign(merged, perFile);   // later file wins for a ref it also contains
   }
-  return Object.values(map);
+  return Object.values(merged);
 }
 
-function loadShopifyDrafts(dir) {
-  const file = findFiles(dir, 'draft-orders-report').find(f => f.endsWith('.csv'));
-  if (!file) return [];
-  const rows = csvParse(fs.readFileSync(path.join(dir, file), 'utf8'), { columns: true, skip_empty_lines: true, relax_quotes: true });
-  const map = {};
-  for (const r of rows) {
-    const ref = (r['Order name'] || '').trim();
-    if (!ref) continue;
-    if (!map[ref]) map[ref] = { ref, customer: (r['Customer name'] || '').trim(), date: parseShopDate(r['Day'] || ''), total: 0, type: 'draft', paymentTags: r['Payment Tags'] || '' };
-    map[ref].total += parseFloat(r['Net sales'] || '0');
-  }
-  const drafts = Object.values(map);
+function loadShopifyOrders(src) {
+  return loadShopifyDocs(src, 'accounts', 'order');
+}
+
+function loadShopifyDrafts(src) {
+  const drafts = loadShopifyDocs(src, 'draft-orders-report', 'draft');
   // Parse advance_paid from payment tags: "paid:Rs96000"
   for (const d of drafts) {
     const m = (d.paymentTags || '').match(/paid:Rs(\d+)/);
@@ -353,6 +386,7 @@ function buildRow(txn, mr) {
   const gst = gstSplit(taxable, m && m.state, '');
   return {
     _vpa:    txn.vpa || txn.name || '',
+    _name:   txn.name || '',
     _date:   txn.date,
     _amount: amount,
     _entity: m,
@@ -409,10 +443,14 @@ async function enrichOrderMeta(refs, storeUrl, token) {
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 
-async function runRecon({ dir, storeUrl, token }) {
+// `files` (uploaded, [{name, contentBase64}]) takes precedence over `dir` (baked into the
+// image). Passing files is what lets a fresh export reconcile without a rebuild/deploy.
+async function runRecon({ dir, files, storeUrl, token }) {
+  const src = (files && files.length) ? memorySource(files) : diskSource(dir);
+
   // ── Load Pine Labs ──
-  const pineTxns = loadPineTxns(dir);
-  const mprById  = loadMPR(dir);
+  const pineTxns = loadPineTxns(src);
+  const mprById  = loadMPR(src);
   for (const t of pineTxns) {
     const m = mprById[t.txnId];
     if (m) { t.fee = m.fee; t.netPaid = m.netPaid; t.settlDate = m.settlDate; t.utr = m.utr; }
@@ -444,24 +482,29 @@ async function runRecon({ dir, storeUrl, token }) {
   }
 
   // ── Load GoKwik ──
-  const gkTxns    = loadGKTxns(dir);
-  const gkSettle  = loadGKSettlement(dir);
+  const gkTxns    = loadGKTxns(src);
+  const gkSettle  = loadGKSettlement(src);
   for (const t of gkTxns) {
     const s = gkSettle[t.paymentId];
     if (s) { t.fee = s.fee; t.netPaid = s.netPaid; t.settlDate = s.settlDate; t.utr = s.utr; if (s.platformOrderId) t.platformOrderId = s.platformOrderId; }
   }
 
   // ── Load Shopify ──
-  const shopOrders = loadShopifyOrders(dir);
-  const shopDrafts = loadShopifyDrafts(dir);
+  const shopOrders = loadShopifyOrders(src);
+  const shopDrafts = loadShopifyDrafts(src);
   const allEntities = [...shopOrders, ...shopDrafts];
   const entityByRef = Object.fromEntries(allEntities.map(e => [e.ref, e]));
 
   // ── Resolve draft→order via Shopify API ──
+  // Seed the draft→order lookup from EVERY draft we know about, not just the ones a
+  // transaction happens to name. A UPI advance carries no Bill Invoice, so it reaches its
+  // draft by amount+date — under the old seeding that draft was never looked up and its
+  // conversion to a real order stayed invisible, leaving the order looking unpaid.
   const draftRefs = [...new Set([
+    ...shopDrafts.map(d => d.ref),
     ...pineTxns.filter(t => t.billInvoice.startsWith('#D')).map(t => t.billInvoice),
     ...gkTxns.map(t => t.platformOrderId || t.platformOrderNum).filter(r => r.startsWith('#D')),
-  ])];
+  ].filter(Boolean))];
   const draftToOrder = await buildDraftToOrderMap(draftRefs, storeUrl, token);
 
   // Register resolved order entities that aren't already in our data
@@ -475,6 +518,31 @@ async function runRecon({ dir, storeUrl, token }) {
       }
     }
   }
+
+  // What the middleware recorded as collected against each order (custom.amount_paid +
+  // amount_paid_final). This is often the ONLY place the actually-swiped figure exists: a
+  // card can be run for the pre-discount amount, so the settled sum equals neither the
+  // order total nor its balance. Degrades silently — it only ever adds a candidate.
+  await Promise.all(allEntities
+    .filter(e => /^#\d+$/.test(e.ref))
+    .map(async (e) => {
+      if (!storeUrl || !token) return;
+      try {
+        const query = `query($q:String!){ orders(first:1, query:$q){ edges{ node{
+          paid: metafield(namespace:"custom", key:"amount_paid"){ value }
+          paidFinal: metafield(namespace:"custom", key:"amount_paid_final"){ value } } } } }`;
+        const resp = await fetch(`${storeUrl}/admin/api/2024-01/graphql.json`, {
+          method: 'POST',
+          headers: { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query, variables: { q: `name:${e.ref}` } }),
+        });
+        if (!resp.ok) return;
+        const n = (await resp.json())?.data?.orders?.edges?.[0]?.node;
+        if (!n) return;
+        const sum = (parseFloat(n.paid?.value) || 0) + (parseFloat(n.paidFinal?.value) || 0);
+        if (sum > 0) e.amountPaid = sum;
+      } catch (_) { /* enrichment only */ }
+    }));
 
   // ── First pass: match each transaction ──
   const rows = [];
@@ -600,6 +668,117 @@ async function runRecon({ dir, storeUrl, token }) {
     });
   }
 
+  // ── Fourth pass: roll a converted draft's payments up into the order it became ──
+  // Shopify completes a draft in place, so the advance is filed under #Dxxx while the
+  // balance is collected against #NNNN. They are the same sale. draftToOrder is the
+  // authoritative link (draft_order.order_id), so re-point the draft legs at the order.
+  const applyEntity = (row, e, method, confidence, notes) => {
+    const taxable = e.total > 0 ? Math.round((e.total / 1.03) * 100) / 100 : 0;
+    const gst = gstSplit(taxable, e.state, '');
+    row._entity      = e;
+    row.OrderRef     = e.ref;
+    row.OrderTotal   = e.total.toFixed(2);
+    row.TaxableValue = taxable.toFixed(2);
+    row.IGST = gst.igst.toFixed(2); row.SGST = gst.sgst.toFixed(2); row.CGST = gst.cgst.toFixed(2);
+    row.Customer     = e.customer;
+    row.EntityType   = e.type;
+    row.MatchMethod  = method;
+    row.Confidence   = confidence;
+    row.Notes        = notes;
+  };
+
+  for (const row of rows) {
+    if (!row._entity || row._entity.type !== 'draft') continue;
+    const orderName = draftToOrder[row._entity.ref];
+    const order = orderName && entityByRef[orderName];
+    if (!order) continue;
+    const draftRef = row._entity.ref;
+    applyEntity(row, order, row.MatchMethod, row.Confidence,
+      [row.Notes, `Paid against ${draftRef}, which converted to ${orderName}`].filter(Boolean).join('; '));
+    row.Role = determineRole(parseFloat(row.GrossAmount), order);
+  }
+
+  // ── Fifth pass: close an order's REMAINING balance ──
+  // With the advance now attributed to the order, an order can be part-paid. A single
+  // unlinked leg equal to what is still outstanding is the balance payment — this is what
+  // links an advance taken in one month to the settlement collected in the next.
+  const paidFor = ref => rows
+    .filter(r => r._entity && r._entity.ref === ref)
+    .reduce((s, r) => s + parseFloat(r.GrossAmount), 0);
+  const balanceOf = e => e.total - paidFor(e.ref);
+
+  for (const e of entitiesByDate) {
+    const bal = balanceOf(e);
+    if (bal <= 1.5) continue;
+    // the balance must be unambiguous across open documents
+    if (entitiesByDate.filter(x => x !== e && Math.abs(balanceOf(x) - bal) <= 1.5).length) continue;
+    const hits = rows.filter(r => isUnlinked(r) && r._date
+      && daysDiff(r._date, e.date) <= SPLIT_WINDOW_DAYS
+      && Math.abs(parseFloat(r.GrossAmount) - bal) <= 1.5);
+    if (hits.length !== 1) continue;
+    applyEntity(hits[0], e, 'BALANCE_MATCH', 'MEDIUM',
+      `Closes ${e.ref} balance of Rs${bal.toFixed(2)} outstanding after earlier payment(s)`);
+    hits[0].Role = 'final_payment';
+  }
+
+  // ── Sixth pass: one payment covering several documents ──
+  // The mirror of the split pass. A single card swipe can settle an order AND take an
+  // advance on a second draft in one go (Rs102,394 = #1067 Rs77,394 + #D189 Rs25,000).
+  // Find a unique combination of documents whose OUTSTANDING balances sum to the payment.
+  // The row stays one row — it reports the primary document and names the rest.
+  for (const row of rows) {
+    if (!isUnlinked(row) || !row._date) continue;
+    const amt = parseFloat(row.GrossAmount);
+    const open = entitiesByDate.filter(e =>
+      balanceOf(e) > 1.5 && daysDiff(row._date, e.date) <= SPLIT_WINDOW_DAYS);
+    if (open.length < 2) continue;
+    // Amounts alone are far too weak here: several small same-valued documents produce
+    // coincidental sums (two Rs5,000 CAD advances "explaining" an unrelated Rs10,000 leg).
+    // One swipe covering several documents means ONE customer paying for several things,
+    // so every document in the combination must be the same named customer.
+    const sameCustomer = (c) => {
+      const names = c.map(e => (e.customer || '').trim().toLowerCase());
+      if (names.some(n => !n)) return false;
+      if (!names.every(n => n === names[0] || nameSim(n, names[0]) >= 0.8)) return false;
+      // And the person who actually paid must be that customer. Without this, one
+      // customer's swipe can be "explained" by another customer's documents that happen
+      // to sum to the same figure (Rs40,000 from RU CHATTERJI vs two Ginisha drafts).
+      const payer = (row._name || '').trim();
+      if (payer && payer.toLowerCase() !== 'null') {
+        return names.some(n => nameSim(payer, n) >= 0.5);
+      }
+      return true;
+    };
+    // What a single document could plausibly have taken in this swipe: its outstanding
+    // balance, its total, its gross (discount recorded after the card was run), or a
+    // recorded advance on a draft. Any of these is a legitimate settled figure.
+    const payable = (e) => [...new Set([balanceOf(e), e.total, e.gross, e.advance_paid, e.amountPaid]
+      .filter(v => typeof v === 'number' && isFinite(v) && v > 1.5)
+      .map(v => Math.round(v * 100) / 100))];
+
+    let combo = null, ambiguous = false;
+    for (let size = 2; size <= Math.min(open.length, MAX_LEGS) && !combo; size++) {
+      const fits = [];
+      for (const c of combinations(open, size)) {
+        if (!sameCustomer(c)) continue;
+        // try every mix of plausible amounts across the documents in this combination
+        let acc = [[]];
+        for (const e of c) acc = acc.flatMap(pre => payable(e).map(v => [...pre, { e, v }]));
+        for (const pick of acc) {
+          if (Math.abs(pick.reduce((s, p) => s + p.v, 0) - amt) <= 1.5) fits.push(pick);
+        }
+      }
+      if (fits.length === 1) combo = fits[0];
+      else if (fits.length > 1) { ambiguous = true; break; }
+    }
+    if (ambiguous || !combo) continue;
+    const sorted = [...combo].sort((a, b) => b.v - a.v);
+    applyEntity(row, sorted[0].e, 'MULTI_DOC_PAYMENT', 'MEDIUM',
+      `One payment of Rs${amt.toFixed(2)} covers ${sorted.map(p => `${p.e.ref} Rs${p.v.toFixed(2)}`).join(' + ')}`);
+    row.Role = 'multi_document';
+    row.OrderRef = sorted.map(p => p.e.ref).join(' + ');
+  }
+
   // ── Enrich matched orders with shipping state + serial, then refine the GST split ──
   const meta = await enrichOrderMeta(rows.map(r => r.OrderRef), storeUrl, token);
   for (const row of rows) {
@@ -615,7 +794,7 @@ async function runRecon({ dir, storeUrl, token }) {
   }
 
   // Strip internal fields
-  return rows.map(({ _vpa, _entity, _date, _amount, ...clean }) => clean);
+  return rows.map(({ _vpa, _name, _entity, _date, _amount, ...clean }) => clean);
 }
 
 // ── CSV serialiser ────────────────────────────────────────────────────────────
@@ -627,4 +806,4 @@ function toCSV(rows) {
   return [hdrs.join(','), ...rows.map(r => hdrs.map(h => esc(r[h])).join(','))].join('\n');
 }
 
-module.exports = { runRecon, toCSV };
+module.exports = { runRecon, toCSV, diskSource, memorySource };

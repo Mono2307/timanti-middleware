@@ -4860,6 +4860,36 @@ app.get('/api/recon', async (req, res) => {
   }
 });
 
+// POST /api/recon   body: { files: [{ name, contentBase64 }, ...], format?: 'json'|'csv' }
+// Reconcile against UPLOADED exports instead of the CSVs baked into the image. GET /api/recon
+// reads /app/Recon Test, which only changes when the image is rebuilt — so refreshing the
+// monthly dumps used to mean a commit and a deploy. Posting the files runs the identical
+// matcher over them, so dropping new exports somewhere and posting them is enough.
+// Same file-name conventions as the folder ("All transactions", "MPR", "transaction-report",
+// "settlement_v2", "Accounts", "draft-orders-report"); several months can be sent at once.
+app.post('/api/recon', express.json({ limit: '25mb' }), async (req, res) => {
+  try {
+    const files = (req.body && req.body.files) || [];
+    if (!Array.isArray(files) || !files.length) {
+      return res.status(400).json({ success: false, error: 'body.files must be a non-empty array of { name, contentBase64 }' });
+    }
+    const bad = files.find(f => !f || !f.name || !(f.contentBase64 || f.content));
+    if (bad) return res.status(400).json({ success: false, error: 'each file needs { name, contentBase64 }' });
+
+    const token = await getShopifyToken();
+    const rows  = await runRecon({ files, storeUrl: process.env.SHOPIFY_STORE_URL, token });
+    if ((req.body.format || 'json').toLowerCase() === 'csv') {
+      res.setHeader('Content-Type', 'text/csv');
+      res.setHeader('Content-Disposition', `attachment; filename="recon-${new Date().toISOString().slice(0,10)}.csv"`);
+      return res.send(reconToCSV(rows));
+    }
+    return res.json({ success: true, count: rows.length, filesReceived: files.map(f => f.name), rows });
+  } catch (err) {
+    console.error('Recon (upload) error:', err);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // GET /api/sales-report?from=YYYY-MM-DD&to=YYYY-MM-DD&state=&paymentStatus=&format=json|csv
 // The stitched SALES view: one row per line item across open/partial DRAFTS and completed ORDERS,
 // deduped so a partial-paid draft and the order it becomes never both appear. Carries the GST/HSN/

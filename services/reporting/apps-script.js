@@ -48,7 +48,14 @@ const REPORTS = {
   },
   recon: {
     tab: 'Payment Recon', endpoint: '/api/recon', extraQp: 'format=json',
-    filters: [], // reads the fixed Recon Test file set on the server
+    // Put the gateway/Shopify exports in a Drive folder and paste its ID in B1. The script
+    // uploads whatever is in that folder and the server reconciles those files directly, so
+    // refreshing the month is a file drop — no commit, no deploy. Leave B1 blank to fall
+    // back to the CSVs baked into the server image (which only change on a deploy).
+    driveUpload: true,
+    filters: [
+      { label: 'Drive folder ID (blank = server copy)', param: 'folderId' },
+    ],
   },
   ledger: {
     tab: 'Credit Ledger', endpoint: '/api/recon-ledger',
@@ -109,6 +116,21 @@ function fmtDate_(v) {
   return String(v).trim();
 }
 
+// Read every .csv/.xlsx in a Drive folder as base64, for POST /api/recon. Uses your own
+// Drive access — no service account or extra credentials to configure.
+function readDriveFiles_(folderId) {
+  const out = [];
+  const folder = DriveApp.getFolderById(String(folderId).trim());
+  const it = folder.getFiles();
+  while (it.hasNext()) {
+    const f = it.next();
+    const name = f.getName();
+    if (!/\.(csv|xlsx)$/i.test(name)) continue;
+    out.push({ name: name, contentBase64: Utilities.base64Encode(f.getBlob().getBytes()) });
+  }
+  return out;
+}
+
 // The generic runner: ensure the tab, lay out filter labels, read filter values, fetch, write.
 function generate_(key) {
   const cfg = REPORTS[key];
@@ -137,9 +159,22 @@ function generate_(key) {
   if (cfg.extraQp) parts.push(cfg.extraQp);
   const url = MIDDLEWARE_URL + cfg.endpoint + (parts.length ? '?' + parts.join('&') : '');
 
+  // Recon can POST the month's exports straight from a Drive folder — see driveUpload above.
+  let request = { method: 'get', muteHttpExceptions: true };
+  let fetchUrl = url;
+  if (cfg.driveUpload && params.folderId) {
+    const files = readDriveFiles_(params.folderId);
+    if (!files.length) { ui.alert('No .csv/.xlsx files found in that Drive folder.'); return; }
+    fetchUrl = MIDDLEWARE_URL + cfg.endpoint;
+    request = {
+      method: 'post', contentType: 'application/json', muteHttpExceptions: true,
+      payload: JSON.stringify({ files: files, format: 'json' }),
+    };
+  }
+
   let body;
   try {
-    const res = UrlFetchApp.fetch(url, { method: 'get', muteHttpExceptions: true });
+    const res = UrlFetchApp.fetch(fetchUrl, request);
     if (res.getResponseCode() !== 200) { ui.alert('Report failed: ' + res.getResponseCode() + '\n' + res.getContentText()); return; }
     body = JSON.parse(res.getContentText());
   } catch (e) { ui.alert('Report failed: ' + e.message); return; }
