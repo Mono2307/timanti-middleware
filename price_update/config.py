@@ -26,6 +26,13 @@ API_VERSION  = '2024-10'
 RESEND_API_KEY = os.environ.get('RESEND_API_KEY', '')
 FROM_EMAIL     = os.environ.get('FROM_EMAIL', '')
 
+# ── No-weight sheet (Google Apps Script web app) ──────────────────────────────
+# Deployed web app that receives the daily "skipped — no net metal weight" list.
+# Separate from PO Ops' APPS_SCRIPT_URL: different sheet, different script.
+# Unset → the push is skipped and the run continues normally.
+NO_WEIGHT_SHEET_URL   = os.environ.get('NO_WEIGHT_SHEET_URL', '')
+NO_WEIGHT_SHEET_CHUNK = 500   # rows per POST, keeps each request well under limits
+
 # ── Email recipients ──────────────────────────────────────────────────────────
 EMAIL_RUN_REPORT_TO = 'monodeep.dutta@timanti.in'
 EMAIL_RATES_TO      = 'hsrstore@timanti.in'

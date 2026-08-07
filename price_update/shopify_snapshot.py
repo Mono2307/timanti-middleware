@@ -13,6 +13,7 @@ import csv
 import time
 import logging
 import requests
+from datetime import datetime
 from pathlib import Path
 
 import sys
@@ -28,7 +29,7 @@ query($cursor: String) {
     nodes {
       id
       sku
-      product { id status }
+      product { id status title handle }
       wt:    metafield(namespace: "custom", key: "net_metal_weight_g")    { value }
       gross: metafield(namespace: "custom", key: "total_metal_weight_g")  { value }
       dia:   metafield(namespace: "custom", key: "price_breakup_diamond") { value }
@@ -37,6 +38,12 @@ query($cursor: String) {
   }
 }
 """
+
+_NO_WEIGHT_COLS = [
+    'run_date', 'gati_id', 'sku', 'variant_id',
+    'product_title', 'product_status', 'karat',
+    'gross_weight_g', 'diamond_cost', 'making_cost', 'admin_url',
+]
 
 _COLS = [
     'shopify_variant_id', 'shopify_sku', 'search_prefix',
@@ -88,6 +95,23 @@ def _mf_float(node, key):
         return float(obj.get('value') or 0)
     except (ValueError, TypeError):
         return 0.0
+
+
+def _numeric_id(gid: str) -> str:
+    """gid://shopify/ProductVariant/12345 → '12345'"""
+    return (gid or '').rsplit('/', 1)[-1]
+
+
+_STORE_HANDLE = STORE_DOMAIN.replace('.myshopify.com', '')
+
+
+def _admin_url(product_gid: str, variant_gid: str) -> str:
+    pid = _numeric_id(product_gid)
+    vid = _numeric_id(variant_gid)
+    if not pid:
+        return ''
+    base = f'https://admin.shopify.com/store/{_STORE_HANDLE}/products/{pid}'
+    return f'{base}/variants/{vid}' if vid else base
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -154,6 +178,7 @@ def build_snapshot(token: str, gold_rate: dict, output_csv: Path, log: logging.L
     no_weight     = []
     excluded      = []
     products_seen = set()
+    run_date      = datetime.now().strftime('%Y-%m-%d')
 
     # Normalise exclusion list once (uppercase, stripped)
     _excluded_ids = {g.upper().strip() for g in STATIC_PRICE_GATI_IDS}
@@ -171,13 +196,13 @@ def build_snapshot(token: str, gold_rate: dict, output_csv: Path, log: logging.L
         # Determine karat from SKU position 3 (e.g. "24", "22", "18", or "14")
         karat_part = parts[2].strip() if len(parts) > 2 else ''
         if '24' in karat_part:
-            gold_rate_used = rate_24k
+            gold_rate_used, karat_label = rate_24k, '24K'
         elif '22' in karat_part:
-            gold_rate_used = rate_22k
+            gold_rate_used, karat_label = rate_22k, '22K'
         elif '14' in karat_part:
-            gold_rate_used = rate_14k
+            gold_rate_used, karat_label = rate_14k, '14K'
         else:
-            gold_rate_used = rate_18k
+            gold_rate_used, karat_label = rate_18k, '18K'
 
         net_wt   = _mf_float(v, 'wt')
         gross_wt = _mf_float(v, 'gross') or net_wt   # fall back to net if not stored
@@ -185,7 +210,22 @@ def build_snapshot(token: str, gold_rate: dict, output_csv: Path, log: logging.L
         making   = _mf_float(v, 'make')
 
         if net_wt == 0:
-            no_weight.append(sku)
+            prod = v.get('product') or {}
+            no_weight.append({
+                'run_date':       run_date,
+                'gati_id':        gati_id,
+                'sku':            sku,
+                'variant_id':     _numeric_id(v.get('id', '')),
+                'product_title':  prod.get('title', ''),
+                'product_status': prod.get('status', ''),
+                'karat':          karat_label,
+                # gross_wt fell back to net (0) above, so read the raw metafield here —
+                # a non-zero gross with zero net means the fix is just copying it across
+                'gross_weight_g': _mf_float(v, 'gross'),
+                'diamond_cost':   diamond,
+                'making_cost':    making,
+                'admin_url':      _admin_url(prod.get('id', ''), v.get('id', '')),
+            })
             continue
 
         gold     = round(net_wt * gold_rate_used, p)
@@ -230,12 +270,13 @@ def build_snapshot(token: str, gold_rate: dict, output_csv: Path, log: logging.L
     # Write full no-weight list to a dated CSV so it can be reviewed after the run
     no_weight_csv = None
     if no_weight:
+        no_weight.sort(key=lambda r: (r['gati_id'], r['sku']))
         stem = output_csv.stem.replace('PREVIEW_VARIANT_IMPORT_', '').replace('_v2', '')
         no_weight_csv = output_csv.parent / f'SKIPPED_NO_WEIGHT_{stem}.csv'
         with open(no_weight_csv, 'w', newline='', encoding='utf-8') as f:
-            writer = csv.writer(f)
-            writer.writerow(['sku'])
-            writer.writerows([[s] for s in no_weight])
+            writer = csv.DictWriter(f, fieldnames=_NO_WEIGHT_COLS)
+            writer.writeheader()
+            writer.writerows(no_weight)
         log.warning(f'  {len(no_weight)} variants skipped (no net_metal_weight_g): full list → {no_weight_csv.name}')
 
     return {
@@ -247,4 +288,5 @@ def build_snapshot(token: str, gold_rate: dict, output_csv: Path, log: logging.L
         'products_covered':      len(products_seen),
         'preview_csv':           str(output_csv),
         'no_weight_csv':         str(no_weight_csv) if no_weight_csv else '',
+        'no_weight_rows':        no_weight,
     }

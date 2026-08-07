@@ -79,7 +79,10 @@
     <div class="invoice-details-grid">
       <div class="invoice-detail-row">
         <div class="invoice-detail-cell">
-          {% assign _inv = order.metafields.custom.serial_code %}{% if _inv == blank %}{% assign _inv = order.order_number %}{% endif %}
+          {% comment %}Invoice Number = the minted serial. Order Printer Pro returns text metafields as their plain value and only surfaces the first ~10 metafields, where serial_display is in range, so read serial_display first, then serial_code, then the order number.{% endcomment %}
+          {% assign _inv = order.metafields.custom.serial_display.value | default: order.metafields.custom.serial_display %}
+          {% if _inv == blank %}{% assign _inv = order.metafields.custom.serial_code.value | default: order.metafields.custom.serial_code %}{% endif %}
+          {% if _inv == blank %}{% assign _inv = order.order_number %}{% endif %}
           <strong>Invoice Number</strong>{{ _inv }}
         </div>
         <div class="invoice-detail-cell">
@@ -261,15 +264,19 @@
             {% else %}–{% endif %}
           </td>
           <td class="text-right">{{ gross_paise | divided_by: 1.03 | money_without_currency | remove: ',' }}</td>
-          <td class="text-right">{{ disc_paise | divided_by: 1.03 | money_without_currency | remove: ',' }}</td>
-          <td class="text-right">{% if prop_taxable_str != "" %}{{ prop_taxable_str | times: 100 | round | money_without_currency | remove: ',' }}{% else %}{{ gross_paise | minus: disc_paise | divided_by: 1.03 | money_without_currency | remove: ',' }}{% endif %}</td>
+          {% comment %}Discount Applied is PRE-TAX (a discount on the diamond/making component, which is already a pre-tax value) — show it as-is, do NOT divide by 1.03.{% endcomment %}
+          <td class="text-right">{{ disc_paise | money_without_currency | remove: ',' }}</td>
+          <td class="text-right">{% if prop_taxable_str != "" %}{{ prop_taxable_str | times: 100 | round | money_without_currency | remove: ',' }}{% else %}{{ gross_paise | divided_by: 1.03 | minus: disc_paise | money_without_currency | remove: ',' }}{% endif %}</td>
         </tr>
       {% endfor %}
 
       {% comment %}── Totals — GST split driven by is_same_state (supplier store state vs place of supply) ──{% endcomment %}
-      {% assign total_net_paise = total_gross_paise | minus: total_disc_paise %}
-      {% assign taxable_base = total_net_paise %}
-      {% assign taxable_value = taxable_base | divided_by: 1.03 %}
+      {% comment %}Discount Applied is PRE-TAX, so it is subtracted from the PRE-TAX taxable (gross/1.03),
+      NOT from the tax-inclusive gross. taxable_value = gross/1.03 − discount; the tax-inclusive Total
+      Invoice Price (taxable_base) is that × 1.03. This keeps the printed total equal to the repriced
+      line prices (Taxable × 1.03) instead of overstating it by discount × 0.03.{% endcomment %}
+      {% assign taxable_value = total_gross_paise | divided_by: 1.03 | minus: total_disc_paise %}
+      {% assign taxable_base = taxable_value | times: 1.03 %}
       {% assign total_tax = taxable_value | times: 0.03 %}
 
       <tr class="totals-row">
@@ -297,11 +304,7 @@
           ₹{{ round_off | money_without_currency | remove: ',' }}
         </td>
       </tr>
-      <tr class="total-row">
-        <td colspan="12" class="text-right"><strong>Total Invoice Price</strong></td>
-        <td class="text-right"><strong>₹{{ taxable_base | money_without_currency | remove: ',' }}</strong></td>
-      </tr>
-
+      {% comment %}── Total Invoice Price row is rendered at the bottom of the summary (see below) per requested order ──{% endcomment %}
       {% assign final_payable = taxable_base %}
 
       {% comment %}── Old gold exchange ──{% endcomment %}
@@ -322,39 +325,47 @@
         {% assign final_payable = final_payable | minus: og_value_paise %}
       {% endif %}
 
-      {% comment %}── Exchange note adjustment (post-tax, mirrors old gold). Code from exc-num: tag ──{% endcomment %}
+      {% comment %}── Exchange note adjustment (post-tax, mirrors old gold). Number from exchange_note_code
+      metafield (fallback exc-num: tag); issuing/source order from the exc-original: tag — absent when the
+      note has no issuing order (e.g. generated from old gold), in which case only the number prints ──{% endcomment %}
       {% assign exc_value = order.metafields.custom.exchange_note_value | plus: 0 %}
-      {% assign exc_code = "" %}
+      {% assign exc_code  = order.metafields.custom.exchange_note_code | default: "" %}
+      {% assign exc_src   = "" %}
       {% for attr in order.note_attributes %}
         {% if attr.name == "exchange_note_value" and exc_value == 0 %}{% assign exc_value = attr.value | plus: 0 %}{% endif %}
       {% endfor %}
       {% for tag in order.tags %}
         {% assign _t = tag | strip %}
-        {% if _t contains "exc-num:" %}{% assign exc_code = _t | remove: "exc-num:" | strip %}{% endif %}
+        {% if exc_code == "" and _t contains "exc-num:" %}{% assign exc_code = _t | remove: "exc-num:" | strip %}{% endif %}
+        {% if _t contains "exc-original:" %}{% assign exc_src = _t | remove: "exc-original:" | strip %}{% endif %}
       {% endfor %}
       {% if exc_value > 0 %}
         {% assign exc_value_paise = exc_value | times: 100 | round %}
         <tr class="totals-row">
-          <td colspan="12" class="text-right" style="border-top: 1px solid #ccc;">Less: Exchange Note Adjustment</td>
+          <td colspan="12" class="text-right" style="border-top: 1px solid #ccc;">Less: Exchange Note Adjustment{% if exc_code != "" %} ({{ exc_code }}{% if exc_src != "" %} · issued against {{ exc_src }}{% endif %}){% endif %}</td>
           <td class="text-right" style="border-top: 1px solid #ccc;">− ₹{{ exc_value_paise | money_without_currency | remove: ',' }}</td>
         </tr>
         {% assign final_payable = final_payable | minus: exc_value_paise %}
       {% endif %}
 
-      {% comment %}── Voucher adjustment (post-tax, mirrors old gold). Code from voucher-num: tag ──{% endcomment %}
+      {% comment %}── Voucher adjustment (post-tax, mirrors old gold). Number from voucher_code metafield
+      (fallback vch-num: tag); issuing/source order from the vch-original: tag — absent for a voucher with
+      no issuing order (e.g. from old gold), in which case only the number prints (still reconciles in the ledger) ──{% endcomment %}
       {% assign voucher_value = order.metafields.custom.voucher_value | plus: 0 %}
-      {% assign voucher_code = "" %}
+      {% assign voucher_code  = order.metafields.custom.voucher_code | default: "" %}
+      {% assign voucher_src   = "" %}
       {% for attr in order.note_attributes %}
         {% if attr.name == "voucher_value" and voucher_value == 0 %}{% assign voucher_value = attr.value | plus: 0 %}{% endif %}
       {% endfor %}
       {% for tag in order.tags %}
         {% assign _t = tag | strip %}
-        {% if _t contains "voucher-num:" %}{% assign voucher_code = _t | remove: "voucher-num:" | strip %}{% endif %}
+        {% if voucher_code == "" and _t contains "vch-num:" %}{% assign voucher_code = _t | remove: "vch-num:" | strip %}{% endif %}
+        {% if _t contains "vch-original:" %}{% assign voucher_src = _t | remove: "vch-original:" | strip %}{% endif %}
       {% endfor %}
       {% if voucher_value > 0 %}
         {% assign voucher_value_paise = voucher_value | times: 100 | round %}
         <tr class="totals-row">
-          <td colspan="12" class="text-right" style="border-top: 1px solid #ccc;">Less: Voucher Adjustment{% if voucher_code != "" %} ({{ voucher_code }}){% endif %}</td>
+          <td colspan="12" class="text-right" style="border-top: 1px solid #ccc;">Less: Voucher Adjustment{% if voucher_code != "" %} ({{ voucher_code }}{% if voucher_src != "" %} · issued against {{ voucher_src }}{% endif %}){% endif %}</td>
           <td class="text-right" style="border-top: 1px solid #ccc;">− ₹{{ voucher_value_paise | money_without_currency | remove: ',' }}</td>
         </tr>
         {% assign final_payable = final_payable | minus: voucher_value_paise %}
@@ -374,17 +385,32 @@
         {% assign final_payable = final_payable | minus: design_advance_paise %}
       {% endif %}
 
-      {% comment %}── Credit voucher + Net payable. If post-tax adjustments exceed the invoice price, net is clamped to ₹0 and a credit voucher is issued for the excess ──{% endcomment %}
+      {% comment %}── Net payable + credit voucher. Net ALWAYS clamps at ₹0 (a customer never owes negative).
+      The "Credit Voucher Generated" row prints ONLY when a real voucher was actually issued against THIS
+      order — the cn-issued / cn-num: / cn-val: tags that createVoucher_ stamps on the originating order —
+      AND the adjustments genuinely exceeded the invoice (was_negative). If staff did NOT issue a voucher
+      (customer forwent the excess), net still clamps to ₹0 but no credit-voucher row appears. Number and
+      value come from the tag (the real instrument), not the computed excess — the excess is only a
+      fallback amount if the cn-val: tag is missing. ──{% endcomment %}
       {% if og_value > 0 or exc_value > 0 or voucher_value > 0 or design_advance > 0 %}
-        {% assign credit_voucher_paise = 0 %}
-        {% if final_payable < 0 %}
-          {% assign credit_voucher_paise = 0 | minus: final_payable %}
-          {% assign final_payable = 0 %}
-        {% endif %}
-        {% if credit_voucher_paise > 0 %}
+        {% assign was_negative = false %}
+        {% assign cv_excess_paise = 0 %}
+        {% if final_payable < 0 %}{% assign was_negative = true %}{% assign cv_excess_paise = 0 | minus: final_payable %}{% assign final_payable = 0 %}{% endif %}
+        {% assign cv_issued = false %}
+        {% assign cv_num = "" %}
+        {% assign cv_val = 0 %}
+        {% for tag in order.tags %}
+          {% assign _t = tag | strip %}
+          {% if _t == "cn-issued" %}{% assign cv_issued = true %}{% endif %}
+          {% if _t contains "cn-num:" %}{% assign cv_num = _t | remove: "cn-num:" | strip %}{% assign cv_issued = true %}{% endif %}
+          {% if _t contains "cn-val:" %}{% assign cv_val = _t | remove: "cn-val:" | strip | plus: 0 %}{% endif %}
+        {% endfor %}
+        {% if cv_issued and was_negative %}
+          {% assign cv_show_paise = cv_val | times: 100 | round %}
+          {% if cv_val <= 0 %}{% assign cv_show_paise = cv_excess_paise %}{% endif %}
           <tr class="totals-row">
-            <td colspan="12" class="text-right" style="border-top: 1px solid #ccc; color:#006630; font-style:italic;">Credit Voucher Generated</td>
-            <td class="text-right" style="border-top: 1px solid #ccc; color:#006630; font-weight:bold;">+ ₹{{ credit_voucher_paise | money_without_currency | remove: ',' }}</td>
+            <td colspan="12" class="text-right" style="border-top: 1px solid #ccc; color:#006630; font-style:italic;">Credit Voucher Generated{% if cv_num != "" %} ({{ cv_num }}){% endif %}</td>
+            <td class="text-right" style="border-top: 1px solid #ccc; color:#006630; font-weight:bold;">+ ₹{{ cv_show_paise | money_without_currency | remove: ',' }}</td>
           </tr>
         {% endif %}
         <tr class="total-row">
@@ -417,42 +443,56 @@
         {% if t == "deposit:fully-paid" and is_partial == false and is_fully_paid == false %}{% assign is_fully_paid = true %}{% endif %}
         {% if t contains "paid:rs"    and paid_amount    == "" %}{% assign paid_amount    = t | remove: "paid:rs"    %}{% endif %}
         {% if t contains "pending:rs" and pending_amount == "" %}{% assign pending_amount = t | remove: "pending:rs" %}{% endif %}
+        {% comment %}Payment-mode fallback: Order Printer often returns empty custom metafields, so also read the pmode-advance:/pmode-final: tags (only when the metafield didn't populate). Mirrors the paid/pending tag fallback above — without this, a mode like gokwik_link that IS on the order as a tag would not print.{% endcomment %}
+        {% if t contains "pmode-advance:" and pm_advance == "" %}{% assign pm_advance = tag | strip | remove: "pmode-advance:" %}{% endif %}
+        {% if t contains "pmode-final:"   and pm_final   == "" %}{% assign pm_final   = tag | strip | remove: "pmode-final:"   %}{% endif %}
       {% endfor %}
+
+      {% comment %}── Native fallback (authoritative). Order Printer can return empty order.metafields.custom.* at print time, which would otherwise drop a fully-paid order into the "unpaid" branch (Balance Due = full, Amount Received = 0). Shopify's own order.financial_status is always available. A draft only converts to a real order on FULL settlement (partials stay drafts), so financial_status == "paid" reliably means fully paid. Only apply when no explicit metafield/tag signal was found, so an explicit "partial" still wins. ──{% endcomment %}
+      {% if is_partial == false and is_fully_paid == false %}
+        {% if order.financial_status == "paid" %}{% assign is_fully_paid = true %}{% endif %}
+        {% if order.financial_status == "partially_paid" %}{% assign is_partial = true %}{% endif %}
+      {% endif %}
 
       {% if is_partial and paid_amount != "" %}
         <tr class="totals-row">
-          <td colspan="12" class="text-right" style="border-top: 1px solid #ccc;">
-            Amount Received – Advance{% if pm_advance != "" %}&nbsp; <em style="color:#555;">({{ pm_advance }})</em>{% endif %}
-          </td>
-          <td class="text-right" style="border-top: 1px solid #ccc;">₹{{ paid_amount }}</td>
+          <td colspan="12" class="text-right" style="border-top: 1px solid #ccc;"><strong>Payment Due</strong></td>
+          <td class="text-right" style="border-top: 1px solid #ccc;"><strong>₹{{ pending_amount }}</strong></td>
         </tr>
         <tr class="totals-row">
-          <td colspan="12" class="text-right"><strong>Balance Due</strong></td>
-          <td class="text-right"><strong>₹{{ pending_amount }}</strong></td>
+          <td colspan="12" class="text-right">
+            Amount Received – Advance{% if pm_advance != "" %}&nbsp; <em style="color:#555;">({{ pm_advance }})</em>{% endif %}
+          </td>
+          <td class="text-right">₹{{ paid_amount }}</td>
         </tr>
       {% elsif is_fully_paid %}
         {% assign pm_display = "" %}
-        {% if pm_advance != "" and pm_final != "" and pm_final != pm_advance %}{% assign pm_display = pm_advance | append: " / " | append: pm_final %}
-        {% elsif pm_advance != "" %}{% assign pm_display = pm_advance %}
-        {% elsif pm_final != "" %}{% assign pm_display = pm_final %}{% endif %}
+        {% if pm_advance != "" and pm_final != "" %}{% assign pm_display = "Advance: " | append: pm_advance | append: " / Final: " | append: pm_final %}
+        {% elsif pm_advance != "" %}{% assign pm_display = "Advance: " | append: pm_advance %}
+        {% elsif pm_final != "" %}{% assign pm_display = "Final: " | append: pm_final %}{% endif %}
+        <tr class="totals-row">
+          <td colspan="12" class="text-right" style="border-top: 1px solid #ccc;"><strong>Payment Due</strong></td>
+          <td class="text-right" style="border-top: 1px solid #ccc;"><strong>₹0</strong></td>
+        </tr>
         <tr class="totals-row">
           <td colspan="12" class="text-right">Amount Received{% if pm_display != "" %}&nbsp; <em style="color:#555;">({{ pm_display }})</em>{% endif %}</td>
-          <td class="text-right">{% if paid_amount != "" %}₹{{ paid_amount }}{% else %}₹{{ final_payable | money_without_currency | remove: ',' }}{% endif %}</td>
-        </tr>
-        <tr class="totals-row">
-          <td colspan="12" class="text-right"><strong>Balance Due</strong></td>
-          <td class="text-right"><strong>₹0</strong></td>
+          <td class="text-right">₹{{ final_payable | money_without_currency | remove: ',' }}</td>
         </tr>
       {% else %}
+        <tr class="totals-row">
+          <td colspan="12" class="text-right" style="border-top: 1px solid #ccc;"><strong>Payment Due</strong></td>
+          <td class="text-right" style="border-top: 1px solid #ccc;"><strong>₹{{ taxable_base | money_without_currency | remove: ',' }}</strong></td>
+        </tr>
         <tr class="totals-row">
           <td colspan="12" class="text-right">Amount Received</td>
           <td class="text-right">₹0</td>
         </tr>
-        <tr class="totals-row">
-          <td colspan="12" class="text-right"><strong>Balance Due</strong></td>
-          <td class="text-right"><strong>₹{{ final_payable | money_without_currency | remove: ',' }}</strong></td>
-        </tr>
       {% endif %}
+
+      <tr class="total-row">
+        <td colspan="12" class="text-right"><strong>Total Invoice Price</strong></td>
+        <td class="text-right"><strong>₹{{ taxable_base | money_without_currency | remove: ',' }}</strong></td>
+      </tr>
     </tbody>
   </table>
 
@@ -460,7 +500,7 @@
     <span>
       {% assign ones = "Zero,One,Two,Three,Four,Five,Six,Seven,Eight,Nine,Ten,Eleven,Twelve,Thirteen,Fourteen,Fifteen,Sixteen,Seventeen,Eighteen,Nineteen" | split: "," %}
       {% assign tens = "Zero,Ten,Twenty,Thirty,Forty,Fifty,Sixty,Seventy,Eighty,Ninety" | split: "," %}
-      {% assign total_int = final_payable | divided_by: 100 | floor %}{% assign words = "" %}
+      {% assign total_int = taxable_base | divided_by: 100 | floor %}{% assign words = "" %}
       {% assign crores = total_int | divided_by: 10000000 %}
       {% if crores > 0 %}{% assign temp = crores | modulo: 100 %}{% if temp < 20 %}{% assign words = words | append: ones[temp] | append: " " %}{% else %}{% assign td = temp | divided_by: 10 %}{% assign od = temp | modulo: 10 %}{% assign words = words | append: tens[td] %}{% if od > 0 %}{% assign words = words | append: "-" | append: ones[od] %}{% endif %}{% assign words = words | append: " " %}{% endif %}{% assign words = words | append: "Crore " %}{% assign total_int = total_int | modulo: 10000000 %}{% endif %}
       {% assign lakhs = total_int | divided_by: 100000 %}

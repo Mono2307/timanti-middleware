@@ -103,7 +103,7 @@ These all live in `custom`, so `copyDraftMetafieldsToOrder` (server.js) carries 
 2. Create Shopify Metafield Definitions on **Orders + Draft orders**: `state_code` (single-line text, **staff-editable, plain text — not a choice list**), `document_type`, `serial_code`, `serial_display` (single-line text), `serial_no` (integer).
 3. Register `orders/update` → `/api/serial/order-serial`; fix/remove stale `order-created`.
 4. Set `SERIAL_*` flags per rollout.
-5. Apps Scripts: paste `services/exchange-cn/apps-script.js` (CN counter) and `services/reporting/apps-script.js` (reports). OPP `repair-note.liquid` prints `serial_display`.
+5. Apps Scripts: paste `services/exchange-cn/apps-script.js` (CN counter) and `services/reporting/apps-script.js` (reports). OPP `templates/repair-note.liquid` prints `serial_display`.
 
 ## 10. One-time backfill of existing orders (#1038–#1056)
 Goal: number already-punched orders per state, chronologically, with manual curation.
@@ -128,7 +128,7 @@ Goal: number already-punched orders per state, chronologically, with manual cura
 ## 12. Files
 - `services/serialization/setup.sql`, `services/serialization/index.js`
 - `server.js` — routes + integration (`maybeAssignCustomerOrderSerial`, `assignRepairSerial`, `assignDocSerial`/`handleDocumentSerialTags`, `handleCustomerOrderDraftSerial`, `/api/serial/*`, `getMetafieldType`)
-- `services/repairs/index.js` (+`repair-note.liquid`), `services/exchange-cn/apps-script.js`, `services/reporting/apps-script.js`
+- `services/repairs/index.js` (+`templates/repair-note.liquid`), `services/exchange-cn/apps-script.js`, `services/reporting/apps-script.js`
 - Branch `feat/serialization` (commits `43e5b89` → `eaafd24` …). Not yet merged to `main`.
 
 ## 13. Open items

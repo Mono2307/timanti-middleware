@@ -1,3 +1,9 @@
+{% comment %}
+  order-confirmation-receipt.liquid — derived from mto-invoice-template.liquid.
+  Change: dropped the IGST/CGST/SGST + Round Off tax breakup; added post-tax
+  adjustments (Old Gold / Exchange Note / Voucher / Design Advance) → Net Payable,
+  matching tax-invoice.liquid. Source of truth: SESSION_CONTEXT_INVOICE_VOUCHER.md.
+{% endcomment %}
 <style>
   @page { size: A4; margin: 0.5cm; }
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -35,6 +41,7 @@
   .totals-row td { font-weight: normal; padding: 3px 4px; font-size: 7px; }
   .total-row td { font-weight: bold; font-size: 8px; background-color: #f9f9f9; }
   .section-label-row td { font-weight: bold; font-size: 7px; color: #444; font-style: italic; padding: 2px 4px; }
+  .tbd { color: #999; font-style: italic; }
   .amount-words { padding: 4px 8px; font-size: 7px; font-weight: bold; border-top: 2px solid #000; display: flex; justify-content: space-between; }
   .footer-section { display: grid; grid-template-columns: 1fr 1fr; border-top: 2px solid #000; font-size: 6.5px; line-height: 1.25; }
   .footer-left { padding: 6px 8px; border-right: 2px solid #000; }
@@ -70,6 +77,9 @@
   {% if t == "deposit:fully-paid" and is_partial == false and is_fully_paid == false %}{% assign is_fully_paid = true %}{% endif %}
   {% if t contains "paid:rs"        and paid_amount    == "" %}{% assign paid_amount    = t | remove: "paid:rs"        | strip %}{% endif %}
   {% if t contains "pending:rs"     and pending_amount == "" %}{% assign pending_amount = t | remove: "pending:rs"     | strip %}{% endif %}
+  {% comment %}Payment-mode fallback: Order Printer often returns empty custom metafields, so also read the pmode-advance:/pmode-final: tags (only when the metafield didn't populate). Without this a mode like gokwik_link that IS on the order as a tag would not print.{% endcomment %}
+  {% if t contains "pmode-advance:" and pm_advance     == "" %}{% assign pm_advance = tag | strip | remove: "pmode-advance:" %}{% endif %}
+  {% if t contains "pmode-final:"   and pm_final       == "" %}{% assign pm_final   = tag | strip | remove: "pmode-final:"   %}{% endif %}
 {% endfor %}
 
 {% comment %}── Place of Supply = supplier store state (custom.state_code metafield, e.g. KA-HSR→KA), NOT shipping. Shipping is the delivery destination, used only for the GST inter/intra split. ──{% endcomment %}
@@ -234,29 +244,29 @@
           </td>
           <td class="text-center">{{ line_item.quantity }}</td>
 
-          {% comment %}── Gross Wt ──{% endcomment %}
+          {% comment %}── Gross Wt (indicative on this advance copy → trailing * ; TBC when unknown) ──{% endcomment %}
           <td class="text-center">
-            {% if has_repriced_props and prop_gross_wt != "" %}{{ prop_gross_wt }}
-            {% elsif line_item.variant.metafields.custom.total_metal_weight_g %}{{ line_item.variant.metafields.custom.total_metal_weight_g | round: 2 }}
-            {% elsif line_item.variant.metafields.custom.gross_weight_g %}{{ line_item.variant.metafields.custom.gross_weight_g | round: 2 }}
-            {% elsif line_item.product.metafields.custom.total_metal_weight_g %}{{ line_item.product.metafields.custom.total_metal_weight_g | round: 2 }}
-            {% else %}–{% endif %}
+            {% if has_repriced_props and prop_gross_wt != "" %}{{ prop_gross_wt }}*
+            {% elsif line_item.variant.metafields.custom.total_metal_weight_g %}{{ line_item.variant.metafields.custom.total_metal_weight_g | round: 2 }}*
+            {% elsif line_item.variant.metafields.custom.gross_weight_g %}{{ line_item.variant.metafields.custom.gross_weight_g | round: 2 }}*
+            {% elsif line_item.product.metafields.custom.total_metal_weight_g %}{{ line_item.product.metafields.custom.total_metal_weight_g | round: 2 }}*
+            {% else %}<span class="tbd">TBC</span>{% endif %}
           </td>
 
-          {% comment %}── Net Wt ──{% endcomment %}
+          {% comment %}── Net Wt (indicative → trailing * ; TBC when unknown) ──{% endcomment %}
           <td class="text-center">
-            {% if has_repriced_props and prop_net_wt != "" %}{{ prop_net_wt }}
-            {% elsif line_item.variant.metafields.custom.net_metal_weight_g %}{{ line_item.variant.metafields.custom.net_metal_weight_g | round: 2 }}
-            {% elsif line_item.product.metafields.custom.net_metal_weight_g %}{{ line_item.product.metafields.custom.net_metal_weight_g | round: 2 }}
-            {% else %}–{% endif %}
+            {% if has_repriced_props and prop_net_wt != "" %}{{ prop_net_wt }}*
+            {% elsif line_item.variant.metafields.custom.net_metal_weight_g %}{{ line_item.variant.metafields.custom.net_metal_weight_g | round: 2 }}*
+            {% elsif line_item.product.metafields.custom.net_metal_weight_g %}{{ line_item.product.metafields.custom.net_metal_weight_g | round: 2 }}*
+            {% else %}<span class="tbd">TBC</span>{% endif %}
           </td>
 
-          {% comment %}── Dia Wt (cts) ──{% endcomment %}
+          {% comment %}── Dia Wt (cts) (indicative → trailing * ; TBC when unknown) ──{% endcomment %}
           <td class="text-center">
-            {% if prop_dia_cts != "" %}{{ prop_dia_cts }}
-            {% elsif line_item.product.metafields.custom.totaldiamondweight %}{{ line_item.product.metafields.custom.totaldiamondweight }}
-            {% elsif line_item.variant.metafields.custom.totaldiamondweight %}{{ line_item.variant.metafields.custom.totaldiamondweight }}
-            {% else %}–{% endif %}
+            {% if prop_dia_cts != "" %}{{ prop_dia_cts }}*
+            {% elsif line_item.product.metafields.custom.totaldiamondweight %}{{ line_item.product.metafields.custom.totaldiamondweight }}*
+            {% elsif line_item.variant.metafields.custom.totaldiamondweight %}{{ line_item.variant.metafields.custom.totaldiamondweight }}*
+            {% else %}<span class="tbd">TBC</span>{% endif %}
           </td>
 
           {% comment %}── Dia Pcs ──{% endcomment %}
@@ -287,42 +297,41 @@
           {% else %}–{% endif %}
           </td>
 
-          <td class="text-right">₹{{ gross_paise | divided_by: 1.03 | money_without_currency | remove: ',' }}</td>
-          {% comment %}Discount Applied is PRE-TAX (diamond/making component discount) — show as-is, no ÷1.03.{% endcomment %}
+          {% comment %}
+            "Gross Value" is PRE-discount and tax-INCLUSIVE; "Discount Applied" is already PRE-tax
+            (diamond-only), so it is NOT divided by 1.03 — only the gross is converted:
+              taxable (pre-disc)  = gross / 1.03
+              discount            = disc            <- pre-tax already
+              taxable (post-disc) = gross / 1.03 - disc
+          {% endcomment %}
+          {% assign taxable_pre_paise = gross_paise | divided_by: 1.03 %}
+          <td class="text-right">₹{{ taxable_pre_paise | money_without_currency | remove: ',' }}</td>
           <td class="text-right">₹{{ disc_paise | money_without_currency | remove: ',' }}</td>
-          <td class="text-right">₹{{ gross_paise | divided_by: 1.03 | minus: disc_paise | money_without_currency | remove: ',' }}</td>
+          <td class="text-right">₹{{ taxable_pre_paise | minus: disc_paise | money_without_currency | remove: ',' }}</td>
         </tr>
       {% endfor %}
 
-      {% comment %}── Credit note ──{% endcomment %}
-      {% assign cn_applied = false %}
-      {% assign cn_code    = "" %}
-      {% assign cn_amount  = 0 %}
-      {% for discount in order.cart_level_discount_applications %}
-        {% if discount.code contains "CNTM" %}{% assign cn_applied = true %}{% assign cn_code = discount.code %}{% assign cn_amount = discount.total_allocated_amount %}{% endif %}
-      {% endfor %}
-      {% unless cn_applied %}
-        {% for discount in order.discount_applications %}
-          {% if discount.code contains "CNTM" %}{% assign cn_applied = true %}{% assign cn_code = discount.code %}{% assign cn_amount = discount.total_allocated_amount %}{% endif %}
-        {% endfor %}
-      {% endunless %}
+      {% comment %}
+        ── ORDER CONFIRMATION / PAYMENT RECEIPT ──
+        Per SESSION_CONTEXT_INVOICE_VOUCHER.md: this copy carries NO GST tax breakup
+        (kept simple). The final Tax Invoice shows the CGST/SGST/IGST split.
+        Pre-tax discount (product-collection) is already netted inside taxable_base
+        via the per-line "Discount Applied" property. Voucher / exchange-note /
+        design-advance are POST-tax adjustments and subtract from final_payable below.
+      {% endcomment %}
+      {% comment %}Discount Applied is PRE-TAX, so removing it from the tax-inclusive Total drops the GST on
+      it too: Total = gross − discount×1.03 = (gross/1.03 − disc)×1.03. Subtracting the raw pre-tax disc
+      straight off the tax-inclusive gross (as before) overstated the Total by disc×3%.{% endcomment %}
+      {% assign taxable_base = total_gross_paise | divided_by: 1.03 | minus: total_disc_paise | times: 1.03 %}
 
-      {% if cn_applied %}
-      <tr class="totals-row">
-        <td colspan="12" class="text-right" style="color:#006630; font-style:italic;">Credit Note Applied &nbsp;({{ cn_code }})</td>
-        <td class="text-right" style="color:#006630; font-weight:bold;">− ₹{{ cn_amount | money_without_currency | remove: ',' }}</td>
+      <tr class="total-row">
+        <td colspan="12" class="text-right"><strong>Total Invoice Price (incl. GST)</strong></td>
+        <td class="text-right"><strong>₹{{ taxable_base | money_without_currency | remove: ',' }}</strong></td>
       </tr>
-      {% endif %}
 
-      {% comment %}Discount Applied is PRE-TAX, so it reduces the tax-inclusive Total by disc×1.03 (its GST
-      comes off too), NOT by the raw disc. A native Credit Note (cn_amount, read raw from Shopify) IS
-      tax-inclusive, subtracted as-is. taxable_base stays the tax-inclusive Total; taxable_value =
-      taxable_base/1.03 downstream.{% endcomment %}
-      {% assign disc_incl_paise = total_disc_paise | times: 1.03 %}
-      {% assign taxable_base = total_gross_paise | minus: disc_incl_paise %}
-      {% if cn_applied %}{% assign taxable_base = taxable_base | minus: cn_amount %}{% endif %}
+      {% assign final_payable = taxable_base %}
 
-      {% comment %}── Old gold exchange ──{% endcomment %}
+      {% comment %}── Old gold exchange (post-tax adjustment) ──{% endcomment %}
       {% assign og_value  = order.metafields.custom.old_gold_value  | plus: 0 %}
       {% assign og_weight = order.metafields.custom.old_gold_weight | plus: 0 %}
       {% assign og_karat  = order.metafields.custom.old_gold_karat  | default: "" %}
@@ -333,54 +342,91 @@
       {% endfor %}
       {% if og_value > 0 %}
         {% assign og_value_paise = og_value | times: 100 | round %}
-        {% assign og_gross_paise = og_value | times: 103 | round %}
-        {% assign taxable_base   = taxable_base | minus: og_gross_paise %}
+        <tr class="totals-row">
+          <td colspan="12" class="text-right" style="border-top: 1px solid #ccc;">Consideration against Gold received ({{ og_weight }}g{% if og_karat != "" %}, {{ og_karat }}kt{% endif %})</td>
+          <td class="text-right" style="border-top: 1px solid #ccc;">− ₹{{ og_value_paise | money_without_currency | remove: ',' }}</td>
+        </tr>
+        {% assign final_payable = final_payable | minus: og_value_paise %}
       {% endif %}
 
-      {% assign taxable_value = taxable_base | divided_by: 1.03 %}
-      {% assign gst_computed  = taxable_value | times: 0.03 %}
-      {% assign round_off     = taxable_base | minus: taxable_value | minus: gst_computed %}
-
-      <tr class="totals-row">
-        <td colspan="12" class="text-right"><strong>Taxable Value</strong></td>
-        <td class="text-right"><strong>₹{{ taxable_value | money_without_currency | remove: ',' }}</strong></td>
-      </tr>
-
-      {% if is_same_state %}
-        {% assign cgst_amount = taxable_value | times: 0.015 %}
-        {% assign sgst_amount = taxable_value | times: 0.015 %}
-        <tr class="totals-row"><td colspan="12" class="text-right">IGST @ 3%</td><td class="text-right">–</td></tr>
-        <tr class="totals-row"><td colspan="12" class="text-right">CGST @ 1.5%</td><td class="text-right">₹{{ cgst_amount | money_without_currency | remove: ',' }}</td></tr>
-        <tr class="totals-row"><td colspan="12" class="text-right">SGST @ 1.5%</td><td class="text-right">₹{{ sgst_amount | money_without_currency | remove: ',' }}</td></tr>
-      {% else %}
-        {% assign igst_amount = taxable_value | times: 0.03 %}
-        <tr class="totals-row"><td colspan="12" class="text-right">IGST @ 3%</td><td class="text-right">₹{{ igst_amount | money_without_currency | remove: ',' }}</td></tr>
-        <tr class="totals-row"><td colspan="12" class="text-right">CGST @ 1.5%</td><td class="text-right">–</td></tr>
-        <tr class="totals-row"><td colspan="12" class="text-right">SGST @ 1.5%</td><td class="text-right">–</td></tr>
+      {% comment %}── Exchange note adjustment (post-tax). Code from exc-num: tag ──{% endcomment %}
+      {% assign exc_value = order.metafields.custom.exchange_note_value | plus: 0 %}
+      {% assign exc_code  = "" %}
+      {% for attr in order.note_attributes %}
+        {% if attr.name == "exchange_note_value" and exc_value == 0 %}{% assign exc_value = attr.value | plus: 0 %}{% endif %}
+      {% endfor %}
+      {% for tag in order.tags %}
+        {% assign _t = tag | strip %}
+        {% if _t contains "exc-num:" %}{% assign exc_code = _t | remove: "exc-num:" | strip %}{% endif %}
+      {% endfor %}
+      {% if exc_value > 0 %}
+        {% assign exc_value_paise = exc_value | times: 100 | round %}
+        <tr class="totals-row">
+          <td colspan="12" class="text-right" style="border-top: 1px solid #ccc;">Less: Exchange Note Adjustment</td>
+          <td class="text-right" style="border-top: 1px solid #ccc;">− ₹{{ exc_value_paise | money_without_currency | remove: ',' }}</td>
+        </tr>
+        {% assign final_payable = final_payable | minus: exc_value_paise %}
       {% endif %}
 
-      <tr class="totals-row">
-        <td colspan="12" class="text-right">Round Off +/(-)</td>
-        <td class="text-right">₹{{ round_off | money_without_currency | remove: ',' }}</td>
-      </tr>
-      <tr class="total-row">
-        <td colspan="12" class="text-right">Total Invoice Price</td>
-        <td class="text-right">₹{{ taxable_base | money_without_currency | remove: ',' }}</td>
-      </tr>
-
-      {% if og_value > 0 %}
-      <tr class="totals-row">
-        <td colspan="12" class="text-right">Consideration against Gold received ({{ og_weight }}g{% if og_karat != "" %}, {{ og_karat }}kt{% endif %})</td>
-        <td class="text-right">₹{{ og_value_paise | money_without_currency | remove: ',' }}</td>
-      </tr>
+      {% comment %}── Voucher adjustment (post-tax). Code from voucher-num: tag ──{% endcomment %}
+      {% assign voucher_value = order.metafields.custom.voucher_value | plus: 0 %}
+      {% assign voucher_code  = "" %}
+      {% for attr in order.note_attributes %}
+        {% if attr.name == "voucher_value" and voucher_value == 0 %}{% assign voucher_value = attr.value | plus: 0 %}{% endif %}
+      {% endfor %}
+      {% for tag in order.tags %}
+        {% assign _t = tag | strip %}
+        {% if _t contains "voucher-num:" %}{% assign voucher_code = _t | remove: "voucher-num:" | strip %}{% endif %}
+      {% endfor %}
+      {% if voucher_value > 0 %}
+        {% assign voucher_value_paise = voucher_value | times: 100 | round %}
+        <tr class="totals-row">
+          <td colspan="12" class="text-right" style="border-top: 1px solid #ccc;">Less: Voucher Adjustment{% if voucher_code != "" %} ({{ voucher_code }}){% endif %}</td>
+          <td class="text-right" style="border-top: 1px solid #ccc;">− ₹{{ voucher_value_paise | money_without_currency | remove: ',' }}</td>
+        </tr>
+        {% assign final_payable = final_payable | minus: voucher_value_paise %}
       {% endif %}
 
+      {% comment %}── Design advance (post-tax). custom.design_advance metafield, fallback note attr design_advance ──{% endcomment %}
+      {% assign design_advance = order.metafields.custom.design_advance | plus: 0 %}
+      {% for attr in order.note_attributes %}
+        {% if attr.name == "design_advance" and design_advance == 0 %}{% assign design_advance = attr.value | plus: 0 %}{% endif %}
+      {% endfor %}
+      {% if design_advance > 0 %}
+        {% assign design_advance_paise = design_advance | times: 100 | round %}
+        <tr class="totals-row">
+          <td colspan="12" class="text-right" style="border-top: 1px solid #ccc;">Less: Design Advance</td>
+          <td class="text-right" style="border-top: 1px solid #ccc;">− ₹{{ design_advance_paise | money_without_currency | remove: ',' }}</td>
+        </tr>
+        {% assign final_payable = final_payable | minus: design_advance_paise %}
+      {% endif %}
+
+      {% comment %}── Credit voucher + Net Payable. If post-tax adjustments exceed the invoice price, net is clamped to ₹0 and a credit voucher is issued for the excess ──{% endcomment %}
+      {% if og_value > 0 or exc_value > 0 or voucher_value > 0 or design_advance > 0 %}
+        {% assign credit_voucher_paise = 0 %}
+        {% if final_payable < 0 %}
+          {% assign credit_voucher_paise = 0 | minus: final_payable %}
+          {% assign final_payable = 0 %}
+        {% endif %}
+        {% if credit_voucher_paise > 0 %}
+          <tr class="totals-row">
+            <td colspan="12" class="text-right" style="border-top: 1px solid #ccc; color:#006630; font-style:italic;">Credit Voucher Generated</td>
+            <td class="text-right" style="border-top: 1px solid #ccc; color:#006630; font-weight:bold;">+ ₹{{ credit_voucher_paise | money_without_currency | remove: ',' }}</td>
+          </tr>
+        {% endif %}
+        <tr class="total-row">
+          <td colspan="12" class="text-right"><strong>Net Payable</strong></td>
+          <td class="text-right"><strong>₹{{ final_payable | money_without_currency | remove: ',' }}</strong></td>
+        </tr>
+      {% endif %}
+
+      {% comment %}── Payment rows (is_partial / paid_amount / pm_* computed at top of file) ──{% endcomment %}
       {% if is_partial and paid_amount != "" %}
         <tr class="totals-row">
-          <td colspan="12" class="text-right">
+          <td colspan="12" class="text-right" style="border-top: 1px solid #ccc;">
             Amount Received – Advance{% if pm_advance != "" %}&nbsp; <em style="color:#555;">({{ pm_advance }})</em>{% endif %}
           </td>
-          <td class="text-right">₹{{ paid_amount }}</td>
+          <td class="text-right" style="border-top: 1px solid #ccc;">₹{{ paid_amount }}</td>
         </tr>
         <tr class="totals-row">
           <td colspan="12" class="text-right"><strong>Balance Due</strong></td>
@@ -388,18 +434,18 @@
         </tr>
       {% elsif is_fully_paid %}
         {% assign pm_display = "" %}
-        {% if pm_advance != "" and pm_final != "" and pm_final != pm_advance %}
-          {% assign pm_display = pm_advance | append: " / " | append: pm_final %}
+        {% if pm_advance != "" and pm_final != "" %}
+          {% assign pm_display = "Advance: " | append: pm_advance | append: " / Final: " | append: pm_final %}
         {% elsif pm_advance != "" %}
-          {% assign pm_display = pm_advance %}
+          {% assign pm_display = "Advance: " | append: pm_advance %}
         {% elsif pm_final != "" %}
-          {% assign pm_display = pm_final %}
+          {% assign pm_display = "Final: " | append: pm_final %}
         {% endif %}
         <tr class="totals-row">
           <td colspan="12" class="text-right">
             Amount Received{% if pm_display != "" %}&nbsp; <em style="color:#555;">({{ pm_display }})</em>{% endif %}
           </td>
-          <td class="text-right">{% if paid_amount != "" %}₹{{ paid_amount }}{% else %}₹{{ taxable_base | money_without_currency | remove: ',' }}{% endif %}</td>
+          <td class="text-right">{% if paid_amount != "" %}₹{{ paid_amount }}{% else %}₹{{ final_payable | money_without_currency | remove: ',' }}{% endif %}</td>
         </tr>
         <tr class="totals-row">
           <td colspan="12" class="text-right"><strong>Balance Due</strong></td>
@@ -412,18 +458,22 @@
         </tr>
         <tr class="totals-row">
           <td colspan="12" class="text-right"><strong>Balance Due</strong></td>
-          <td class="text-right"><strong>₹{{ taxable_base | money_without_currency | remove: ',' }}</strong></td>
+          <td class="text-right"><strong>₹{{ final_payable | money_without_currency | remove: ',' }}</strong></td>
         </tr>
       {% endif %}
 
     </tbody>
   </table>
 
+  <div style="padding: 4px 10px; font-size: 7.5px; font-style: italic; border-top: 1px solid #ccc;">
+    * Weights shown are indicative estimates. Actual weights confirmed on final tax invoice issued at dispatch.
+  </div>
+
   <div class="amount-words">
     <span>
       {% assign ones = "Zero,One,Two,Three,Four,Five,Six,Seven,Eight,Nine,Ten,Eleven,Twelve,Thirteen,Fourteen,Fifteen,Sixteen,Seventeen,Eighteen,Nineteen" | split: "," %}
       {% assign tens = "Zero,Ten,Twenty,Thirty,Forty,Fifty,Sixty,Seventy,Eighty,Ninety" | split: "," %}
-      {% assign total_int = taxable_base | divided_by: 100 | floor %}
+      {% assign total_int = final_payable | divided_by: 100 | floor %}
       {% assign words = "" %}
       {% assign crores = total_int | divided_by: 10000000 %}
       {% if crores > 0 %}{% assign temp = crores | modulo: 100 %}{% if temp < 20 %}{% assign words = words | append: ones[temp] | append: " " %}{% else %}{% assign td = temp | divided_by: 10 %}{% assign od = temp | modulo: 10 %}{% assign words = words | append: tens[td] %}{% if od > 0 %}{% assign words = words | append: "-" | append: ones[od] %}{% endif %}{% assign words = words | append: " " %}{% endif %}{% assign words = words | append: "Crore " %}{% assign total_int = total_int | modulo: 10000000 %}{% endif %}

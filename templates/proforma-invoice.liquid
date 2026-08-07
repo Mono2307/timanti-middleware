@@ -255,8 +255,9 @@
           {% else %}<span class="tbd">TBC</span>{% endif %}
         </td>
         <td class="text-right">{{ gross_paise | divided_by: 1.03 | money_without_currency | remove: ',' }}</td>
-        <td class="text-right">{{ disc_paise | divided_by: 1.03 | money_without_currency | remove: ',' }}</td>
-        <td class="text-right">{{ gross_paise | minus: disc_paise | divided_by: 1.03 | money_without_currency | remove: ',' }}</td>
+        {% comment %}Discount Applied is PRE-TAX (diamond/making component discount) — show as-is, no ÷1.03.{% endcomment %}
+        <td class="text-right">{{ disc_paise | money_without_currency | remove: ',' }}</td>
+        <td class="text-right">{{ gross_paise | divided_by: 1.03 | minus: disc_paise | money_without_currency | remove: ',' }}</td>
       </tr>
       {% endfor %}
 
@@ -290,13 +291,13 @@
       </tr>
       {% endif %}
 
-      {% assign total_net_paise = total_gross_paise | minus: total_disc_paise %}
-      {% if cn_applied %}
-        {% assign taxable_base = total_net_paise | minus: cn_amount %}
-      {% else %}
-        {% assign taxable_base = total_net_paise %}
-      {% endif %}
-      {% assign taxable_value = taxable_base | divided_by: 1.03 %}
+      {% comment %}Discount Applied is PRE-TAX (a diamond/making component discount, already a pre-tax figure)
+      so it is subtracted from the pre-tax taxable (gross/1.03), NOT ÷1.03. A native Credit Note (cn_amount,
+      read RAW from Shopify's discount_applications) IS tax-inclusive, so it is converted to pre-tax (÷1.03)
+      before subtracting. taxable_base (tax-inclusive Total) = taxable_value × 1.03.{% endcomment %}
+      {% assign taxable_value = total_gross_paise | divided_by: 1.03 | minus: total_disc_paise %}
+      {% if cn_applied %}{% assign cn_pretax = cn_amount | divided_by: 1.03 %}{% assign taxable_value = taxable_value | minus: cn_pretax %}{% endif %}
+      {% assign taxable_base = taxable_value | times: 1.03 %}
       {% assign total_tax = taxable_value | times: 0.03 %}
 
       {% if is_same_state %}
