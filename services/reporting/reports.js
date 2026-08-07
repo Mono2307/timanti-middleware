@@ -60,9 +60,37 @@ function lineMoney({ grossValue, discount, taxableProp, storeState, shipState })
   };
 }
 
+// ── Draft → order lineage ────────────────────────────────────────────────────
+// Shopify completes a draft in place (PUT .../complete.json): the draft flips to
+// status=completed and carries `order_id`, but NOTHING is written back onto the
+// order identifying the draft it came from. So an order row can only name its
+// originating draft by walking the completed drafts and indexing them by order_id.
+// Keyed by the numeric order id, which is what `draft_order.order_id` holds.
+
+async function buildOrderToDraftMap(deps) {
+  const { axios, storeUrl, token } = deps;
+  const map = {};
+  if (!storeUrl || !token) return map;
+  let pageUrl = `${storeUrl}/admin/api/2024-01/draft_orders.json?status=completed&limit=250`;
+  let page = 0;
+  while (pageUrl && page++ < 50) {
+    let resp;
+    try {
+      resp = await axios.get(pageUrl, { headers: { 'X-Shopify-Access-Token': token }, timeout: 30000 });
+    } catch (_) { break; }   // lineage is enrichment — never fail the whole report over it
+    for (const d of (resp.data.draft_orders || [])) {
+      if (d.order_id) map[String(d.order_id)] = d.name || '';
+    }
+    const link = resp.headers['link'] || '';
+    const next = link.match(/<([^>]+)>;\s*rel="next"/);
+    pageUrl = next ? next[1] : null;
+  }
+  return map;
+}
+
 // ── Sales report — orders side (GraphQL) ─────────────────────────────────────
 
-async function collectOrders(deps, { from, to }, rows) {
+async function collectOrders(deps, { from, to }, rows, draftByOrderId = {}) {
   const { axios, storeUrl, token } = deps;
   const search = `created_at:>=${from} created_at:<=${to}`;
   let cursor = null, page = 0;
@@ -70,7 +98,7 @@ async function collectOrders(deps, { from, to }, rows) {
     const query = `query($q:String!,$after:String){ orders(first:50, query:$q, after:$after, sortKey:CREATED_AT){
       pageInfo{ hasNextPage endCursor }
       edges{ node{
-        name createdAt customer{ displayName }
+        id name createdAt customer{ displayName }
         shippingAddress{ provinceCode province }
         totalPriceSet{ shopMoney{ amount } }
         metafields(namespace:"custom", first:40){ edges{ node{ key value } } }
@@ -110,6 +138,9 @@ async function collectOrders(deps, { from, to }, rows) {
       const bothModes = !!(mf.payment_mode_advance && mf.payment_mode_final);
       const paymentType = isFull ? (bothModes ? 'full: advance+final' : 'full: one-time')
                                  : (paid > 0 ? 'partial' : 'unpaid');
+      // the draft this order was converted from, if it started life as one
+      const orderLegacyId = String(n.id || '').split('/').pop();
+      const originDraft = draftByOrderId[orderLegacyId] || '';
 
       const lines = n.lineItems.edges.map(le => le.node);
       lines.forEach((li, idx) => {
@@ -124,7 +155,7 @@ async function collectOrders(deps, { from, to }, rows) {
         rows.push({
           stage,
           payment_type:  paymentType,
-          draft_name:   '',
+          draft_name:   originDraft,
           order_name:   n.name || '',
           day:          fmtDay(n.createdAt),
           customer:     (n.customer && n.customer.displayName) || '',
@@ -154,20 +185,41 @@ async function collectOrders(deps, { from, to }, rows) {
 // sale appears exactly once. Draft line HSN/serial/state_code metafields aren't inline on the list
 // endpoint, so HSN falls back to the default and place-of-supply approximates from shipping; the
 // completed-order row carries the authoritative GST/serial figures.
+//
+// DATE FILTERING IS DONE CLIENT-SIDE, DELIBERATELY. The REST draft_orders endpoint does not support
+// created_at_min/created_at_max — it accepts updated_at_* and since_id only — and Shopify silently
+// IGNORES unsupported query params rather than erroring. Passing them looked like it worked while
+// actually returning every open/invoice_sent draft ever created, so each month's report re-counted
+// the same drafts (a July run carried #D115 from May and #D194 from August, and June's run carried
+// the identical draft list). Filter on d.created_at here instead, and never trust the endpoint to
+// have narrowed anything.
 
 async function collectDrafts(deps, { from, to }, rows) {
   const { axios, storeUrl, token } = deps;
   const hdrs = { 'X-Shopify-Access-Token': token };
-  const baseQp = new URLSearchParams({ limit: '250' });
-  if (from) baseQp.set('created_at_min', new Date(from).toISOString());
-  if (to)   baseQp.set('created_at_max', new Date(to + 'T23:59:59Z').toISOString());
+  const fromT = from ? new Date(from + 'T00:00:00Z').getTime() : null;
+  const toT   = to   ? new Date(to   + 'T23:59:59.999Z').getTime() : null;
+  const inWindow = (iso) => {
+    const t = new Date(iso).getTime();
+    if (!Number.isFinite(t)) return false;
+    return (fromT == null || t >= fromT) && (toT == null || t <= toT);
+  };
+  const seen = new Set();
 
   for (const status of ['open', 'invoice_sent']) {
-    const qp = new URLSearchParams(baseQp); qp.set('status', status);
+    const qp = new URLSearchParams({ limit: '250', status });
     let pageUrl = `${storeUrl}/admin/api/2024-01/draft_orders.json?${qp}`;
     while (pageUrl) {
       const { data, headers } = await axios.get(pageUrl, { headers: hdrs, timeout: 30000 });
       for (const d of (data.draft_orders || [])) {
+        // A converted draft is represented by its order row (collectOrders) — never both.
+        // Shopify's status filter should already exclude these; this is the belt-and-braces
+        // dedupe the sales report is specified to do.
+        if (d.order_id) continue;
+        // a draft can surface under more than one status pass
+        if (seen.has(d.id)) continue;
+        seen.add(d.id);
+        if (!inWindow(d.created_at)) continue;
         const tags = (d.tags || '').split(',').map(t => t.trim()).filter(Boolean);
         const tag  = (prefix) => { const t = tags.find(x => x.startsWith(prefix)); return t ? t.slice(prefix.length) : ''; };
         const deposit = tag('deposit:');
@@ -241,7 +293,8 @@ const SALES_COLS = [
 
 async function buildSalesReport(deps, { from, to, state, paymentStatus } = {}) {
   const rows = [];
-  await collectOrders(deps, { from, to }, rows);
+  const draftByOrderId = await buildOrderToDraftMap(deps);
+  await collectOrders(deps, { from, to }, rows, draftByOrderId);
   await collectDrafts(deps, { from, to }, rows);
   let out = rows;
   if (state)         out = out.filter(r => r.place_of_supply === normState(state));
