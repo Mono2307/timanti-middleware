@@ -360,8 +360,12 @@ def ingest_shopify(fname, etype):
         for r in csv.DictReader(f):
             ref = r.get('Order name','').strip()
             if not ref: continue
+            # Shopify names this column after the grouping used ("Day", "Month", ...).
+            # Export by Day — a Month-grouped file dates every order to the 1st, which is
+            # too coarse for the date window. Accepted so a mis-grouped export still loads.
+            _day = r.get('Day') or r.get('Month') or r.get('Week') or r.get('Date') or ''
             e = agg.setdefault(ref, {'total': 0.0, 'customer': r.get('Customer name','').strip(),
-                                     'date': parse_shop_date(r.get('Day','')),
+                                     'date': parse_shop_date(_day),
                                      'tags': r.get('Payment Tags','')})
             e['total'] += fnum(r.get('Net sales'))
     for ref, e in agg.items():
@@ -377,11 +381,15 @@ def ingest_shopify(fname, etype):
         upsert(ent_store, ref, rec)
     return len(agg)
 
-_orders_file = 'Accounts - Fully Paid Orders.csv'
-if os.path.exists(os.path.join(BASE, _orders_file)):
-    print(f'Orders ingested: {ingest_shopify(_orders_file, "order")} from {_orders_file}')
+# Matched on the keyword rather than an exact name, so a date-stamped export
+# ("Accounts - Fully Paid Orders - 2026-04-01 - 2026-07-31.csv") is picked up too.
+_orders_files = sorted(f for f in os.listdir(BASE)
+                       if 'accounts' in f.lower() and f.endswith('.csv'))
+if _orders_files:
+    for of in _orders_files:
+        print(f'Orders ingested: {ingest_shopify(of, "order")} from {of}')
 else:
-    print(f'!! {_orders_file} not found — relying on stored orders only')
+    print('!! No Accounts*.csv found — relying on stored orders only')
 
 _draft_files = sorted(f for f in os.listdir(BASE)
                       if f.lower().startswith('draft-orders-report') and f.endswith('.csv'))

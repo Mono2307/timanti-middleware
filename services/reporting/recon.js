@@ -265,7 +265,10 @@ function loadShopifyDocs(src, keyword, type) {
       if (!ref) continue;
       if (!perFile[ref]) perFile[ref] = {
         ref, customer: (r['Customer name'] || '').trim(),
-        date: parseShopDate(r['Day'] || ''), total: 0, gross: 0, type,
+        // Shopify's export names this column after the grouping used ("Day", "Month", ...).
+        // Month-grouped exports date every order to the 1st, which is too coarse for the
+        // date window — export by Day. Accepted here so a mis-grouped export still loads.
+        date: parseShopDate(r['Day'] || r['Month'] || r['Week'] || r['Date'] || ''), total: 0, gross: 0, type,
         paymentTags: r['Payment Tags'] || '',
       };
       perFile[ref].total += parseFloat(r['Net sales'] || '0');
@@ -330,18 +333,55 @@ function findCandidates(amount, entities) {
   );
 }
 
+// Payment modes recorded on a document: "pmode-advance:card, pmode-final:upi".
+// Returns true (compatible) / false (definitely not) / null (no signal — never excludes).
+function paymentModeFits(txn, e) {
+  const modes = [...String(e.paymentTags || '').matchAll(/pmode-(?:advance|final):([^\s,]+)/g)]
+    .map(m => m[1].toLowerCase());
+  if (!modes.length) return null;
+  const mode = (txn.paymentMode || '').toLowerCase();
+  if (txn.source === 'GoKwik')  return modes.some(m => /gokwik|kwik/.test(m));
+  if (/upi/.test(mode))         return modes.some(m => /upi|gokwik/.test(m));
+  if (/card/.test(mode))        return modes.some(m => /card/.test(m));
+  if (/cash/.test(mode))        return modes.some(m => /cash/.test(m));
+  return null;
+}
+
 function matchByAmountDate(txn, entities) {
   const cands = findCandidates(txn.amount, entities);
   if (!cands.length) return { method: 'UNLINKED', match: null, confidence: 'NONE', notes: 'No amount match' };
 
   const name = txn.name || txn.vpa || '';
-  const scored = cands
+  // A draft's date is when it was CREATED, not when the advance was collected — a customer
+  // routinely pays days later (#D182 raised 22-Jul, card run 27-Jul). When the payer's name
+  // matches the customer, identity is stronger evidence than proximity, so allow a wider
+  // window; without a name match, stay strict at 3 days.
+  const NAMED_WINDOW_DAYS = 30;
+  let scored = cands
     .map(e => ({ e, days: daysDiff(txn.date, e.date), sim: nameSim(name, e.customer) }))
-    .filter(x => x.days <= 3)
+    .filter(x => x.days <= (x.sim >= 0.8 ? NAMED_WINDOW_DAYS : 3))
     .sort((a, b) => a.days - b.days || b.sim - a.sim);
 
   if (!scored.length) return { method: 'UNLINKED', match: null, confidence: 'NONE', notes: 'Amount match but >3d date gap' };
-  if (scored.length === 1) return { method: 'AMOUNT_DATE', match: scored[0].e, confidence: scored[0].days <= 1 ? 'MEDIUM' : 'LOW', notes: '' };
+  if (scored.length > 1) {
+    // How the money was collected is recorded on the document (pmode-advance/pmode-final).
+    // A GoKwik collection cannot be a draft tagged `card`, which separates same-amount,
+    // same-day candidates that nothing else can (#D184 gokwik_link vs #D185/#D186 card).
+    const compatible = scored.filter(x => paymentModeFits(txn, x.e) !== false);
+    if (compatible.length && compatible.length < scored.length) {
+      if (compatible.length === 1) {
+        return { method: 'AMOUNT_DATE', match: compatible[0].e, confidence: 'MEDIUM',
+                 notes: `Payment mode (${txn.source === 'GoKwik' ? 'gokwik' : (txn.paymentMode || '').toLowerCase()}) ruled out ${scored.length - 1} other candidate(s)` };
+      }
+      scored = compatible;
+    }
+  }
+  if (scored.length === 1) {
+    const only = scored[0];
+    const conf = (only.days <= 1 || only.sim >= 0.8) ? 'MEDIUM' : 'LOW';
+    const note = only.days > 3 ? `Payer name matches ${only.e.customer}; paid ${only.days.toFixed(0)}d after the draft was raised` : '';
+    return { method: 'AMOUNT_DATE', match: only.e, confidence: conf, notes: note };
+  }
 
   const [top, sec] = scored;
   if (top.sim > 0.25 && top.sim > sec.sim + 0.2) return { method: 'AMOUNT_DATE', match: top.e, confidence: 'MEDIUM', notes: `Name preferred over ${sec.e.ref}` };
