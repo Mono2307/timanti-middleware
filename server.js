@@ -844,7 +844,8 @@ app.get('/api/test-db', async (req, res) => {
       // Repair wallet refunds post the voucher-issue request to the sheet, and build their own
       // signed callback URL. Both fail SOFT (the customer sees "we're on it"), so a missing secret
       // is invisible in production unless it is surfaced here.
-      appsScriptUrl:       process.env.APPS_SCRIPT_URL       ? 'SET' : 'MISSING ⚠️',
+      appsScriptUrl:         process.env.APPS_SCRIPT_URL          ? 'SET' : 'MISSING ⚠️',  // PO Tracker web app
+      exchangeAppsScriptUrl: process.env.EXCHANGE_APPS_SCRIPT_URL ? 'SET' : 'MISSING ⚠️',  // Exchange Calculator (CN Log) web app
       serverUrl:           process.env.SERVER_URL            ? 'SET' : 'defaulting to timanti-middleware.fly.dev'
     }
   });

@@ -1209,14 +1209,19 @@ function registerRepairRoutes(app, getShopifyToken) {
           `<h2 style="font-size:20px;margin:0 0 10px;">We have your request</h2>
            <p style="font-size:14px;color:#555;line-height:1.6;margin:0;">Our team will confirm your voucher shortly.</p>`));
       }
-      if (!process.env.APPS_SCRIPT_URL) {
-        console.error('refund-wallet: APPS_SCRIPT_URL not set — cannot reach the voucher sheet');
+      // Deliberately NOT APPS_SCRIPT_URL — that is the PO Tracker web app, which only handles
+      // append/update and would swallow an issue_voucher post without complaint. The CN Log lives
+      // in the Exchange Calculator, a different Apps Script project with its own web app URL.
+      // No fallback: posting a voucher request to the PO sheet fails silently, which is worse than
+      // not sending it at all.
+      if (!process.env.EXCHANGE_APPS_SCRIPT_URL) {
+        console.error('refund-wallet: EXCHANGE_APPS_SCRIPT_URL not set — cannot reach the Exchange Calculator sheet that owns the CN Log');
         return res.send(page('We are on it',
           `<h2 style="font-size:20px;margin:0 0 10px;">We have your request</h2>
            <p style="font-size:14px;color:#555;line-height:1.6;margin:0;">Our team will confirm your voucher shortly.</p>`));
       }
 
-      await axios.post(process.env.APPS_SCRIPT_URL, {
+      await axios.post(process.env.EXCHANGE_APPS_SCRIPT_URL, {
         action:         'issue_voucher',
         source:         'repair-refund',
         draft_ref:      draft.name,

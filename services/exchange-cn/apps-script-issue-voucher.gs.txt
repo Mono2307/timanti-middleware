@@ -1,0 +1,200 @@
+/**
+ * issue_voucher — Apps Script handler for vouchers raised from an email CTA.
+ *
+ * PASTE THIS INTO the Exchange Calculator's Apps Script project and route to it
+ * from doPost. The middleware calls it when a customer clicks "Refund to my
+ * Timanti wallet" on the repair ready+final email.
+ *
+ * WHY THE SHEET AND NOT THE MIDDLEWARE
+ * The sheet is the system of record for credit instruments — the CN Log is what
+ * finance reconciles against. A voucher minted only in the middleware would be
+ * invisible there. So the middleware supplies the facts it alone knows (store
+ * code, delta, customer, source order) and the sheet does the issuing exactly as
+ * it does for a counter-raised voucher.
+ *
+ * WHAT THE MIDDLEWARE SENDS
+ * {
+ *   action:         'issue_voucher',
+ *   source:         'repair-refund',
+ *   draft_ref:      '#D1042',
+ *   store_code:     'KA-HSR',      // custom.state_code on the repair draft
+ *   value:          870,           // collected minus final cost
+ *   customer_name:  'Priya Sharma',
+ *   customer_email: 'priya@example.com',
+ *   source_order:   '#1042'        // custom.repair_order_reference
+ * }
+ *
+ * THE VARIABLES THAT NORMALLY COME FROM THE SHEET, AND WHERE THEY COME FROM HERE
+ *   Store code (B47)  -> store_code from the draft. Repair refunds belong to the
+ *                        store that received the piece.
+ *   Value (B36)       -> value from the reconciliation. NOT a gold/diamond
+ *                        valuation — the calculator's pricing logic does not run
+ *                        for a repair refund, because the amount is already known.
+ *   Customer (B4/B5)  -> from the repair draft.
+ *   Source order (B7) -> the original Timanti order the repair references.
+ *   Expiry            -> issue date + 365 days, computed below.
+ *   Doc type (B45)    -> always Voucher for this path.
+ */
+
+// ─────────────────────────────────────────────────────────────────────────────
+// WHERE THIS GOES — the Exchange Calculator's Apps Script project, NOT the PO one
+//
+// The Exchange Calculator script has NO doPost today; it only calls OUT to the
+// middleware (/api/cn-email, /api/exc-redeem, …). So you are adding an inbound
+// entry point that does not yet exist. Steps:
+//
+//   1. Open the Exchange Calculator sheet → Extensions → Apps Script.
+//   2. Paste handleIssueVoucher_ (below) at the end of the script.
+//   3. Add a doPost router. If the project has none, paste this verbatim:
+//
+//        function doPost(e) {
+//          var body = JSON.parse(e.postData.contents);
+//          if (body.action === 'issue_voucher') return handleIssueVoucher_(body);
+//          return ContentService
+//            .createTextOutput(JSON.stringify({ ok: false, error: 'unknown action' }))
+//            .setMimeType(ContentService.MimeType.JSON);
+//        }
+//
+//   4. Deploy → New deployment → Web app. Execute as: Me. Access: Anyone.
+//   5. Copy the web app URL and set it on Fly as EXCHANGE_APPS_SCRIPT_URL:
+//        flyctl secrets set EXCHANGE_APPS_SCRIPT_URL="https://script.google.com/..."
+//
+// DO NOT reuse APPS_SCRIPT_URL. That variable points at the PO Tracker web app,
+// which handles only 'append' and 'update' — an issue_voucher post would be
+// accepted and silently ignored, and no voucher would ever be issued.
+//
+// Re-deploy to the SAME deployment on later edits so the URL does not change.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function handleIssueVoucher_(body) {
+  var out = function (ok, payload) {
+    return ContentService
+      .createTextOutput(JSON.stringify(Object.assign({ ok: ok }, payload || {})))
+      .setMimeType(ContentService.MimeType.JSON);
+  };
+
+  try {
+    // ── validate ────────────────────────────────────────────────────────────
+    var value = Number(body.value);
+    if (!body.store_code)              return out(false, { error: 'store_code is required' });
+    if (!(value > 0))                  return out(false, { error: 'value must be > 0' });
+    if (!body.customer_email)          return out(false, { error: 'customer_email is required' });
+
+    var ss  = SpreadsheetApp.getActiveSpreadsheet();
+    var log = ss.getSheetByName(CN_LOG_SHEET_NAME);   // reuse your existing constant
+    if (!log) return out(false, { error: 'CN Log sheet not found' });
+
+    // ── idempotency: never issue two vouchers for one repair ─────────────────
+    // The middleware also tags the draft, but a retried POST must not double-issue.
+    var existing = findVoucherBySourceRef_(log, body.draft_ref);
+    if (existing) {
+      return out(true, { cnNumber: existing.cnNumber, duplicate: true });
+    }
+
+    // ── allocate the voucher number, same series as a counter-raised one ─────
+    // Uses your existing allocator so the sequence stays continuous per store/FY.
+    var cnNumber = allocateVoucherNumber_(body.store_code);
+
+    // ── dates ───────────────────────────────────────────────────────────────
+    var tz       = ss.getSpreadsheetTimeZone();
+    var issued   = new Date();
+    var expires  = new Date(issued.getTime());
+    expires.setDate(expires.getDate() + 365);
+    var issuedStr  = Utilities.formatDate(issued,  tz, 'dd-MM-yyyy');
+    var expiresStr = Utilities.formatDate(expires, tz, 'dd-MM-yyyy');
+
+    // ── append the CN Log row ───────────────────────────────────────────────
+    // Column order mirrors a counter-raised voucher. The gold/diamond weight and
+    // value columns are blank on purpose: a repair refund has no valuation behind
+    // it, the amount comes from estimate-minus-actual. `source` records why.
+    log.appendRow([
+      issuedStr,             // issue date
+      cnNumber,              // voucher number
+      body.source_order,     // original order
+      body.customer_name,    // customer
+      body.customer_email,   // email
+      '',                    // net wt      — n/a for a repair refund
+      '',                    // dia cts     — n/a
+      '',                    // gold value  — n/a
+      '',                    // dia value   — n/a
+      value,                 // net credit
+      expiresStr,            // expiry
+      'Issued',              // status
+      body.store_code,       // store
+      body.source || 'repair-refund',
+      body.draft_ref         // repair draft, for idempotency + audit
+    ]);
+
+    // ── tag the ORIGINAL order so it matches a counter-raised voucher ────────
+    if (body.source_order) {
+      try {
+        tagOrderWithVoucher_(body.source_order, cnNumber, value, expiresStr, issuedStr);
+      } catch (tagErr) {
+        Logger.log('issue_voucher: order tagging failed for ' + body.source_order + ': ' + tagErr);
+      }
+    }
+
+    // ── send the customer their voucher via the middleware ──────────────────
+    // Same endpoint the counter flow uses, so the email is identical.
+    if (SEND_CUSTOMER_EMAILS) {
+      UrlFetchApp.fetch(MIDDLEWARE_BASE_URL + '/api/cn-email', {
+        method: 'post',
+        contentType: 'application/json',
+        muteHttpExceptions: true,
+        payload: JSON.stringify({
+          customerName:  body.customer_name,
+          customerEmail: body.customer_email,
+          cnNumber:      cnNumber,
+          creditValue:   value,
+          validUntil:    expiresStr,
+          originalOrder: body.source_order
+        })
+      });
+    } else {
+      Logger.log('issue_voucher: email SUPPRESSED (SEND_CUSTOMER_EMAILS=false) for ' + cnNumber);
+    }
+
+    return out(true, { cnNumber: cnNumber, value: value, expires: expiresStr });
+
+  } catch (err) {
+    Logger.log('issue_voucher failed: ' + err);
+    return out(false, { error: String(err) });
+  }
+}
+
+/**
+ * Look up an existing voucher by the repair draft reference, so a retry returns
+ * the original instead of issuing a second one. Assumes draft_ref is the last
+ * column appended above — adjust the index if your CN Log layout differs.
+ */
+function findVoucherBySourceRef_(log, draftRef) {
+  if (!draftRef) return null;
+  var values = log.getDataRange().getValues();
+  for (var i = values.length - 1; i >= 1; i--) {
+    if (String(values[i][14]).trim() === String(draftRef).trim()) {
+      return { cnNumber: values[i][1], row: i + 1 };
+    }
+  }
+  return null;
+}
+
+/**
+ * STUB — wire to whatever your counter flow already uses.
+ *
+ * The counter path allocates VCH{FY}-{STORE}-{SEQ}. Do not write a second
+ * allocator here: call the existing one so both paths share a sequence.
+ */
+function allocateVoucherNumber_(storeCode) {
+  // return existingAllocator_(storeCode, 'voucher');
+  throw new Error('allocateVoucherNumber_ not wired — point this at the existing voucher allocator');
+}
+
+/**
+ * STUB — wire to the existing order-tagging helper used by the counter flow, so
+ * a refund-raised voucher carries the same cn-issued / cn-num: / cn-val: /
+ * cn-exp: / cn-iss: tags as any other.
+ */
+function tagOrderWithVoucher_(orderName, cnNumber, value, expiresStr, issuedStr) {
+  // return existingTagger_(orderName, cnNumber, value, expiresStr, issuedStr);
+  throw new Error('tagOrderWithVoucher_ not wired — point this at the existing order tagger');
+}
