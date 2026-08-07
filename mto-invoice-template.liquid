@@ -10,7 +10,10 @@
   {% if _mf_status == "full"    %}{% assign is_fully_paid = true %}{% endif %}
   {% if _mf_status == "partial" %}{% assign is_partial    = true %}{% endif %}
 {% endif %}
-{% if order.metafields.custom.is_finalized %}{% assign is_fully_paid = true %}{% endif %}
+{% comment %}is_finalized is a BOOLEAN metafield — compare its string form. Testing the object for
+truthiness marks every order fully paid, including the ones explicitly set to false.{% endcomment %}
+{% assign _fin = order.metafields.custom.is_finalized.value | default: order.metafields.custom.is_finalized | append: "" | downcase %}
+{% if _fin == "true" %}{% assign is_fully_paid = true %}{% endif %}
 {% if order.metafields.custom.amount_paid    %}{% assign paid_amount    = order.metafields.custom.amount_paid    | round %}{% endif %}
 {% if order.metafields.custom.amount_pending %}{% assign pending_amount = order.metafields.custom.amount_pending | round %}{% endif %}
 {% if order.metafields.custom.payment_mode_final   %}{% assign pm_final   = order.metafields.custom.payment_mode_final   %}{% endif %}
@@ -25,6 +28,51 @@
   {% if t contains "pmode-advance:" and pm_advance     == "" %}{% assign pm_advance = tag | strip | remove: "pmode-advance:" %}{% endif %}
   {% if t contains "pmode-final:"   and pm_final       == "" %}{% assign pm_final   = tag | strip | remove: "pmode-final:"   %}{% endif %}
 {% endfor %}
+
+{% comment %}── Payment installments — up to 4 legs, each date + mode + value ────────────────────
+Flat metafields (installment_N_value/_mode/_date) rather than one JSON blob, so staff can type
+them in the native editor. Liquid can't index a metafield key dynamically, so each slot is read
+explicitly and packed into a delimited string we can loop over once at render time.
+
+A leg whose type is cad_advance is the CAD design advance. It prints as "Design Advance" because
+that is what the customer paid for, but it is NOT collected money against this order — custom.advance
+already reduces the amount to be collected further down, and counting it here as well would credit
+the same rupees twice. installments_collected therefore excludes it.
+──{% endcomment %}
+{% assign inst_rows = "" %}
+{% assign installments_collected = 0 %}
+{% for i in (1..4) %}
+  {% case i %}
+    {% when 1 %}
+      {% assign _v = order.metafields.custom.installment_1_value.value | default: order.metafields.custom.installment_1_value | plus: 0 %}
+      {% assign _m = order.metafields.custom.installment_1_mode.value  | default: order.metafields.custom.installment_1_mode  | append: "" %}
+      {% assign _d = order.metafields.custom.installment_1_date.value  | default: order.metafields.custom.installment_1_date  | append: "" %}
+      {% assign _t = order.metafields.custom.installment_1_type.value  | default: order.metafields.custom.installment_1_type  | append: "" %}
+    {% when 2 %}
+      {% assign _v = order.metafields.custom.installment_2_value.value | default: order.metafields.custom.installment_2_value | plus: 0 %}
+      {% assign _m = order.metafields.custom.installment_2_mode.value  | default: order.metafields.custom.installment_2_mode  | append: "" %}
+      {% assign _d = order.metafields.custom.installment_2_date.value  | default: order.metafields.custom.installment_2_date  | append: "" %}
+      {% assign _t = "" %}
+    {% when 3 %}
+      {% assign _v = order.metafields.custom.installment_3_value.value | default: order.metafields.custom.installment_3_value | plus: 0 %}
+      {% assign _m = order.metafields.custom.installment_3_mode.value  | default: order.metafields.custom.installment_3_mode  | append: "" %}
+      {% assign _d = order.metafields.custom.installment_3_date.value  | default: order.metafields.custom.installment_3_date  | append: "" %}
+      {% assign _t = "" %}
+    {% when 4 %}
+      {% assign _v = order.metafields.custom.installment_4_value.value | default: order.metafields.custom.installment_4_value | plus: 0 %}
+      {% assign _m = order.metafields.custom.installment_4_mode.value  | default: order.metafields.custom.installment_4_mode  | append: "" %}
+      {% assign _d = order.metafields.custom.installment_4_date.value  | default: order.metafields.custom.installment_4_date  | append: "" %}
+      {% assign _t = "" %}
+  {% endcase %}
+  {% if _v > 0 %}
+    {% assign inst_rows = inst_rows | append: _d | append: "|" | append: _m | append: "|" | append: _v | append: "|" | append: _t | append: "~" %}
+    {% unless _t == "cad_advance" %}{% assign installments_collected = installments_collected | plus: _v %}{% endunless %}
+  {% endif %}
+{% endfor %}
+{% assign inst_list = inst_rows | split: "~" %}
+{% assign has_installments = false %}
+{% if inst_list.size > 0 %}{% assign has_installments = true %}{% endif %}
+
 
 
 <style>
@@ -422,12 +470,58 @@
         </tr>
       {% endif %}
 
+      {% comment %}── Design advance (post-tax). custom.advance is a tax-free amount collected
+      earlier; it reduces what remains payable but is NOT part of the taxable value. Mirrors
+      templates/tax-invoice.liquid, which this file was missing entirely. The matching installment
+      leg (type cad_advance) prints in the payment table above for the record and is excluded from
+      Amount Received, so the same rupees are only ever credited once. ──{% endcomment %}
+      {% assign design_advance = order.metafields.custom.advance.value | default: order.metafields.custom.advance | plus: 0 %}
+      {% for attr in order.note_attributes %}
+        {% if attr.name == "advance"        and design_advance == 0 %}{% assign design_advance = attr.value | plus: 0 %}{% endif %}
+        {% if attr.name == "design_advance" and design_advance == 0 %}{% assign design_advance = attr.value | plus: 0 %}{% endif %}
+      {% endfor %}
+      {% if design_advance > 0 %}
+        {% assign design_advance_paise = design_advance | times: 100 | round %}
+        <tr class="totals-row">
+          <td colspan="12" class="text-right" style="border-top: 1px solid #ccc;">Less: Design Advance</td>
+          <td class="text-right" style="border-top: 1px solid #ccc;">− ₹{{ design_advance_paise | money_without_currency | remove: ',' }}</td>
+        </tr>
+        {% assign final_payable = final_payable | minus: design_advance_paise %}
+        <tr class="total-row">
+          <td colspan="12" class="text-right"><strong>Net Payable</strong></td>
+          <td class="text-right"><strong>₹{{ final_payable | money_without_currency | remove: ',' }}</strong></td>
+        </tr>
+      {% endif %}
+
       {% comment %}── Payment Mode — pm_advance/pm_final read from pmode-advance:/pmode-final: tags at top ──{% endcomment %}
       <tr class="totals-row">
         <td colspan="12" class="text-right" style="font-style:italic; color:#555; border-top: 1px solid #ccc;">Payment Mode</td>
         <td style="border-top: 1px solid #ccc;"></td>
       </tr>
-      {% if is_partial and paid_amount != "" %}
+      {% comment %}── Payment rows. Preferred: the installment table (one row per leg, date + mode
+      + value). Fallback: the legacy single-line view, kept because Order Printer can return empty
+      metafields at print time, and for orders that predate the installment migration. ──{% endcomment %}
+      {% if has_installments %}
+        {% for row in inst_list %}
+          {% assign c = row | split: "|" %}
+          {% assign c_date = c[0] %}
+          {% assign c_mode = c[1] %}
+          {% assign c_val  = c[2] %}
+          {% assign c_type = c[3] %}
+          <tr class="totals-row">
+            <td colspan="12" class="text-right"{% if forloop.first %} style="border-top: 1px solid #ccc;"{% endif %}>
+              {% if c_type == "cad_advance" %}Design Advance{% else %}Amount Received{% endif %}
+              {% if c_date != "" %}&nbsp;<em style="color:#555;">{{ c_date | date: "%d %b %Y" }}</em>{% endif %}
+              {% if c_mode != "" %}&nbsp;<em style="color:#555;">({{ c_mode }})</em>{% endif %}
+            </td>
+            <td class="text-right"{% if forloop.first %} style="border-top: 1px solid #ccc;"{% endif %}>₹{{ c_val | round }}</td>
+          </tr>
+        {% endfor %}
+        <tr class="totals-row">
+          <td colspan="12" class="text-right"><strong>Balance Due</strong></td>
+          <td class="text-right"><strong>{% if pending_amount != "" %}₹{{ pending_amount }}{% else %}₹0{% endif %}</strong></td>
+        </tr>
+      {% elsif is_partial and paid_amount != "" %}
         <tr class="totals-row">
           <td colspan="12" class="text-right">
             Amount Received – Advance{% if pm_advance != "" %}&nbsp; <em style="color:#555;">({{ pm_advance }})</em>{% endif %}

@@ -3,7 +3,8 @@
   "version": "1.0.0",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "test": "node services/payment-installments/installments.test.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.38.4",

@@ -13,6 +13,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 const { runRecon, toCSV: reconToCSV } = require('./recon');
+const { readInstallments, installmentModes } = require('../payment-installments/installments');
 
 // ── Small helpers ────────────────────────────────────────────────────────────
 
@@ -126,18 +127,24 @@ async function collectOrders(deps, { from, to }, rows, draftByOrderId = {}) {
 
       const storeState = mf.state_code || '';                 // place of supply (e.g. KA-HSR)
       const shipState  = n.shippingAddress?.provinceCode || '';
+      // Collections come from the installment legs. amount_paid is the middleware's running sum of
+      // them and stays authoritative (it also covers orders predating the migration, which have no
+      // legs). cad_advance legs are excluded from the sum by readInstallments' consumers — a design
+      // advance reduces amount_to_be_collected instead, so counting it here would deduct it twice.
+      const legs    = readInstallments(mf);
       const paid    = num(mf.amount_paid);
       const net     = mf.amount_to_be_collected != null ? num(mf.amount_to_be_collected)
                                                         : num(n.totalPriceSet?.shopMoney?.amount);
       const pending = Math.max(0, r2(net - paid));
       const isFull  = mf.is_finalized === 'true' || String(mf.payment_status || '').toLowerCase() === 'full' || (paid > 0 && pending < 1);
       const stage   = isFull ? 'completed-paid' : (paid > 0 ? 'partial' : 'unpaid');
-      const pmode   = [mf.payment_mode_advance, mf.payment_mode_final].filter(Boolean).join(' / ');
-      // For completed orders, distinguish a single full payment from an advance-then-final settlement
-      // (both advance & final payment modes recorded ⇒ it was paid in installments).
-      const bothModes = !!(mf.payment_mode_advance && mf.payment_mode_final);
-      const paymentType = isFull ? (bothModes ? 'full: advance+final' : 'full: one-time')
-                                 : (paid > 0 ? 'partial' : 'unpaid');
+      const pmode   = legs.length ? installmentModes(legs).join(' / ')
+                                  : [mf.payment_mode_advance, mf.payment_mode_final].filter(Boolean).join(' / ');
+      // How the money arrived: one payment or several. Counted off the legs rather than inferred
+      // from which of two named mode fields happened to be set.
+      const legCount = legs.length || (mf.payment_mode_advance && mf.payment_mode_final ? 2 : (paid > 0 ? 1 : 0));
+      const paymentType = isFull ? (legCount > 1 ? `full: ${legCount} installments` : 'full: one-time')
+                                 : (paid > 0 ? `partial${legCount > 1 ? `: ${legCount} installments` : ''}` : 'unpaid');
       // the draft this order was converted from, if it started life as one
       const orderLegacyId = String(n.id || '').split('/').pop();
       const originDraft = draftByOrderId[orderLegacyId] || '';
@@ -173,6 +180,7 @@ async function collectOrders(deps, { from, to }, rows, draftByOrderId = {}) {
           amount_pending:  idx === 0 ? pending  : '',
           net_to_collect:  idx === 0 ? r2(net)  : '',
           payment_mode:    idx === 0 ? pmode    : '',
+          installments:    idx === 0 ? legCount : '',
         });
       });
     }
@@ -231,7 +239,15 @@ async function collectDrafts(deps, { from, to }, rows) {
         if (!(paid > 0 || deposit === 'partial' || deposit === 'fully-paid')) continue;
         const stage   = deposit === 'fully-paid' ? 'draft-paid' : (paid > 0 ? 'partial' : 'open-draft');
         const paymentType = deposit === 'fully-paid' ? 'full: paid-in-advance' : 'partial';
-        const pmode   = [tag('pmode-advance:'), tag('pmode-final:')].filter(Boolean).join(' / ');
+        // Modes come off tags on the draft side (no metafield fetch here). `pmodes:` is the
+        // aggregate covering every leg; the two-slot tags are the pre-migration fallback.
+        const pmodesTag = tag('pmodes:');
+        const pmode   = pmodesTag ? pmodesTag.split('/').filter(Boolean).join(' / ')
+                                  : [tag('pmode-advance:'), tag('pmode-final:')].filter(Boolean).join(' / ');
+        // The draft side reads tags only, and `pmodes:` carries DISTINCT modes — two cash legs look
+        // like one. Leaving the count blank rather than printing an undercount; the converted-order
+        // row carries the real figure.
+        const legCount = '';
 
         const shipState  = d.shipping_address?.province_code || '';
         // Draft has no custom.state_code inline. Mirror the invoice's supplier default (KA) so the
@@ -274,6 +290,7 @@ async function collectDrafts(deps, { from, to }, rows) {
             amount_pending:  idx === 0 ? r2(pending) : '',
             net_to_collect:  idx === 0 ? r2(total)   : '',
             payment_mode:    idx === 0 ? pmode       : '',
+            installments:    idx === 0 ? legCount    : '',
           });
         });
       }
@@ -288,7 +305,7 @@ const SALES_COLS = [
   'stage', 'payment_type', 'draft_name', 'order_name', 'day', 'customer', 'place_of_supply', 'shipping_state',
   'product_title', 'variant_title', 'sku', 'hsn', 'qty',
   'gross_sales', 'discount', 'net_sales', 'taxable_value', 'igst', 'sgst', 'cgst',
-  'custom_serial', 'amount_paid', 'amount_pending', 'net_to_collect', 'payment_mode',
+  'custom_serial', 'amount_paid', 'amount_pending', 'net_to_collect', 'payment_mode', 'installments',
 ];
 
 async function buildSalesReport(deps, { from, to, state, paymentStatus } = {}) {

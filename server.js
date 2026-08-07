@@ -258,6 +258,9 @@ function getMetafieldType(key) {
   // gold_rate and making are single_line_text so they can hold a positional, comma-separated list
   // ("9713,10200") for multi-product reprice. Readers parseFloat each position regardless of type.
   if (key === 'gold_rate' || key === 'making') return 'single_line_text_field';
+  // installment_N_value / _date — the payment legs. _mode and _type fall through to text.
+  if (/^installment_[1-9]\d*_value$/.test(key)) return 'number_decimal';
+  if (/^installment_[1-9]\d*_date$/.test(key))  return 'date';
   if (key === 'amount_paid' || key === 'amount_paid_final' || key === 'amount_pending' ||
       key === 'exchange_note_value' || key === 'voucher_value' || key === 'amount_to_be_collected' ||
       key === 'old_gold_value' || key === 'old_gold_weight' || key === 'old_gold_purity' ||
@@ -489,26 +492,36 @@ async function getCollectionBase(draftOrderId, fallbackTotal) {
   }
 }
 
-// What a draft has been paid, per stage, in Rs — read from the metafields.
-// store_deposits tracks ONE cumulative amount_paid, but the metafields split it into
-// custom.amount_paid (advance) + custom.amount_paid_final (final). The metafields are the surface
+// Payment installments — pure helpers live in services/payment-installments/installments.js so the
+// backfill script and unit tests can use the same arithmetic. See that file for the data model.
+const {
+  MAX_INSTALLMENTS, readInstallments, sumInstallments, installmentModes, installmentLegPatch,
+} = require('./services/payment-installments/installments');
+const backfillInstallments = require('./services/payment-installments/backfill-installments');
+
+// What a draft has been paid, in Rs — read from the metafields. The metafields are the surface
 // staff type into and the invoice reads, so they are the union of every payment route: the panel
 // writes them directly, and the cash/gateway paths write them too.
-async function getStagedPaid(draftOrderId) {
-  const num = (m) => { const v = m ? parseFloat(m.value) : NaN; return Number.isFinite(v) && v >= 0 ? v : 0; };
+//
+// Legacy fallback: drafts predating installments carry only amount_paid (+ amount_paid_final).
+// While dual-write is on, fall back to those so a mid-migration payment never resets a recorded
+// balance to zero.
+async function getInstallmentState(draftOrderId) {
+  const num = (v) => { const n = parseFloat(v); return Number.isFinite(n) && n >= 0 ? n : 0; };
   try {
     const token = await getShopifyToken();
     const { data } = await axios.get(
       `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}/metafields.json`,
       { headers: { 'X-Shopify-Access-Token': token }, timeout: 10000 }
     );
-    const at = (k) => (data.metafields || []).find(x => x.namespace === 'custom' && x.key === k);
-    const advance = num(at('amount_paid'));
-    const final   = num(at('amount_paid_final'));
-    return { advance, final, total: advance + final };
+    const map = {};
+    for (const m of (data.metafields || [])) if (m.namespace === 'custom') map[m.key] = m.value;
+    const rows = readInstallments(map);
+    const legacyTotal = num(map.amount_paid) + num(map.amount_paid_final);
+    return { rows, total: rows.length ? sumInstallments(rows) : legacyTotal, legacyTotal, map };
   } catch (e) {
-    console.error(`getStagedPaid(${draftOrderId}) failed: ${e.message} — assuming 0`);
-    return { advance: 0, final: 0, total: 0 };
+    console.error(`getInstallmentState(${draftOrderId}) failed: ${e.message} — assuming 0`);
+    return { rows: [], total: 0, legacyTotal: 0, map: {} };
   }
 }
 
@@ -522,27 +535,34 @@ async function getStagedPaid(draftOrderId) {
 //
 // We take the HIGHER of the two as the base: money that either surface believes was collected is
 // never dropped. A divergence means one side missed a write, so it is logged rather than swallowed.
-// installment_type follows what is ALREADY paid rather than the deposit's own status, so a payment
-// following a panel-entered advance is correctly the final one.
+//
+// Returns the installment state alongside, so callers can place the new leg without re-fetching.
+// installmentType is retained ONLY for the store_deposit_payments audit column and the legacy
+// pmode-*/payment_mode_* dual-write; it no longer drives any balance arithmetic.
 async function reconcileDepositPaid(draftOrderId, deposit) {
   const dbPaid = parseFloat(deposit?.amount_paid) || 0;
-  const { total: mfPaid } = await getStagedPaid(draftOrderId);
+  const state = await getInstallmentState(draftOrderId);
+  const mfPaid = state.total;
   const basePaid = Math.max(dbPaid, mfPaid);
   if (Math.abs(dbPaid - mfPaid) >= 0.5) {
     console.warn(`[payments] draft ${draftOrderId}: deposit/metafield divergence — store_deposits=Rs${dbPaid.toFixed(2)} metafields=Rs${mfPaid.toFixed(2)} → using Rs${basePaid.toFixed(2)}`);
   }
-  return { basePaid, installmentType: basePaid > 0 ? 'final' : 'advance' };
+  return { basePaid, state, installmentType: basePaid > 0 ? 'final' : 'advance' };
 }
 
-// Split a cumulative paid total across the two staged payment metafields.
-// advance stage → it IS the advance; final stage → whatever is left once the advance is accounted for
-// (so a 3rd+ payment accumulates into final rather than overwriting it).
-async function stagedPaidPatch(draftOrderId, installmentType, cumulativePaid) {
-  if (installmentType === 'advance') {
-    return { amount_paid: cumulativePaid.toFixed(2), amount_paid_final: '0' };
-  }
-  const { advance } = await getStagedPaid(draftOrderId);
-  return { amount_paid_final: Math.max(0, cumulativePaid - advance).toFixed(2) };
+// Metafield patch recording ONE new payment leg plus the derived cumulative total.
+//
+// amount_paid now carries the FULL cumulative figure, and amount_paid_final is pinned to 0.
+// That keeps both generations of reader correct with no branching: readers that take amount_paid
+// alone (all four invoice templates, the sales report) get the true total — which is the
+// under-reporting bug fixed — and readers that sum amount_paid + amount_paid_final (the tag
+// engine, the adjustment report) get total + 0. Splitting the value across both fields instead
+// would make the summing readers double-count.
+function paymentLegPatch(state, { value, mode, date }, cumulativePaid) {
+  const patch = installmentLegPatch(state.rows, { value, mode, date });
+  patch.amount_paid = cumulativePaid.toFixed(2);
+  patch.amount_paid_final = '0'; // legacy field, retired at rollout step 6
+  return patch;
 }
 
 async function handlePaymentCompletion(transaction, overrides = {}) {
@@ -587,7 +607,7 @@ async function handlePaymentCompletion(transaction, overrides = {}) {
     if (!deposit) { console.error(`Could not find or create store_deposits for draft ${transaction.shopify_draft_id}`); return; }
 
     // Base this payment on what EITHER surface already recorded — see reconcileDepositPaid.
-    const { basePaid, installmentType } = await reconcileDepositPaid(transaction.shopify_draft_id, deposit);
+    const { basePaid, installmentType, state } = await reconcileDepositPaid(transaction.shopify_draft_id, deposit);
     const newAmountPaid    = basePaid + amountPaidRupees;
     // Reconcile against the net-to-collect (refreshed here so adjustments applied AFTER the deposit
     // row was created still land), never the gross total.
@@ -621,11 +641,13 @@ async function handlePaymentCompletion(transaction, overrides = {}) {
 
     const metafieldUpdate = {
       payment_status:  newStatus === 'paid' ? 'Full' : 'Partial',  // choice-list values: Partial|Full|None
-      // Land this payment in its own stage field (advance vs final) rather than overwriting the single
-      // cumulative amount_paid — advance + final must reconcile to the deposit's cumulative.
-      ...(await stagedPaidPatch(transaction.shopify_draft_id, installmentType, newAmountPaid)),
+      // Record this payment as its OWN installment leg (value + mode + date) and set amount_paid to
+      // the cumulative sum. Payments arrive incrementally here, so we append rather than replace.
+      ...paymentLegPatch(state, { value: amountPaidRupees, mode: paymentMode, date: new Date().toISOString().slice(0, 10) }, newAmountPaid),
       amount_pending:  Math.max(0, newAmountPending).toFixed(2)
     };
+    // DUAL-WRITE (remove at rollout step 6): legacy two-slot modes, still read by unmigrated
+    // invoice templates and the sales report until they move to the installment legs.
     if (installmentType === 'advance') {
       metafieldUpdate.payment_mode_advance = paymentMode;
     }
@@ -905,23 +927,27 @@ app.get('/api/draft-orders-report', async (req, res) => {
         const tag  = (prefix) => { const t = tags.find(t => t.startsWith(prefix)); return t ? t.slice(prefix.length) : ''; };
 
         const depositTag   = tag('deposit:');
+        // `pmodes:` is the aggregate covering every installment leg; the two-slot tags are the
+        // pre-migration fallback. Matching against the union means the filter sees a mode used in
+        // ANY leg, not just the two that used to have named slots.
+        const pmodesTag    = tag('pmodes:');
         const pmodeAdvance = tag('pmode-advance:');
         const pmodeFinal   = tag('pmode-final:');
+        const allModes     = [...new Set(
+          pmodesTag.split('/').concat([pmodeAdvance, pmodeFinal]).filter(Boolean).map(m => m.toLowerCase())
+        )];
 
         const paymentStatus = depositTag === 'fully-paid' ? 'fully-paid'
                             : depositTag === 'partial'    ? 'partial'
                             : 'unpaid';
 
         if (filterPaymentStatus && paymentStatus !== filterPaymentStatus) continue;
-        if (filterPaymentMode) {
-          const modes = [pmodeAdvance, pmodeFinal].map(m => m.toLowerCase());
-          if (!modes.some(m => m === filterPaymentMode)) continue;
-        }
+        if (filterPaymentMode && !allModes.includes(filterPaymentMode)) continue;
 
         // Only relevant payment tags in a comma-separated list
         const paymentTags = tags
           .filter(t => t.startsWith('deposit:') || t.startsWith('paid:') ||
-                       t.startsWith('pending:') || t.startsWith('pmode-'))
+                       t.startsWith('pending:') || t.startsWith('pmode-') || t.startsWith('pmodes:'))
           .join(', ');
 
         const customer = d.customer
@@ -1424,7 +1450,7 @@ async function handleCashPaymentTag(draft) {
 
   // Base this payment on what EITHER surface already recorded — the panel writes the metafield without
   // touching Supabase, so deposit.amount_paid alone would miss a staff-entered advance and clobber it.
-  const { basePaid, installmentType } = await reconcileDepositPaid(draftOrderId, deposit);
+  const { basePaid, installmentType, state } = await reconcileDepositPaid(draftOrderId, deposit);
   const newAmountPaid    = basePaid + amountRupees;
   // Reconcile against the net-to-collect (refreshed here so adjustments applied AFTER the deposit
   // row was created still land), never the gross total.
@@ -1478,10 +1504,12 @@ async function handleCashPaymentTag(draft) {
 
   const metafieldUpdate = {
     payment_status:  newStatus === 'paid' ? 'Full' : 'Partial',  // choice-list values: Partial|Full|None
-    // Land this payment in its own stage field (advance vs final) — see stagedPaidPatch.
-    ...(await stagedPaidPatch(draftOrderId, installmentType, newAmountPaid)),
+    // Append this payment as its own installment leg — same helper as the gateway path, so the two
+    // near-duplicate handlers can no longer drift on the arithmetic that matters.
+    ...paymentLegPatch(state, { value: amountRupees, mode: 'cash', date: new Date().toISOString().slice(0, 10) }, newAmountPaid),
     amount_pending:  Math.max(0, newAmountPending).toFixed(2)
   };
+  // DUAL-WRITE (remove at rollout step 6): legacy two-slot modes for unmigrated readers.
   if (installmentType === 'advance') metafieldUpdate.payment_mode_advance = 'cash';
   if (installmentType === 'final')   metafieldUpdate.payment_mode_final   = 'cash';
   // Track the balance both ways — is_finalized drives is_fully_paid on the tax invoice.
@@ -2440,13 +2468,12 @@ async function copyDraftMetafieldsToOrder(draftOrderId, orderId, token) {
 
 // Reads custom metafields from an order and writes payment tags to it.
 // Tags written: deposit:fully-paid/partial, paid:Rs{n}, pending:Rs{n},
-//               total:Rs{n}, pmode-advance:{mode}, pmode-final:{mode}
+//               total:Rs{n}, pmodes:{m1}/{m2}/... (+ legacy pmode-advance:/pmode-final: while
+//               dual-write is on).
 //
-// Logic:
-//   amount_paid < total                                → advance-only (partial)
-//   amount_paid == total AND pending == 0 AND modeAdvance set → installment complete
-//     → keep pmode-advance AND add pmode-final; paid = total (backfill: one-payment view)
-//   amount_paid == total AND no modeAdvance            → single payment, full
+// paid is the SUM of the installment legs (cad_advance excluded — custom.advance already reduces
+// the net, so counting it again would deduct it twice). pending is derived against the net, never
+// gross. Everything here is arithmetic only.
 async function applyPaymentTagsToOrder(orderId, token) {
   const headers = { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' };
 
@@ -2465,12 +2492,17 @@ async function applyPaymentTagsToOrder(orderId, token) {
 
   const paymentStatus = mf('payment_status');
   const isFinalized   = mf('is_finalized') === 'true';
-  // Staged payments — see applyPaymentTagsToDraftOrder. amount_paid = advance, amount_paid_final = final.
-  const advancePaid   = parseFloat(mf('amount_paid')       || 0) || 0;
-  const finalPaid     = parseFloat(mf('amount_paid_final') || 0) || 0;
-  const amountPaid    = advancePaid + finalPaid;
-  const modeAdvance   = mf('payment_mode_advance');
-  const modeFinal     = mf('payment_mode_final');
+  // Installment legs are the source of truth for what was collected. Legacy fallback covers orders
+  // predating the migration, which carry only the two-slot pair.
+  const mfMap = {};
+  for (const m of (mfData.metafields || [])) if (m.namespace === 'custom') mfMap[m.key] = m.value;
+  const legs        = readInstallments(mfMap);
+  const legacyPaid  = (parseFloat(mf('amount_paid') || 0) || 0) + (parseFloat(mf('amount_paid_final') || 0) || 0);
+  const amountPaid  = legs.length ? sumInstallments(legs) : legacyPaid;
+  const modes       = legs.length ? installmentModes(legs)
+                                  : [mf('payment_mode_advance'), mf('payment_mode_final')].filter(Boolean);
+  const modeAdvance = mf('payment_mode_advance');
+  const modeFinal   = mf('payment_mode_final');
 
   // Balance reconciles against the NET-to-collect (total − post-tax adjustments), never gross.
   // amount_pending is DERIVED. Fallback to gross when the net field is absent.
@@ -2483,8 +2515,18 @@ async function applyPaymentTagsToOrder(orderId, token) {
   const isPartial = !isFull && amountPaid > 0;
 
   // Persist the derived balance + status on the order so re-downloads/reporting read them.
-  if (isFull || isPartial) {
+  // A cad_advance-only order has amountPaid 0 by design but still has a real balance to publish.
+  if (isFull || isPartial || legs.length) {
     const patch = {};
+    // amount_paid is DERIVED from the legs. The admin panel writes legs but never the total (it is
+    // read-only there), and the CAD flip changes the sum without touching any leg value — so
+    // re-summing here is what keeps the figure the invoice prints actually true.
+    if (legs.length) {
+      const curPaid = parseFloat(mf('amount_paid'));
+      if (!Number.isFinite(curPaid) || Math.abs(curPaid - amountPaid) >= 0.5) patch.amount_paid = amountPaid.toFixed(2);
+      // Legacy field pinned to 0 so readers still summing the old pair get total + 0, never double.
+      if ((parseFloat(mf('amount_paid_final')) || 0) !== 0) patch.amount_paid_final = '0';
+    }
     const curPending = mf('amount_pending');
     if (curPending === null || Math.abs(parseFloat(curPending) - amountPending) >= 0.5) patch.amount_pending = amountPending.toFixed(2);
     const wantStatus = isFull ? 'Full' : 'Partial';  // choice-list values: Partial|Full|None
@@ -2494,14 +2536,12 @@ async function applyPaymentTagsToOrder(orderId, token) {
     if (isFull !== isFinalized) patch.is_finalized = isFull ? 'true' : 'false';
     if (Object.keys(patch).length) await updateOrderMetafields(orderId, patch, token);
   }
-  if (!isFull && !isPartial) return false;
-
-  const isInstallmentComplete = isFull && !!modeAdvance;
+  if (!isFull && !isPartial && !legs.length) return false;
 
   const existingTags = (order.tags || '').split(',').map(t => t.trim()).filter(Boolean);
   const cleanedTags  = existingTags.filter(t =>
-    !t.startsWith('deposit:') && !t.startsWith('paid:') &&
-    !t.startsWith('pending:') && !t.startsWith('pmode-') && !t.startsWith('total:')
+    !t.startsWith('deposit:') && !t.startsWith('paid:') && !t.startsWith('pending:') &&
+    !t.startsWith('pmode-') && !t.startsWith('pmodes:') && !t.startsWith('total:')
   );
 
   const paymentTags = [
@@ -2509,7 +2549,10 @@ async function applyPaymentTagsToOrder(orderId, token) {
     `paid:Rs${Math.round(amountPaid)}`,
     ...(isPartial && amountPending > 0 ? [`pending:Rs${Math.round(amountPending)}`] : []),
     `total:Rs${totalPrice}`,
-    // For installment-complete orders include BOTH modes; partial only has advance
+    // One aggregate mode tag covering every leg. Recon reads modes off tags to disambiguate
+    // same-amount candidates, so it needs all of them without fetching metafields.
+    ...(modes.length ? [`pmodes:${modes.join('/')}`] : []),
+    // DUAL-WRITE (remove at rollout step 6): the two-slot tags unmigrated readers still parse.
     ...(modeAdvance ? [`pmode-advance:${modeAdvance}`] : []),
     ...(modeFinal   ? [`pmode-final:${modeFinal}`]   : []),
   ];
@@ -2519,7 +2562,7 @@ async function applyPaymentTagsToOrder(orderId, token) {
     { order: { id: parseInt(orderId), tags: [...cleanedTags, ...paymentTags].join(', ') } },
     { headers, timeout: 10000 }
   );
-  console.log(`Order ${orderId}: tags [${paymentTags.join(', ')}]${isInstallmentComplete ? ' (installment-complete)' : ''}`);
+  console.log(`Order ${orderId}: tags [${paymentTags.join(', ')}]${legs.length ? ` (${legs.length} installment${legs.length > 1 ? 's' : ''})` : ''}`);
   return true;
 }
 
@@ -2543,15 +2586,19 @@ async function applyPaymentTagsToDraftOrder(draftOrderId, token) {
 
   const paymentStatus = mf('payment_status');
   const isFinalized   = mf('is_finalized') === 'true';
-  // Payments are staged: custom.amount_paid is the ADVANCE (first collection) and
-  // custom.amount_paid_final is the FINAL one, each alongside its own payment_mode_*. What's been paid
-  // is their sum — a second payment is entered in its own field rather than by re-typing a running
-  // total into amount_paid, which previously just overwrote the first.
-  const advancePaid   = parseFloat(mf('amount_paid')       || 0) || 0;
-  const finalPaid     = parseFloat(mf('amount_paid_final') || 0) || 0;
-  const amountPaid    = advancePaid + finalPaid;
-  const modeAdvance   = mf('payment_mode_advance');
-  const modeFinal     = mf('payment_mode_final');
+  // Payments are recorded as up to MAX_INSTALLMENTS legs, each with its own value + mode + date.
+  // What's been paid is their sum, with cad_advance legs excluded (custom.advance already reduces
+  // amount_to_be_collected, so counting it here too would deduct the same rupees twice).
+  // Legacy fallback covers drafts predating the migration, which carry only the two-slot pair.
+  const mfMap = {};
+  for (const m of (mfData.metafields || [])) if (m.namespace === 'custom') mfMap[m.key] = m.value;
+  const legs        = readInstallments(mfMap);
+  const legacyPaid  = (parseFloat(mf('amount_paid') || 0) || 0) + (parseFloat(mf('amount_paid_final') || 0) || 0);
+  const amountPaid  = legs.length ? sumInstallments(legs) : legacyPaid;
+  const modes       = legs.length ? installmentModes(legs)
+                                  : [mf('payment_mode_advance'), mf('payment_mode_final')].filter(Boolean);
+  const modeAdvance = mf('payment_mode_advance');
+  const modeFinal   = mf('payment_mode_final');
 
   // Balance reconciles against the NET-to-collect (total − post-tax adjustments, frozen by
   // syncAmountToCollect), never the gross total. amount_pending is DERIVED here (staff set what was
@@ -2573,8 +2620,18 @@ async function applyPaymentTagsToDraftOrder(draftOrderId, token) {
 
   // Persist the derived balance + status so the invoice/collection surfaces read them (not just tags).
   // Metafield writes don't fire the draft webhook → no loop.
-  if (isFull || isPartial) {
+  // A cad_advance-only draft has amountPaid 0 by design but still has a real balance to publish.
+  if (isFull || isPartial || legs.length) {
     const patch = {};
+    // amount_paid is DERIVED from the legs. The admin panel writes legs but never the total (it is
+    // read-only there), and the CAD flip changes the sum without touching any leg value — so
+    // re-summing here is what keeps the figure the invoice prints actually true.
+    if (legs.length) {
+      const curPaid = parseFloat(mf('amount_paid'));
+      if (!Number.isFinite(curPaid) || Math.abs(curPaid - amountPaid) >= 0.5) patch.amount_paid = amountPaid.toFixed(2);
+      // Legacy field pinned to 0 so readers still summing the old pair get total + 0, never double.
+      if ((parseFloat(mf('amount_paid_final')) || 0) !== 0) patch.amount_paid_final = '0';
+    }
     const curPending = mf('amount_pending');
     if (curPending === null || Math.abs(parseFloat(curPending) - amountPending) >= 0.5) patch.amount_pending = amountPending.toFixed(2);
     const wantStatus = isFull ? 'Full' : 'Partial';  // choice-list values: Partial|Full|None
@@ -2585,13 +2642,13 @@ async function applyPaymentTagsToDraftOrder(draftOrderId, token) {
     if (isFull !== isFinalized) patch.is_finalized = isFull ? 'true' : 'false';
     if (Object.keys(patch).length) await updateDraftOrderMetafields(draftOrderId, patch);
   }
-  if (!isFull && !isPartial) return false;
+  if (!isFull && !isPartial && !legs.length) return false;
 
   const existingTags = (draft.tags || '').split(',').map(t => t.trim()).filter(Boolean);
   const cleanedTags  = existingTags.filter(t =>
     t.toLowerCase() !== 'sync-payment' &&
-    !t.startsWith('deposit:') && !t.startsWith('paid:') &&
-    !t.startsWith('pending:') && !t.startsWith('pmode-') && !t.startsWith('total:')
+    !t.startsWith('deposit:') && !t.startsWith('paid:') && !t.startsWith('pending:') &&
+    !t.startsWith('pmode-') && !t.startsWith('pmodes:') && !t.startsWith('total:')
   );
 
   const paymentTags = [
@@ -2599,6 +2656,9 @@ async function applyPaymentTagsToDraftOrder(draftOrderId, token) {
     `paid:Rs${Math.round(amountPaid)}`,
     ...(isPartial && amountPending > 0 ? [`pending:Rs${Math.round(amountPending)}`] : []),
     `total:Rs${totalPrice}`,
+    // Aggregate mode tag — the draft-side sales report and recon both read modes off tags.
+    ...(modes.length ? [`pmodes:${modes.join('/')}`] : []),
+    // DUAL-WRITE (remove at rollout step 6): the two-slot tags unmigrated readers still parse.
     ...(modeAdvance ? [`pmode-advance:${modeAdvance}`] : []),
     ...(modeFinal   ? [`pmode-final:${modeFinal}`]   : []),
   ];
@@ -2683,6 +2743,17 @@ function hasCadAdvanceLine(draft) {
 // custom.advance / advance_date (starts the 365-day clock) / advance_status='open'. The draft stays open;
 // syncAmountToCollect nets `advance` post-tax. Idempotent once advance_status is set. Never throws into
 // the webhook chain.
+//
+// Path A also claims INSTALLMENT SLOT 1. The payment path has already recorded the collection as
+// installment 1 (value + mode + date); when that leg is the advance, we flip its type to
+// cad_advance. That leaves it visible on the invoice payment table as "Design Advance" — carrying
+// the real mode and date, which the advance metafields themselves never captured — while removing
+// it from amount_paid. Without the flip the same rupees are deducted twice: once by custom.advance
+// reducing amount_to_be_collected, and again as money received.
+//
+// The flip only fires when the leg MATCHES the advance. A customer who paid more than the advance
+// in one go has real collected money in that leg, and zeroing it would lose it — so we leave it as
+// a payment leg and log for a human.
 async function handleAdvanceCapture(draft) {
   try {
     if (!hasCadAdvanceLine(draft)) return;
@@ -2692,7 +2763,9 @@ async function handleAdvanceCapture(draft) {
       `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}/metafields.json`,
       { headers: { 'X-Shopify-Access-Token': token }, timeout: 10000 }
     );
-    const mf = (key) => { const m = (mfData.metafields || []).find(x => x.namespace === 'custom' && x.key === key); return m ? m.value : null; };
+    const mfMap = {};
+    for (const m of (mfData.metafields || [])) if (m.namespace === 'custom') mfMap[m.key] = m.value;
+    const mf = (key) => (mfMap[key] === undefined ? null : mfMap[key]);
     if (mf('advance_status')) return;                       // already captured
     if (!(parseFloat(mf('amount_paid') || 0) > 0)) return;  // advance is money collected, not intent
     const advanceAmount = (draft.line_items || [])
@@ -2700,9 +2773,26 @@ async function handleAdvanceCapture(draft) {
       .reduce((s, li) => s + parseFloat(li.price || 0) * (li.quantity || 0), 0);
     if (!(advanceAmount > 0)) return;
     const today = new Date().toISOString().slice(0, 10);
-    await updateDraftOrderMetafields(draftOrderId, {
-      advance: advanceAmount.toFixed(2), advance_date: today, advance_status: 'open',
-    });
+    const patch = { advance: advanceAmount.toFixed(2), advance_date: today, advance_status: 'open' };
+
+    const legs = readInstallments(mfMap);
+    const first = legs.find(r => r.slot === 1);
+    if (first && first.type !== 'cad_advance' && Math.abs(first.value - advanceAmount) < 0.5) {
+      patch.installment_1_type = 'cad_advance';
+      // amount_paid must drop by the advance in the same write, or the balance is briefly wrong.
+      patch.amount_paid = sumInstallments(legs.map(r => (r.slot === 1 ? { ...r, type: 'cad_advance' } : r))).toFixed(2);
+      console.log(`[cad-advance] installment 1 (Rs${first.value.toFixed(2)} ${first.mode || 'mode unknown'}) reclassified as the design advance on draft ${draft.name || draftOrderId}`);
+    } else if (first && first.type !== 'cad_advance') {
+      console.warn(`[cad-advance] draft ${draft.name || draftOrderId}: installment 1 is Rs${first.value.toFixed(2)} but the CAD advance line is Rs${advanceAmount.toFixed(2)} — leaving it as a payment leg. Balance will net the advance once via custom.advance and count the full leg as paid; check this draft by hand.`);
+    } else if (!first) {
+      // Advance recorded without a payment leg (e.g. a panel-entered amount_paid). Synthesize the
+      // leg so the invoice payment table still shows it; mode is unknown by construction.
+      patch.installment_1_value = advanceAmount.toFixed(2);
+      patch.installment_1_date  = today;
+      patch.installment_1_type  = 'cad_advance';
+    }
+
+    await updateDraftOrderMetafields(draftOrderId, patch);
     console.log(`[cad-advance] captured ${advanceAmount.toFixed(2)} on draft ${draft.name || draftOrderId} (date ${today})`);
   } catch (e) {
     console.error(`[cad-advance] capture failed for draft ${draft?.id}:`, e.message);
@@ -4658,6 +4748,39 @@ app.post('/api/trigger-price-update', async (req, res) => {
 // Backfill endpoints
 // ─────────────────────────────────────────
 
+// GET/POST /api/backfill-installments
+// Populates installment legs on documents that predate the installment model.
+//   scope=drafts (default) — replays store_deposit_payments, the real per-leg audit trail
+//   scope=orders           — synthesizes from the two-slot pair; needs ?orderIds=1,2,3
+// DRY RUN BY DEFAULT — pass apply=true to write. Idempotent: documents that already have a leg are
+// skipped, and a draft whose audit rows disagree with its recorded amount_paid is reported as
+// 'drift' and left alone rather than silently overwritten.
+async function runBackfillInstallments(req, res) {
+  try {
+    const p = { ...(req.query || {}), ...(req.body || {}) };
+    const apply = (p.apply === 'true' || p.apply === true);
+    const scope = String(p.scope || 'drafts').toLowerCase();
+    const split = (v) => String(v || '').split(',').map(s => s.trim()).filter(Boolean);
+    const deps = { axios, storeUrl: process.env.SHOPIFY_STORE_URL, token: await getShopifyToken(), supabase };
+
+    const results = scope === 'orders'
+      ? await backfillInstallments.backfillOrders(deps, { apply, orderIds: split(p.orderIds) })
+      : await backfillInstallments.backfillDrafts(deps, {
+          apply,
+          draftIds: split(p.draftIds).length ? split(p.draftIds) : null,
+          limit: parseInt(p.limit, 10) || 500,
+        });
+
+    const tally = results.reduce((acc, r) => { acc[r.status] = (acc[r.status] || 0) + 1; return acc; }, {});
+    return res.json({ success: true, dryRun: !apply, scope, tally, results });
+  } catch (err) {
+    console.error('backfill-installments error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+}
+app.get('/api/backfill-installments', runBackfillInstallments);
+app.post('/api/backfill-installments', runBackfillInstallments);
+
 // POST /api/backfill-draft-tags
 // Reads metafields from draft orders and writes payment tags.
 // Body: { nameFrom: 1038, nameTo: 1053 } for a name range, or {} for all open+invoice_sent.
@@ -5416,30 +5539,104 @@ app.post('/api/credit-instrument/issue', async (req, res) => {
 
 // ─────────────────────────────────────────
 // GET/POST /api/metafield-definitions/ensure
-// Creates the Shopify metafield DEFINITIONS for the adjustment keys, idempotently. Writing a
+// Creates the Shopify metafield DEFINITIONS this repo depends on, idempotently. Writing a
 // metafield does not require a definition — but without one the field is invisible in Shopify's
-// own Settings → Custom data UI, isn't filterable, and isn't available to Flow. This repo never
-// created definitions in code, so any that exist were made by hand.
+// own Settings → Custom data UI, isn't filterable, isn't available to Flow, and (the reason that
+// bites here) the admin extension renders it as a free-text box instead of a typed widget.
 // Re-runnable: an existing definition returns userError code TAKEN, reported as 'exists'.
 // DRY RUN BY DEFAULT — pass ?apply=true to actually create.
+// ?group=adjustments|installments|all (default all) scopes the run.
 // ─────────────────────────────────────────
 const ADJUSTMENT_MF_DEFS = [
   { key: 'exchange_note_code', name: 'Exchange Note Applied', type: 'single_line_text_field', description: 'Serial code of the exchange note applied to this order (e.g. EXC27-KAHSR-0001).' },
   { key: 'voucher_code',       name: 'Voucher Applied',       type: 'single_line_text_field', description: 'Serial code of the voucher applied to this order (e.g. VCH27-KAHSR-0001).' },
 ];
 
+// Mode list used only when the live custom.payment_mode_advance definition carries no choices
+// validation. These mirror values already present on live records — note 'bank transfer' has a
+// space where 'gokwik_link' has an underscore. Both are real; do NOT normalise, existing records
+// depend on the exact strings.
+const PAYMENT_MODE_FALLBACK = ['upi', 'card', 'cash', 'pos', 'gokwik_link', 'bank transfer'];
+
+// Reads the authoritative payment-mode enum off the existing payment_mode_advance definition so
+// the installment mode dropdowns offer exactly the same values as the field they replace.
+// Returns null when the definition is absent or carries no choices validation.
+async function fetchPaymentModeChoices(token) {
+  const QUERY = `query {
+    metafieldDefinitions(first: 1, ownerType: DRAFTORDER, namespace: "custom", key: "payment_mode_advance") {
+      nodes { validations { name value } }
+    }
+  }`;
+  try {
+    const { data } = await axios.post(
+      `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/graphql.json`,
+      { query: QUERY },
+      { headers: { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' }, timeout: 15000 });
+    const v = (data?.data?.metafieldDefinitions?.nodes?.[0]?.validations || []).find(x => x.name === 'choices');
+    if (!v?.value) return null;
+    const parsed = JSON.parse(v.value);
+    return Array.isArray(parsed) && parsed.length ? parsed : null;
+  } catch (e) {
+    console.error('fetchPaymentModeChoices failed:', e.message);
+    return null;
+  }
+}
+
+// Definitions for the installment legs. MAX_INSTALLMENTS and the readers live up with the payment
+// helpers; this only describes the Shopify-side definitions.
+function buildInstallmentMfDefs(modeChoices) {
+  const choices = (list) => [{ name: 'choices', value: JSON.stringify(list) }];
+  const defs = [];
+  for (let n = 1; n <= MAX_INSTALLMENTS; n++) {
+    defs.push({ key: `installment_${n}_value`, name: `Installment ${n} — Value`, type: 'number_decimal',
+      description: `Amount received in installment ${n}. amount_paid is the sum of all installment values.` });
+    defs.push({ key: `installment_${n}_mode`, name: `Installment ${n} — Mode`, type: 'single_line_text_field',
+      description: `Payment mode used for installment ${n}.`, validations: choices(modeChoices) });
+    defs.push({ key: `installment_${n}_date`, name: `Installment ${n} — Date`, type: 'date',
+      description: `Date installment ${n} was received. Stamped when the payment lands; editable so a late-recorded payment can be corrected (this date prints on the customer invoice).` });
+  }
+  // Only slot 1 can hold a CAD design advance (it absorbs the FIRST payment), so one flag suffices.
+  // cad_advance rows render as "Design Advance" and are excluded from amount_paid — custom.advance
+  // already reduces amount_to_be_collected, so counting it again would deduct it twice.
+  defs.push({ key: 'installment_1_type', name: 'Installment 1 — Type', type: 'single_line_text_field',
+    description: 'payment (default) or cad_advance. cad_advance means installment 1 mirrors custom.advance for display only and is excluded from amount_paid.',
+    validations: choices(['payment', 'cad_advance']) });
+  return defs;
+}
+
 async function runEnsureMetafieldDefinitions(req, res) {
   const p = { ...(req.query || {}), ...(req.body || {}) };
   const apply = (p.apply === 'true' || p.apply === true);
+  const group = String(p.group || 'all').toLowerCase();
   const owners = ['DRAFTORDER', 'ORDER'];
+  let token = null;
+  try {
+    token = await getShopifyToken();
+  } catch (err) {
+    console.error('metafield-definitions/ensure token error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+
+  // Read the live enum even on a dry run, so the response shows exactly what would be created.
+  let modeChoices = PAYMENT_MODE_FALLBACK;
+  let modeChoicesSource = 'fallback';
+  if (group !== 'adjustments') {
+    const live = await fetchPaymentModeChoices(token);
+    if (live) { modeChoices = live; modeChoicesSource = 'live:custom.payment_mode_advance'; }
+  }
+
+  const defs = [];
+  if (group === 'all' || group === 'adjustments')  defs.push(...ADJUSTMENT_MF_DEFS);
+  if (group === 'all' || group === 'installments') defs.push(...buildInstallmentMfDefs(modeChoices));
+
   const planned = [];
-  for (const d of ADJUSTMENT_MF_DEFS) for (const ownerType of owners) planned.push({ ...d, ownerType, namespace: 'custom' });
+  for (const d of defs) for (const ownerType of owners) planned.push({ ...d, ownerType, namespace: 'custom' });
   if (!apply) {
-    return res.json({ success: true, dryRun: true, wouldCreate: planned,
+    return res.json({ success: true, dryRun: true, group, modeChoices, modeChoicesSource,
+      count: planned.length, wouldCreate: planned,
       hint: 'Re-run with ?apply=true to create these definitions.' });
   }
   try {
-    const token = await getShopifyToken();
     const MUTATION = `mutation($def: MetafieldDefinitionInput!) {
       metafieldDefinitionCreate(definition: $def) {
         createdDefinition { id key namespace ownerType }
@@ -5453,7 +5650,8 @@ async function runEnsureMetafieldDefinitions(req, res) {
           `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/graphql.json`,
           { query: MUTATION, variables: { def: {
               name: def.name, namespace: def.namespace, key: def.key,
-              type: def.type, ownerType: def.ownerType, description: def.description } } },
+              type: def.type, ownerType: def.ownerType, description: def.description,
+              ...(def.validations ? { validations: def.validations } : {}) } } },
           { headers: { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' }, timeout: 15000 });
         const payload = data?.data?.metafieldDefinitionCreate;
         const errs = payload?.userErrors || [];
@@ -5470,7 +5668,11 @@ async function runEnsureMetafieldDefinitions(req, res) {
       }
     }
     const failed = results.filter(r => r.status === 'error');
-    return res.status(failed.length ? 207 : 200).json({ success: !failed.length, results });
+    return res.status(failed.length ? 207 : 200).json({
+      success: !failed.length, group, modeChoices, modeChoicesSource,
+      created: results.filter(r => r.status === 'created').length,
+      exists:  results.filter(r => r.status === 'exists').length,
+      results });
   } catch (err) {
     console.error('metafield-definitions/ensure error:', err.message);
     return res.status(500).json({ success: false, error: err.message });
@@ -5669,8 +5871,11 @@ app.get('/api/adjustment-report', async (req, res) => {
           old_gold_value:         num(mf.old_gold_value).toFixed(2),
           advance:                num(mf.advance).toFixed(2),
           amount_to_be_collected: (mf.amount_to_be_collected != null ? num(mf.amount_to_be_collected) : num(n.totalPriceSet.shopMoney.amount)).toFixed(2),
-          // Payments are staged (advance + final), so what was collected is the SUM of both fields —
-          // amount_paid alone is only the advance and would under-report every two-stage order.
+          // amount_paid is the cumulative sum of the installment legs and stands alone;
+          // amount_paid_final is legacy, pinned to 0, and added only so orders written before the
+          // installment migration (which still split the two) tie out to the same figure.
+          // `advance` stays a SEPARATE column above — the CAD design advance is tax-free at
+          // collection, and folding it into amount_paid would make that treatment unauditable.
           amount_paid:            (num(mf.amount_paid) + num(mf.amount_paid_final)).toFixed(2),
           total_price:            num(n.totalPriceSet.shopMoney.amount).toFixed(2),
           instruments_issued:     (bySource[n.name] || []).join(' | '),   // credits generated on this order

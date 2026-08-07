@@ -14,15 +14,21 @@ import { useEffect, useRef, useState } from "preact/hooks";
  *   - section:  visual grouping
  *   - editable: whether store staff may edit it (else read-only)
  *   - applies:  "draft" | "order" | "both" — which page the field belongs to
+ *   - required: display only (adds an asterisk); does NOT promote the field out
+ *               of its section, unlike membership of REQUIRED_FIELDS
  *
  * Mirrors middleware metafield_governance.csv. Namespace/type are never
  * hardcoded — they come from the live definitions at save time.
  */
-// Founder flow: identity header (top, read-only) → Required Inputs → Payments →
+// Founder flow: identity header (top, read-only) → Required Inputs → Installments → Payments →
 // Pricing (incl. discounts) → Product Metadata → Adjustments (selector + values) →
 // Repair → Credit Note → Manufacturing → System. "Order Details" is gone (its
 // fields are Required), "Exchange" was always dead, "Procurement" PO fields removed.
+//
+// Installments sits FIRST so the payment table reads as one block. Leg 1 is marked required in
+// FIELD_CONFIG rather than promoted into Required Inputs, which would split it from legs 2-4.
 const SECTION_ORDER = [
+  "Installments",
   "Payments",
   "Pricing",
   "Product Metadata",
@@ -40,13 +46,14 @@ const SECTION_ORDER = [
 // FIELD_CONFIG.
 // Staff-fill only. payment_status / amount_pending were removed — they are now SYSTEM-computed
 // (net-based) and shown read-only, so staff can't hand-type a wrong balance.
+// The first payment used to live here as payment_mode_advance + amount_paid. It now lives in the
+// Installments section as leg 1, flagged `required` in FIELD_CONFIG so it still gets the asterisk
+// without being torn out of the table.
 const REQUIRED_FIELDS = [
   "order_type",
   "channel",
   "state_code",
   "employee_name",
-  "payment_mode_advance",
-  "amount_paid",
 ];
 const REQUIRED_SET = new Set(REQUIRED_FIELDS);
 const REQUIRED_SECTION = "Required Inputs";
@@ -71,15 +78,33 @@ const FIELD_CONFIG = {
   channel: { section: "Order Details", label: "Channel", editable: true, applies: "both" },
   employee_name: { section: "Order Details", label: "Sales Staff", editable: true, applies: "both" },
 
-  // System-computed (net-based) — read-only so staff never hand-type a balance.
+  // Payments are captured as up to 4 INSTALLMENTS, each with its own value, mode and date. Enter
+  // each collection in its own leg — never re-type a running total, and never skip a slot. The
+  // middleware sums the legs into amount_paid and derives the balance from there.
+  //
+  // The date is stamped by the middleware when a gateway or cash payment lands, and is editable so
+  // a payment recorded days late can be corrected — it prints on the customer's tax invoice.
+  installment_1_value: { section: "Installments", label: "1 · Amount", editable: true, applies: "both", required: true },
+  installment_1_mode: { section: "Installments", label: "1 · Mode", editable: true, applies: "both", required: true },
+  installment_1_date: { section: "Installments", label: "1 · Date", editable: true, applies: "both" },
+  // Set to cad_advance by the middleware when leg 1 is a CAD design advance. That leg then shows on
+  // the invoice as "Design Advance" and is EXCLUDED from amount_paid — custom.advance already
+  // reduces the amount to be collected, so counting it again would deduct it twice.
+  installment_1_type: { section: "Installments", label: "1 · Type (system)", editable: false, applies: "both" },
+  installment_2_value: { section: "Installments", label: "2 · Amount", editable: true, applies: "both" },
+  installment_2_mode: { section: "Installments", label: "2 · Mode", editable: true, applies: "both" },
+  installment_2_date: { section: "Installments", label: "2 · Date", editable: true, applies: "both" },
+  installment_3_value: { section: "Installments", label: "3 · Amount", editable: true, applies: "both" },
+  installment_3_mode: { section: "Installments", label: "3 · Mode", editable: true, applies: "both" },
+  installment_3_date: { section: "Installments", label: "3 · Date", editable: true, applies: "both" },
+  installment_4_value: { section: "Installments", label: "4 · Amount", editable: true, applies: "both" },
+  installment_4_mode: { section: "Installments", label: "4 · Mode", editable: true, applies: "both" },
+  installment_4_date: { section: "Installments", label: "4 · Date", editable: true, applies: "both" },
+
+  // All system-computed (net-based) — read-only so staff never hand-type a balance.
+  // amount_paid is the SUM of the installment legs above, recomputed server-side on every save.
   payment_status: { section: "Payments", label: "Payment Status", editable: false, applies: "both" },
-  // Payments are STAGED: amount_paid is the advance, amount_paid_final the final collection, each with
-  // its own mode. A second payment goes in its own field — typing a running total into amount_paid used
-  // to just overwrite the first. Total collected = amount_paid + amount_paid_final (derived server-side).
-  payment_mode_advance: { section: "Payments", label: "Advance Payment Mode", editable: true, applies: "both" },
-  amount_paid: { section: "Payments", label: "Advance Paid", editable: true, applies: "both" },
-  payment_mode_final: { section: "Payments", label: "Final Payment Mode", editable: true, applies: "both" },
-  amount_paid_final: { section: "Payments", label: "Final Paid", editable: true, applies: "both" },
+  amount_paid: { section: "Payments", label: "Total Received", editable: false, applies: "both" },
   amount_pending: { section: "Payments", label: "Amount Pending", editable: false, applies: "both" },
   amount_to_be_collected: { section: "Payments", label: "Amount To Be Collected", editable: false, applies: "both" },
 
@@ -205,7 +230,9 @@ function buildSections(scope) {
   for (const key of inScope) {
     if (REQUIRED_SET.has(key) || IDENTITY_SET.has(key)) continue;
     const cfg = FIELD_CONFIG[key];
-    (bySection[cfg.section] ||= []).push({ key, label: cfg.label, editable: cfg.editable });
+    // `required` here is display only (the asterisk) — it marks a compulsory field that must stay
+    // with its neighbours rather than being promoted into the Required Inputs section.
+    (bySection[cfg.section] ||= []).push({ key, label: cfg.label, editable: cfg.editable, required: cfg.required });
   }
   const topical = SECTION_ORDER.filter((title) => bySection[title]?.length).map((title) => ({
     title,
@@ -279,7 +306,14 @@ const TAGS_ADD_MUTATION = `
     tagsAdd(id: $id, tags: $tags) { userErrors { field message } }
   }
 `;
-const PAYMENT_TRIGGER_KEYS = ["amount_paid", "amount_paid_final", "payment_mode_advance", "payment_mode_final"];
+// Editing any installment leg must nudge the middleware to re-sum amount_paid and re-derive the
+// balance — the values themselves are staff-entered, but the totals are always server-computed.
+const PAYMENT_TRIGGER_KEYS = [
+  "installment_1_value", "installment_1_mode", "installment_1_date",
+  "installment_2_value", "installment_2_mode", "installment_2_date",
+  "installment_3_value", "installment_3_mode", "installment_3_date",
+  "installment_4_value", "installment_4_mode", "installment_4_date",
+];
 
 // A metafield save alone never fires the resource webhook, so the middleware never recomputes on its
 // own. We add trigger tags for what changed so it does (the middleware strips them after processing):

@@ -333,11 +333,19 @@ function findCandidates(amount, entities) {
   );
 }
 
-// Payment modes recorded on a document: "pmode-advance:card, pmode-final:upi".
+// Payment modes recorded on a document. Current shape is one aggregate tag covering every
+// installment leg — "pmodes:upi/card/cash". The old two-slot pair ("pmode-advance:card,
+// pmode-final:upi") is still read for documents written before the installment migration.
 // Returns true (compatible) / false (definitely not) / null (no signal — never excludes).
 function paymentModeFits(txn, e) {
-  const modes = [...String(e.paymentTags || '').matchAll(/pmode-(?:advance|final):([^\s,]+)/g)]
+  const tags = String(e.paymentTags || '');
+  const aggregate = [...tags.matchAll(/pmodes:([^\s,]+)/g)]
+    .flatMap(m => m[1].split('/'))
+    .filter(Boolean)
+    .map(s => s.toLowerCase());
+  const legacy = [...tags.matchAll(/pmode-(?:advance|final):([^\s,]+)/g)]
     .map(m => m[1].toLowerCase());
+  const modes = [...new Set(aggregate.concat(legacy))];
   if (!modes.length) return null;
   const mode = (txn.paymentMode || '').toLowerCase();
   if (txn.source === 'GoKwik')  return modes.some(m => /gokwik|kwik/.test(m));
@@ -579,6 +587,9 @@ async function runRecon({ dir, files, storeUrl, token }) {
         if (!resp.ok) return;
         const n = (await resp.json())?.data?.orders?.edges?.[0]?.node;
         if (!n) return;
+        // amount_paid is the cumulative sum of the installment legs, so it stands alone.
+        // amount_paid_final is legacy and pinned to 0 — added only so a document written before the
+        // installment migration, which still splits the two, reconciles to the same figure.
         const sum = (parseFloat(n.paid?.value) || 0) + (parseFloat(n.paidFinal?.value) || 0);
         if (sum > 0) e.amountPaid = sum;
       } catch (_) { /* enrichment only */ }

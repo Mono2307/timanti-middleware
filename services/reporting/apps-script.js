@@ -32,8 +32,10 @@ const REPORTS = {
     ],
     cols: ['stage','payment_type','draft_name','order_name','day','customer','place_of_supply','shipping_state',
            'product_title','variant_title','sku','hsn','qty','gross_sales','discount','net_sales',
+           // Must mirror SALES_COLS in services/reporting/reports.js — a column missing here is
+           // silently dropped from the sheet rather than erroring.
            'taxable_value','igst','sgst','cgst','custom_serial','amount_paid','amount_pending',
-           'net_to_collect','payment_mode'],
+           'net_to_collect','payment_mode','installments'],
   },
   adjustments: {
     tab: 'Adjustments', endpoint: '/api/adjustment-report', totals: true,
