@@ -2555,6 +2555,8 @@ async function applyPaymentTagsToOrder(orderId, token) {
 
   const existingTags = (order.tags || '').split(',').map(t => t.trim()).filter(Boolean);
   const cleanedTags  = existingTags.filter(t =>
+    // sync-payment is the admin panel's nudge; consume it here exactly as the draft twin does.
+    t.toLowerCase() !== 'sync-payment' &&
     !t.startsWith('deposit:') && !t.startsWith('paid:') && !t.startsWith('pending:') &&
     !t.startsWith('pmode-') && !t.startsWith('pmodes:') && !t.startsWith('total:')
   );
@@ -2572,9 +2574,21 @@ async function applyPaymentTagsToOrder(orderId, token) {
     ...(modeFinal   ? [`pmode-final:${modeFinal}`]   : []),
   ];
 
+  // Idempotence guard, mirroring the draft twin. This function now runs from the orders/update
+  // webhook, and every tag PUT fires that webhook again — without this it would write, retrigger
+  // itself, and loop forever. Skipping the no-op write breaks the cycle on the second pass.
+  const proposedTags = [...cleanedTags, ...paymentTags];
+  const proposedSet  = new Set(proposedTags.map(t => t.toLowerCase()));
+  const existingSet  = new Set(existingTags.map(t => t.toLowerCase()));
+  const unchanged = proposedSet.size === existingSet.size && [...proposedSet].every(t => existingSet.has(t));
+  if (unchanged) {
+    console.log(`Order ${orderId}: payment tags unchanged, skipping PUT`);
+    return true;
+  }
+
   await axios.put(
     `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/orders/${orderId}.json`,
-    { order: { id: parseInt(orderId), tags: [...cleanedTags, ...paymentTags].join(', ') } },
+    { order: { id: parseInt(orderId), tags: proposedTags.join(', ') } },
     { headers, timeout: 10000 }
   );
   console.log(`Order ${orderId}: tags [${paymentTags.join(', ')}]${legs.length ? ` (${legs.length} installment${legs.length > 1 ? 's' : ''})` : ''}`);
@@ -4128,6 +4142,21 @@ app.post('/api/serial/order-serial', async (req, res) => {
 
   // Post-tax voucher freeze — runs regardless of serial flags (only touches orders with a VCH code).
   freezeOnlineVoucher(order, token).catch(e => console.error(`[voucher-freeze] order ${order.id}:`, e.message));
+
+  // Payment recompute — the order-side twin of the draft webhook's payment-sync step.
+  //
+  // Installments are editable AFTER conversion (the admin panel renders them on the order page and
+  // the metafields are copied over at conversion), but nothing here used to recompute: the panel
+  // adds a `sync-payment` tag and only the DRAFT chain ever consumed it. So an order edited to
+  // full-and-final kept printing the old balance on its tax invoice.
+  //
+  // Runs unconditionally rather than gating on the tag, because a metafield save does not always
+  // carry one and a stale balance on an invoice is worse than a no-op read. Safe to run on every
+  // orders/update: applyPaymentTagsToOrder returns early when there is nothing to bill, and skips
+  // the tag write entirely when nothing changed — which is what stops this webhook re-triggering
+  // itself in a loop. Fire-and-forget; never blocks the serial mint below.
+  applyPaymentTagsToOrder(String(order.id), token)
+    .catch(e => console.error(`[payment-sync] order ${order.name || order.id}:`, e.message));
 
   if (!SERIAL_CUSTOMER_ORDER) return;
 
