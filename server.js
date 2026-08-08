@@ -2563,7 +2563,7 @@ async function applyPaymentTagsToOrder(orderId, token) {
     // sync-payment is the admin panel's nudge; consume it here exactly as the draft twin does.
     t.toLowerCase() !== 'sync-payment' &&
     !t.startsWith('deposit:') && !t.startsWith('paid:') && !t.startsWith('pending:') &&
-    !t.startsWith('pmode-') && !t.startsWith('pmodes:') && !t.startsWith('total:')
+    !t.startsWith('pmode-') && !t.startsWith('pmodes:') && !/^i[1-9]:/.test(t) && !t.startsWith('total:')
   );
 
   const paymentTags = [
@@ -2574,6 +2574,12 @@ async function applyPaymentTagsToOrder(orderId, token) {
     // One aggregate mode tag covering every leg. Recon reads modes off tags to disambiguate
     // same-amount candidates, so it needs all of them without fetching metafields.
     ...(modes.length ? [`pmodes:${modes.join('/')}`] : []),
+    // The whole installment table, encoded in ONE tag: value@mode@date, legs separated by ~.
+    // Order Printer can hand a template empty order.metafields at print time — which is why every
+    // other payment field here already has a tag fallback (deposit:/paid:/pending:/pmode-*). The
+    // installment rows had none, so the payment table silently printed nothing. Well inside the
+    // 255-char tag limit at 4 legs.
+    ...legs.map(r => `i${r.slot}:${r.value}@${r.mode || ''}@${r.date || ''}${r.type === 'cad_advance' ? '@c' : ''}`),
     // DUAL-WRITE (remove at rollout step 6): the two-slot tags unmigrated readers still parse.
     ...(modeAdvance ? [`pmode-advance:${modeAdvance}`] : []),
     ...(modeFinal   ? [`pmode-final:${modeFinal}`]   : []),
@@ -2691,7 +2697,7 @@ async function applyPaymentTagsToDraftOrder(draftOrderId, token) {
   const cleanedTags  = existingTags.filter(t =>
     t.toLowerCase() !== 'sync-payment' &&
     !t.startsWith('deposit:') && !t.startsWith('paid:') && !t.startsWith('pending:') &&
-    !t.startsWith('pmode-') && !t.startsWith('pmodes:') && !t.startsWith('total:')
+    !t.startsWith('pmode-') && !t.startsWith('pmodes:') && !/^i[1-9]:/.test(t) && !t.startsWith('total:')
   );
 
   const paymentTags = [
@@ -2701,6 +2707,12 @@ async function applyPaymentTagsToDraftOrder(draftOrderId, token) {
     `total:Rs${totalPrice}`,
     // Aggregate mode tag — the draft-side sales report and recon both read modes off tags.
     ...(modes.length ? [`pmodes:${modes.join('/')}`] : []),
+    // The whole installment table, encoded in ONE tag: value@mode@date, legs separated by ~.
+    // Order Printer can hand a template empty order.metafields at print time — which is why every
+    // other payment field here already has a tag fallback (deposit:/paid:/pending:/pmode-*). The
+    // installment rows had none, so the payment table silently printed nothing. Well inside the
+    // 255-char tag limit at 4 legs.
+    ...legs.map(r => `i${r.slot}:${r.value}@${r.mode || ''}@${r.date || ''}${r.type === 'cad_advance' ? '@c' : ''}`),
     // DUAL-WRITE (remove at rollout step 6): the two-slot tags unmigrated readers still parse.
     ...(modeAdvance ? [`pmode-advance:${modeAdvance}`] : []),
     ...(modeFinal   ? [`pmode-final:${modeFinal}`]   : []),

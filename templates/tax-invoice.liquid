@@ -501,7 +501,35 @@ properties (prop_*). jc_meta stays nil so its fallback branches below are simply
           {% unless _t == "cad_advance" %}{% assign installments_collected = installments_collected | plus: _v %}{% endunless %}
         {% endif %}
       {% endfor %}
-      {% assign inst_list = inst_rows | split: "~" %}
+      {% comment %}── Tag fallback ────────────────────────────────────────────────────────────────
+Order Printer can hand a template EMPTY order.metafields at print time — which is why every other
+payment field here already falls back to a tag. The installment rows had no fallback, so the whole
+payment table silently printed nothing on a document whose metafields did not resolve.
+
+The middleware writes the same table into one tag: inst:<value>@<mode>@<date>~<value>@<mode>@<date>
+with "@cad" appended on a design-advance leg. Only consulted when the metafields yielded nothing.
+──{% endcomment %}
+{% if inst_rows == "" %}
+  {% for i in (1..4) %}
+    {% assign pfx = "i" | append: i | append: ":" %}
+    {% for tag in order.tags %}
+      {% assign t = tag | strip %}
+      {% if t contains pfx %}
+        {% assign p = t | remove_first: pfx | split: "@" %}
+        {% assign _v = p[0] | plus: 0 %}
+        {% if _v > 0 %}
+          {% assign _m = p[1] | default: "" %}
+          {% assign _d = p[2] | default: "" %}
+          {% assign _t = "" %}
+          {% if p[3] == "c" %}{% assign _t = "cad_advance" %}{% endif %}
+          {% assign inst_rows = inst_rows | append: _d | append: "|" | append: _m | append: "|" | append: _v | append: "|" | append: _t | append: "~" %}
+          {% unless _t == "cad_advance" %}{% assign installments_collected = installments_collected | plus: _v %}{% endunless %}
+        {% endif %}
+      {% endif %}
+    {% endfor %}
+  {% endfor %}
+{% endif %}
+{% assign inst_list = inst_rows | split: "~" %}
 
       {% if inst_list.size > 0 %}
         <tr class="totals-row">
