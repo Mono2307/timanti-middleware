@@ -122,8 +122,12 @@ Order Printer can hand a template EMPTY order.metafields at print time — which
 payment field here already falls back to a tag. The installment rows had no fallback, so the whole
 payment table silently printed nothing on a document whose metafields did not resolve.
 
-The middleware writes the same table into one tag: inst:<value>@<mode>@<date>~<value>@<mode>@<date>
-with "@cad" appended on a design-advance leg. Only consulted when the metafields yielded nothing.
+The middleware writes one tag PER LEG alongside the metafields, named i1: i2: i3: i4: — each holding
+value, then mode, then date, separated by an at-sign. A design-advance leg carries a trailing @c.
+Only consulted when the metafields yielded nothing.
+
+NOTE: keep angle brackets out of this comment. Order Printer validates the template as HTML and
+reads them as unknown tags, rejecting the paste with "Tag value invalid / Tag mode invalid".
 ──{% endcomment %}
 {% if inst_rows == "" %}
   {% for i in (1..4) %}
