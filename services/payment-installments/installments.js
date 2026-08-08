@@ -63,8 +63,15 @@ function installmentModes(rows) {
 // is left blank because it is genuinely unknown — inventing today's date would print a false
 // receipt date on the customer's invoice. Mode falls back to the legacy two-slot fields.
 //
+// ONLY fires when there are NO legs yet — i.e. the document has never been touched by the
+// installment model. Once a single leg exists the legs are authoritative and amount_paid follows
+// them, including DOWNWARD. Folding on a document that already has legs would make corrections
+// impossible: blank a leg to remove a payment and the difference would just reappear as a new
+// leg, pinning the order permanently at its old total and at "fully paid".
+//
 // Returns the effective rows plus the patch needed to persist the synthetic leg ({} when none).
 function materializeLegacyLeg(mfMap, rows) {
+  if ((rows || []).length) return { rows, patch: {} };
   const recorded = parseFloat((mfMap || {}).amount_paid) || 0;
   const residue  = recorded - sumInstallments(rows);
   if (!(residue >= 0.5)) return { rows, patch: {} };

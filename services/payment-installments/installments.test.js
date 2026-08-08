@@ -141,19 +141,26 @@ t('appending never loses money across a full 4-leg sequence', () => {
 console.log(`\n${n} assertions passed`);
 
 console.log('materializeLegacyLeg — the #D194 regression');
-t('folds pre-installment money into a free slot', () => {
-  // Live shape of #D194 after one new leg: Rs10,000 recorded the old way, Rs5,000 as leg 1.
-  const map = { amount_paid: '15000', payment_mode_advance: 'card',
-                installment_1_value: '5000', installment_1_mode: 'upi', installment_1_date: '2026-08-07' };
+t('folds pre-installment money into slot 1 when the doc has no legs yet', () => {
+  // A draft paid the old way: Rs10,000 recorded, no legs. First touch must not lose it.
+  const map = { amount_paid: '10000', payment_mode_advance: 'card' };
   const { rows, patch } = materializeLegacyLeg(map, readInstallments(map));
-  assert.strictEqual(patch.installment_2_value, '10000.00');
-  assert.strictEqual(patch.installment_2_mode, 'card');   // from the legacy two-slot field
-  assert.strictEqual(patch.installment_2_date, undefined); // unknown — never invent a receipt date
-  assert.strictEqual(sumInstallments(rows), 15000);        // reconciles to amount_paid
+  assert.strictEqual(patch.installment_1_value, '10000.00');
+  assert.strictEqual(patch.installment_1_mode, 'card');    // from the legacy two-slot field
+  assert.strictEqual(patch.installment_1_date, undefined); // unknown — never invent a receipt date
+  assert.strictEqual(sumInstallments(rows), 10000);
+});
+t('NEVER folds once legs exist — corrections must be able to reduce the total', () => {
+  // Staff blank installment 2 to remove a payment. amount_paid is still the old higher figure.
+  // Folding here would recreate the removed money and pin the order at 'fully paid' forever.
+  const map = { amount_paid: '8000', installment_1_value: '5000', installment_1_mode: 'upi' };
+  const { rows, patch } = materializeLegacyLeg(map, readInstallments(map));
+  assert.deepStrictEqual(patch, {});
+  assert.strictEqual(sumInstallments(rows), 5000);   // follows the legs DOWN, as it must
 });
 t('the bug it fixes: without folding, the sum understates what was collected', () => {
-  const map = { amount_paid: '15000', installment_1_value: '5000' };
-  assert.strictEqual(sumInstallments(readInstallments(map)), 5000);  // what shipped — Rs10,000 lost
+  const map = { amount_paid: '15000' };
+  assert.strictEqual(sumInstallments(readInstallments(map)), 0);      // what shipped — the whole Rs15,000 lost
   assert.strictEqual(sumInstallments(materializeLegacyLeg(map, readInstallments(map)).rows), 15000);
 });
 t('no-op once legs already reconcile', () => {
@@ -171,11 +178,11 @@ t('never fabricates a leg when slots are full — money over audit trail', () =>
   const { patch } = materializeLegacyLeg(map, readInstallments(map));
   assert.deepStrictEqual(patch, {});
 });
-t('ignores a cad_advance leg when measuring the residue', () => {
-  // cad_advance is excluded from amount_paid, so it must not count as covering it.
+t('a cad_advance leg still counts as a leg — no fold', () => {
+  // Path A drafts carry a cad_advance leg. It is excluded from amount_paid by design, but it IS a
+  // leg, so the document is already on the installment model and must not be folded into.
   const map = { amount_paid: '5000', installment_1_value: '2000', installment_1_type: 'cad_advance' };
-  const { patch } = materializeLegacyLeg(map, readInstallments(map));
-  assert.strictEqual(patch.installment_2_value, '5000.00');
+  assert.deepStrictEqual(materializeLegacyLeg(map, readInstallments(map)).patch, {});
 });
 
 console.log(`\n${n} assertions passed`);
