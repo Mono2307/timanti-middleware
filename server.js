@@ -2502,7 +2502,12 @@ async function applyPaymentTagsToOrder(orderId, token) {
   };
 
   const paymentStatus = mf('payment_status');
-  const isFinalized   = mf('is_finalized') === 'true';
+  // REST returns a BOOLEAN metafield as a JSON boolean, not the string "true" — so comparing it
+  // to a string was always false. is_finalized could be written true (the values differed) but
+  // never written back to false (both read as false), making it a one-way latch: an order that
+  // reopened a balance kept printing "fully paid" on its tax invoice, which is what is_finalized
+  // drives there. String() normalises both shapes.
+  const isFinalized   = String(mf('is_finalized')) === 'true';
   // Installment legs are the source of truth for what was collected. Legacy fallback covers orders
   // predating the migration, which carry only the two-slot pair.
   const mfMap = {};
@@ -2614,7 +2619,12 @@ async function applyPaymentTagsToDraftOrder(draftOrderId, token) {
   };
 
   const paymentStatus = mf('payment_status');
-  const isFinalized   = mf('is_finalized') === 'true';
+  // REST returns a BOOLEAN metafield as a JSON boolean, not the string "true" — so comparing it
+  // to a string was always false. is_finalized could be written true (the values differed) but
+  // never written back to false (both read as false), making it a one-way latch: an order that
+  // reopened a balance kept printing "fully paid" on its tax invoice, which is what is_finalized
+  // drives there. String() normalises both shapes.
+  const isFinalized   = String(mf('is_finalized')) === 'true';
   // Payments are recorded as up to MAX_INSTALLMENTS legs, each with its own value + mode + date.
   // What's been paid is their sum, with cad_advance legs excluded (custom.advance already reduces
   // amount_to_be_collected, so counting it here too would deduct the same rupees twice).
