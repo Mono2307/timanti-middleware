@@ -56,6 +56,11 @@ const REQUIRED_FIELDS = [
   "state_code",
   "employee_name",
 ];
+// Label on the blank entry of every choice dropdown. It is also the sentinel we normalise back to
+// "" — see renderEditable and save(). Never let this string reach Shopify: it is not a valid
+// choice, so a definition with a `choices` validation rejects the whole save.
+const BLANK_CHOICE_LABEL = "—";
+
 const REQUIRED_SET = new Set(REQUIRED_FIELDS);
 const REQUIRED_SECTION = "Required Inputs";
 
@@ -521,7 +526,11 @@ export default function MetafieldManager({ surface = "block" } = {}) {
           missing.push(key);
           continue;
         }
-        const value = (editsRef.current[key] ?? "").trim();
+        // Belt-and-braces: the blank dropdown entry must clear the field, never be written. If it
+        // ever reaches here it fails the whole save with 'Value does not exist in provided
+        // choices', taking every other edited field down with it.
+        const raw = (editsRef.current[key] ?? "").trim();
+        const value = raw === BLANK_CHOICE_LABEL ? "" : raw;
         if (value === "") {
           toDelete.push({ ownerId, namespace: def.namespace, key });
         } else {
@@ -1038,7 +1047,15 @@ function renderReadOnly(field, value) {
 
 function renderEditable(field, type, choices, value, setField, saving) {
   const disabled = saving ? "" : undefined;
-  const onChange = (e) => setField(field.key, e.target.value ?? "");
+  // The blank dropdown entry is <s-option value="">—</s-option>, but the host hands back the
+  // OPTION LABEL rather than its empty value — so clearing a choice field yielded the literal
+  // "—". That is not empty, so save() WROTE it instead of deleting the metafield, and Shopify
+  // rejected it: 'Value does not exist in provided choices'. Normalise it back to empty here so
+  // picking "—" clears the field, which is the only way to remove an installment's mode.
+  const onChange = (e) => {
+    const raw = e.target.value ?? "";
+    setField(field.key, raw === BLANK_CHOICE_LABEL ? "" : raw);
+  };
   // Required staff inputs get an asterisk so the compulsory fields read clearly.
   const label = field.required ? `${field.label} *` : field.label;
 
@@ -1047,7 +1064,7 @@ function renderEditable(field, type, choices, value, setField, saving) {
   if (Array.isArray(choices) && choices.length) {
     return (
       <s-select key={field.key} label={label} value={value} disabled={disabled} onChange={onChange}>
-        <s-option value="">—</s-option>
+        <s-option value="">{BLANK_CHOICE_LABEL}</s-option>
         {choices.map((c) => (
           <s-option key={c} value={c}>
             {c}
@@ -1060,7 +1077,7 @@ function renderEditable(field, type, choices, value, setField, saving) {
   if (type === "boolean") {
     return (
       <s-select key={field.key} label={label} value={value} disabled={disabled} onChange={onChange}>
-        <s-option value="">—</s-option>
+        <s-option value="">{BLANK_CHOICE_LABEL}</s-option>
         <s-option value="true">Yes</s-option>
         <s-option value="false">No</s-option>
       </s-select>
