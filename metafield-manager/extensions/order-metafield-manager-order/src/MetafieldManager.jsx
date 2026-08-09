@@ -332,10 +332,15 @@ const PAYMENT_TRIGGER_KEYS = [
 //  - `sync-payment` → recompute net-to-collect (amount_to_be_collected) + balance (amount_pending);
 //                     also runs syncAmountToCollect, which re-reads every adjustment metafield.
 // Gold rate / jewel weights drive a full reprice; adjustment + payment fields drive a balance recompute.
+// PRICE-BEARING fields only. Gross weight and gemstone weight are DISPLAY fields — nothing in the
+// pricing engine multiplies by them (gold is rated off net weight, diamond off carats), so editing
+// one used to add a `reprice` tag that the handler then refused to act on, because it aborts unless
+// jewelcode_net_weight is present. A cosmetic correction should not be routed through the pricing
+// engine at all, let alone rejected by it.
 const REPRICE_TRIGGER_KEYS = [
   "gold_rate", "gold_rate_date", "making",
-  "jewelcode_net_weight", "jewelcode_gross_weight",
-  "jewelcode_diamond_carats", "jewelcode_gemstone_weight",
+  "jewelcode_net_weight",
+  "jewelcode_diamond_carats",
 ];
 const RECOMPUTE_TRIGGER_KEYS = [
   ...PAYMENT_TRIGGER_KEYS,
