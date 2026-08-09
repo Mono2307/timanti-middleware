@@ -302,6 +302,15 @@ reads them as unknown tags, rejecting the paste with "Tag value invalid / Tag mo
           line item properties only when delta > 5%. Use those; fall back to variant metafields.
         {% endcomment %}
         {% assign has_repriced_props = false %}
+        {% comment %}── Staff gross-weight override ────────────────────────────────────────────
+        custom.jewelcode_gross_weight is a POSITIONAL CSV across the line items (same convention as
+        gold_rate and making). Editing it is purely cosmetic — it changes what prints, never the
+        price — and it is the only correction that works after conversion, since Shopify freezes
+        line-item properties when a draft becomes an order.
+        ──{% endcomment %}
+        {% assign _gw_csv = order.metafields.custom.jewelcode_gross_weight.value | default: order.metafields.custom.jewelcode_gross_weight | append: "" %}
+        {% assign _gw_arr = _gw_csv | split: "," %}
+        {% assign gw_override = _gw_arr[forloop.index0] | default: "" | strip %}
         {% assign prop_gross_wt  = "" %}
         {% assign prop_net_wt    = "" %}
         {% assign prop_dia_cts   = "" %}
@@ -329,9 +338,13 @@ reads them as unknown tags, rejecting the paste with "Tag value invalid / Tag mo
 
           {% comment %}── Gross Wt (indicative on this advance copy → trailing * ; TBC when unknown) ──{% endcomment %}
           <td class="text-center">
-            {% if has_repriced_props and prop_gross_wt != "" %}{{ prop_gross_wt }}*
-            {% elsif line_item.variant.metafields.custom.total_metal_weight_g %}{{ line_item.variant.metafields.custom.total_metal_weight_g | round: 2 }}*
+            {% comment %}Order of trust: staff override, then the variant's gross_weight_g — the only key
+            that means GROSS — then whatever was captured on the line item. total_metal_weight_g is
+            routinely set equal to NET, so preferring it printed the net weight in the gross column.{% endcomment %}
+            {% if gw_override != "" %}{{ gw_override }}*
             {% elsif line_item.variant.metafields.custom.gross_weight_g %}{{ line_item.variant.metafields.custom.gross_weight_g | round: 2 }}*
+            {% elsif has_repriced_props and prop_gross_wt != "" %}{{ prop_gross_wt }}*
+            {% elsif line_item.variant.metafields.custom.total_metal_weight_g %}{{ line_item.variant.metafields.custom.total_metal_weight_g | round: 2 }}*
             {% elsif line_item.product.metafields.custom.total_metal_weight_g %}{{ line_item.product.metafields.custom.total_metal_weight_g | round: 2 }}*
             {% else %}<span class="tbd">TBC</span>{% endif %}
           </td>
