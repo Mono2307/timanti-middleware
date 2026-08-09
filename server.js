@@ -1599,9 +1599,12 @@ async function fetchItemMeta(item, token) {
 // Bootstraps _gold_rate from variant if not already locked. Does NOT change price.
 async function hydrateItemFromVariant(item, token) {
   const { varMf, prodMf } = await fetchItemMeta(item, token);
-  // Variant weight metafields: catalog uses net_metal_weight_g / total_metal_weight_g.
-  // Keep the legacy net_wt / gross_wt keys as fallbacks for any older variants.
-  const grossWt    = parseFloat(varMf.gross_wt || varMf.total_metal_weight_g || 0);
+  // Variant weight metafields. GROSS comes from gross_weight_g — that is the only key that means
+  // gross. `gross_wt` is a legacy key most variants do not carry, and total_metal_weight_g is
+  // frequently set equal to NET, so reading it as gross silently printed the net weight in the
+  // gross column (order #1069: gross_weight_g 6.656, total_metal_weight_g 5.45, net 5.45 — the
+  // invoice showed 5.45 for both). Prefer the explicit key, keep the others as fallbacks.
+  const grossWt    = parseFloat(varMf.gross_weight_g || varMf.gross_wt || varMf.total_metal_weight_g || 0);
   const netWt      = parseFloat(varMf.net_wt   || varMf.net_metal_weight_g   || 0);
   const diaCts     = parseFloat(prodMf.totaldiamondweight || 0);
   const gemCts     = parseFloat(prodMf.gemstone_weight    || 0);

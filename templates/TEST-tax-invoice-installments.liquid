@@ -213,6 +213,16 @@ properties (prop_*). jc_meta stays nil so its fallback branches below are simply
         {% assign prop_gross_str    = "" %}
         {% assign prop_taxable_str  = "" %}
         {% assign prop_making_str   = "" %}
+        {% comment %}── Staff gross-weight override ────────────────────────────────────────────
+        custom.jewelcode_gross_weight is a POSITIONAL CSV across the line items (same convention as
+        gold_rate and making), so index it by the loop position. This is the only way to correct a
+        gross weight AFTER conversion: Shopify freezes line-item properties when a draft becomes an
+        order — a PUT is accepted and silently ignored — so the captured _gross_wt can never be
+        edited or deleted. Purely cosmetic: it changes what prints, never the price.
+        ──{% endcomment %}
+        {% assign _gw_csv = order.metafields.custom.jewelcode_gross_weight.value | default: order.metafields.custom.jewelcode_gross_weight | append: "" %}
+        {% assign _gw_arr = _gw_csv | split: "," %}
+        {% assign gw_override = _gw_arr[forloop.index0] | default: "" | strip %}
         {% assign prop_gross_wt = "" %}
         {% assign prop_net_wt   = "" %}
         {% assign prop_dia_cts  = "" %}
@@ -243,10 +253,16 @@ properties (prop_*). jc_meta stays nil so its fallback branches below are simply
           <td class="text-center">{% if line_item.product.metafields.custom.hsn_code %}{{ line_item.product.metafields.custom.hsn_code }}{% else %}71131914{% endif %}</td>
           <td class="text-center">{{ line_item.quantity }}</td>
           <td class="text-center">
-            {% if prop_gross_wt != "" %}{{ prop_gross_wt }}
+            {% comment %}Order of trust: staff override, then the variant's own gross_weight_g, then whatever
+            was captured on the line item. The captured _gross_wt used to win, but it was written from
+            total_metal_weight_g — which is routinely set equal to NET — so it printed the net weight in
+            the gross column (order #1069: 5.45 against a real gross of 6.656). The catalogue key that
+            actually means gross now outranks it.{% endcomment %}
+            {% if gw_override != "" %}{{ gw_override }}
+            {% elsif line_item.variant.metafields.custom.gross_weight_g %}{{ line_item.variant.metafields.custom.gross_weight_g | round: 2 }}
+            {% elsif prop_gross_wt != "" %}{{ prop_gross_wt }}
             {% elsif jc_meta.gross_wt_grams %}{{ jc_meta.gross_wt_grams }}
             {% elsif line_item.variant.metafields.custom.total_metal_weight_g %}{{ line_item.variant.metafields.custom.total_metal_weight_g | round: 2 }}
-            {% elsif line_item.variant.metafields.custom.gross_weight_g %}{{ line_item.variant.metafields.custom.gross_weight_g | round: 2 }}
             {% else %}–{% endif %}
           </td>
           <td class="text-center">

@@ -362,8 +362,9 @@ reads them as unknown tags, rejecting the paste with "Tag value invalid / Tag mo
           {% comment %}── Gross Wt: line item prop first (_gross_wt), else variant metafield ──{% endcomment %}
           <td class="text-center">
             {% if prop_gross_wt != "" %}{{ prop_gross_wt }}
-            {% elsif line_item.variant.metafields.custom.total_metal_weight_g %}{{ line_item.variant.metafields.custom.total_metal_weight_g | round: 2 }}
+            {% comment %}gross_weight_g is the only key that means GROSS. total_metal_weight_g is often set equal to NET, so preferring it printed the net weight in the gross column.{% endcomment %}
             {% elsif line_item.variant.metafields.custom.gross_weight_g %}{{ line_item.variant.metafields.custom.gross_weight_g | round: 2 }}
+            {% elsif line_item.variant.metafields.custom.total_metal_weight_g %}{{ line_item.variant.metafields.custom.total_metal_weight_g | round: 2 }}
             {% elsif line_item.product.metafields.custom.total_metal_weight_g %}{{ line_item.product.metafields.custom.total_metal_weight_g | round: 2 }}
             {% else %}–{% endif %}
           </td>
