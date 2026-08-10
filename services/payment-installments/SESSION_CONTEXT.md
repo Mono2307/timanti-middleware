@@ -89,7 +89,7 @@ revert, which is bug #3.
 | Item | Note |
 |---|---|
 | **Is `orders/update` webhook registered?** | `SYSTEM_OVERVIEW.md:98` says it must be created **manually** → `/api/serial/order-serial`. Unverified — `webhooks.json` only lists the querying app's own. If absent, order-side recompute needs `POST /api/recompute-payment {orderId}`. |
-| **Do metafields resolve in Order Printer?** | I concluded they don't (hence tag fallbacks), but the first paste **failed validation**, so D195 may have printed the old template. Decisive test: strip `i1:`/`i2:` from #D195 and print. |
+| ~~Do metafields resolve in Order Printer?~~ **RESOLVED** | They do, but Order Printer Pro **caps how many it exposes** — it prints the cost fields and a limited set of metafields, which is why this codebase has tag fallbacks everywhere. The installment table needs 13 keys, well past that cap, so the `i1:`–`i4:` tags are the correct primary source, not a workaround. Confirmed by the founder 2026-08-09. |
 | **`total_metal_weight_g` = net across the catalogue?** | True on #1069's variant. If widespread, other readers still get a net weight labelled "total". |
 | **Tags are a denormalised cache** | Only refreshed by the panel's `sync-payment`. Editing installments in **Metafields Guru** or the native editor leaves them stale, silently. Argues for keeping these 12 fields out of Guru. |
 | **`_gross_wt` on drafts** | The override is display-only. Anything else reading the property (reports, `jewelcode` JSON) still sees the old value. |
