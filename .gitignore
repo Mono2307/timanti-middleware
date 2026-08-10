@@ -1,3 +1,16 @@
 node_modules/
 .env
 E2E-TEST-PLAN.md
+
+# Claude Code session state and scratch worktrees. A stale worktree here once held a full
+# second copy of the repo, which polluted every search.
+.claude/
+
+# Python bytecode — was committed by accident once.
+__pycache__/
+*.pyc
+
+# Local scratch: diff dumps, template previews, editor lock files.
+*.patch
+_*.html
+~$*
