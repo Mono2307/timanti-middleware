@@ -46,6 +46,9 @@ function repairItemFromDraft(draft, freshSpecs) {
 const processingDrafts = new Set();
 
 // When REPAIR_TEST_EMAIL is set, all repair emails (HQ + customer) go to that address only
+// All repair mail — customer AND HQ — is copied to the store inbox. Who actually
+// acts on the signed Set-Estimate / Mark-Complete links is governed by SOP, not
+// by who can see them.
 // Customer-facing repair mail is copied to the store inbox so the counter team
 // sees what the customer got. Pass { ccStore: true } on those sends; HQ mail is
 // left alone, because those carry signed Set-Estimate / Mark-Complete links and
@@ -297,7 +300,7 @@ async function handleRepairPayment(draft, { transactionId, gatewayRef }, getShop
     const completeUrl   = `${serverUrl}/repairs/set-complete?d=${draft.id}&t=${completeToken}`;
     await repairSendEmail({
       to:      hqEmail,
-      cc:      process.env.HQ_CC_EMAIL,
+      cc:      withStoreCc(process.env.HQ_CC_EMAIL),   // HQ + store; who acts on the links is an SOP matter
       subject: `Payment Received — ${draft.name} — ${customerName}`,
       html:    buildRepairHqCompleteReadyHtml({ customerName, draftRef: draft.name, amount, completeUrl })
     }).catch(err => console.error(`❌ HQ complete-link email failed for ${draft.name}:`, err.message));
@@ -372,7 +375,7 @@ async function processRepairDraftUpdate(incomingDraft, getShopifyToken, assignRe
           try {
             await repairSendEmail({
               to:      hqEmail,
-              cc:      process.env.HQ_CC_EMAIL,
+              cc:      withStoreCc(process.env.HQ_CC_EMAIL),   // HQ + store; who acts on the links is an SOP matter
               subject: `Action needed — missing order reference on ${draft.name}`,
               html:    `<div style="font-family:Arial,sans-serif;padding:24px;max-width:520px;">
                 <h2 style="font-size:18px;margin:0 0 12px;">Repair intake is on hold</h2>
@@ -419,7 +422,7 @@ async function processRepairDraftUpdate(incomingDraft, getShopifyToken, assignRe
       try {
         await repairSendEmail({
           to:      hqEmail,
-          cc:      process.env.HQ_CC_EMAIL,
+          cc:      withStoreCc(process.env.HQ_CC_EMAIL),   // HQ + store; who acts on the links is an SOP matter
           subject: `New Repair Intake — ${draft.name} — ${customerName}`,
           html:    buildRepairIntakeHtml({ customerName, customerEmail, customerPhone, draftRef: draft.name, itemDesc, notes, approveUrl })
         });
@@ -489,7 +492,7 @@ async function processRepairDraftUpdate(incomingDraft, getShopifyToken, assignRe
       try {
         await repairSendEmail({
           to:      hqEmail,
-          cc:      process.env.HQ_CC_EMAIL,
+          cc:      withStoreCc(process.env.HQ_CC_EMAIL),   // HQ + store; who acts on the links is an SOP matter
           subject: `Complimentary Repair — ${draft.name} — ${customerName}`,
           html:    buildRepairHqCompleteReadyHtml({ customerName, draftRef: draft.name, amount: null, completeUrl })
         });
@@ -533,7 +536,7 @@ async function processRepairDraftUpdate(incomingDraft, getShopifyToken, assignRe
       try {
         await repairSendEmail({
           to:      hqEmail,
-          cc:      process.env.HQ_CC_EMAIL,
+          cc:      withStoreCc(process.env.HQ_CC_EMAIL),   // HQ + store; who acts on the links is an SOP matter
           subject: `Store Payment Approved — ${draft.name} — ${customerName} — Rs.${amount}`,
           html:    buildRepairHqCompleteReadyHtml({ customerName, draftRef: draft.name, amount, completeUrl })
         });
