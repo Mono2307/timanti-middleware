@@ -5,6 +5,7 @@ const axios  = require('axios');
 const { createPaymentLink } = require('../gokwik');
 const {
   sendEmail,
+  withStoreCc,
   buildRepairEstimateHtml,
   buildRepairPaymentConfirmedHtml,
   buildRepairCompleteHtml,
@@ -45,9 +46,18 @@ function repairItemFromDraft(draft, freshSpecs) {
 const processingDrafts = new Set();
 
 // When REPAIR_TEST_EMAIL is set, all repair emails (HQ + customer) go to that address only
+// Customer-facing repair mail is copied to the store inbox so the counter team
+// sees what the customer got. Pass { ccStore: true } on those sends; HQ mail is
+// left alone, because those carry signed Set-Estimate / Mark-Complete links and
+// who may action them is a business decision, not a mailing-list one.
+//
+// While REPAIR_TEST_EMAIL is set the cc is deliberately dropped along with the
+// real recipient — nothing leaves the test inbox. Clearing that constant is what
+// switches BOTH the customer and the store copy on.
 function repairSendEmail(opts) {
-  if (!REPAIR_TEST_EMAIL) return sendEmail(opts);
-  return sendEmail({ ...opts, to: REPAIR_TEST_EMAIL, cc: undefined });
+  const { ccStore, ...rest } = opts;
+  if (REPAIR_TEST_EMAIL) return sendEmail({ ...rest, to: REPAIR_TEST_EMAIL, cc: undefined });
+  return sendEmail(ccStore ? { ...rest, cc: withStoreCc(rest.cc) } : rest);
 }
 
 // Every repair action link (set-estimate, set-complete, store-approve) is signed with this.
@@ -268,6 +278,7 @@ async function handleRepairPayment(draft, { transactionId, gatewayRef }, getShop
   if (customerEmail) {
     await repairSendEmail({
       to:      customerEmail,
+      ccStore: true,
       subject: `Payment Confirmed — Repair in Progress (${draft.name})`,
       html:    buildRepairPaymentConfirmedHtml({
         customerName,
@@ -422,6 +433,7 @@ async function processRepairDraftUpdate(incomingDraft, getShopifyToken, assignRe
       try {
         await repairSendEmail({
           to:      customerEmail,
+          ccStore: true,
           subject: `We've received your jewellery for repair`,
           html:    buildRepairReceivedHtml({ draftRef: draft.name, item: repairItemFromDraft(draft, specsCopied) })
         });
@@ -464,6 +476,7 @@ async function processRepairDraftUpdate(incomingDraft, getShopifyToken, assignRe
       try {
         await repairSendEmail({
           to:      customerEmail,
+          ccStore: true,
           subject: `Great News — Complimentary Repair Confirmed (${draft.name})`,
           html:    buildRepairFreeHtml({ customerName, draftRef: draft.name, itemDesc })
         });
@@ -507,6 +520,7 @@ async function processRepairDraftUpdate(incomingDraft, getShopifyToken, assignRe
       try {
         await repairSendEmail({
           to:      customerEmail,
+          ccStore: true,
           subject: `Repair Confirmed — We'll Be in Touch (${draft.name})`,
           html:    buildRepairStoreApprovedCustomerHtml({ customerName, draftRef: draft.name, amount })
         });
@@ -566,6 +580,7 @@ async function processRepairDraftUpdate(incomingDraft, getShopifyToken, assignRe
     try {
       await repairSendEmail({
         to:      customerEmail,
+        ccStore: true,
         subject: `Your Timanti Repair Estimate — ${draft.name}`,
         html:    buildRepairEstimateHtml({
           customerName,
@@ -672,6 +687,7 @@ async function processRepairDraftUpdate(incomingDraft, getShopifyToken, assignRe
         try {
           await repairSendEmail({
             to:      customerEmail,
+            ccStore: true,
             subject: `Your Repair is Ready — ${draft.name}`,
             html:    buildRepairReadyFinalHtml({
               draftRef:       draft.name,
@@ -717,6 +733,7 @@ async function processRepairDraftUpdate(incomingDraft, getShopifyToken, assignRe
     try {
       await repairSendEmail({
         to:      customerEmail,
+        ccStore: true,
         subject: completionSubject,
         html:    buildRepairCompleteHtml({ customerName, draftRef: draft.name, sequelId, trackingUrl, storePickup, pickupPayContext, pickupAmount })
       });

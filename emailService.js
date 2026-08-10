@@ -17,6 +17,18 @@ const supabase = createClient(
 // Core Resend sender
 // ─────────────────────────────────────────
 
+// Store inbox copied on every customer-facing after-sales email, so the counter
+// team can see exactly what the customer received without asking HQ.
+// Override per-environment with the STORE_EMAIL secret.
+const STORE_EMAIL = process.env.STORE_EMAIL || 'hsrstore@timanti.in';
+
+// Merge the store address into any cc the caller already set, de-duplicated.
+function withStoreCc(cc) {
+  const list = Array.isArray(cc) ? cc.slice() : (cc ? [cc] : []);
+  if (!list.includes(STORE_EMAIL)) list.push(STORE_EMAIL);
+  return list;
+}
+
 async function sendEmail({ to, subject, html, cc }) {
   const payload = { from: 'Timanti <hello@timanti.in>', to, subject, html };
   if (cc) payload.cc = Array.isArray(cc) ? cc : [cc];
@@ -1057,4 +1069,4 @@ function buildRepairStoreApprovedCustomerHtml({ customerName, draftRef, amount }
 </html>`;
 }
 
-module.exports = { sendEmail, sendDepositEmail, buildDepositEmailHtml, buildRepairEstimateHtml, buildRepairPaymentConfirmedHtml, buildRepairCompleteHtml, buildCreditNoteHtml, buildExchangeNoteHtml, buildRepairIntakeHtml, buildRepairAcknowledgementHtml, buildRepairFreeHtml, buildRepairHqCompleteReadyHtml, buildRepairStoreApprovedCustomerHtml };
+module.exports = { sendEmail, sendDepositEmail, buildDepositEmailHtml, buildRepairEstimateHtml, buildRepairPaymentConfirmedHtml, buildRepairCompleteHtml, buildCreditNoteHtml, buildExchangeNoteHtml, buildRepairIntakeHtml, buildRepairAcknowledgementHtml, buildRepairFreeHtml, buildRepairHqCompleteReadyHtml, buildRepairStoreApprovedCustomerHtml, STORE_EMAIL, withStoreCc };

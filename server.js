@@ -4,7 +4,7 @@ const express = require('express');
 const cors    = require('cors');
 const axios   = require('axios');
 const { createClient } = require('@supabase/supabase-js');
-const { sendEmail, sendDepositEmail, buildCreditNoteHtml, buildExchangeNoteHtml } = require('./emailService');
+const { sendEmail, sendDepositEmail, buildCreditNoteHtml, buildExchangeNoteHtml, withStoreCc } = require('./emailService');
 const { handlePoWebhook } = require('./services/po-ops/webhook');
 const { handlePoAction }  = require('./services/po-ops/action');
 const { syncDraftOrderToSheet, syncOrderToSheet, syncAllDraftOrders, syncAllOrders, removeDraftFromSheet, pruneOrphans } = require('./services/po-ops/sync');
@@ -5145,6 +5145,7 @@ app.post('/api/cn-email', async (req, res) => {
   try {
     await sendEmail({
       to:      customerEmail,
+      cc:      withStoreCc(),   // store inbox sees every voucher it issues
       subject: `Your Timanti Voucher — Rs.${creditValue} | Code: ${cnNumber}`,
       html:    buildCreditNoteHtml({ customerName, cnNumber, creditValue, validUntil, originalOrder })
     });
@@ -5169,6 +5170,7 @@ app.post('/api/exc-email', async (req, res) => {
   try {
     await sendEmail({
       to:      customerEmail,
+      cc:      withStoreCc(),   // store inbox sees every exchange note it applies
       subject: `Your Timanti Exchange Note — Rs.${excValue} applied | ${excNumber}`,
       html:    buildExchangeNoteHtml({ customerName, excNumber, excValue, oldOrder, newOrder })
     });
