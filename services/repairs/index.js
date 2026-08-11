@@ -660,11 +660,18 @@ async function processRepairDraftUpdate(incomingDraft, getShopifyToken, assignRe
     // A prepaid repair that lands exactly on estimate has no delta and falls through to the
     // original email, which already says the right thing.
     const delta = Math.round(paidAmount - finalCost);
+    // Every completed repair gets the v2 email. The old completion template is only
+    // reachable if we cannot establish ANY amount at all.
+    //
+    // delta === 0 is the common case, not an edge one: the Mark Complete form is
+    // pre-filled with the estimate, so "nothing changed" is a single click. It used
+    // to fall through all three branches and silently drop back to the v1 email.
     let readyFinalMode = null;
     if (finalCost > 0) {
-      if (paidAmount <= 0)   readyFinalMode = 'collect';
-      else if (delta > 0)    readyFinalMode = 'refund';
-      else if (delta < 0)    readyFinalMode = 'balance';
+      if (paidAmount <= 0)   readyFinalMode = 'collect';   // never prepaid — pay at the counter
+      else if (delta > 0)    readyFinalMode = 'refund';    // overpaid  — money owed back
+      else if (delta < 0)    readyFinalMode = 'balance';   // underpaid — money owed to us
+      else                   readyFinalMode = 'settled';   // exact      — nothing further to pay
     }
 
     if (readyFinalMode) {

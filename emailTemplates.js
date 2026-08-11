@@ -369,6 +369,14 @@ function buildRepairReadyFinalHtml({
           'Or pay when you collect your piece at the store'
         ])
     );
+  } else if (mode === 'settled') {
+    // Prepaid and the final cost matched the estimate. The commonest outcome, so it
+    // gets a proper close rather than silence: the numbers reconcile and nothing is owed.
+    rows = [
+      { label: 'Estimated charges',    value: money(estimateAmount) },
+      { label: 'Final charges',        value: money(finalAmount) },
+      { label: 'Nothing further to pay', value: money(0), total: true }
+    ];
   } else {
     rows = [
       { label: 'Estimated charges',    value: money(estimateAmount) },
