@@ -3,7 +3,7 @@ const path    = require('path');
 const express = require('express');
 const cors    = require('cors');
 const axios   = require('axios');
-const { createClient } = require('@supabase/supabase-js');
+const { config, flagOn } = require('./src/core/config');
 const { sendEmail, sendDepositEmail, buildCreditNoteHtml, buildExchangeNoteHtml, withStoreCc } = require('./src/integrations/email');
 const { handlePoWebhook } = require('./src/modules/procurement/webhook');
 const { handlePoAction }  = require('./src/modules/procurement/action');
@@ -21,27 +21,28 @@ app.use(cors());
 app.use(express.json({ verify: (req, _res, buf) => { req.rawBody = buf.toString('utf8'); } }));
 app.use(express.text({ type: '*/*' }));
 
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_KEY
-);
+// Shared primitives live in src/core/ — one definition, one place to change.
+const { supabase } = require('./src/core/supabase');
+const {
+  getShopifyToken, initShopifyToken, shopifyHeaders,
+  getBuyingRateTable, buyingRateFor,
+} = require('./src/core/shopify');
 
-const AUTO_PUSH_TO_TERMINAL       = process.env.AUTO_PUSH_TO_TERMINAL       === 'true';
-const AUTO_CONVERT_DRAFT_TO_ORDER = process.env.AUTO_CONVERT_DRAFT_TO_ORDER === 'true';
-const AUTO_SEND_DRAFT_INVOICE     = process.env.AUTO_SEND_DRAFT_INVOICE     === 'true';
-const AUTO_SEND_DEPOSIT_EMAIL     = process.env.AUTO_SEND_DEPOSIT_EMAIL     === 'true';
+const AUTO_PUSH_TO_TERMINAL       = config.auto.pushToTerminal;
+const AUTO_CONVERT_DRAFT_TO_ORDER = config.auto.convertDraftToOrder;
+const AUTO_SEND_DRAFT_INVOICE     = config.auto.sendDraftInvoice;
+const AUTO_SEND_DEPOSIT_EMAIL     = config.auto.sendDepositEmail;
 
 // Serialization feature flags — wire one doc type at a time.
 // Lenient parse so True/TRUE/1/yes/whitespace all count as on.
-const flagOn = (v) => ['true', '1', 'yes', 'on'].includes(String(v || '').trim().toLowerCase());
-const SERIAL_CUSTOMER_ORDER = flagOn(process.env.SERIAL_CUSTOMER_ORDER);
-const SERIAL_REPAIR         = flagOn(process.env.SERIAL_REPAIR);
-const SERIAL_MEMO_TRANSFER  = flagOn(process.env.SERIAL_MEMO_TRANSFER);
-const SERIAL_PO             = flagOn(process.env.SERIAL_PO);
+const SERIAL_CUSTOMER_ORDER = config.serial.customerOrder;
+const SERIAL_REPAIR         = config.serial.repair;
+const SERIAL_MEMO_TRANSFER  = config.serial.memoTransfer;
+const SERIAL_PO             = config.serial.po;
 
 // Customer-order serials only mint for orders created on/after this cutoff (IST).
 // Overridable via env; default = 1 Aug 2026 so July (and earlier) orders are never auto-numbered.
-const SERIAL_CUSTOMER_ORDER_START = process.env.SERIAL_CUSTOMER_ORDER_START || '2026-08-01T00:00:00+05:30';
+const SERIAL_CUSTOMER_ORDER_START = config.serial.customerOrderStart;
 
 // Typeform in-store customer capture -> Shopify customer + metafields.
 app.post('/api/webhooks/typeform/customer-capture',
@@ -92,66 +93,6 @@ async function resolveStoreForLocation(shopifyLocationId, terminalTag) {
   return null;
 }
 
-// ─────────────────────────────────────────
-// Shopify Token Manager
-// ─────────────────────────────────────────
-
-let cachedToken = null;
-let tokenFetchedAt = null;
-
-async function getShopifyToken() {
-  const now = Date.now();
-  if (cachedToken && tokenFetchedAt && (now - tokenFetchedAt) < 23 * 60 * 60 * 1000) return cachedToken;
-  if (process.env.SHOPIFY_CLIENT_ID && process.env.SHOPIFY_CLIENT_SECRET) {
-    try {
-      const response = await axios.post(
-        `${process.env.SHOPIFY_STORE_URL}/admin/oauth/access_token`,
-        { client_id: process.env.SHOPIFY_CLIENT_ID, client_secret: process.env.SHOPIFY_CLIENT_SECRET, grant_type: 'client_credentials' },
-        { timeout: 10000 }
-      );
-      const newToken = response.data.access_token;
-      if (newToken) {
-        cachedToken = newToken; tokenFetchedAt = now;
-        await supabase.from('config').upsert({ key: 'shopify_access_token', value: newToken, updated_at: new Date().toISOString() });
-        console.log('✅ Shopify token refreshed');
-        return newToken;
-      }
-    } catch (err) { console.error('⚠️ Shopify token refresh failed:', err.response?.data || err.message); }
-  }
-  try {
-    const { data } = await supabase.from('config').select('value').eq('key', 'shopify_access_token').single();
-    if (data?.value) { cachedToken = data.value; tokenFetchedAt = now; return data.value; }
-  } catch (err) { console.warn('Supabase token load failed:', err.message); }
-  if (process.env.SHOPIFY_ACCESS_TOKEN) return process.env.SHOPIFY_ACCESS_TOKEN;
-  throw new Error('No Shopify token available');
-}
-
-async function initShopifyToken() {
-  console.log('🔑 Initialising Shopify token...');
-  try {
-    await getShopifyToken();
-    setInterval(async () => { cachedToken = null; tokenFetchedAt = null; await getShopifyToken(); }, 23 * 60 * 60 * 1000);
-  } catch (err) { console.error('❌ Shopify token init failed:', err.message); }
-}
-
-// ── Old-gold buying rate table (Supabase config key 'buying_rate_table') ──
-// Built daily from the 24kt pure rate in /api/trigger-price-update. Cached in memory.
-let _buyingTableCache = null, _buyingTableAt = null;
-async function getBuyingRateTable() {
-  const now = Date.now();
-  if (_buyingTableCache && _buyingTableAt && (now - _buyingTableAt) < 60 * 60 * 1000) return _buyingTableCache;
-  try {
-    const { data } = await supabase.from('config').select('value').eq('key', 'buying_rate_table').single();
-    if (!data?.value) return null;
-    _buyingTableCache = JSON.parse(data.value); _buyingTableAt = now;
-    return _buyingTableCache;
-  } catch (err) { console.warn('Buying rate table load failed:', err.message); return null; }
-}
-// Buy-back rate for a (possibly fractional) karat: karat/24 × pure × (1 − haircut).
-function buyingRateFor(table, purity) {
-  if (!table || !(purity > 0) || purity > 24) return null;
-  return +((purity / 24) * table.base_24k * (1 - table.haircut_pct / 100)).toFixed(2);
-}
 
 // ─────────────────────────────────────────
 // Pine Helpers
