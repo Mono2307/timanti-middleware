@@ -17,7 +17,10 @@ const {
   buildRepairStoreApprovedCustomerHtml,
 } = require('../../integrations/email');
 
-const { buildRepairReceivedHtml, buildRepairReadyFinalHtml } = require('../../integrations/email/templates');
+const {
+  buildRepairReceivedHtml, buildRepairReadyFinalHtml,
+  buildRepairEstimateV2Html, buildRepairConfirmedHtml, buildVoucherV2Html,
+} = require('../../integrations/email/templates');
 
 const REPAIR_TEST_EMAIL = 'monodeep.dutta@timanti.in'; // revert after testing
 
@@ -282,12 +285,13 @@ async function handleRepairPayment(draft, { transactionId, gatewayRef }, getShop
       to:      customerEmail,
       ccStore: true,
       subject: `Payment Confirmed — Repair in Progress (${draft.name})`,
-      html:    buildRepairPaymentConfirmedHtml({
-        customerName,
-        draftRef:      draft.name,
+      // paid: true — this handler only runs after a payment has actually landed, so the
+      // template's 'Amount received' wording is always the correct one here.
+      html:    buildRepairConfirmedHtml({
+        draftRef: draft.name,
+        item:     repairItemFromDraft(draft),
         amount,
-        transactionId: transactionId || gatewayRef || 'N/A',
-        paymentMethod: 'GoKwik Link'
+        paid:     true
       })
     });
   }
@@ -584,12 +588,11 @@ async function processRepairDraftUpdate(incomingDraft, getShopifyToken, assignRe
         to:      customerEmail,
         ccStore: true,
         subject: `Your Timanti Repair Estimate — ${draft.name}`,
-        html:    buildRepairEstimateHtml({
-          customerName,
-          draftRef:        draft.name,
-          itemDescription: itemDesc,
-          amount:          Math.round(amount).toString(),
-          paymentUrl:      shortUrl,
+        html:    buildRepairEstimateV2Html({
+          draftRef:   draft.name,
+          item:       repairItemFromDraft(draft),
+          amount:     Math.round(amount).toString(),
+          paymentUrl: shortUrl,
           approveStoreUrl,
           whatsappUrl
         })
@@ -1435,7 +1438,7 @@ h2{margin:0 0 12px;font-size:20px;}p{color:#555;font-size:14px;line-height:1.6;}
       await sendEmail({
         to:      order.email,
         subject: `Your Timanti Credit Note — ${mf.cn_number}`,
-        html:    buildCreditNoteHtml({
+        html:    buildVoucherV2Html({
           customerName:  order.billing_address?.name || order.email,
           cnNumber:      mf.cn_number,
           creditValue:   mf.cn_value,
