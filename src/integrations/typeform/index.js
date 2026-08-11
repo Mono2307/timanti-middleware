@@ -7,7 +7,7 @@
 // can be smoke-tested before the secret is configured).
 //
 // Wire-up in server.js:
-//   const { handleTypeformWebhook } = require('./services/typeform');
+//   const { handleTypeformWebhook } = require('./src/integrations/typeform');
 //   app.post('/api/webhooks/typeform/customer-capture',
 //     (req, res) => handleTypeformWebhook(req, res, { supabase, getShopifyToken }));
 

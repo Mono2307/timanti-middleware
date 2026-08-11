@@ -40,7 +40,7 @@ RUN apt-get update -qq && \
 COPY --from=build /app /app
 
 # Install Python dependencies for price update
-RUN pip3 install --no-cache-dir -r /app/price_update/requirements.txt --break-system-packages
+RUN pip3 install --no-cache-dir -r /app/src/jobs/price-update/requirements.txt --break-system-packages
 
 # Ensure Outputs dir exists as fallback when /data volume is not mounted
 RUN mkdir -p /app/Outputs

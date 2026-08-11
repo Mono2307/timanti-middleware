@@ -4,17 +4,17 @@ const express = require('express');
 const cors    = require('cors');
 const axios   = require('axios');
 const { createClient } = require('@supabase/supabase-js');
-const { sendEmail, sendDepositEmail, buildCreditNoteHtml, buildExchangeNoteHtml, withStoreCc } = require('./emailService');
-const { handlePoWebhook } = require('./services/po-ops/webhook');
-const { handlePoAction }  = require('./services/po-ops/action');
-const { syncDraftOrderToSheet, syncOrderToSheet, syncAllDraftOrders, syncAllOrders, removeDraftFromSheet, pruneOrphans } = require('./services/po-ops/sync');
-const { batchRaisePo } = require('./services/po-ops/batch');
-const { createPaymentLink: createGokwikLink, cancelPaymentLink: cancelGokwikLink } = require('./services/gokwik');
-const { sendSMS } = require('./services/sms');
-const { registerRepairRoutes, handleRepairPayment, handleRepairDraftUpdate } = require('./services/repairs');
-const serialization = require('./services/serialization');
-const creditInstruments = require('./services/exchange-cn/credit_instruments');
-const { handleTypeformWebhook } = require('./services/typeform');
+const { sendEmail, sendDepositEmail, buildCreditNoteHtml, buildExchangeNoteHtml, withStoreCc } = require('./src/integrations/email');
+const { handlePoWebhook } = require('./src/modules/procurement/webhook');
+const { handlePoAction }  = require('./src/modules/procurement/action');
+const { syncDraftOrderToSheet, syncOrderToSheet, syncAllDraftOrders, syncAllOrders, removeDraftFromSheet, pruneOrphans } = require('./src/modules/procurement/sync');
+const { batchRaisePo } = require('./src/modules/procurement/batch');
+const { createPaymentLink: createGokwikLink, cancelPaymentLink: cancelGokwikLink } = require('./src/integrations/gokwik');
+const { sendSMS } = require('./src/integrations/sms');
+const { registerRepairRoutes, handleRepairPayment, handleRepairDraftUpdate } = require('./src/modules/after-sales');
+const serialization = require('./src/modules/serialization');
+const creditInstruments = require('./src/modules/adjustments/credit_instruments');
+const { handleTypeformWebhook } = require('./src/integrations/typeform');
 
 const app = express();
 app.use(cors());
@@ -492,13 +492,13 @@ async function getCollectionBase(draftOrderId, fallbackTotal) {
   }
 }
 
-// Payment installments — pure helpers live in services/payment-installments/installments.js so the
+// Payment installments — pure helpers live in src/modules/payments/installments.js so the
 // backfill script and unit tests can use the same arithmetic. See that file for the data model.
 const {
   MAX_INSTALLMENTS, readInstallments, sumInstallments, installmentModes, installmentLegPatch,
   materializeLegacyLeg,
-} = require('./services/payment-installments/installments');
-const backfillInstallments = require('./services/payment-installments/backfill-installments');
+} = require('./src/modules/payments/installments');
+const backfillInstallments = require('./src/modules/payments/backfill-installments');
 
 // What a draft has been paid, in Rs — read from the metafields. The metafields are the surface
 // staff type into and the invoice reads, so they are the union of every payment route: the panel
@@ -4678,9 +4678,9 @@ app.get('/api/price-update-diag', (req, res) => {
     'import requests; print("requests: OK")',
     'import resend; print("resend: OK")',
     'from pathlib import Path',
-    'print("orchestrator:", Path("/app/price_update/orchestrator.py").exists())',
-    'print("snapshot:", Path("/app/price_update/shopify_snapshot.py").exists())',
-    'print("importer:", Path("/app/price_update/import_from_preview.mjs").exists())',
+    'print("orchestrator:", Path("/app/src/jobs/price-update/orchestrator.py").exists())',
+    'print("snapshot:", Path("/app/src/jobs/price-update/shopify_snapshot.py").exists())',
+    'print("importer:", Path("/app/src/jobs/price-update/import_from_preview.mjs").exists())',
     'print("SUPABASE_KEY set:", bool(os.environ.get("SUPABASE_SERVICE_KEY")))',
     'print("RESEND_API_KEY set:", bool(os.environ.get("RESEND_API_KEY")))',
     'print("FROM_EMAIL set:", bool(os.environ.get("FROM_EMAIL")))',
@@ -4708,7 +4708,7 @@ function _spawnPriceUpdate(extraArgs = []) {
   const fs = require('fs');
   _priceUpdateRunning = true;
   try { fs.writeFileSync(PRICE_UPDATE_FLAG, String(process.pid)); } catch (_) {}
-  const proc = spawn('python3', ['/app/price_update/orchestrator.py', ...extraArgs], {
+  const proc = spawn('python3', ['/app/src/jobs/price-update/orchestrator.py', ...extraArgs], {
     detached: false,
     stdio:    ['ignore', 'pipe', 'pipe'],
   });
@@ -5036,12 +5036,12 @@ app.post('/api/backfill-order-tags', async (req, res) => {
 // ─────────────────────────────────────────
 
 // Reporting module — single entry point for every report builder (sales, counters, recon).
-const reports = require('./services/reporting/reports');
+const reports = require('./src/modules/reporting/reports');
 const { runRecon, reconToCSV } = reports;
 
 app.get('/api/recon', async (req, res) => {
   try {
-    const reconDir = path.join(__dirname, 'Recon Test');
+    const reconDir = path.join(__dirname, 'src', 'data', 'recon');
     const token    = await getShopifyToken();
     const rows     = await runRecon({ dir: reconDir, storeUrl: process.env.SHOPIFY_STORE_URL, token });
     if ((req.query.format || '').toLowerCase() === 'json') {
@@ -5058,7 +5058,7 @@ app.get('/api/recon', async (req, res) => {
 
 // POST /api/recon   body: { files: [{ name, contentBase64 }, ...], format?: 'json'|'csv' }
 // Reconcile against UPLOADED exports instead of the CSVs baked into the image. GET /api/recon
-// reads /app/Recon Test, which only changes when the image is rebuilt — so refreshing the
+// reads /app/src/data/recon, which only changes when the image is rebuilt — so refreshing the
 // monthly dumps used to mean a commit and a deploy. Posting the files runs the identical
 // matcher over them, so dropping new exports somewhere and posting them is enough.
 // Same file-name conventions as the folder ("All transactions", "MPR", "transaction-report",

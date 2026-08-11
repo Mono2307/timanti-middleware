@@ -13,7 +13,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 const { runRecon, toCSV: reconToCSV } = require('./recon');
-const { readInstallments, installmentModes } = require('../payment-installments/installments');
+const { readInstallments, installmentModes } = require('../payments/installments');
 
 // ── Small helpers ────────────────────────────────────────────────────────────
 

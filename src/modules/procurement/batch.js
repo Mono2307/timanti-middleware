@@ -2,7 +2,7 @@
 
 const crypto = require('crypto');
 const axios  = require('axios');
-const { sendEmail } = require('../../emailService');
+const { sendEmail } = require('../../integrations/email');
 
 const HQ_EMAIL        = process.env.HQ_EMAIL;
 const HQ_CC_EMAIL     = process.env.HQ_CC_EMAIL;

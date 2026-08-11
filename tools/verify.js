@@ -100,8 +100,8 @@ run('dockerfile — referenced paths still exist', () => {
 
   // Runtime paths the server reads or spawns — these break silently, not at build time.
   const runtime = [
-    ['price_update/orchestrator.py', 'spawned by /api/trigger-price-update'],
-    ['Recon Test',                   'read by GET /api/recon'],
+    ['src/jobs/price-update/orchestrator.py', 'spawned by /api/trigger-price-update'],
+    ['src/data/recon',                'read by GET /api/recon'],
   ];
   for (const [p, why] of runtime) {
     checked.push(p);

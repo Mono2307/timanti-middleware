@@ -2,7 +2,7 @@
 
 const crypto = require('crypto');
 const axios  = require('axios');
-const { sendEmail } = require('../../emailService');
+const { sendEmail } = require('../../integrations/email');
 
 const WEBHOOK_SECRET  = process.env.SHOPIFY_WEBHOOK_SECRET;
 const HQ_EMAIL        = process.env.HQ_EMAIL;

@@ -2,7 +2,7 @@
 
 const crypto = require('crypto');
 const axios  = require('axios');
-const { createPaymentLink } = require('../gokwik');
+const { createPaymentLink } = require('../../integrations/gokwik');
 const {
   sendEmail,
   withStoreCc,
@@ -16,9 +16,9 @@ const {
   buildRepairHqCompleteReadyHtml,
   buildRepairStoreApprovedCustomerHtml,
   buildRepairReadyFinalHtml
-} = require('../../emailService');
+} = require('../../integrations/email');
 
-const { buildRepairReceivedHtml } = require('../../emailTemplates');
+const { buildRepairReceivedHtml } = require('../../integrations/email/templates');
 
 const REPAIR_TEST_EMAIL = 'monodeep.dutta@timanti.in'; // revert after testing
 
