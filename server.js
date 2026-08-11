@@ -29,7 +29,7 @@ app.use(express.text({ type: '*/*' }));
 // Shared primitives live in src/core/ — one definition, one place to change.
 const { supabase } = require('./src/core/supabase');
 const {
-  getShopifyToken, initShopifyToken, shopifyHeaders,
+  getShopifyToken, initShopifyToken, getTokenState, shopifyHeaders,
   getBuyingRateTable, buyingRateFor,
 } = require('./src/core/shopify');
 
@@ -690,8 +690,8 @@ app.get('/api/test-db', async (req, res) => {
       autoPushToTerminal:     AUTO_PUSH_TO_TERMINAL,
       pinePaymentMode:        process.env.PINE_PAYMENT_MODE || 'integer',
       pinePaymentModeValue:   getPinePaymentMode(),
-      shopifyTokenCached:     !!cachedToken,
-      shopifyTokenAgeMinutes: tokenFetchedAt ? Math.round((Date.now() - tokenFetchedAt) / 60000) : null
+      shopifyTokenCached:     getTokenState().cached,
+      shopifyTokenAgeMinutes: getTokenState().ageMinutes
     },
     env: {
       supabaseUrl:         process.env.SUPABASE_URL          ? 'SET' : 'MISSING',

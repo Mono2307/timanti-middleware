@@ -55,6 +55,21 @@ async function getShopifyToken() {
   throw new Error('No Shopify token available');
 }
 
+/**
+ * Diagnostic view of the token cache, for /api/test-db.
+ *
+ * Exposed as a function rather than the raw `cachedToken` / `tokenFetchedAt` variables: those are
+ * module-private, and a caller holding a reference would see a stale snapshot after a refresh.
+ * (server.js read them directly before the extraction, which is how /api/test-db came to throw
+ * a ReferenceError once they moved here.)
+ */
+function getTokenState() {
+  return {
+    cached: !!cachedToken,
+    ageMinutes: tokenFetchedAt ? Math.round((Date.now() - tokenFetchedAt) / 60000) : null,
+  };
+}
+
 async function initShopifyToken() {
   log.info('shopify', 'initialising token...');
   try {
@@ -119,7 +134,7 @@ function buyingRateFor(table, purity) {
 
 module.exports = {
   API_VERSION,
-  getShopifyToken, initShopifyToken,
+  getShopifyToken, initShopifyToken, getTokenState,
   shopifyHeaders, restUrl, rest, getJson, postJson, putJson, deleteJson, graphql,
   getBuyingRateTable, buyingRateFor,
 };
