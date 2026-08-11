@@ -484,15 +484,9 @@ function determineRole(amount, entity) {
 // intra-state → CGST+SGST 1.5% each, inter-state → IGST 3%. Duplicated (not imported from reports.js)
 // to avoid a circular require, since reports.js requires this module.
 
-function supplierState(stateCode) { return String(stateCode || '').split('-')[0].trim().toUpperCase() || 'KA'; }
-function gstSplit(taxable, supplier, dest) {
-  const sup = supplierState(supplier);
-  const d   = String(dest || '').trim().toUpperCase() || sup;
-  const t   = Math.round(taxable * 100) / 100;
-  return d === sup
-    ? { igst: 0,         cgst: +(t * 0.015).toFixed(2), sgst: +(t * 0.015).toFixed(2) }
-    : { igst: +(t * 0.03).toFixed(2), cgst: 0,          sgst: 0 };
-}
+// GST comes from src/core/tax.js — this module used to carry its own copy that rounded
+// half-paisa amounts DOWN, disagreeing with reports.js by 1p on 4,476 of 1.5M cases.
+const { gstSplit, supplierState } = require('../../core/tax');
 
 // ── Row builder ───────────────────────────────────────────────────────────────
 

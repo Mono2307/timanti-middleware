@@ -15,10 +15,9 @@ const {
   buildRepairFreeHtml,
   buildRepairHqCompleteReadyHtml,
   buildRepairStoreApprovedCustomerHtml,
-  buildRepairReadyFinalHtml
 } = require('../../integrations/email');
 
-const { buildRepairReceivedHtml } = require('../../integrations/email/templates');
+const { buildRepairReceivedHtml, buildRepairReadyFinalHtml } = require('../../integrations/email/templates');
 
 const REPAIR_TEST_EMAIL = 'monodeep.dutta@timanti.in'; // revert after testing
 

@@ -22,21 +22,9 @@ const r2   = (v) => Math.round((num(v) + Number.EPSILON) * 100) / 100;
 const fmtDay = (iso) => (iso ? new Date(iso).toLocaleDateString('en-IN') : '');
 
 // Bare supplier/place-of-supply state from the compound store code: "KA-HSR" → "KA".
-function supplierState(stateCode) {
-  return String(stateCode || '').split('-')[0].trim().toUpperCase() || 'KA';
-}
-const normState = (s) => String(s || '').trim().toUpperCase();
-
-// GST split on a taxable base — mirrors tax-invoice.liquid: flat 3%, intra-state → CGST+SGST 1.5%
-// each, inter-state → IGST 3%. `supplier` is the place-of-supply store state; `dest` the shipping state.
-function gstSplit(taxable, supplier, dest) {
-  const sup = supplierState(supplier);
-  const d   = normState(dest) || sup;
-  const t   = r2(taxable);
-  return d === sup
-    ? { igst: 0,          cgst: r2(t * 0.015), sgst: r2(t * 0.015) }
-    : { igst: r2(t * 0.03), cgst: 0,           sgst: 0 };
-}
+// GST + state normalisation come from src/core/tax.js, shared with recon.js so both reports
+// can never disagree on tax again. Rates: flat 3%, intra-state CGST+SGST 1.5% each.
+const { gstSplit, supplierState, normState } = require('../../core/tax');
 
 // Read a numeric line-item property from a {name/key,value} array (strips the "Rs" prefix).
 function lineProp(attrs, name) {
