@@ -5,6 +5,7 @@ const cors    = require('cors');
 const axios   = require('axios');
 const { config, flagOn } = require('./src/core/config');
 const { log } = require('./src/core/logger');
+const { getMetafieldType, updateDraftOrderMetafields, updateOrderMetafields } = require('./src/core/metafields');
 const { sendEmail, sendDepositEmail, buildCreditNoteHtml, buildExchangeNoteHtml, withStoreCc } = require('./src/integrations/email');
 const { handlePoWebhook } = require('./src/modules/procurement/webhook');
 const { handlePoAction }  = require('./src/modules/procurement/action');
@@ -196,100 +197,9 @@ async function tagShopifyDraftOrder(shopifyDraftId, amountPaid, amountPending, s
 // simultaneously fully paid and partially paid depending on which surface you asked.
 const PAID_EPSILON = 1;
 
-function getMetafieldType(key) {
-  // gold_rate and making are single_line_text so they can hold a positional, comma-separated list
-  // ("9713,10200") for multi-product reprice. Readers parseFloat each position regardless of type.
-  if (key === 'gold_rate' || key === 'making') return 'single_line_text_field';
-  // installment_N_value / _date — the payment legs. _mode and _type fall through to text.
-  if (/^installment_[1-9]\d*_value$/.test(key)) return 'number_decimal';
-  if (/^installment_[1-9]\d*_date$/.test(key))  return 'date';
-  if (key === 'amount_paid' || key === 'amount_paid_final' || key === 'amount_pending' ||
-      key === 'exchange_note_value' || key === 'voucher_value' || key === 'amount_to_be_collected' ||
-      key === 'old_gold_value' || key === 'old_gold_weight' || key === 'old_gold_purity' ||
-      key === 'gross_value' || key === 'discount_applied' || key === 'discount_rate' ||
-      key === 'advance') return 'number_decimal';
-  if (key === 'is_finalized') return 'boolean';
-  if (key === 'gold_rate_date') return 'date_time';
-  if (key === 'advance_date') return 'date';
-  if (key === 'serial_no') return 'number_integer';
-  return 'single_line_text_field';
-}
+// Metafield read/write lives in src/core/metafields.js — one writer for both draft_orders
+// and orders, which used to be two near-identical copies here.
 
-async function updateDraftOrderMetafields(draftOrderId, fields) {
-  try {
-    const token = await getShopifyToken();
-    const headers = { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' };
-
-    // Fetch existing metafields so we can UPDATE by ID rather than create (Shopify 422s on duplicate key)
-    const { data: existing } = await axios.get(
-      `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}/metafields.json`,
-      { headers: { 'X-Shopify-Access-Token': token }, timeout: 10000 }
-    );
-    const existingById = {};
-    for (const mf of (existing.metafields || [])) {
-      if (mf.namespace === 'custom') existingById[mf.key] = mf.id;
-    }
-
-    for (const [key, value] of Object.entries(fields)) {
-      if (value === null || value === undefined || String(value).trim() === '') continue;
-      const existingId = existingById[key];
-      if (existingId) {
-        await axios.put(
-          `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/metafields/${existingId}.json`,
-          { metafield: { id: existingId, value: String(value), type: getMetafieldType(key) } },
-          { headers, timeout: 10000 }
-        );
-      } else {
-        await axios.post(
-          `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}/metafields.json`,
-          { metafield: { namespace: 'custom', key, value: String(value), type: getMetafieldType(key) } },
-          { headers, timeout: 10000 }
-        );
-      }
-    }
-    console.log(`✅ Metafields updated for draft ${draftOrderId}`, Object.keys(fields));
-  } catch (err) {
-    console.error('❌ Metafield update failed for draft', draftOrderId, ':', err.response?.data || err.message);
-  }
-}
-
-// Order-level metafield writer (mirrors updateDraftOrderMetafields for the `orders` resource). Used to
-// FREEZE reproducible values on the order (gross_value / discount_applied / voucher_value) that the tax
-// invoice and reconciliation read after the draft is gone. Accepts an optional token to reuse a webhook's.
-async function updateOrderMetafields(orderId, fields, tokenArg) {
-  try {
-    const token = tokenArg || await getShopifyToken();
-    const headers = { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' };
-    const { data: existing } = await axios.get(
-      `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/orders/${orderId}/metafields.json`,
-      { headers: { 'X-Shopify-Access-Token': token }, timeout: 10000 }
-    );
-    const existingById = {};
-    for (const mf of (existing.metafields || [])) {
-      if (mf.namespace === 'custom') existingById[mf.key] = mf.id;
-    }
-    for (const [key, value] of Object.entries(fields)) {
-      if (value === null || value === undefined || String(value).trim() === '') continue;
-      const existingId = existingById[key];
-      if (existingId) {
-        await axios.put(
-          `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/metafields/${existingId}.json`,
-          { metafield: { id: existingId, value: String(value), type: getMetafieldType(key) } },
-          { headers, timeout: 10000 }
-        );
-      } else {
-        await axios.post(
-          `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/orders/${orderId}/metafields.json`,
-          { metafield: { namespace: 'custom', key, value: String(value), type: getMetafieldType(key) } },
-          { headers, timeout: 10000 }
-        );
-      }
-    }
-    console.log(`✅ Metafields updated for order ${orderId}`, Object.keys(fields));
-  } catch (err) {
-    console.error('❌ Metafield update failed for order', orderId, ':', err.response?.data || err.message);
-  }
-}
 
 async function sendDraftOrderInvoice(draftOrderId) {
   try {
