@@ -276,11 +276,14 @@ def _write_summary(run_id, gold_rate, snapshot_stats, import_stats, log_path):
 
 # ── Core pipeline (callable directly or via CLI) ──────────────────────────────
 
-def run(test_gati: str = None):
+def run(test_gati: str = None, dry_run: bool = False):
     """
     Run the full price update pipeline.
     Call this directly from code (e.g. gold_rate_form) or use main() for CLI.
     test_gati: restrict to a single GATI ID (e.g. 'RG00001'), or None for all.
+    dry_run:   build the preview CSV and stop — nothing is written to Shopify
+               and no email is sent. Use it to eyeball the price breakup
+               (gold / diamond / making / gemstone / GST) before a live run.
     """
     if test_gati:
         test_gati = test_gati.upper().strip()
@@ -291,6 +294,8 @@ def run(test_gati: str = None):
 
     log.info('=' * 70)
     run_label = f'TEST RUN ({test_gati})' if test_gati else 'DAILY PRICE UPDATE'
+    if dry_run:
+        run_label += '  [DRY RUN — no writes to Shopify]'
     log.info(f'AURACARAT {run_label}  —  RUN {run_id}')
     log.info('=' * 70)
 
@@ -319,11 +324,21 @@ def run(test_gati: str = None):
         # 3. Snapshot + price recalculation
         from shopify_snapshot import build_snapshot
         today       = datetime.now().strftime('%Y%m%d')
-        preview_csv = OUTPUTS / f'PREVIEW_VARIANT_IMPORT_{today}_v2.csv'
+
+        # Test and dry runs get their own filename. They cover a fraction of the
+        # catalogue, so writing them to the production name would leave a stub CSV
+        # that the day's real run then "resumes" from — pricing only that fraction
+        # and silently skipping everything else.
+        if dry_run or test_gati:
+            tag         = '_'.join(x for x in ('DRYRUN' if dry_run else 'TEST', test_gati) if x)
+            preview_csv = OUTPUTS / f'PREVIEW_VARIANT_IMPORT_{today}_{tag}_{run_id}_v2.csv'
+        else:
+            preview_csv = OUTPUTS / f'PREVIEW_VARIANT_IMPORT_{today}_v2.csv'
 
         # Resume if today's CSV already exists and has data (e.g. after OOM/deploy restart)
         resuming = (
             not test_gati and
+            not dry_run and
             preview_csv.exists() and
             preview_csv.stat().st_size > 500
         )
@@ -341,8 +356,18 @@ def run(test_gati: str = None):
                 f'{snapshot_stats["variants_priced"]:,} priced, '
                 f'{snapshot_stats["products_covered"]} products, '
                 f'{snapshot_stats["archived_skipped"]} archived skipped, '
-                f'{snapshot_stats["variants_no_weight"]} missing weight'
+                f'{snapshot_stats["variants_no_weight"]} missing weight, '
+                f'{snapshot_stats.get("variants_with_gemstone", 0):,} with a gemstone value'
             )
+
+        if dry_run:
+            log.info('=' * 70)
+            log.info('DRY RUN COMPLETE — nothing written to Shopify, no email sent')
+            log.info(f'  Preview CSV : {preview_csv}')
+            log.info('  Check mf_price_breakup_gemstone and mf_price_subtotal in that CSV '
+                     'against the product before running live.')
+            log.info('=' * 70)
+            return
 
         # 4. Import to Shopify
         import_stats = _run_importer(token, preview_csv, log, resume=resuming)
@@ -372,6 +397,11 @@ def run(test_gati: str = None):
 
     except Exception as exc:
         log.error(f'FATAL: {exc}', exc_info=True)
+        if dry_run:
+            # A dry run is an operator sanity check, not the daily job — its
+            # failures belong in the console, not in the FATAL alert inbox.
+            log.error('Dry run failed — no alert email sent')
+            raise
         try:
             from notifier import send_alert
             send_alert(str(exc), run_id, gold_rate)
@@ -387,6 +417,8 @@ def main():
                         help='Run for a single GATI ID only (e.g. RG00001)')
     parser.add_argument('--rate', dest='rate_override', type=float, default=None,
                         help='Pure gold rate in Rs/g — saves to gold_rate.json and runs')
+    parser.add_argument('--dry-run', dest='dry_run', action='store_true',
+                        help='Build the preview CSV only — no Shopify writes, no email')
     args = parser.parse_args()
 
     if args.rate_override:
@@ -397,7 +429,7 @@ def main():
         print(f'Gold rate set to Rs {args.rate_override:,.0f}/g')
 
     try:
-        run(test_gati=args.test_gati)
+        run(test_gati=args.test_gati, dry_run=args.dry_run)
     except Exception:
         sys.exit(1)
 
