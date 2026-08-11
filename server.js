@@ -6,9 +6,7 @@ const axios   = require('axios');
 const { config, flagOn } = require('./src/core/config');
 const { log } = require('./src/core/logger');
 const { getMetafieldType, updateDraftOrderMetafields, updateOrderMetafields } = require('./src/core/metafields');
-const { sendEmail, sendDepositEmail, withStoreCc } = require('./src/integrations/email');
-// Customer-facing voucher / exchange-note bodies use the v2 templates (2026-08-07 redesign).
-const { buildVoucherV2Html, buildExchangeNoteV2Html } = require('./src/integrations/email/templates');
+const { sendEmail, sendDepositEmail, buildCreditNoteHtml, buildExchangeNoteHtml, withStoreCc } = require('./src/integrations/email');
 const { handlePoWebhook } = require('./src/modules/procurement/webhook');
 const { handlePoAction }  = require('./src/modules/procurement/action');
 const { syncDraftOrderToSheet, syncOrderToSheet, syncAllDraftOrders, syncAllOrders, removeDraftFromSheet, pruneOrphans } = require('./src/modules/procurement/sync');
@@ -3869,7 +3867,7 @@ app.post('/api/cn-email', async (req, res) => {
       to:      customerEmail,
       cc:      withStoreCc(),   // store inbox sees every voucher it issues
       subject: `Your Timanti Voucher — Rs.${creditValue} | Code: ${cnNumber}`,
-      html:    buildVoucherV2Html({ customerName, cnNumber, creditValue, validUntil, originalOrder })
+      html:    buildCreditNoteHtml({ customerName, cnNumber, creditValue, validUntil, originalOrder })
     });
     console.log(`Voucher email sent → ${customerEmail} | ${cnNumber}`);
     res.json({ ok: true });
@@ -3894,8 +3892,7 @@ app.post('/api/exc-email', async (req, res) => {
       to:      customerEmail,
       cc:      withStoreCc(),   // store inbox sees every exchange note it applies
       subject: `Your Timanti Exchange Note — Rs.${excValue} applied | ${excNumber}`,
-      // buildExchangeNoteV2Html does not take customerName — the redesign drops the salutation.
-      html:    buildExchangeNoteV2Html({ excNumber, excValue, oldOrder, newOrder })
+      html:    buildExchangeNoteHtml({ customerName, excNumber, excValue, oldOrder, newOrder })
     });
     console.log(`EXC email sent → ${customerEmail} | ${excNumber}`);
     res.json({ ok: true });
