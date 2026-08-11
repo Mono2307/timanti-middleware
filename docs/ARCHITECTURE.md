@@ -135,6 +135,22 @@ and the tag pipeline calls across all of them. Extracting one alone means inject
 functions through ctx, which reads worse than leaving it whole. They should move in a single pass,
 in a session where nothing else is committing to server.js.
 
+## The Shopify admin extension — do not consolidate it
+
+`apps/metafield-manager/` ships four extensions whose `MetafieldManager.jsx` files are currently
+byte-identical. **This is deliberate and they must stay four separate files.** They are four
+distinct admin action apps with their own extension identities, targets and registrations; the
+fact that their source happens to match today is a coincidence of history, not a sign of
+accidental duplication.
+
+There is also a practical reason not to touch this lightly: **a Shopify store can only run one
+version of an app at a time.** You cannot deploy a second copy alongside the live one and compare
+them, the way you can with two branches of the middleware. Any change here goes straight to the
+only environment that exists, in front of staff. So changes to this app are made deliberately,
+one at a time, and never as part of a refactor.
+
+This was tried during the 2026-08 restructure and reverted.
+
 ## The regression gate
 
 There is no integration test suite. `tools/route-inventory.js` substitutes for one during
