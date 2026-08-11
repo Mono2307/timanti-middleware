@@ -63,13 +63,36 @@ Karat comes from SKU segment `[2]` (`GATI|COLOR|KARAT|...`).
 
 ```python
 gold     = round(net_wt * rate_for_karat, 2)
-subtotal = round(gold + diamond + making, 2)     # diamond, making read from variant metafields
+subtotal = round(gold + diamond + making + gemstone, 2)   # all three read from variant metafields
 gst      = round(subtotal * 0.03, 2)
-total    = round(subtotal + gst, 2)              # → Variant price
+total    = round(subtotal + gst, 2)                       # → Variant price
 ```
+
+The taxable value (`subtotal`) is **gold + diamond + making + gemstone**. Only the gold
+leg moves with the daily rate; diamond, making and gemstone are read from the variant's
+stored metafields and passed through unchanged — but they are all part of the GST base,
+so a missing component understates both the price and the 3% charged on it.
+
+Gemstone is read from `custom.<GEMSTONE_MF_KEY>` (`config.py`, default
+`price_breakup_gemstone`). A variant with no such metafield reads 0 and prices exactly as
+it did under the old three-component formula, so plain gold and diamond-only pieces are
+unaffected. The snapshot logs how many priced variants carried a non-zero gemstone value
+(`variants_with_gemstone`) — 0 on a catalogue that has gemstone pieces means the key is
+wrong, not that the pieces are free.
 
 Only variants with `custom.net_metal_weight_g > 0` are priced. Archived products and
 `STATIC_PRICE_GATI_IDS` are skipped.
+
+### Validating before a live run
+
+```bash
+python orchestrator.py --dry-run --test RG00001
+```
+
+Builds the preview CSV only — no Shopify write, no email — under its own
+`PREVIEW_VARIANT_IMPORT_<date>_DRYRUN_<GATI>_<run_id>_v2.csv` name, so it can never be
+mistaken for the day's production CSV by the resume check. Compare
+`mf_price_breakup_gemstone` / `mf_price_subtotal` / `mf_price_total` against the product.
 
 ### What gets written back — `import_from_preview.mjs`
 
@@ -92,6 +115,9 @@ mutation metafieldsSet($m: [MetafieldsSetInput!]!) {
 The 6 daily metafields (namespace `custom`):
 `price_breakup_gold`, `price_breakup_gst`, `price_total`, `price_subtotal`,
 `gold_rate` (number_decimal), `gold_last_updated_at` (date_time).
+
+`price_breakup_gemstone` is an **input**, like diamond and making — it is carried in the
+preview CSV for audit but never rewritten by the daily run.
 
 ### Idempotency / resume
 

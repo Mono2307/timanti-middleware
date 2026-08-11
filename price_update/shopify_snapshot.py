@@ -2,7 +2,8 @@
 shopify_snapshot.py
 ===================
 Pages through ALL live Shopify variants (ACTIVE + DRAFT, skips ARCHIVED).
-Reads stored metafields: net weight, gross weight, diamond cost, making cost.
+Reads stored metafields: net weight, gross weight, diamond cost, making cost,
+gemstone cost.
 Recalculates gold component + GST using the day's gold rate.
 Writes the preview CSV that import_from_preview.mjs consumes.
 
@@ -18,9 +19,11 @@ from pathlib import Path
 
 import sys
 sys.path.insert(0, str(Path(__file__).parent))
-from config import STORE_DOMAIN, API_VERSION, GST_RATE, DECIMAL_PRECISION, STATIC_PRICE_GATI_IDS
+from config import (STORE_DOMAIN, API_VERSION, GST_RATE, DECIMAL_PRECISION,
+                    STATIC_PRICE_GATI_IDS, GEMSTONE_MF_KEY)
 
 # ── GraphQL query — fetches 250 variants per page with all needed metafields ──
+# %-interpolated (not .format) so the GraphQL braces need no escaping.
 
 _Q = """
 query($cursor: String) {
@@ -34,10 +37,11 @@ query($cursor: String) {
       gross: metafield(namespace: "custom", key: "total_metal_weight_g")  { value }
       dia:   metafield(namespace: "custom", key: "price_breakup_diamond") { value }
       make:  metafield(namespace: "custom", key: "price_breakup_making")  { value }
+      gem:   metafield(namespace: "custom", key: "%s") { value }
     }
   }
 }
-"""
+""" % GEMSTONE_MF_KEY
 
 _NO_WEIGHT_COLS = [
     'run_date', 'gati_id', 'sku', 'variant_id',
@@ -50,7 +54,8 @@ _COLS = [
     'price_to_write', 'grams_to_write',
     'mf_net_metal_weight_g', 'mf_total_metal_weight_g',
     'mf_price_breakup_gold', 'mf_price_breakup_diamond',
-    'mf_price_breakup_making', 'mf_price_breakup_gst',
+    'mf_price_breakup_making', 'mf_price_breakup_gemstone',
+    'mf_price_breakup_gst',
     'mf_price_total', 'mf_price_subtotal',
     'mf_gold_rate', 'mf_gold_last_updated_at',
 ]
@@ -174,11 +179,12 @@ def build_snapshot(token: str, gold_rate: dict, output_csv: Path, log: logging.L
         log.info(f'TEST MODE — filtered to GATI {test_gati.upper()}: {len(all_variants)} variants')
 
     # ── Phase 2: recalculate prices ───────────────────────────────────────────
-    rows          = []
-    no_weight     = []
-    excluded      = []
-    products_seen = set()
-    run_date      = datetime.now().strftime('%Y-%m-%d')
+    rows            = []
+    no_weight       = []
+    excluded        = []
+    products_seen   = set()
+    gemstone_priced = 0   # variants carrying a non-zero gemstone value
+    run_date        = datetime.now().strftime('%Y-%m-%d')
 
     # Normalise exclusion list once (uppercase, stripped)
     _excluded_ids = {g.upper().strip() for g in STATIC_PRICE_GATI_IDS}
@@ -208,6 +214,7 @@ def build_snapshot(token: str, gold_rate: dict, output_csv: Path, log: logging.L
         gross_wt = _mf_float(v, 'gross') or net_wt   # fall back to net if not stored
         diamond  = _mf_float(v, 'dia')
         making   = _mf_float(v, 'make')
+        gemstone = _mf_float(v, 'gem')   # 0 when the variant carries no gemstone value
 
         if net_wt == 0:
             prod = v.get('product') or {}
@@ -228,10 +235,16 @@ def build_snapshot(token: str, gold_rate: dict, output_csv: Path, log: logging.L
             })
             continue
 
+        # Taxable value = gold + diamond + making + gemstone. Gemstone is a
+        # component in its own right; leaving it out understates both the price
+        # and the GST charged on it.
         gold     = round(net_wt * gold_rate_used, p)
-        subtotal = round(gold + diamond + making, p)
+        subtotal = round(gold + diamond + making + gemstone, p)
         gst      = round(subtotal * GST_RATE, p)
         total    = round(subtotal + gst, p)
+
+        if gemstone > 0:
+            gemstone_priced += 1
 
         prefix     = '|'.join(parts[:3]) if len(parts) >= 3 else sku
         product_id = (v.get('product') or {}).get('id', '')
@@ -248,6 +261,7 @@ def build_snapshot(token: str, gold_rate: dict, output_csv: Path, log: logging.L
             'mf_price_breakup_gold':      gold,
             'mf_price_breakup_diamond':   diamond,
             'mf_price_breakup_making':    making,
+            'mf_price_breakup_gemstone':  gemstone,
             'mf_price_breakup_gst':       gst,
             'mf_price_total':             total,
             'mf_price_subtotal':          subtotal,
@@ -263,6 +277,10 @@ def build_snapshot(token: str, gold_rate: dict, output_csv: Path, log: logging.L
         writer.writerows(rows)
 
     log.info(f'Preview CSV written — {len(rows)} rows → {output_csv.name}')
+    # Sanity signal for the gemstone component: if this is 0 on a run that should
+    # have gemstone pieces, GEMSTONE_MF_KEY is pointing at the wrong metafield.
+    log.info(f'  {gemstone_priced} of {len(rows)} priced variants carry a gemstone value '
+             f'(custom.{GEMSTONE_MF_KEY})')
 
     if excluded:
         log.info(f'  {len(excluded)} variants excluded (static-price list): {excluded[:5]}{"..." if len(excluded) > 5 else ""}')
@@ -282,6 +300,7 @@ def build_snapshot(token: str, gold_rate: dict, output_csv: Path, log: logging.L
     return {
         'variants_in_snapshot':  len(all_variants),
         'variants_priced':       len(rows),
+        'variants_with_gemstone': gemstone_priced,
         'variants_no_weight':    len(no_weight),
         'variants_excluded':     len(excluded),
         'archived_skipped':      archived_count,

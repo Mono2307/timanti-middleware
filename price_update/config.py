@@ -46,6 +46,21 @@ RATIO_24K         = 1.0      # 24/24 pure gold ratio
 GST_RATE          = 0.03
 DECIMAL_PRECISION = 2
 
+# ── Taxable value composition ─────────────────────────────────────────────────
+# Subtotal (the GST base) = gold + diamond + making + gemstone.
+# Gemstone used to be folded into price_breakup_diamond; it is now a component
+# of its own, so it has to be added to the subtotal or both the price and the
+# 3% computed on it come out short.
+#
+# A variant with no gemstone metafield reads 0 and prices exactly as before,
+# so this is a no-op for plain gold and diamond-only pieces.
+#
+# ⚠ This key must match the variant metafield the catalogue actually writes
+#   gemstone VALUE (rupees) to — not gemstone weight. A wrong key fails silently
+#   as gemstone = 0. Validate with `orchestrator.py --dry-run --test <GATI>`
+#   before a live run.
+GEMSTONE_MF_KEY = 'price_breakup_gemstone'
+
 # ── Static-price exclusion list ───────────────────────────────────────────────
 # Variants whose GATI ID (first SKU segment) is in this list are skipped
 # entirely — the importer will not touch their price.
