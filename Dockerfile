@@ -36,6 +36,11 @@ RUN apt-get update -qq && \
     apt-get install --no-install-recommends -y python3 python3-pip && \
     rm -rf /var/lib/apt/lists/*
 
+# Stamp the build so /api/version can prove WHICH commit is running. Without this there is
+# no way to tell a new deploy from the old one — every health check looks identical.
+ARG GIT_SHA=unknown
+ENV GIT_SHA=$GIT_SHA
+
 # Copy built application
 COPY --from=build /app /app
 

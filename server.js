@@ -4401,6 +4401,7 @@ require('./src/modules/serialization/routes').register(app, ctx);
 require('./src/modules/procurement/routes').register(app, ctx);
 const admin = require('./src/modules/admin/routes');
 admin.register(app, ctx);
+require('./src/modules/admin/version').register(app);
 
 // ─────────────────────────────────────────
 // Start
