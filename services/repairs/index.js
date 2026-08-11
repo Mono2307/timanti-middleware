@@ -18,7 +18,12 @@ const {
   buildRepairReadyFinalHtml
 } = require('../../emailService');
 
-const { buildRepairReceivedHtml } = require('../../emailTemplates');
+const {
+  buildRepairReceivedHtml,
+  buildRepairEstimateV2Html,
+  buildRepairConfirmedHtml,
+  buildVoucherV2Html
+} = require('../../emailTemplates');
 
 const REPAIR_TEST_EMAIL = 'monodeep.dutta@timanti.in'; // revert after testing
 
@@ -282,13 +287,12 @@ async function handleRepairPayment(draft, { transactionId, gatewayRef }, getShop
     await repairSendEmail({
       to:      customerEmail,
       ccStore: true,
-      subject: `Payment Confirmed — Repair in Progress (${draft.name})`,
-      html:    buildRepairPaymentConfirmedHtml({
-        customerName,
-        draftRef:      draft.name,
-        amount,
-        transactionId: transactionId || gatewayRef || 'N/A',
-        paymentMethod: 'GoKwik Link'
+      subject: `Your repair charges have been confirmed`,
+      html:    buildRepairConfirmedHtml({
+        draftRef: draft.name,
+        item:     repairItemFromDraft(draft),
+        amount:   Math.round(parseFloat(amount) || 0),
+        paid:     true          // money is in hand — this is the GoKwik path
       })
     });
   }
@@ -524,8 +528,13 @@ async function processRepairDraftUpdate(incomingDraft, getShopifyToken, assignRe
         await repairSendEmail({
           to:      customerEmail,
           ccStore: true,
-          subject: `Repair Confirmed — We'll Be in Touch (${draft.name})`,
-          html:    buildRepairStoreApprovedCustomerHtml({ customerName, draftRef: draft.name, amount })
+          subject: `Your repair charges have been confirmed`,
+          html:    buildRepairConfirmedHtml({
+            draftRef: draft.name,
+            item:     repairItemFromDraft(draft),
+            amount:   Math.round(parseFloat(amount) || 0),
+            paid:     false     // approved only — collected at the counter
+          })
         });
       } catch (err) {
         console.error(`❌ Store-approve customer email failed for ${draft.name}:`, err.message);
@@ -584,12 +593,11 @@ async function processRepairDraftUpdate(incomingDraft, getShopifyToken, assignRe
       await repairSendEmail({
         to:      customerEmail,
         ccStore: true,
-        subject: `Your Timanti Repair Estimate — ${draft.name}`,
-        html:    buildRepairEstimateHtml({
-          customerName,
+        subject: `Your estimated repair charges`,
+        html:    buildRepairEstimateV2Html({
           draftRef:        draft.name,
-          itemDescription: itemDesc,
-          amount:          Math.round(amount).toString(),
+          item:            repairItemFromDraft(draft),
+          amount:          Math.round(amount),
           paymentUrl:      shortUrl,
           approveStoreUrl,
           whatsappUrl
@@ -1436,7 +1444,7 @@ h2{margin:0 0 12px;font-size:20px;}p{color:#555;font-size:14px;line-height:1.6;}
       await sendEmail({
         to:      order.email,
         subject: `Your Timanti Credit Note — ${mf.cn_number}`,
-        html:    buildCreditNoteHtml({
+        html:    buildVoucherV2Html({
           customerName:  order.billing_address?.name || order.email,
           cnNumber:      mf.cn_number,
           creditValue:   mf.cn_value,
