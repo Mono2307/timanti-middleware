@@ -135,14 +135,17 @@ if (process.argv.includes('--check')) {
     realErr('route-inventory: no baseline at tools/baseline-routes.txt — run with --write first');
     process.exit(2);
   }
+  // Normalise line endings before comparing: git checks this file out as CRLF on Windows
+  // while we generate LF, which would otherwise report every single line as drift.
+  const norm = (s) => s.replace(/\r\n/g, '\n');
   const expected = fs.readFileSync(BASELINE, 'utf8');
-  if (expected === body) {
+  if (norm(expected) === norm(body)) {
     realLog(`route-inventory: OK — ${routes.length} routes match the baseline`);
     process.exit(0);
   }
   realErr('route-inventory: DRIFT vs tools/baseline-routes.txt\n');
-  const e = expected.split('\n').filter(l => l && !l.startsWith('#'));
-  const a = body.split('\n').filter(l => l && !l.startsWith('#'));
+  const e = norm(expected).split('\n').filter(l => l && !l.startsWith('#'));
+  const a = norm(body).split('\n').filter(l => l && !l.startsWith('#'));
   for (const line of e) if (!a.includes(line)) realErr(`  - LOST    ${line}`);
   for (const line of a) if (!e.includes(line)) realErr(`  + ADDED   ${line}`);
   process.exit(1);
