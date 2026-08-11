@@ -62,25 +62,37 @@ Reordering these silently produces wrong customer balances. There is no test tha
 ## Module map
 
 ```
-                        ┌──────────────┐
-   Shopify webhooks ───▶│  server.js   │  bootstrap + not-yet-extracted handlers
-   Apps Scripts     ───▶│              │
-   Admin extension  ───▶└──────┬───────┘
-                               │ register(app, ctx)
-      ┌────────────┬───────────┼───────────┬──────────────┐
-      ▼            ▼           ▼           ▼              ▼
-  reporting   serialization  payments  adjustments   after-sales
-  (extracted)                                        procurement
-      │            │           │           │              │
-      └────────────┴───────────┴─────┬─────┴──────────────┘
-                                     ▼
-                             ┌───────────────┐
-                             │   src/core    │  config · supabase · shopify
-                             │               │  metafields · logger
-                             └───────┬───────┘
-                                     ▼
-                        Shopify · Supabase · Pine · Gokwik · Resend
+   Shopify webhooks ──┐
+   Apps Scripts     ──┼──▶┌────────────────────────────────────────┐
+   Admin extension  ──┘   │              server.js                 │
+                          │  bootstrap + ctx + module registration │
+                          │                                        │
+                          │  STILL HERE (one interwoven unit):     │
+                          │    payments/Pine · adjustments ·       │
+                          │    pricing · draft lifecycle           │
+                          └───────────────┬────────────────────────┘
+                                          │ register(app, ctx)
+        ┌───────────┬────────────┬────────┴────┬──────────────┐
+        ▼           ▼            ▼             ▼              ▼
+    reporting  serialization  procurement    admin      after-sales
+        │           │            │             │              │
+        └───────────┴────────────┴──────┬──────┴──────────────┘
+                                        ▼
+                          ┌───────────────────────────┐
+                          │         src/core          │
+                          │  config · supabase        │
+                          │  shopify · metafields     │
+                          │  logger                   │
+                          └─────────────┬─────────────┘
+                                        ▼
+                     Shopify · Supabase · Pine · Gokwik · Resend
 ```
+
+Modules registered via `register(app, ctx)` never import `server.js`. Where an extracted module
+still needs something that has not moved yet, it is **injected through `ctx`** rather than
+required — so the dependency arrow keeps pointing inward. Three such injections exist today
+(`handleRecalculatePriceTag`, `applyPaymentTagsToOrder`, `applyPaymentTagsToDraftOrder`) and each
+is marked TEMPORARY in the module that receives it.
 
 Dependencies point **inward and downward only**: modules may use `core` and `integrations`;
 `core` never imports a module. Where a module needs another module's data it goes through an
@@ -101,20 +113,27 @@ Knowing who writes what prevents most double-write bugs:
 
 ## Extraction status
 
+`server.js` went from 6,060 lines to ~4,440 across this work.
+
 | Domain | Where it lives |
 |---|---|
-| config, supabase, shopify token, metafields, logging | `src/core/` ✅ |
-| reporting | `src/modules/reporting/routes.js` ✅ |
-| repairs | `src/modules/after-sales/` ✅ (predates this work) |
-| installment arithmetic | `src/modules/payments/installments.js` ✅ (predates this work) |
-| serialization routes | still in `server.js` |
-| procurement routes | still in `server.js` |
-| payments / Pine terminal | still in `server.js` |
-| adjustments (voucher/exc/advance) | still in `server.js` |
-| pricing / reprice | still in `server.js` |
-| draft lifecycle + tag pipeline | still in `server.js` |
+| config, supabase, shopify token, metafields, logging | `src/core/` |
+| reporting (6 endpoints) | `src/modules/reporting/routes.js` |
+| serialization (10 endpoints) | `src/modules/serialization/routes.js` |
+| procurement / PO Ops (5 endpoints) | `src/modules/procurement/routes.js` |
+| admin: backfills, price-update, metafield defs (7) | `src/modules/admin/routes.js` |
+| repairs | `src/modules/after-sales/` (predates this work) |
+| installment arithmetic | `src/modules/payments/installments.js` (predates this work) |
+| **payments / Pine terminal** | still in `server.js` |
+| **adjustments** (voucher, exchange note, advance) | still in `server.js` |
+| **pricing / reprice** | still in `server.js` |
+| **draft lifecycle + tag pipeline** | still in `server.js` |
 
-The remaining four are mutually entangled through the tag pipeline and should move together.
+The remaining four are one unit, not four. They share the draft-mutation primitives —
+syncAmountToCollect, stripInstrumentFromDraft, gqlSetDraftLineItems, handleRecalculatePriceTag —
+and the tag pipeline calls across all of them. Extracting one alone means injecting four or five
+functions through ctx, which reads worse than leaving it whole. They should move in a single pass,
+in a session where nothing else is committing to server.js.
 
 ## The regression gate
 

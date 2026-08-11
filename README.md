@@ -85,10 +85,10 @@ GitHub Actions UI. Full detail in `docs/DEPLOY.md`.
 
 Honest notes, so nobody rediscovers these the hard way:
 
-- **`server.js` is still ~5,600 lines.** Reporting and the core primitives have been extracted;
-  payments, adjustments, pricing and the draft-order lifecycle have not. They are genuinely
-  entangled — the tag pipeline calls across all four — and splitting them needs a session where
-  nothing else is committing to `server.js`.
+- **`server.js` is still ~4,400 lines**, down from 6,060. Core, reporting, serialization,
+  procurement and admin are out. Payments, adjustments, pricing and the draft-order lifecycle are
+  not — they share the draft-mutation primitives and the tag pipeline calls across all four, so
+  they should move together in one pass rather than one at a time.
 - **The draft-update tag pipeline order is load-bearing.** Fifteen handlers run in sequence and
   the order encodes real rules: net-to-collect must be recomputed *after* every adjustment, and
   the payment sync must run *last* because `amount_pending` is derived from the fresh net.
