@@ -27,17 +27,64 @@ const LEAD_DAYS = 30;
 const remindedThisProcess = new Set();
 
 /**
+ * Resolve a customer email for a ledger row. The ledger stores customer_id and
+ * source_order_name, never an address, so we go and find one — in order of how
+ * reliable it is:
+ *
+ *   1. Shopify customer record   — authoritative, survives the order being edited
+ *   2. The source order's email  — covers guest checkouts with no customer record,
+ *                                  and rows written before customer_id was captured
+ *
+ * Returns null only when both fail, which is the one case worth logging loudly:
+ * a voucher nobody can be reminded about.
+ */
+async function resolveCustomerEmail(deps, row) {
+  const { axios, storeUrl, token } = deps;
+  const headers = { 'X-Shopify-Access-Token': token };
+
+  if (row.customer_id) {
+    try {
+      const { data } = await axios.get(
+        `${storeUrl}/admin/api/2024-01/customers/${row.customer_id}.json?fields=id,email`,
+        { headers, timeout: 10000 }
+      );
+      if (data?.customer?.email) return data.customer.email;
+    } catch (err) {
+      console.warn(`[voucher-expiry] customer ${row.customer_id} lookup failed: ${err.message}`);
+    }
+  }
+
+  if (row.source_order_name) {
+    try {
+      const { data } = await axios.get(
+        `${storeUrl}/admin/api/2024-01/orders.json?name=${encodeURIComponent(row.source_order_name)}&status=any&limit=1&fields=id,name,email`,
+        { headers, timeout: 10000 }
+      );
+      const email = data?.orders?.[0]?.email;
+      if (email) return email;
+    } catch (err) {
+      console.warn(`[voucher-expiry] order ${row.source_order_name} lookup failed: ${err.message}`);
+    }
+  }
+
+  return null;
+}
+
+/**
  * @param deps.supabase
  * @param deps.sendEmail        from emailService
  * @param deps.buildVoucherExpiryHtml  from emailTemplates
  * @param deps.withStoreCc      from emailService
- * @param deps.customerEmailFor optional resolver — the ledger stores customer_id,
- *                              not an email address, so the caller supplies a way
- *                              to turn one into the other. Vouchers with no
- *                              resolvable email are logged and skipped.
+ * @param deps.axios            for the Shopify lookups
+ * @param deps.storeUrl         process.env.SHOPIFY_STORE_URL
+ * @param deps.getShopifyToken  async () => token
+ * @param deps.customerEmailFor optional override; defaults to resolveCustomerEmail
  */
 async function runVoucherExpirySweep(deps, { dryRun = false } = {}) {
-  const { supabase, sendEmail, buildVoucherExpiryHtml, withStoreCc, customerEmailFor } = deps;
+  const { supabase, sendEmail, buildVoucherExpiryHtml, withStoreCc } = deps;
+  const token = deps.token || (deps.getShopifyToken ? await deps.getShopifyToken() : null);
+  const lookup = deps.customerEmailFor
+    || ((row) => resolveCustomerEmail({ ...deps, token }, row));
 
   const target = new Date(Date.now() + LEAD_DAYS * DAY_MS);
   const dayStart = new Date(Date.UTC(target.getUTCFullYear(), target.getUTCMonth(), target.getUTCDate()));
@@ -64,7 +111,7 @@ async function runVoucherExpirySweep(deps, { dryRun = false } = {}) {
 
     let email = null;
     try {
-      email = customerEmailFor ? await customerEmailFor(row) : null;
+      email = await lookup(row);
     } catch (err) {
       console.warn(`[voucher-expiry] email lookup failed for ${row.serial_code}: ${err.message}`);
     }
@@ -125,4 +172,4 @@ function startVoucherExpirySweep(deps) {
   setInterval(kick, DAY_MS);
 }
 
-module.exports = { runVoucherExpirySweep, startVoucherExpirySweep, LEAD_DAYS };
+module.exports = { runVoucherExpirySweep, startVoucherExpirySweep, resolveCustomerEmail, LEAD_DAYS };

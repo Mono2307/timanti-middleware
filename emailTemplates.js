@@ -369,6 +369,10 @@ function buildRepairReadyFinalHtml({
           'Or pay when you collect your piece at the store'
         ])
     );
+  } else if (mode === 'free') {
+    // Complimentary, or a job that carried no charge anywhere. No figures at all —
+    // showing "Rs.0" three times reads like a billing error.
+    rows = null;
   } else if (mode === 'settled') {
     // Prepaid and the final cost matched the estimate. The commonest outcome, so it
     // gets a proper close rather than silence: the numbers reconcile and nothing is owed.
@@ -393,7 +397,12 @@ function buildRepairReadyFinalHtml({
         ref: `Repair ID: ${draftRef}`,
         heading: 'Your jewellery is repaired and ready for collection'
       })
-    + section(h3('Repair summary') + itemRow(item) + summary(rows))
+    + section(
+        h3('Repair summary')
+        + itemRow(item)
+        + (rows ? summary(rows) : '')
+        + (mode === 'free' ? note('This repair was carried out at no charge. Nothing is due.') : '')
+      )
     + actionSection
     + section(
         h3('Collection or delivery')

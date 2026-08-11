@@ -649,114 +649,85 @@ async function processRepairDraftUpdate(incomingDraft, getShopifyToken, assignRe
       console.warn(`⚠️  Could not fetch metafields for ${draft.name}:`, err.message);
     }
 
-    // ── v2 ready+final email ────────────────────────────────────────────────
-    // Only when a final cost was actually recorded on the set-complete form. Without one there is
-    // nothing to reconcile, so the original "repair is ready" email still goes out unchanged — this
-    // path adds a case, it does not replace the existing behaviour.
+    // ── v2 ready+final email — the ONLY completion email ────────────────────
+    // Every completed repair gets this. There is no fallback to the v1 template:
+    // a customer's experience must not depend on whether a staff member happened
+    // to fill one box.
     //
-    //   refund  — prepaid and the final came in LOWER  → offer wallet voucher / original method
-    //   balance — prepaid and the final came in HIGHER → offer a payment link for the difference
+    // If the final cost is missing, we do not give up — we derive it, in order of
+    // authority: what was actually collected, then the draft total (which is the
+    // estimate, since that is what the estimate form priced the line item at).
+    // Both are the correct number in the case where nobody edited anything.
+    let effectiveFinal = finalCost;
+    if (!(effectiveFinal > 0)) {
+      effectiveFinal = paidAmount > 0 ? paidAmount : (parseFloat(draft.total_price) || 0);
+      if (effectiveFinal > 0) {
+        console.log(`[repair-complete] ${draft.name}: no repair_final_cost recorded — derived Rs.${effectiveFinal} from ${paidAmount > 0 ? 'payment_amount' : 'draft total'}`);
+      }
+    }
+
+    const delta = Math.round(paidAmount - effectiveFinal);
+
     //   collect — never prepaid                        → payable on collection
-    // A prepaid repair that lands exactly on estimate has no delta and falls through to the
-    // original email, which already says the right thing.
-    const delta = Math.round(paidAmount - finalCost);
-    // Every completed repair gets the v2 email. The old completion template is only
-    // reachable if we cannot establish ANY amount at all.
-    //
-    // delta === 0 is the common case, not an edge one: the Mark Complete form is
-    // pre-filled with the estimate, so "nothing changed" is a single click. It used
-    // to fall through all three branches and silently drop back to the v1 email.
-    let readyFinalMode = null;
-    if (finalCost > 0) {
-      if (paidAmount <= 0)   readyFinalMode = 'collect';   // never prepaid — pay at the counter
-      else if (delta > 0)    readyFinalMode = 'refund';    // overpaid  — money owed back
-      else if (delta < 0)    readyFinalMode = 'balance';   // underpaid — money owed to us
-      else                   readyFinalMode = 'settled';   // exact      — nothing further to pay
+    //   refund  — prepaid, final came in LOWER         → wallet voucher / original method
+    //   balance — prepaid, final came in HIGHER        → payment link for the difference
+    //   settled — prepaid, exact                       → nothing further to pay
+    //   free    — nothing to charge at all (complimentary, or no amount anywhere)
+    let readyFinalMode;
+    if (effectiveFinal <= 0)    readyFinalMode = 'free';
+    else if (paidAmount <= 0)   readyFinalMode = 'collect';
+    else if (delta > 0)         readyFinalMode = 'refund';
+    else if (delta < 0)         readyFinalMode = 'balance';
+    else                        readyFinalMode = 'settled';
+
+    const serverUrl = process.env.SERVER_URL || 'https://timanti-middleware.fly.dev';
+    let refundWalletUrl = null;
+    let payBalanceUrl   = null;
+
+    if (readyFinalMode === 'refund') {
+      refundWalletUrl = `${serverUrl}/repairs/refund-wallet?d=${draft.id}&t=${generateRefundWalletToken(draft.id)}`;
     }
-
-    if (readyFinalMode) {
-      const serverUrl = process.env.SERVER_URL || 'https://timanti-middleware.fly.dev';
-      let refundWalletUrl = null;
-      let payBalanceUrl   = null;
-
-      if (readyFinalMode === 'refund') {
-        refundWalletUrl = `${serverUrl}/repairs/refund-wallet?d=${draft.id}&t=${generateRefundWalletToken(draft.id)}`;
-      }
-      if (readyFinalMode === 'balance') {
-        // A link for the SHORTFALL only, not the whole repair — the customer already paid the
-        // estimate. If GoKwik is unavailable we fall back to the original email rather than send a
-        // "pay now" CTA that leads nowhere.
-        try {
-          const link = await createPaymentLink({
-            draftOrderId:  draft.id.toString(),
-            amount:        Math.abs(delta),
-            customerPhone: draft.billing_address?.phone || draft.phone || '',
-            customerName,
-            customerEmail
-          });
-          payBalanceUrl = link.shortUrl;
-        } catch (err) {
-          console.error(`❌ Balance link failed for ${draft.name}: ${err.message} — falling back to the standard completion email`);
-          readyFinalMode = null;
-        }
-      }
-
-      if (readyFinalMode) {
-        try {
-          await repairSendEmail({
-            to:      customerEmail,
-            ccStore: true,
-            subject: `Your Repair is Ready — ${draft.name}`,
-            html:    buildRepairReadyFinalHtml({
-              draftRef:       draft.name,
-              item:           repairItemFromDraft(draft),
-              mode:           readyFinalMode,
-              estimateAmount: Math.round(paidAmount > 0 ? paidAmount : finalCost).toString(),
-              finalAmount:    Math.round(finalCost).toString(),
-              delta:          Math.abs(delta).toString(),
-              refundWalletUrl,
-              payBalanceUrl,
-              trackingId:     sequelId,
-              trackingUrl
-            })
-          });
-        } catch (err) {
-          console.error(`❌ Resend failed (ready+final) for ${draft.name}:`, err.message);
-          return;
-        }
-
-        await updateDraftOrderTags(draft.id, [...tags, 'repair-completion-notified'], token);
-        await writeDraftOrderMetafields(draft.id, {
-          repair_completed_at: new Date().toISOString()
-        }, token);
-        if (assignRepairSerial) { try { await assignRepairSerial(draft, { free: hasFreeTag }); } catch (_) {} }
-        console.log(`✅ Repair completion notified (${readyFinalMode}): ${draft.name} — paid Rs.${paidAmount}, final Rs.${finalCost}, delta Rs.${delta}`);
-        return;
+    if (readyFinalMode === 'balance') {
+      // A link for the SHORTFALL only, not the whole repair — the customer already paid
+      // the estimate.
+      try {
+        const link = await createPaymentLink({
+          draftOrderId:  draft.id.toString(),
+          amount:        Math.abs(delta),
+          customerPhone: draft.billing_address?.phone || draft.phone || '',
+          customerName,
+          customerEmail
+        });
+        payBalanceUrl = link.shortUrl;
+      } catch (err) {
+        // Do NOT fall back to the old template. Send the same email without a pay-now
+        // link — the copy already offers paying at collection, so the customer still
+        // gets a correct, actionable message.
+        console.error(`❌ Balance link failed for ${draft.name}: ${err.message} — sending without a pay-now link`);
+        payBalanceUrl = null;
       }
     }
-
-    // Determine payment context for store-pickup email
-    let pickupPayContext = null;
-    const pickupAmount  = Math.round(parseFloat(draft.total_price)).toString();
-    if (storePickup) {
-      if (tags.includes('repair-paid'))            pickupPayContext = 'paid';
-      else if (tags.includes('repair-store-approved')) pickupPayContext = 'pay_at_store';
-      else if (tags.includes('repair-free') || tags.includes('free-repair')) pickupPayContext = 'free';
-    }
-
-    const completionSubject = storePickup
-      ? `Your Repair is Ready — Please Collect at Our Store (${draft.name})`
-      : `Your Repair is Ready — ${draft.name}`;
 
     try {
       await repairSendEmail({
         to:      customerEmail,
         ccStore: true,
-        subject: completionSubject,
-        html:    buildRepairCompleteHtml({ customerName, draftRef: draft.name, sequelId, trackingUrl, storePickup, pickupPayContext, pickupAmount })
+        subject: `Your jewellery is repaired and ready for collection`,
+        html:    buildRepairReadyFinalHtml({
+          draftRef:       draft.name,
+          item:           repairItemFromDraft(draft),
+          mode:           readyFinalMode,
+          estimateAmount: Math.round(paidAmount > 0 ? paidAmount : effectiveFinal),
+          finalAmount:    Math.round(effectiveFinal),
+          delta:          Math.abs(delta),
+          refundWalletUrl,
+          payBalanceUrl,
+          trackingId:     sequelId,
+          trackingUrl
+        })
       });
     } catch (err) {
-      console.error(`❌ Resend failed (complete) for ${draft.name}:`, err.message);
+      console.error(`❌ Resend failed (ready+final) for ${draft.name}:`, err.message);
       return;
     }
 
@@ -770,7 +741,7 @@ async function processRepairDraftUpdate(incomingDraft, getShopifyToken, assignRe
     // Idempotent + non-blocking.
     if (assignRepairSerial) { try { await assignRepairSerial(draft, { free: hasFreeTag }); } catch (_) {} }
 
-    console.log(`✅ Repair completion notified: ${draft.name}${sequelId ? ` (Sequel: ${sequelId})` : ''}`);
+    console.log(`✅ Repair completion notified (${readyFinalMode}): ${draft.name} — paid Rs.${paidAmount}, final Rs.${effectiveFinal}, delta Rs.${delta}${sequelId ? `, Sequel ${sequelId}` : ''}`);
   }
 }
 
