@@ -24,10 +24,12 @@ classify() {
     #   tools/       : baseline-routes.txt is the regression gate, not a doc.
     #   metafield-mgr: the Shopify app's own README/CHANGELOG ship with the app.
     #   .github/     : workflow YAML is the deploy mechanism.
+    #   requirements : the Dockerfile pip-installs it at build time.
     "Recon Test"/*)                        echo KEEP;;
     tools/*)                               echo KEEP;;
     metafield-manager/*)                   echo KEEP;;
     .github/*)                             echo KEEP;;
+    price_update/requirements.txt)         echo KEEP;;
 
     # ── copy-paste artifacts (most specific first) ─────────────────────────
     *apps-script*.js|*sheets-app-script.js|*.gs|*.gs.txt) echo apps-script;;
@@ -44,7 +46,7 @@ classify() {
     # ── runtime / build / app source — stays in the deploy repo ────────────
     server.js|emailService.js|emailTemplates.js)        echo KEEP;;
     package.json|package-lock.json|Dockerfile|fly.toml) echo KEEP;;
-    .dockerignore|.gitignore)                           echo KEEP;;
+    .dockerignore|.gitignore|.gitattributes)     echo KEEP;;
     .github/*|tools/*)                                  echo KEEP;;
     "Recon Test"/*)                                     echo KEEP;;
     price_update/*)                                     echo KEEP;;
