@@ -73,12 +73,44 @@ function isTest(amount, orderNumber) {
   return amount < 2 || /TEST/i.test(orderNumber || '');
 }
 
+const NAME_NOISE = new Set(['mr','mrs','ms','dr','shri','smt','kum','sri']);
+
+// A cardholder name, a UPI handle and a Shopify customer name almost never agree
+// token-for-token: the card reads "K SANTOSH KUMAR" where the order reads "Santosh
+// Kampli", and a UPI leg carries only "akash.shetty@okhdfcbank". Strip the handle, treat
+// the punctuation inside a VPA as separators, and drop bare initials — an unmatched "K"
+// used to dilute the score purely by being present.
+function nameTokens(s) {
+  return String(s || '')
+    .toLowerCase()
+    .replace(/@.*$/, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .split(/\s+/)
+    .filter(t => t.length > 1 && !/^\d+$/.test(t) && !NAME_NOISE.has(t));
+}
+
+// Scored by CONTAINMENT (shared / smaller side) rather than the old symmetric ratio, which
+// divided by the LONGER side and so punished exactly the cases that matter: "Akash Shetty"
+// inside "akash.shetty@okhdfcbank" scored 0.67 and lost to a 0.8 gate it could never pass.
 function nameSim(a, b) {
-  if (!a || !b) return 0;
-  const tok = s => s.toLowerCase().replace(/[^a-z0-9 ]/g,' ').split(/\s+/).filter(Boolean);
-  const ta = new Set(tok(a));
-  const hits = tok(b).filter(t => ta.has(t)).length;
-  return hits / Math.max(ta.size, tok(b).length, 1);
+  const ta = nameTokens(a), tb = nameTokens(b);
+  if (!ta.length || !tb.length) return 0;
+
+  // VPAs also run the name together — "varshareddy24" against customer "Varsha Reddy".
+  // Nothing tokenises that, so test whether the customer's words spell out the handle.
+  if (ta.length === 1 || tb.length === 1) {
+    const one   = (ta.length === 1 ? ta[0] : tb[0]).replace(/\d+$/, '');
+    const parts = (ta.length === 1 ? tb : ta).filter(p => p.length >= 3 && one.includes(p));
+    const covered = parts.join('').length;
+    if (one.length >= 6 && covered >= one.length * 0.6) return covered / one.length;
+  }
+
+  const sa = new Set(ta), sb = new Set(tb);
+  const shared = [...sb].filter(t => sa.has(t));
+  // One shared token has to carry real information — a common surname on its own
+  // ("kumar", "reddy") is not identity evidence.
+  if (!shared.some(t => t.length >= 3)) return 0;
+  return shared.length / Math.min(sa.size, sb.size);
 }
 
 // ── File sources ───────────────────────────────────────────────────────────────
@@ -363,17 +395,49 @@ function matchByAmountDate(txn, entities) {
   if (!cands.length) return { method: 'UNLINKED', match: null, confidence: 'NONE', notes: 'No amount match' };
 
   const name = txn.name || txn.vpa || '';
-  // A draft's date is when it was CREATED, not when the advance was collected — a customer
-  // routinely pays days later (#D182 raised 22-Jul, card run 27-Jul). When the payer's name
-  // matches the customer, identity is stronger evidence than proximity, so allow a wider
-  // window; without a name match, stay strict at 3 days.
-  const NAMED_WINDOW_DAYS = 30;
-  let scored = cands
-    .map(e => ({ e, days: daysDiff(txn.date, e.date), sim: nameSim(name, e.customer) }))
-    .filter(x => x.days <= (x.sim >= 0.8 ? NAMED_WINDOW_DAYS : 3))
-    .sort((a, b) => a.days - b.days || b.sim - a.sim);
 
-  if (!scored.length) return { method: 'UNLINKED', match: null, confidence: 'NONE', notes: 'Amount match but >3d date gap' };
+  // The date window exists to CHOOSE BETWEEN documents that share an amount. It was being
+  // applied as if it were a plausibility test on the payment itself, which is wrong twice
+  // over: a draft's date is when it was raised, not when money arrived, and an advance is
+  // routinely collected weeks before the order exists. A flat 3 days therefore rejected
+  // #1060 (card "K SANTOSH KUMAR" vs order "Santosh Kampli") and every deposit-then-balance
+  // sale, even when exactly one document in the whole dataset carried that amount.
+  //
+  // So the window now widens as the evidence strengthens, and all but disappears when there
+  // is nothing to disambiguate.
+  const SOLE_WINDOW    = 60; // this amount is unique — there is no rival to exclude
+  const NAMED_WINDOW   = 45; // payer and customer are the same person
+  const PARTIAL_WINDOW = 21; // shared surname, or an initialled form of the same name
+  const ANON_WINDOW    = 7;  // amount alone, payer unknown — identity evidence is absent
+  const STRONG_NAME  = 0.6;
+  const PARTIAL_NAME = 0.34;
+
+  const windowFor = sim =>
+    cands.length === 1     ? SOLE_WINDOW
+    : sim >= STRONG_NAME   ? NAMED_WINDOW
+    : sim >= PARTIAL_NAME  ? PARTIAL_WINDOW
+    : ANON_WINDOW;
+
+  // An entity with no usable date (a Month-grouped export, or a column Shopify renamed)
+  // must not be silently unmatchable: daysDiff returns 999 for a null date, so such a
+  // document failed EVERY window and vanished from consideration without ever being
+  // reported as a date problem. Judge those on amount and name instead, and say so.
+  const scoredAll = cands.map(e => ({
+    e, days: daysDiff(txn.date, e.date), sim: nameSim(name, e.customer), undated: !e.date,
+  }));
+  let scored = scoredAll
+    .filter(x => x.undated
+      ? (cands.length === 1 || x.sim >= PARTIAL_NAME)
+      : x.days <= windowFor(x.sim))
+    // undated candidates sort last: a dated document that fits its window is better evidence
+    .sort((a, b) => (a.undated ? 1 : 0) - (b.undated ? 1 : 0) || a.days - b.days || b.sim - a.sim);
+
+  if (!scored.length) {
+    const near = scoredAll.sort((a, b) => a.days - b.days)[0];
+    const gap = near.days >= 999 ? 'no comparable date' : `${near.days.toFixed(0)}d away`;
+    return { method: 'UNLINKED', match: null, confidence: 'NONE',
+             notes: `Amount matches ${scoredAll.map(x => x.e.ref).join('/')} but nearest is ${gap} (window ${windowFor(near.sim)}d, name ${(near.sim * 100).toFixed(0)}%)` };
+  }
   if (scored.length > 1) {
     // How the money was collected is recorded on the document (pmode-advance/pmode-final).
     // A GoKwik collection cannot be a draft tagged `card`, which separates same-amount,
@@ -389,8 +453,13 @@ function matchByAmountDate(txn, entities) {
   }
   if (scored.length === 1) {
     const only = scored[0];
-    const conf = (only.days <= 1 || only.sim >= 0.8) ? 'MEDIUM' : 'LOW';
-    const note = only.days > 3 ? `Payer name matches ${only.e.customer}; paid ${only.days.toFixed(0)}d after the draft was raised` : '';
+    const conf = only.undated ? 'LOW'
+      : (only.days <= 1 || only.sim >= STRONG_NAME) ? 'MEDIUM' : 'LOW';
+    const note = only.undated
+      ? `${only.e.ref} carries no date in the Shopify export — matched on amount${only.sim >= PARTIAL_NAME ? ` and payer name (${only.e.customer})` : ' alone'}`
+      : only.days > 3
+        ? `${only.sim >= PARTIAL_NAME ? `Payer name matches ${only.e.customer}; ` : ''}${only.days.toFixed(0)}d between payment and document date`
+        : '';
     return { method: 'AMOUNT_DATE', match: only.e, confidence: conf, notes: note };
   }
 

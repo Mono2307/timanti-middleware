@@ -88,11 +88,32 @@ export), the draft converted and its snapshot was deleted (see above), or the ca
 for a figure that is neither the total nor the balance — e.g. #1067 was swiped for the
 pre-discount ₹77,394 against a ₹74,288.67 order.
 
+## How the date window works (fixed 2026-08-11)
+
+The window is there to **choose between documents that share an amount** — it is not a
+plausibility test on the payment. It used to be a flat 3 days, applied even when only one
+document in the dataset carried that amount, which wrongly rejected both an advance
+collected before its order existed and #1060 (card `K SANTOSH KUMAR` vs order
+`Santosh Kampli`). It now widens with the evidence:
+
+| Situation | Window |
+|---|---|
+| Exactly one document has this amount — nothing to disambiguate | 60d |
+| Payer and customer are the same person (name ≥ 0.6) | 45d |
+| Shared surname, or an initialled form of the name (≥ 0.34) | 21d |
+| Amount alone, payer unknown | 7d |
+
+Name comparison scores by *containment*, so `akash.shetty@okhdfcbank` ↔ `Akash Shetty` and
+`varshareddy24@okhdfcbank` ↔ `Varsha Reddy` both read as the same person. A single shared
+common surname is not enough on its own.
+
+A document with **no date** (a Month-grouped export, or a renamed column) is no longer
+silently unmatchable — it is judged on amount and name, marked LOW, and the note says so.
+
 ## Known gaps (not yet fixed)
 
-- A draft's date is when it was *created*, not when the advance was collected, so a payment
-  more than 3 days later falls outside `AMOUNT_DATE` (₹40,000 → #D182, paid 5 days after).
-- Same-amount, same-day drafts stay `AMBIGUOUS` even when the payment mode settles it
-  (₹20,000: only #D184 is `gokwik_link`; the rivals are `card`).
 - Converted drafts are only available from retained snapshots. Reading `status=completed`
   drafts directly during recon would remove the need to keep them.
+- `SPLIT_PAYMENT` is amount-driven and payer-agnostic, so a plausible-looking combination
+  can be coincidence. Treat every LOW split as needing a human — e.g. ₹72,000 (30-May) +
+  ₹32,548 (17-Jun) → #1059 ₹104,548.71 fits to 71 paise but the payers differ.
