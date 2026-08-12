@@ -1,4 +1,4 @@
-# route inventory — 80 routes across 1 express app(s)
+# route inventory — 81 routes across 1 express app(s)
 # Regenerate: node tools/route-inventory.js --write
 # This file must not change during a pure move/refactor.
 
@@ -30,6 +30,7 @@ POST   /api/gokwik-webhook
 POST   /api/log-cash-payment
 GET    /api/metafield-definitions/ensure
 POST   /api/metafield-definitions/ensure
+GET    /api/metafields/inspect
 GET    /api/payment-links
 POST   /api/pine-postback
 POST   /api/pine-webhook

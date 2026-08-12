@@ -4402,6 +4402,7 @@ require('./src/modules/procurement/routes').register(app, ctx);
 const admin = require('./src/modules/admin/routes');
 admin.register(app, ctx);
 require('./src/modules/admin/version').register(app);
+require('./src/modules/admin/metafield-explorer').register(app);
 
 // ─────────────────────────────────────────
 // Start
