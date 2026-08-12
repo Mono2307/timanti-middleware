@@ -45,7 +45,10 @@ function register(app, ctx) {
 
 app.get('/api/recon', async (req, res) => {
   try {
-    const reconDir = path.join(__dirname, 'src', 'data', 'recon');
+    // Repo-root-relative, NOT __dirname-relative: this file lives at
+    // src/modules/reporting/, so joining 'src/data/recon' onto __dirname resolved to
+    // /app/src/modules/reporting/src/data/recon and the route 500'd on scandir.
+    const reconDir = path.join(__dirname, '..', '..', 'data', 'recon');
     const token    = await getShopifyToken();
     const rows     = await runRecon({ dir: reconDir, storeUrl: process.env.SHOPIFY_STORE_URL, token });
     if ((req.query.format || '').toLowerCase() === 'json') {
