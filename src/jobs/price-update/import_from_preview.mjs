@@ -21,7 +21,27 @@ import { resolve, dirname, basename } from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-dotenv.config({ path: resolve(__dirname, '../.env') });
+
+/**
+ * The application root — the directory holding package.json (/app in the container).
+ *
+ * Discovered rather than counted. `../` was correct while this file lived at /app/price_update;
+ * the 2026-08 restructure moved it to /app/src/jobs/price-update, which silently repointed both
+ * the .env lookup and the Outputs directory at /app/src/jobs — a directory that does not exist.
+ * Neither failed at startup; they would only have surfaced on the next daily run.
+ */
+const APP_ROOT = (() => {
+  let dir = __dirname;
+  for (let i = 0; i < 6; i++) {
+    if (fs.existsSync(resolve(dir, 'package.json'))) return dir;
+    const up = dirname(dir);
+    if (up === dir) break;
+    dir = up;
+  }
+  return resolve(__dirname, '../../..');   // last-resort fallback
+})();
+
+dotenv.config({ path: resolve(APP_ROOT, '.env') });
 
 // ── CLI args ──────────────────────────────────────────────────────────────────
 // --input  <path>  Override the input CSV (used by daily orchestrator)
@@ -34,14 +54,14 @@ const _inputIdx = _args.indexOf('--input');
 
 const INPUT_CSV = _inputIdx !== -1
   ? resolve(_args[_inputIdx + 1])
-  : resolve(__dirname, '../Outputs/PREVIEW_VARIANT_IMPORT_20260421_v2.csv');
+  : resolve(APP_ROOT, 'Outputs/PREVIEW_VARIANT_IMPORT_20260421_v2.csv');
 
 const RESUME = !_args.includes('--no-resume');
 
 // Progress and error logs are scoped to the input file so daily runs never
 // collide with manual runs or each other.
 const _stem      = basename(INPUT_CSV, '.csv');
-const OUTPUTS_DIR  = process.env.OUTPUTS_DIR || resolve(__dirname, '../Outputs');
+const OUTPUTS_DIR  = process.env.OUTPUTS_DIR || resolve(APP_ROOT, 'Outputs');
 const ERROR_LOG    = resolve(OUTPUTS_DIR, `import_preview_errors_${_stem}.json`);
 const PROGRESS_LOG = resolve(OUTPUTS_DIR, `import_preview_progress_${_stem}.json`);
 const SKIPPED_LOG  = resolve(OUTPUTS_DIR, `import_preview_skipped_${_stem}.json`);

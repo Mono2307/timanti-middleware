@@ -1,9 +1,29 @@
 import os
 from pathlib import Path
 
-# /app/price_update → parent is /app
-_HERE        = Path(__file__).resolve().parent
-BASE         = _HERE.parent          # /app
+_HERE = Path(__file__).resolve().parent
+
+
+def _app_root(start: Path) -> Path:
+    """
+    The application root — the directory holding package.json (/app in the container).
+
+    Discovered rather than counted, deliberately. This was `_HERE.parent`, correct while the file
+    lived at /app/price_update. The 2026-08 restructure moved it to /app/src/jobs/price-update,
+    which silently turned BASE into /app/src/jobs — so OUTPUTS, LOGS_DIR and GOLD_RATE_FILE all
+    pointed at a directory that does not exist, and this job no longer wrote where the server's
+    lock file (/app/Outputs/price_update.running) expects.
+
+    Nothing failed at import; it would only have surfaced on the next daily run. Walking up to a
+    known marker means a future move cannot reintroduce it.
+    """
+    for candidate in [start, *start.parents]:
+        if (candidate / 'package.json').exists():
+            return candidate
+    return start.parents[2] if len(start.parents) >= 3 else start   # last-resort fallback
+
+
+BASE = _app_root(_HERE)              # /app
 # /data is a persistent Fly volume — survives deploys and restarts
 # Falls back to /app/Outputs if volume not mounted (local dev)
 OUTPUTS      = Path('/data') if Path('/data').exists() else BASE / 'Outputs'

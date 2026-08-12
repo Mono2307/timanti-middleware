@@ -4,7 +4,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "node src/modules/payments/installments.test.js && node src/core/tax.test.js && node src/core/metafields.test.js && node tools/module-contract.test.js && node tools/handler-smoke.test.js",
+    "test": "node src/modules/payments/installments.test.js && node src/core/tax.test.js && node src/core/metafields.test.js && node tools/paths.test.js && node tools/module-contract.test.js && node tools/handler-smoke.test.js",
     "verify": "node tools/verify.js",
     "routes": "node tools/route-inventory.js",
     "health": "node tools/health.js"
