@@ -55,11 +55,11 @@ DECIMAL_PRECISION = 2
 # A variant with no gemstone metafield reads 0 and prices exactly as before,
 # so this is a no-op for plain gold and diamond-only pieces.
 #
-# ⚠ This key must match the variant metafield the catalogue actually writes
-#   gemstone VALUE (rupees) to — not gemstone weight. A wrong key fails silently
-#   as gemstone = 0. Validate with `orchestrator.py --dry-run --test <GATI>`
-#   before a live run.
-GEMSTONE_MF_KEY = 'price_breakup_gemstone'
+# This key must match the variant metafield the catalogue actually writes
+# gemstone VALUE (rupees) to — not gemstone weight (jewelcode_gemstone_weight,
+# which is carats). A wrong key fails silently as gemstone = 0. Confirmed with
+# cataloguing 2026-08-12: custom.gemstone_charges.
+GEMSTONE_MF_KEY = 'gemstone_charges'
 
 # ── Static-price exclusion list ───────────────────────────────────────────────
 # Variants whose GATI ID (first SKU segment) is in this list are skipped
