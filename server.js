@@ -4441,10 +4441,14 @@ app.listen(PORT, async () => {
 
   // Voucher expiry reminders: a daily sweep for vouchers 30 days from expiry. The module was
   // added and exported but never started, so no reminder could ever fire.
+  // Key names must match what the module destructures: it reads `storeUrl` and
+  // `axios`. Passing `shopifyStoreUrl` and omitting axios makes every customer
+  // lookup throw, get swallowed by the per-row catch, and skip — the sweep would
+  // run daily and silently send nothing.
   startVoucherExpirySweep({
-    supabase, getShopifyToken, sendEmail, withStoreCc,
+    supabase, getShopifyToken, sendEmail, withStoreCc, axios,
     buildVoucherExpiryHtml: require('./src/integrations/email/templates').buildVoucherExpiryHtml,
-    shopifyStoreUrl: config.shopify.storeUrl,
+    storeUrl: config.shopify.storeUrl,
   });
   await initShopifyToken();
   console.log('🔄 Background poller started (30s)');
