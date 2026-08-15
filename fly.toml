@@ -17,6 +17,14 @@ primary_region = 'bom'
   processes = ['app']
 
 [[vm]]
-  memory = '512mb'
+  # 512mb could not hold Node AND the spawned Python reprice at the same time. The daily
+  # job has been killed mid-flight with the same signature four times now (2026-07-22, and
+  # three times on 2026-08-15): the machine restarts within seconds of the spawn, nothing
+  # reaches Shopify, and no FATAL email is sent because SIGKILL bypasses the orchestrator's
+  # except block, so the failure is completely silent. Reproduced on purpose at 12:05 UTC
+  # on 2026-08-15 by triggering the run and watching startedAt move.
+  # This is the hypothesis-driven half of the fix — confirm an OOM line in `fly logs`
+  # before treating it as settled.
+  memory = '1gb'
   cpu_kind = 'shared'
   cpus = 1
