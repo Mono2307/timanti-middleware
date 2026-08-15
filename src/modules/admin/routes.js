@@ -110,21 +110,61 @@ app.get('/api/price-update-diag', (req, res) => {
 
 
 
+// Spawn the daily reprice.
+//
+// Every failure mode here used to take the whole web process down with it, which is how the
+// job could fail for days without anyone knowing. There was no 'error' listener on the child
+// and no try/catch around spawn(), so a failed spawn either threw synchronously — rejecting
+// this route's promise, which Express 4 does not catch, so Node killed the process — or
+// emitted an unhandled 'error' event, which EventEmitter rethrows. Either way: no HTTP
+// response (the caller sees a 502), no log anyone reads, no alert, and the machine restarts.
+// Observed as a 502 in ~1.3s on 2026-08-15, identically for a full run and for a single-product
+// test run, which is what proved it was the spawn and not the workload.
+//
+// It also set _priceUpdateRunning and wrote the lock file BEFORE spawning, so a crash left a
+// stale lock claiming a run was in progress. Both are now cleared on every failure path.
 function _spawnPriceUpdate(extraArgs = []) {
   const { spawn } = require('child_process');
   const fs = require('fs');
-  _priceUpdateRunning = true;
-  try { fs.writeFileSync(PRICE_UPDATE_FLAG, String(process.pid)); } catch (_) {}
-  const proc = spawn('python3', ['/app/src/jobs/price-update/orchestrator.py', ...extraArgs], {
-    detached: false,
-    stdio:    ['ignore', 'pipe', 'pipe'],
-  });
-  proc.stdout.on('data', d => console.log(`[price-update] ${d.toString().trim()}`));
-  proc.stderr.on('data', d => console.error(`[price-update ERR] ${d.toString().trim()}`));
-  proc.on('close', code => {
+
+  const release = () => {
     _priceUpdateRunning = false;
     try { fs.unlinkSync(PRICE_UPDATE_FLAG); } catch (_) {}
-    console.log(`[price-update] exited with code ${code}`);
+  };
+
+  _priceUpdateRunning = true;
+  try { fs.writeFileSync(PRICE_UPDATE_FLAG, String(process.pid)); } catch (_) {}
+
+  let proc;
+  try {
+    proc = spawn('python3', ['/app/src/jobs/price-update/orchestrator.py', ...extraArgs], {
+      detached: false,
+      stdio:    ['ignore', 'pipe', 'pipe'],
+    });
+  } catch (err) {
+    // Synchronous throw from spawn itself. Report it to the caller instead of dying.
+    release();
+    console.error('[price-update] spawn threw:', err.message);
+    err.spawnFailed = true;
+    throw err;
+  }
+
+  // Asynchronous spawn failure (ENOENT, EACCES, EAGAIN...). Without this listener Node
+  // rethrows it as an uncaught exception and the process exits.
+  proc.on('error', err => {
+    release();
+    console.error(`[price-update] child process error: ${err.code || ''} ${err.message}`);
+  });
+
+  proc.stdout.on('data', d => console.log(`[price-update] ${d.toString().trim()}`));
+  proc.stderr.on('data', d => console.error(`[price-update ERR] ${d.toString().trim()}`));
+  proc.on('close', (code, signal) => {
+    release();
+    // A signal here means the run was killed rather than finishing — the silent failure mode
+    // from 2026-07-22, where SIGKILL skipped Python's except block so no FATAL email went out.
+    console.log(signal
+      ? `[price-update] KILLED by ${signal} — run did NOT complete, no report email will arrive`
+      : `[price-update] exited with code ${code}`);
   });
   return proc;
 }
