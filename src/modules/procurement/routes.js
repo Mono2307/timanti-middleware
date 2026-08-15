@@ -53,7 +53,7 @@ const PO_DEPS = () => ({
 });
 
 function register(app, ctx) {
-  const { handleRecalculatePriceTag } = ctx;
+  const { handleRecalculatePriceTag, gqlSetDraftLineItems } = ctx;
 
 
 app.post('/api/po-webhook', async (req, res) => {

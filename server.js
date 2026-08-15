@@ -4393,6 +4393,11 @@ const ctx = {
   config, supabase, getShopifyToken, log,
   handleRecalculatePriceTag,
   applyPaymentTagsToOrder, applyPaymentTagsToDraftOrder,
+  // Also still here, for the same reason: the metafield copy runs on the live conversion path
+  // below, and the admin backfill replays it; the PO sheet reprice re-writes line items through
+  // the same GraphQL helper the pricing engine uses. Both are injected rather than referenced
+  // by bare name from inside a module — that is what silently broke the serial mint.
+  copyDraftMetafieldsToOrder, gqlSetDraftLineItems,
 };
 
 registerRepairRoutes(app, getShopifyToken);

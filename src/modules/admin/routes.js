@@ -49,6 +49,10 @@ const { getShopifyToken, graphql } = require('../../core/shopify');
 const { log } = require('../../core/logger');
 
 const backfillInstallments = require('../payments/backfill-installments');
+// buildInstallmentMfDefs loops to MAX_INSTALLMENTS. It read the bare name — in scope while this
+// lived in server.js, a free variable once it moved — so /api/metafield-definitions/ensure threw
+// the moment it was called. It is exported by the payments module; take it from there.
+const { MAX_INSTALLMENTS } = require('../payments/installments');
 
 let _priceUpdateRunning = false;
 const PRICE_UPDATE_FLAG = '/app/Outputs/price_update.running';
@@ -67,7 +71,7 @@ function clearStalePriceUpdateFlag() {
 }
 
 function register(app, ctx) {
-  const { applyPaymentTagsToOrder, applyPaymentTagsToDraftOrder } = ctx;
+  const { applyPaymentTagsToOrder, applyPaymentTagsToDraftOrder, copyDraftMetafieldsToOrder } = ctx;
 
 
 // ─────────────────────────────────────────

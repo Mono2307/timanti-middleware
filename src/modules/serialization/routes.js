@@ -61,6 +61,12 @@ const SERIAL_DEPS = () => ({
 });
 
 function register(app, ctx) {
+  // applyPaymentTagsToOrder still lives in the bootstrap (see the header note). It MUST be taken
+  // from ctx: when this module was lifted out of server.js the call below kept referring to the
+  // bare name, which resolved fine inside the monolith and became a free variable here. Node only
+  // resolves it when the handler runs, so the app booted clean and every orders/updated webhook
+  // then died on a ReferenceError — after the 200 ack, and before the serial mint.
+  const { applyPaymentTagsToOrder } = ctx;
 
 // Body: { docType, stateCode?, shopifyLocationId?, shippingAddress?, draftOrderId?, orderId?, documentType? }
 app.post('/api/serial/allocate', async (req, res) => {
