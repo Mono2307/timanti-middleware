@@ -38,6 +38,9 @@ query($cursor: String) {
       dia:   metafield(namespace: "custom", key: "price_breakup_diamond") { value }
       make:  metafield(namespace: "custom", key: "price_breakup_making")  { value }
       gem:   metafield(namespace: "custom", key: "%s") { value }
+      # Already-priced marker. Carries the set_at of the run that last priced this variant, so
+      # an interrupted run can tell what it already finished WITHOUT a local progress file.
+      done:  metafield(namespace: "custom", key: "gold_last_updated_at") { value }
     }
   }
 }
@@ -90,6 +93,13 @@ def _gql(url, headers, query, variables, log, attempt=0):
             time.sleep(3)
             return _gql(url, headers, query, variables, log, attempt + 1)
         raise
+
+
+def _mf_str(node, key):
+    obj = node.get(key)
+    if not obj:
+        return ''
+    return (obj.get('value') or '').strip()
 
 
 def _mf_float(node, key):
@@ -184,6 +194,7 @@ def build_snapshot(token: str, gold_rate: dict, output_csv: Path, log: logging.L
     excluded        = []
     products_seen   = set()
     gemstone_priced = 0   # variants carrying a non-zero gemstone value
+    already_done    = 0   # priced by an earlier attempt of THIS run — see below
     run_date        = datetime.now().strftime('%Y-%m-%d')
 
     # Normalise exclusion list once (uppercase, stripped)
@@ -235,6 +246,25 @@ def build_snapshot(token: str, gold_rate: dict, output_csv: Path, log: logging.L
             })
             continue
 
+        # ── Resume without a progress file ────────────────────────────────────
+        # If this variant already carries THIS run's stamp, an earlier attempt priced it and was
+        # then killed. Skip it: the numbers would be byte-identical, and re-writing them costs a
+        # Shopify call each while the remaining work waits.
+        #
+        # The marker lives in Shopify and the run id lives in Supabase, so this survives anything
+        # that happens to the container — which matters because /data was never mounted and the
+        # progress log the importer keeps has therefore never survived a single deploy.
+        #
+        # A CHANGED rate produces a different set_at, so nothing matches and the whole catalogue
+        # re-prices, which is exactly what should happen.
+        # Compare the first 19 chars ("YYYY-MM-DDTHH:MM:SS") rather than the whole string. Shopify
+        # returned date_time metafields verbatim when this was checked, but a normalisation of
+        # "+00:00" to "Z" would silently break the match — and a silently-not-resuming resume is
+        # indistinguishable from a working one until it wastes two hours.
+        if gold_updated_at and (_mf_str(v, 'done')[:19] == gold_updated_at[:19]):
+            already_done += 1
+            continue
+
         # Taxable value = gold + diamond + making + gemstone. Gemstone is a
         # component in its own right; leaving it out understates both the price
         # and the GST charged on it.
@@ -277,6 +307,9 @@ def build_snapshot(token: str, gold_rate: dict, output_csv: Path, log: logging.L
         writer.writerows(rows)
 
     log.info(f'Preview CSV written — {len(rows)} rows → {output_csv.name}')
+    if already_done:
+        log.info(f'  RESUMED — {already_done} variant(s) already carried this run\'s stamp '
+                 f'({gold_updated_at}) and were skipped. Only {len(rows)} remain to write.')
     # Sanity signal for the gemstone component: if this is 0 on a run that should
     # have gemstone pieces, GEMSTONE_MF_KEY is pointing at the wrong metafield.
     log.info(f'  {gemstone_priced} of {len(rows)} priced variants carry a gemstone value '
@@ -303,6 +336,7 @@ def build_snapshot(token: str, gold_rate: dict, output_csv: Path, log: logging.L
         'variants_with_gemstone': gemstone_priced,
         'variants_no_weight':    len(no_weight),
         'variants_excluded':     len(excluded),
+        'variants_already_done': already_done,
         'archived_skipped':      archived_count,
         'products_covered':      len(products_seen),
         'preview_csv':           str(output_csv),

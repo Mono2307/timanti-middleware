@@ -46,6 +46,9 @@ const axios = require('axios');
 const { config }   = require('../../core/config');
 const { supabase } = require('../../core/supabase');
 const { getShopifyToken, graphql, primeBuyingRateTable } = require('../../core/shopify');
+// Used only by the kill-alert below. Imported rather than referenced by bare name — that mistake
+// is what this whole module has just been fixed for.
+const { sendEmail } = require('../../integrations/email');
 const { log } = require('../../core/logger');
 
 const backfillInstallments = require('../payments/backfill-installments');
@@ -160,11 +163,44 @@ function _spawnPriceUpdate(extraArgs = []) {
   proc.stderr.on('data', d => console.error(`[price-update ERR] ${d.toString().trim()}`));
   proc.on('close', (code, signal) => {
     release();
-    // A signal here means the run was killed rather than finishing — the silent failure mode
-    // from 2026-07-22, where SIGKILL skipped Python's except block so no FATAL email went out.
+    const killed = !!signal || code !== 0;
     console.log(signal
       ? `[price-update] KILLED by ${signal} — run did NOT complete, no report email will arrive`
       : `[price-update] exited with code ${code}`);
+
+    // The alert of last resort. Every silent failure in this saga was a run ending without
+    // Python's except block running — SIGKILL on a deploy or an OOM — so the orchestrator's own
+    // FATAL email could not fire. This fires from the PARENT, which is still alive to notice,
+    // and is the only notification that survives the child being killed outright.
+    //
+    // Deliberately not awaited and never allowed to throw: an alert failing must not be able to
+    // take down the web process, which is the exact class of bug that started all of this.
+    if (killed) {
+      const reason = signal ? `killed by ${signal}` : `exited with code ${code}`;
+      const when   = new Date().toISOString();
+      Promise.resolve()
+        .then(() => sendEmail({
+          to:      process.env.EMAIL_RUN_REPORT_TO || process.env.HQ_EMAIL,
+          subject: `Gold rate reprice did NOT complete — ${reason}`,
+          html: `<div style="font-family:Arial,sans-serif;padding:24px;max-width:560px;">
+            <h2 style="font-size:18px;margin:0 0 12px;">The daily reprice stopped before finishing</h2>
+            <p style="font-size:14px;color:#444;line-height:1.6;margin:0 0 12px;">
+              The job <strong>${reason}</strong> at ${when}. No run report will arrive, because the
+              orchestrator was stopped before it could send one.
+            </p>
+            <p style="font-size:14px;color:#444;line-height:1.6;margin:0 0 12px;">
+              A signal almost always means the machine restarted underneath it — usually a deploy.
+              Part of the catalogue is now on the new rate and part is not.
+            </p>
+            <p style="font-size:14px;color:#444;line-height:1.6;margin:0 0 12px;">
+              <strong>Re-submit the same rate.</strong> The run resumes: variants already stamped
+              with this run's timestamp are skipped, so only the remainder is priced.
+            </p>
+            <p style="font-size:12px;color:#888;margin:0;">Sent by the middleware, not by the job.</p>
+          </div>`,
+        }))
+        .catch(err => console.error(`[price-update] kill-alert email failed: ${err.message}`));
+    }
   });
   return proc;
 }
@@ -210,7 +246,38 @@ app.post('/api/trigger-price-update', async (req, res) => {
     }
   }
 
-  const setAt    = new Date().toISOString();
+  // set_at is the RUN'S IDENTITY, not just a timestamp. The snapshot stamps it onto every
+  // variant it prices as custom.gold_last_updated_at, so "has this variant been done in this
+  // run?" is answerable by comparing the two — from Shopify, with no local file involved.
+  //
+  // That only works if re-triggering the SAME rate keeps the SAME set_at. It used to mint a new
+  // one unconditionally, so a re-trigger after an interrupted run looked like a brand new run:
+  // every variant's stamp mismatched, nothing could be skipped, and the job restarted from row 1.
+  // Seen on 2026-08-17 — a deploy killed the run at 73%, and the re-trigger began re-pricing
+  // variants it had already priced two hours earlier instead of finishing the remaining 3,930.
+  //
+  // So: identical rate on the same UTC day => same run, keep the original set_at and let the
+  // snapshot skip what is already stamped. A CHANGED rate is genuinely a new run and gets a new
+  // identity, which correctly forces the whole catalogue to be re-priced.
+  let setAt = new Date().toISOString();
+  try {
+    const { data: prev } = await supabase.from('config').select('value').eq('key', 'gold_rate').maybeSingle();
+    const prior = prev?.value ? (typeof prev.value === 'string' ? JSON.parse(prev.value) : prev.value) : null;
+    const sameRate = prior
+      && Number(prior.pure) === pure
+      && String(prior.mode || '') === calcMode
+      && Number(prior.r18k ?? NaN) === (calcMode === 'manual' ? manual18k : Number(prior.r18k ?? NaN))
+      && Number(prior.r14k ?? NaN) === (calcMode === 'manual' ? manual14k : Number(prior.r14k ?? NaN));
+    const sameDay = prior?.set_at && String(prior.set_at).slice(0, 10) === setAt.slice(0, 10);
+    if (sameRate && sameDay) {
+      setAt = prior.set_at;
+      console.log(`[price-update] same rate already set today at ${setAt} — reusing it as the run id so an interrupted run resumes instead of restarting`);
+    }
+  } catch (e) {
+    // Never block a run on this. A fresh set_at just means a full re-price, which is safe.
+    console.warn(`[price-update] could not read the previous rate (${e.message}) — treating this as a new run`);
+  }
+
   const rateBlob = { pure, mode: calcMode, set_at: setAt };
   if (calcMode === 'manual') {
     rateBlob.r18k = manual18k;
