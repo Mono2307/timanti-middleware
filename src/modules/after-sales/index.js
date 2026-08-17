@@ -253,6 +253,32 @@ async function fetchAndCopyOriginalOrderSpecs(draft, token) {
   }
 }
 
+// The two pieces of human context every internal repair mail should carry.
+//
+// note  — the draft order's native note: what the counter actually wrote down when the piece came
+//         in. It is the only free-text description of the job anywhere in the flow.
+// weight— custom.repair_intake_gross_weight, recorded in front of the customer at inspection.
+//
+// Whoever clicks Mark Complete is usually not whoever received the piece, so without these the HQ
+// mail says only "payment received, proceed" with no idea what the job is or what came in. Both are
+// optional; a draft missing either just renders less. Never throws — a lookup failure must not stop
+// a repair email from going out.
+async function repairContext(draft, token) {
+  const ctx = { notes: draft.note || '', intakeGrossWeight: '' };
+  try {
+    const { data } = await axios.get(
+      `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draft.id}/metafields.json`,
+      { headers: shopifyHeaders(token), timeout: 10000 }
+    );
+    const mf = (data.metafields || []).find(
+      m => m.namespace === 'custom' && m.key === 'repair_intake_gross_weight');
+    if (mf?.value) ctx.intakeGrossWeight = String(mf.value).trim();
+  } catch (err) {
+    console.warn(`repairContext: metafield read failed for ${draft.name}: ${err.message}`);
+  }
+  return ctx;
+}
+
 // GET current draft tags then PUT with new set
 async function updateDraftOrderTags(draftOrderId, newTags, token) {
   await axios.put(
@@ -307,7 +333,10 @@ async function handleRepairPayment(draft, { transactionId, gatewayRef }, getShop
       to:      hqEmail,
       cc:      withStoreCc(process.env.HQ_CC_EMAIL),   // HQ + store; who acts on the links is an SOP matter
       subject: `Payment Received — ${draft.name} — ${customerName}`,
-      html:    buildRepairHqCompleteReadyHtml({ customerName, draftRef: draft.name, amount, completeUrl })
+      html:    buildRepairHqCompleteReadyHtml({
+        customerName, draftRef: draft.name, amount, completeUrl,
+        ...(await repairContext(draft, token)),
+      })
     }).catch(err => console.error(`❌ HQ complete-link email failed for ${draft.name}:`, err.message));
   }
 
@@ -429,7 +458,10 @@ async function processRepairDraftUpdate(incomingDraft, getShopifyToken, assignRe
           to:      hqEmail,
           cc:      withStoreCc(process.env.HQ_CC_EMAIL),   // HQ + store; who acts on the links is an SOP matter
           subject: `New Repair Intake — ${draft.name} — ${customerName}`,
-          html:    buildRepairIntakeHtml({ customerName, customerEmail, customerPhone, draftRef: draft.name, itemDesc, notes, approveUrl })
+          html:    buildRepairIntakeHtml({
+            customerName, customerEmail, customerPhone, draftRef: draft.name, itemDesc, notes, approveUrl,
+            intakeGrossWeight: (await repairContext(draft, shopifyToken)).intakeGrossWeight,
+          })
         });
       } catch (err) {
         hqEmailFailed = true;
@@ -499,7 +531,10 @@ async function processRepairDraftUpdate(incomingDraft, getShopifyToken, assignRe
           to:      hqEmail,
           cc:      withStoreCc(process.env.HQ_CC_EMAIL),   // HQ + store; who acts on the links is an SOP matter
           subject: `Complimentary Repair — ${draft.name} — ${customerName}`,
-          html:    buildRepairHqCompleteReadyHtml({ customerName, draftRef: draft.name, amount: null, completeUrl })
+          html:    buildRepairHqCompleteReadyHtml({
+            customerName, draftRef: draft.name, amount: null, completeUrl,
+            ...(await repairContext(draft, token)),
+          })
         });
       } catch (err) {
         console.error(`❌ Free repair HQ complete-link email failed for ${draft.name}:`, err.message);
@@ -548,7 +583,10 @@ async function processRepairDraftUpdate(incomingDraft, getShopifyToken, assignRe
           to:      hqEmail,
           cc:      withStoreCc(process.env.HQ_CC_EMAIL),   // HQ + store; who acts on the links is an SOP matter
           subject: `Store Payment Approved — ${draft.name} — ${customerName} — Rs.${amount}`,
-          html:    buildRepairHqCompleteReadyHtml({ customerName, draftRef: draft.name, amount, completeUrl })
+          html:    buildRepairHqCompleteReadyHtml({
+            customerName, draftRef: draft.name, amount, completeUrl,
+            ...(await repairContext(draft, token)),
+          })
         });
       } catch (err) {
         console.error(`❌ Store-approve HQ email failed for ${draft.name}:`, err.message);

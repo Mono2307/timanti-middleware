@@ -712,9 +712,15 @@ function buildExchangeNoteHtml({ customerName, excNumber, excValue, oldOrder, ne
 </html>`;
 }
 
-function buildRepairIntakeHtml({ customerName, customerEmail, customerPhone, draftRef, itemDesc, notes, approveUrl }) {
+function buildRepairIntakeHtml({ customerName, customerEmail, customerPhone, draftRef, itemDesc, notes, intakeGrossWeight, approveUrl }) {
   const notesRow = notes
     ? `<tr><td style="font-size:13px; color:#666666; padding:5px 0; vertical-align:top;">Notes</td><td style="font-size:13px; color:#444444; text-align:right; padding:5px 0;">${notes.replace(/\n/g, '<br>')}</td></tr>`
+    : '';
+  // Weighed with the customer standing there, so it is the agreed number both sides are bound to.
+  // Empty when staff tag the draft before entering it — the field is on the Repair section of the
+  // admin action app, and nothing forces an order between the two.
+  const weightRow = intakeGrossWeight
+    ? `<tr><td style="font-size:13px; color:#666666; padding:5px 0; vertical-align:top;">Gross wt at intake</td><td style="font-size:13px; color:#444444; text-align:right; padding:5px 0;">${intakeGrossWeight} g</td></tr>`
     : '';
   return `<!DOCTYPE html>
 <html lang="en">
@@ -773,6 +779,7 @@ function buildRepairIntakeHtml({ customerName, customerEmail, customerPhone, dra
                   <td style="font-size:13px; color:#666666; padding:5px 0;">Item</td>
                   <td style="font-size:13px; color:#444444; text-align:right; padding:5px 0;">${itemDesc}</td>
                 </tr>
+                ${weightRow}
                 ${notesRow}
               </table>
             </td></tr>
@@ -930,7 +937,13 @@ function buildRepairFreeHtml({ customerName, draftRef, itemDesc }) {
 </html>`;
 }
 
-function buildRepairHqCompleteReadyHtml({ customerName, draftRef, amount, completeUrl }) {
+// `notes` is the draft order's native note — what the counter wrote down when the piece was taken
+// in ("clasp broken, customer says it snagged"). It is the only free-text description of the job
+// anywhere in the flow, and the person clicking Mark Complete is often not the person who received
+// the piece. It rides every internal repair mail for that reason. Optional: omitted renders nothing.
+// `intakeGrossWeight` is custom.repair_intake_gross_weight, the weight recorded with the customer
+// present. Shown here so whoever completes the repair can check the piece back against it.
+function buildRepairHqCompleteReadyHtml({ customerName, draftRef, amount, completeUrl, notes, intakeGrossWeight }) {
   const paymentBanner = amount
     ? `<table width="100%" cellpadding="0" cellspacing="0">
         <tr><td style="background:#d4edda; padding:12px 20px; text-align:center; font-weight:bold; font-size:13px; border-bottom:1px solid #c3e6cb;">
@@ -946,6 +959,27 @@ function buildRepairHqCompleteReadyHtml({ customerName, draftRef, amount, comple
   const bodyText = amount
     ? `Payment of <strong>Rs.${amount}</strong> has been received for <strong>${customerName}</strong>. The repair can now proceed.`
     : `The repair for <strong>${customerName}</strong> has been confirmed as complimentary. Proceed with the repair when ready.`;
+
+  const detailRows = [
+    intakeGrossWeight
+      ? `<tr><td style="font-size:13px; color:#666666; padding:5px 0; vertical-align:top; white-space:nowrap;">Gross wt at intake</td>
+         <td style="font-size:13px; color:#444444; text-align:right; padding:5px 0;">${intakeGrossWeight} g</td></tr>`
+      : '',
+    notes
+      ? `<tr><td style="font-size:13px; color:#666666; padding:5px 0; vertical-align:top; white-space:nowrap;">Intake notes</td>
+         <td style="font-size:13px; color:#444444; text-align:right; padding:5px 0; white-space:pre-wrap;">${String(notes).replace(/\n/g, '<br>')}</td></tr>`
+      : '',
+  ].join('');
+
+  const detailBlock = detailRows
+    ? `<table width="100%" cellpadding="0" cellspacing="0" style="padding:0 30px 4px 30px;">
+         <tr><td>
+           <table width="100%" cellpadding="0" cellspacing="0" style="background:#f9f9f9; border-left:3px solid #fc7d27; padding:10px 14px;">
+             ${detailRows}
+           </table>
+         </td></tr>
+       </table>`
+    : '';
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -975,6 +1009,13 @@ function buildRepairHqCompleteReadyHtml({ customerName, draftRef, amount, comple
           <p style="font-size:13px; color:#999999; margin-bottom:8px;">${draftRef}</p>
           <h2 style="font-size:20px; color:#000000; margin-bottom:16px;">Repair in Progress — Mark Complete When Done</h2>
           <p style="font-size:14px; color:#444444; line-height:1.6;">${bodyText}</p>
+        </td></tr>
+      </table>
+
+      ${detailBlock}
+
+      <table width="100%" cellpadding="0" cellspacing="0">
+        <tr><td style="padding:0 30px 10px 30px; text-align:center;">
         </td></tr>
       </table>
 

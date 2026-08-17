@@ -488,6 +488,19 @@ app.post('/api/backfill-order-tags', async (req, res) => {
 // DRY RUN BY DEFAULT — pass ?apply=true to actually create.
 // ?group=adjustments|installments|all (default all) scopes the run.
 // ─────────────────────────────────────────
+// Gross weight recorded at repair intake, with the customer present. Distinct from
+// custom.gross_weight_g, which the Mark Complete form writes AFTER the repair — the two are
+// different measurements of the same piece at opposite ends of the job, and the whole point of
+// keeping both is being able to show they match. number_decimal so it sorts and validates as a
+// weight rather than as free text.
+//
+// The extension resolves namespace and type from the LIVE definition at save time, so without
+// this the field renders in the Repair section and then fails silently on save.
+const REPAIR_MF_DEFS = [
+  { key: 'repair_intake_gross_weight', name: 'Repair — Gross Weight at Intake (g)', type: 'number_decimal',
+    description: 'Gross weight of the piece when taken in for repair, recorded in the presence of the customer. The number any later weight dispute is settled against.' },
+];
+
 const ADJUSTMENT_MF_DEFS = [
   { key: 'exchange_note_code', name: 'Exchange Note Applied', type: 'single_line_text_field', description: 'Serial code of the exchange note applied to this order (e.g. EXC27-KAHSR-0001).' },
   { key: 'voucher_code',       name: 'Voucher Applied',       type: 'single_line_text_field', description: 'Serial code of the voucher applied to this order (e.g. VCH27-KAHSR-0001).' },
@@ -579,6 +592,7 @@ async function runEnsureMetafieldDefinitions(req, res) {
   const defs = [];
   if (group === 'all' || group === 'adjustments')  defs.push(...ADJUSTMENT_MF_DEFS);
   if (group === 'all' || group === 'installments') defs.push(...buildInstallmentMfDefs(modeChoices));
+  if (group === 'all' || group === 'repair')       defs.push(...REPAIR_MF_DEFS);
 
   const planned = [];
   for (const d of defs) for (const ownerType of owners) planned.push({ ...d, ownerType, namespace: 'custom' });

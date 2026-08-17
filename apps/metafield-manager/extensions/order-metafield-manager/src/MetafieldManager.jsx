@@ -174,6 +174,10 @@ const FIELD_CONFIG = {
   po_mto_variants: { section: "Procurement", label: "MTO Variants", editable: true, applies: "order" },
 
   repair_order_reference: { section: "Repair", label: "Linked Repair Order", editable: true, applies: "draft" },
+  // Weighed in front of the customer when the piece is taken in. Editable because it is a staff
+  // observation, not a computed value, and it is the number any later weight dispute is settled
+  // against — the post-repair weight on the Mark Complete form is a different measurement.
+  repair_intake_gross_weight: { section: "Repair", label: "Gross Weight at Intake (g)", editable: true, applies: "draft" },
   repair_intake_at: { section: "Repair", label: "Repair Intake At", editable: false, applies: "draft" },
   repair_estimate_sent_at: { section: "Repair", label: "Estimate Sent At", editable: false, applies: "draft" },
   repair_completed_at: { section: "Repair", label: "Repair Completed At", editable: false, applies: "draft" },
