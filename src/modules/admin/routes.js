@@ -45,7 +45,7 @@ const axios = require('axios');
 
 const { config }   = require('../../core/config');
 const { supabase } = require('../../core/supabase');
-const { getShopifyToken, graphql } = require('../../core/shopify');
+const { getShopifyToken, graphql, primeBuyingRateTable } = require('../../core/shopify');
 const { log } = require('../../core/logger');
 
 const backfillInstallments = require('../payments/backfill-installments');
@@ -240,7 +240,7 @@ app.post('/api/trigger-price-update', async (req, res) => {
   if (buyErr) {
     console.error('Price update trigger: buying table write failed:', buyErr.message);
   } else {
-    _buyingTableCache = JSON.parse(buyingBlob); _buyingTableAt = Date.now();
+    primeBuyingRateTable(JSON.parse(buyingBlob));
   }
 
   const testGati = (req.body.test_gati || '').toString().trim().toUpperCase();

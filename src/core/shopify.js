@@ -126,6 +126,27 @@ async function getBuyingRateTable() {
   } catch (err) { log.warn('shopify', 'buying rate table load failed:', err.message); return null; }
 }
 
+/**
+ * Seed the cache with a table that was just written to Supabase, so the next read does not
+ * serve the previous hour's rates.
+ *
+ * This exists because the writer and the cache ended up in different modules. The daily
+ * trigger used to sit in server.js beside these two variables and primed them by direct
+ * assignment; the cache moved here (07965ae) and the writer moved to modules/admin (075fec1),
+ * which left `_buyingTableCache = ...` in admin/routes.js referring to nothing. That file is
+ * 'use strict', so the assignment did not create a global — it threw ReferenceError, inside an
+ * async Express handler, which Node turns into an unhandled rejection and a process exit.
+ *
+ * Net effect: POST /api/trigger-price-update saved the gold rate, saved the buying table, then
+ * killed the web process before it ever spawned the reprice. 502 to the caller, machine restart,
+ * no Python, no FATAL email, no trace. The daily job silently did not run from 2026-08-12 on.
+ */
+function primeBuyingRateTable(table) {
+  if (!table) return;
+  _buyingTableCache = table;
+  _buyingTableAt = Date.now();
+}
+
 /** Buy-back rate for a (possibly fractional) karat: karat/24 × pure × (1 − haircut). */
 function buyingRateFor(table, purity) {
   if (!table || !(purity > 0) || purity > 24) return null;
@@ -136,5 +157,5 @@ module.exports = {
   API_VERSION,
   getShopifyToken, initShopifyToken, getTokenState,
   shopifyHeaders, restUrl, rest, getJson, postJson, putJson, deleteJson, graphql,
-  getBuyingRateTable, buyingRateFor,
+  getBuyingRateTable, buyingRateFor, primeBuyingRateTable,
 };
