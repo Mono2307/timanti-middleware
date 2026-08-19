@@ -2238,7 +2238,39 @@ async function syncAmountToCollect(draft) {
   );
   const mf  = (key) => { const m = (mfData.metafields || []).find(x => x.namespace === 'custom' && x.key === key); return m ? m.value : null; };
   const adj = (key) => Math.abs(parseFloat(mf(key)) || 0);
-  const total = parseFloat(draft.total_price || 0);
+
+  // Re-read the total from Shopify instead of trusting the webhook payload.
+  //
+  // This runs LAST in the draft-updated chain, after reprice / recalculate-price / weighted-reprice /
+  // apply-discount have rewritten the line items. Those write to Shopify; they do not mutate the
+  // in-memory `draft`, which was captured from the webhook body before any of them ran. So
+  // draft.total_price was the price as it stood BEFORE the change that triggered this pass — while
+  // the metafields above were read fresh. Mixing the two computed the net against a stale total.
+  //
+  // Observed on D182: a discount repriced the line to 62,971.93 but amount_to_be_collected stayed
+  // pinned to the pre-discount total, so amount_pending was wrong. It only corrected when an
+  // unrelated edit (touching an installment date) fired another webhook whose payload happened to
+  // carry the new price — i.e. it self-healed one edit late, which is worse than failing outright
+  // because the number looks settled.
+  //
+  // Falls back to the payload total if the read fails: a stale number beats no number, and this
+  // must never throw into the webhook chain.
+  let total = parseFloat(draft.total_price || 0);
+  try {
+    const { data: fresh } = await axios.get(
+      `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}.json?fields=id,total_price`,
+      { headers: { 'X-Shopify-Access-Token': token }, timeout: 10000 }
+    );
+    const liveTotal = parseFloat(fresh?.draft_order?.total_price);
+    if (Number.isFinite(liveTotal)) {
+      if (Math.abs(liveTotal - total) >= 0.005) {
+        console.log(`Draft ${draftOrderId}: payload total ${total} is stale — using live ${liveTotal}`);
+      }
+      total = liveTotal;
+    }
+  } catch (err) {
+    console.warn(`Draft ${draftOrderId}: live total read failed (${err.message}) — using payload total ${total}`);
+  }
 
   const patch = {};
   // Auto-value old gold from weight × buying rate — only when no human value is present (manual always wins).
@@ -2838,6 +2870,13 @@ app.post('/api/reprice', async (req, res) => {
       draft.tags = [...existingTags, tagToInject].join(', ');
     }
     await handleRecalculatePriceTag(draft, { force: !threshold });
+    // A reprice changes the total, so the collection figures must follow it in the SAME request.
+    // The line-item write does fire a draft_orders/update webhook that would run these anyway, but
+    // that is delivery-dependent and arrives after this response — so a caller that reads the
+    // metafields straight back would see the old net. Both are no-op guarded, so the webhook
+    // running them again a moment later costs nothing.
+    await syncAmountToCollect({ id: draftOrderId, total_price: draft.total_price });
+    await handlePaymentMetafieldSync({ id: draftOrderId });
     return res.json({ success: true, draftOrderId });
   } catch (err) {
     return res.status(500).json({ success: false, error: err.message, detail: err.response?.data });
