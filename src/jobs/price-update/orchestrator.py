@@ -329,13 +329,31 @@ def run(test_gati: str = None, dry_run: bool = False):
         # catalogue, so writing them to the production name would leave a stub CSV
         # that the day's real run then "resumes" from — pricing only that fraction
         # and silently skipping everything else.
+        # The production CSV is keyed by the RUN, not the day.
+        #
+        # It used to be PREVIEW_VARIANT_IMPORT_{today}_v2.csv. A SECOND rate submitted on the same
+        # day therefore found the FIRST run's CSV, set resuming=True, skipped the snapshot entirely,
+        # and then hit the first run's progress log (named off the same CSV stem) listing every
+        # variant as already done. Net effect: it priced nothing, reported "0 variants updated",
+        # and SILENTLY DISCARDED THE NEW RATE. The rate was saved in Supabase, so everything looked
+        # healthy while the catalogue stayed on the earlier price.
+        #
+        # Observed 2026-08-21: 10:58 IST submitted 16147 and applied it; 15:03 IST submitted 16284
+        # and applied nothing. Gold had risen, so the store was underpricing every live item until
+        # someone noticed the zero in the report.
+        #
+        # set_at is the run id (see /api/trigger-price-update), so keying on it gives both
+        # behaviours for free: re-submitting the SAME rate reuses set_at, finds the same CSV and
+        # correctly resumes an interrupted run; a DIFFERENT rate gets a new set_at, finds no CSV,
+        # and correctly rebuilds the snapshot.
+        run_tag = re.sub(r'\D', '', str(gold_rate.get('set_at') or ''))[8:14] or run_id
         if dry_run or test_gati:
             tag         = '_'.join(x for x in ('DRYRUN' if dry_run else 'TEST', test_gati) if x)
             preview_csv = OUTPUTS / f'PREVIEW_VARIANT_IMPORT_{today}_{tag}_{run_id}_v2.csv'
         else:
-            preview_csv = OUTPUTS / f'PREVIEW_VARIANT_IMPORT_{today}_v2.csv'
+            preview_csv = OUTPUTS / f'PREVIEW_VARIANT_IMPORT_{today}_r{run_tag}_v2.csv'
 
-        # Resume if today's CSV already exists and has data (e.g. after OOM/deploy restart)
+        # Resume if THIS RUN's CSV already exists and has data (e.g. after OOM/deploy restart)
         resuming = (
             not test_gati and
             not dry_run and
