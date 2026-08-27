@@ -221,6 +221,20 @@ function createCadAdvanceHandlers(deps) {
 
       await gqlSetDraftLineItems(draftOrderId, remaining, token);
       console.log(`[cad-advance] ${draft.name || draftOrderId}: CAD Advance line (Rs${value.toFixed(2)}) removed — the advance is a payment against the product, not a charge beside it`);
+
+      // open → APPLIED. The advance is now committed to a purchase, but nothing is final: this is
+      // still a draft, and the customer can walk away. 'applied' is the reservation — it blocks the
+      // advance being spent on a second draft while this one is being built, and it is what tells
+      // accounts the money is no longer an unattached trade advance.
+      //
+      // It becomes 'redeemed' only when this draft converts to an order (handleAdvanceConversion).
+      await updateDraftOrderMetafields(draftOrderId, { advance_status: 'applied' });
+      try {
+        await creditInstruments.apply(supabase, {
+          instrumentType: 'cad_advance', serialCode: cadLedgerKey(draft.name),
+          targetDraftId: draftOrderId, value,
+        });
+      } catch (e) { console.error(`[cad-advance] ledger apply ${draft.name}: ${e.message}`); }
     } catch (e) {
       console.error(`[cad-advance] line removal failed for draft ${draft?.id}:`, e.message);
     }
@@ -325,10 +339,14 @@ function createCadAdvanceHandlers(deps) {
         return;
       }
 
-      // Source order: single-use closes immediately, so the same advance cannot be referenced on a
-      // second draft while this one is still being built. redeemed_against holds the draft name for
-      // now and is back-filled with the real order number at conversion.
-      await updateOrderMetafields(String(advOrder.id), { advance_status: 'redeemed', redeemed_against: draft.name || draftOrderId }, token);
+      // Source order: open → APPLIED, not redeemed. The advance is reserved against this draft — it
+      // cannot be referenced on a second draft while this one is being built (the gate above accepts
+      // 'open' only) — but nothing is final yet. If this sale never converts, the advance was never
+      // actually spent, and it must not be sitting there marked used up.
+      //
+      // It becomes 'redeemed' when this draft converts (handleAdvanceConversion), which is also when
+      // the real order number is known and redeemed_against stops pointing at a draft.
+      await updateOrderMetafields(String(advOrder.id), { advance_status: 'applied', redeemed_against: draft.name || draftOrderId }, token);
 
       // adv-num tag mirrors vch-num/exc-num: it is what the conversion handler reads to back-fill the
       // real order number on both sides.
@@ -339,11 +357,11 @@ function createCadAdvanceHandlers(deps) {
       } catch (e) { console.error(`[cad-advance] adv-num tag: ${e.message}`); }
 
       try {
-        await creditInstruments.redeem(supabase, {
+        await creditInstruments.apply(supabase, {
           instrumentType: 'cad_advance', serialCode: cadLedgerKey(advOrder.name || ref),
           targetDraftId: draftOrderId, value: advVal,
         });
-      } catch (e) { console.error(`[cad-advance] ledger redeem ${ref}: ${e.message}`); }
+      } catch (e) { console.error(`[cad-advance] ledger apply ${ref}: ${e.message}`); }
 
       await delRef();
       console.log(`[cad-advance] absorbed ${advVal.toFixed(2)} from ${ref} → ${draft.name || draftOrderId} as an installment leg`);
@@ -360,9 +378,9 @@ function createCadAdvanceHandlers(deps) {
   //  1. Path B back-fill. A sale that absorbed someone's advance carries an adv-num:#1042 tag. Both
   //     the source order's redeemed_against and the ledger row point at a DRAFT name until now; a
   //     draft number is useless to accounts once it no longer exists, so both get the real order.
-  //  2. Path A consumption. An advance captured on THIS draft, converting alongside a real product,
-  //     has been consumed — advance_status goes open → applied. Nothing wrote 'applied' before this,
-  //     which is why every advance ever taken looked permanently outstanding.
+  //  2. Path A settlement. An advance captured on THIS draft, converting alongside a real product,
+  //     is now genuinely spent — applied → redeemed. (The line-removal step moved it open → applied
+  //     earlier, when the product was added and the sale was still only a draft.)
   //  3. Rekey. The register row was opened under the draft name (all that existed when the money
   //     landed) and moves to the order name, which is what staff reference and reports print.
   //
@@ -386,8 +404,11 @@ function createCadAdvanceHandlers(deps) {
           { headers, timeout: 15000 });
         const src = (data.orders || []).find(o => o.name === srcName) || (data.orders || [])[0] || null;
         if (src) {
-          await updateOrderMetafields(String(src.id), { redeemed_against: target }, token);
-          console.log(`[cad-advance] ${srcName} redeemed_against → ${target}`);
+          // applied → REDEEMED. The draft that reserved this advance has become a real order, so
+          // the advance is now genuinely spent, and redeemed_against stops pointing at a draft
+          // number that no longer means anything to accounts.
+          await updateOrderMetafields(String(src.id), { advance_status: 'redeemed', redeemed_against: target }, token);
+          console.log(`[cad-advance] ${srcName} applied → redeemed against ${target}`);
         } else {
           console.warn(`[cad-advance] conversion: source order ${srcName} not found — redeemed_against left at the draft name`);
         }
@@ -418,21 +439,28 @@ function createCadAdvanceHandlers(deps) {
       });
     } catch (e) { console.error(`[cad-advance] conversion rekey ${draft.name}: ${e.message}`); }
 
-    if (own.advance_status !== 'open') return;   // already applied/redeemed/expired
+    if (own.advance_status === 'redeemed' || own.advance_status === 'expired') return;   // already final
 
+    // An advance-only order — nothing was bought, so nothing was spent. It stays 'open' and keeps
+    // running on its original 365-day clock, which is the whole point of Path B.
     if (!hasProductLineBesidesCad(draft)) {
       console.log(`[cad-advance] ${target} is an advance-only order — status stays open, expires on the original clock`);
       return;
     }
+
+    // A product was bought on the same document the advance sits on. The line removal step already
+    // moved it open → applied when the product went on; this is the moment it becomes final.
+    // ('open' here means the line removal never ran — a draft built in one go, say — so this also
+    // covers that: either way, the sale happened and the advance is spent.)
     try {
-      await updateOrderMetafields(String(orderId), { advance_status: 'applied', redeemed_against: target }, token);
-      await creditInstruments.apply(supabase, {
+      await updateOrderMetafields(String(orderId), { advance_status: 'redeemed', redeemed_against: target }, token);
+      await creditInstruments.redeem(supabase, {
         instrumentType: 'cad_advance', serialCode: cadLedgerKey(target),
         targetDraftId: draftOrderId, targetOrderId: orderId, targetOrderName: target,
         value: parseFloat(own.advance || 0) || null,
       });
-      console.log(`[cad-advance] ${target}: advance ${own.advance} consumed on the same document → applied`);
-    } catch (e) { console.error(`[cad-advance] conversion apply ${target}: ${e.message}`); }
+      console.log(`[cad-advance] ${target}: advance ${own.advance} spent on this sale → redeemed`);
+    } catch (e) { console.error(`[cad-advance] conversion redeem ${target}: ${e.message}`); }
   }
 
   return { handleAdvanceCapture, handleAdvanceLineRemoval, handleAdvanceRedeem, handleAdvanceConversion };

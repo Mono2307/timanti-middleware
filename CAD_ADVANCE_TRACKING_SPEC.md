@@ -82,12 +82,21 @@ every invoice template — an advance appears once, in the payment table, as mon
 
 ## 3. Lifecycle (locked)
 
+The dividing line is **draft vs order**: committed to a draft is reversible, converted to an order is
+final. Same shape as vouchers and exchange notes.
+
 | Status | Written when |
 |---|---|
-| `open` | capture — advance paid, nothing consumed yet |
-| `applied` | **NEW** — Path A: the draft carrying the advance converts to an order that has non-CAD lines |
-| `redeemed` | Path B: referenced on a later sale and absorbed |
-| `expired` | **NEW** — 365 days from `advance_date` with no `applied`/`redeemed` |
+| `open` | capture — advance paid, not committed to any purchase |
+| `applied` | committed to a draft, reversible. Path A: a product is added to the draft the advance sits on (line removal). Path B: the advance is referenced on a new sale draft. Blocks a second draft claiming it — the redeem gate accepts `open` only. |
+| `redeemed` | **final** — that draft converted to an order. Only here is the advance genuinely spent, and only here does `redeemed_against` get a real order number instead of a draft number. |
+| `expired` | 365 days from `advance_date` while still `open` |
+
+An advance-only order stays `open` through conversion: nothing was bought, so nothing was spent.
+
+**Known gap:** an `applied` advance on a draft that is then abandoned or deleted stays `applied`.
+Vouchers solve this with `revertApplied` on draft delete (`procurement/routes.js:74`); the same hook
+is not yet wired for advances, so an abandoned draft needs a manual reset to `open`.
 
 - The 365-day clock stays on `custom.advance_date` (the day payment was recorded). Unchanged.
 - **Expiry blocks redemption.** The existing gate already requires `advance_status === 'open'`
