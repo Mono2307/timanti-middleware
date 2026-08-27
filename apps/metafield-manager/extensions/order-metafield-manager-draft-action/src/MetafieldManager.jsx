@@ -341,6 +341,59 @@ const PAYMENT_TRIGGER_KEYS = [
 // one used to add a `reprice` tag that the handler then refused to act on, because it aborts unless
 // jewelcode_net_weight is present. A cosmetic correction should not be routed through the pricing
 // engine at all, let alone rejected by it.
+// Everything the reprice engine reads BY LINE POSITION, plus the order-level discount intent that
+// outlives a line edit. The positional values are indexed by product-line position (the middleware
+// reads them as CSV, or as a JSON array for line_discounts), so removing, adding or reordering a
+// line shifts every one of them onto a different product. The prices that come out are internally
+// consistent and wrong, which is why nobody notices.
+//
+// discount_applied is in the list because readDiscountIntent falls back to it as a legacy flat
+// discount whenever discount_rate is unset: clearing the others without it does not remove the
+// discount, it just re-routes the same one through the legacy path.
+const POSITIONAL_PRICING_KEYS = [
+  "gold_rate",
+  "making",
+  "jewelcode_net_weight",
+  "jewelcode_gross_weight",
+  "jewelcode_diamond_carats",
+  "jewelcode_gemstone_weight",
+  "jewelcode_diamond_pieces",
+  "line_discounts",
+  "discount_rate",
+  "discount_kind",
+  "discount_mode",
+  "discount_applied",
+];
+
+// Fingerprint of the line composition those values were entered against, stored as a short hash of
+// "<lineId>:<qty>|...". Line ids catch removal, addition, reordering and variant swaps (Shopify
+// issues a new line id on a swap); quantity catches the rest, because custom.making is the whole
+// line's labour, already multiplied by quantity.
+//
+// Stored unstructured - metafieldsSet accepts a key with no definition, exactly as
+// custom.line_discounts already does. Hashed rather than kept verbatim so the value stays short
+// whatever the line count.
+const PRICING_BASIS_KEY = "pricing_basis";
+
+// The fingerprint has to be computable from BOTH sides: here, off GraphQL nodes, and in the
+// middleware, off a REST webhook payload. So it is built from values that mean the same thing in
+// both - the variant id and the quantity - and never from line ids, which arrive as a gid here and
+// as a bare number there and would never agree.
+//
+// PRODUCT lines only, matching how the middleware indexes its positional arrays: it builds
+// productItems by dropping everything without a variant (exchange-note lines and custom negative
+// discount lines are both custom lines), and positions are counted within THAT list.
+function basisHash(lineNodes) {
+  const raw = (lineNodes || [])
+    .filter((n) => n?.variant?.id)
+    .map((n) => String(n.variant.id).split("/").pop() + ":" + (n.quantity ?? 1))
+    .join("|");
+  if (!raw) return "";
+  let h = 5381;
+  for (let i = 0; i < raw.length; i++) h = ((h << 5) + h + raw.charCodeAt(i)) >>> 0;
+  return h.toString(16);
+}
+
 const REPRICE_TRIGGER_KEYS = [
   "gold_rate", "gold_rate_date", "making",
   "jewelcode_net_weight",
@@ -396,11 +449,18 @@ export default function MetafieldManager({ surface = "block" } = {}) {
   const [discountNote, setDiscountNote] = useState("");
   const [refreshTick, setRefreshTick] = useState(0); // bumped after a save to re-pull server-recomputed values
   const [recalcNote, setRecalcNote] = useState(""); // transient "recalculating…" hint after a trigger tag
-  // Per-line pricing editor (draft scope): one row per line item, each with a flat making override and a
-  // stack of discounts. Serialized to custom.making (positional CSV) + custom.line_discounts (JSON).
-  const [lineRows, setLineRows] = useState([]); // [{ id, title, making, discounts:[{ t, m, v }] }]
+  // Per-line discount editor (draft scope): one row per line item carrying a stack of discounts,
+  // serialized to custom.line_discounts (JSON). Labour is NOT written from here: custom.making in the
+  // Pricing section is its only channel, and a reduction to labour is a discount targeting Making.
+  const [lineRows, setLineRows] = useState([]); // [{ id, title, discounts:[{ t, m, v }] }]
   const [lineBusy, setLineBusy] = useState(false);
   const [lineNote, setLineNote] = useState("");
+  // Stale-pricing guard. basis = the current line composition's hash; staleKeys = the positional
+  // values that were entered against a different one.
+  const [staleP, setStaleP] = useState({ basis: "", staleKeys: [] });
+  const [staleNs, setStaleNs] = useState({});
+  const [staleBusy, setStaleBusy] = useState(false);
+  const [staleNote, setStaleNote] = useState("");
   const baselineRef = useRef({});
   const editsRef = useRef({});
 
@@ -409,8 +469,10 @@ export default function MetafieldManager({ surface = "block" } = {}) {
 
     async function load() {
       const valuesByKey = {};
+      const nsByKey = {};
       const defsByKey = {};
       const warnings = [];
+      let currentBasis = "";
 
       // Values — best-effort.
       if (ownerId) {
@@ -419,6 +481,9 @@ export default function MetafieldManager({ surface = "block" } = {}) {
           if (res?.errors?.length) warnings.push(res.errors.map((e) => e.message).join("; "));
           for (const n of res?.data?.[ctx.resourceField]?.metafields?.nodes ?? []) {
             valuesByKey[n.key] = n.value ?? "";
+            // Kept for the stale-pricing wipe: metafieldsDelete identifies by namespace + key, and
+            // these keys are not all in FIELD_CONFIG, so defs[] cannot supply the namespace.
+            nsByKey[n.key] = n.namespace;
           }
         } catch (e) {
           warnings.push(`Couldn't load values: ${e?.message || e}`);
@@ -444,23 +509,22 @@ export default function MetafieldManager({ surface = "block" } = {}) {
       // Fall back to each metafield's own namespace/type where no definition.
       // (values query already carried them; merge in.)
 
-      // Per-line pricing editor prefill (draft scope): one row per line item, seeded from the positional
-      // custom.making CSV and the custom.line_discounts JSON (both indexed by line position).
+      // Per-line discount editor prefill (draft scope): one row per line item, seeded from the
+      // custom.line_discounts JSON (indexed by line position).
       let lineRowsInit = [];
       if (ctx.scope === "draft" && ownerId) {
         try {
           const liRes = await shopify.query(
-            `query LineItemsForPricing($id: ID!) { ${ctx.resourceField}(id: $id) { lineItems(first: 50) { nodes { id title name } } } }`,
+            `query LineItemsForPricing($id: ID!) { ${ctx.resourceField}(id: $id) { lineItems(first: 50) { nodes { id title name quantity variant { id } } } } }`,
             { variables: { id: ownerId } },
           );
           const nodes = liRes?.data?.[ctx.resourceField]?.lineItems?.nodes ?? [];
-          const makingCsv = (valuesByKey["making"] ?? "").split(",");
+          currentBasis = basisHash(nodes);
           let lineDisc = [];
           try { lineDisc = JSON.parse(valuesByKey["line_discounts"] || "[]"); } catch { lineDisc = []; }
           lineRowsInit = nodes.map((n, i) => ({
             id: n.id,
             title: n.title || n.name || `Line ${i + 1}`,
-            making: (makingCsv[i] ?? "").trim(),
             discounts: Array.isArray(lineDisc[i])
               ? lineDisc[i].map((e) => ({ t: e.t || "dia", m: e.m || "pct", v: String(e.v ?? "") }))
               : [],
@@ -482,6 +546,18 @@ export default function MetafieldManager({ surface = "block" } = {}) {
       setDefs(defsByKey);
       setValues(valuesByKey);
       setLineRows(lineRowsInit);
+      // A positional value only means anything against the line composition it was entered for. If
+      // that has moved on, every one of them now points at a different product. A draft with no
+      // recorded basis is left alone: absence is not evidence the lines changed, and every draft
+      // priced before this shipped has none.
+      const storedBasis = (valuesByKey[PRICING_BASIS_KEY] ?? "").trim();
+      const isSet = (k) => {
+        const v = (valuesByKey[k] ?? "").trim();
+        return v !== "" && v !== "[]" && v !== "0";
+      };
+      const drifted = storedBasis && currentBasis && storedBasis !== currentBasis;
+      setStaleNs(nsByKey);
+      setStaleP({ basis: currentBasis, staleKeys: drifted ? POSITIONAL_PRICING_KEYS.filter(isSet) : [] });
       // On a post-save refresh the user may have started typing again — keep those in-progress edits and
       // don't clobber them; adopt fresh server values as the new baseline for everything else.
       const priorEdits = editsRef.current || {};
@@ -564,6 +640,18 @@ export default function MetafieldManager({ surface = "block" } = {}) {
       // A metafield save never fires the resource webhook, so the middleware won't recompute on its own.
       // Add trigger tags for what actually changed: `reprice` re-runs the price calc (gold rate × weight,
       // discount, GST); `sync-payment` recomputes net-to-collect + balance. Best-effort (non-blocking).
+      // Record which line composition these values were entered against, so a later line edit can be
+      // detected. Written whenever a positional value is touched; best-effort, and never allowed to
+      // fail the save that produced it.
+      if (changed.some((k) => POSITIONAL_PRICING_KEYS.includes(k)) && staleP.basis) {
+        try {
+          await shopify.query(SET_MUTATION, { variables: { metafields: [{
+            ownerId, namespace: "custom", key: PRICING_BASIS_KEY,
+            type: "single_line_text_field", value: staleP.basis,
+          }] } });
+        } catch { /* non-blocking */ }
+      }
+
       const triggerTags = [];
       if (changed.some((k) => REPRICE_TRIGGER_KEYS.includes(k))) triggerTags.push("reprice");
       if (changed.some((k) => RECOMPUTE_TRIGGER_KEYS.includes(k))) triggerTags.push("sync-payment");
@@ -670,9 +758,40 @@ export default function MetafieldManager({ surface = "block" } = {}) {
     }
   }
 
-  // Per-line pricing editor mutations.
-  const setRowMaking = (i, val) =>
-    setLineRows((rows) => rows.map((r, j) => (j === i ? { ...r, making: val } : r)));
+  // Clear every positional pricing value that was entered against a superseded line composition,
+  // then reprice. Deliberately a button rather than an automatic wipe on open: this moves
+  // customer-facing prices, and doing that as a side effect of opening a panel leaves nothing to
+  // trace afterwards.
+  //
+  // The basis is deleted along with the values, so the draft returns to "nothing recorded" rather
+  // than to a basis with no values under it.
+  async function clearStalePricing() {
+    if (!ownerId || !staleP.staleKeys.length) return;
+    setStaleBusy(true);
+    setStaleNote("");
+    try {
+      const toDelete = [...staleP.staleKeys, PRICING_BASIS_KEY].map((key) => ({
+        ownerId,
+        namespace: staleNs[key] || defs[key]?.namespace || "custom",
+        key,
+      }));
+      const res = await shopify.query(DELETE_MUTATION, { variables: { metafields: toDelete } });
+      const errs = collectErrors(res, "metafieldsDelete");
+      if (errs.length) throw new Error(errs.join("; "));
+      try {
+        await shopify.query(TAGS_ADD_MUTATION, { variables: { id: ownerId, tags: ["reprice"] } });
+      } catch { /* non-blocking - the values are already gone, which is the part that matters */ }
+      setStaleP({ basis: staleP.basis, staleKeys: [] });
+      setStaleNote("Cleared. Repricing off the catalogue now - re-enter any rate, labour, weight or discount this order needs.");
+      setTimeout(() => setRefreshTick((t) => t + 1), 3000);
+    } catch (e) {
+      setStaleNote("Couldn't clear: " + (e?.message || e));
+    } finally {
+      setStaleBusy(false);
+    }
+  }
+
+  // Per-line discount editor mutations.
   const addRowDiscount = (i) =>
     setLineRows((rows) => rows.map((r, j) => (j === i ? { ...r, discounts: [...r.discounts, { t: "dia", m: "pct", v: "" }] } : r)));
   const setRowDiscount = (i, di, patch) =>
@@ -680,15 +799,19 @@ export default function MetafieldManager({ surface = "block" } = {}) {
   const removeRowDiscount = (i, di) =>
     setLineRows((rows) => rows.map((r, j) => (j === i ? { ...r, discounts: r.discounts.filter((_, k) => k !== di) } : r)));
 
-  // Apply per-line pricing: serialize making → positional CSV (custom.making) and the per-line discount
-  // stacks → JSON (custom.line_discounts), write both, then drop a `reprice` tag so the middleware
-  // recomputes prices/GST/discount and folds every discount into the single pre-tax Discount Applied.
+  // Apply per-line discounts: serialize the discount stacks → JSON (custom.line_discounts), write it,
+  // then drop a `reprice` tag so the middleware recomputes prices/GST/discount and folds every discount
+  // into the single pre-tax Discount Applied.
+  //
+  // custom.making is deliberately NOT written here. It used to be, and an untouched labour box
+  // serialized as "0" — which the reprice engine reads as a real "labour waived" override, not as
+  // "unset", and so zeroed the line's Making on every reprice (draft #D202). Labour is set in the
+  // Pricing section; cutting labour is a discount targeting Making.
   async function applyLinePricing() {
     if (!ownerId || !lineRows.length) return;
     setLineBusy(true);
     setLineNote("");
     try {
-      const makingCsv = lineRows.map((r) => (r.making ?? "").toString().trim()).join(",");
       const lineDiscJson = JSON.stringify(
         lineRows.map((r) =>
           (r.discounts || [])
@@ -698,19 +821,25 @@ export default function MetafieldManager({ surface = "block" } = {}) {
       );
       // Definitions drive namespace/type; fall back to the known custom/* shape if a definition is absent
       // (custom.line_discounts may not be defined yet — an unstructured JSON metafield still reads server-side).
-      const mkDef = defs["making"] || { namespace: "custom", type: "single_line_text_field" };
       const ldDef = defs["line_discounts"] || { namespace: "custom", type: "json" };
       const toSet = [
-        { ownerId, namespace: mkDef.namespace, key: "making", type: mkDef.type, value: makingCsv },
         { ownerId, namespace: ldDef.namespace, key: "line_discounts", type: ldDef.type, value: lineDiscJson },
       ];
+      // Same basis stamp as save(). line_discounts is positional too, and is the value most likely to
+      // be left behind on a line that no longer exists.
+      if (staleP.basis) {
+        toSet.push({
+          ownerId, namespace: "custom", key: PRICING_BASIS_KEY,
+          type: "single_line_text_field", value: staleP.basis,
+        });
+      }
       const res = await shopify.query(SET_MUTATION, { variables: { metafields: toSet } });
       const errs = collectErrors(res, "metafieldsSet");
       if (errs.length) throw new Error(errs.join("; "));
       try {
         await shopify.query(TAGS_ADD_MUTATION, { variables: { id: ownerId, tags: ["reprice"] } });
       } catch { /* non-blocking */ }
-      setLineNote("Applying per-line pricing… making + discounts saved and reprice triggered. Line prices, GST and the balance refresh in a few seconds.");
+      setLineNote("Applying per-line discounts… saved and reprice triggered. Line prices, GST and the balance refresh in a few seconds.");
       setTimeout(() => setRefreshTick((t) => t + 1), 3000);
     } catch (e) {
       setLineNote(`Couldn't apply: ${e?.message || e}`);
@@ -826,28 +955,23 @@ export default function MetafieldManager({ surface = "block" } = {}) {
     </s-section>
   );
 
-  // Per-line pricing & discount editor — draft scope only (reprice runs on the draft webhook). One card
-  // per line item: a flat making override plus a stack of discounts, each targeting Diamond, Making, or the
-  // whole product (%/₹). Everything folds into the single pre-tax Discount on Taxable on the invoice.
+  // Per-line discount editor — draft scope only (reprice runs on the draft webhook). One card per
+  // line item: a stack of discounts, each targeting Diamond, Making, or the whole product (%/₹).
+  // Everything folds into the single pre-tax Discount on Taxable on the invoice. Labour itself is set
+  // in the Pricing section, not here.
   const renderLinePricing = () => {
     if (ctx.scope !== "draft" || !lineRows.length) return null;
     return (
-      <s-section heading="Per-Line Pricing & Discounts">
+      <s-section heading="Per-Line Discounts">
         <s-stack direction="block" gap="base">
           <s-text tone="subdued">
-            Set making (labour ₹, whole line) per item and stack discounts on Diamond, Making, or the whole
-            product — % is of that component, ₹ is a flat amount. Each discount is capped at what it targets;
-            all fold into one pre-tax "Discount on Taxable". Applying reprices every line.
+            Stack discounts on Diamond, Making, or the whole product — % is of that component, ₹ is a
+            flat amount. Each discount is capped at what it targets; all fold into one pre-tax "Discount
+            on Taxable". Applying reprices every line. Labour is set above, under Pricing.
           </s-text>
           {lineRows.map((row, i) => (
             <s-stack key={row.id || i} direction="block" gap="small-500">
               <s-text>{`— ${row.title} —`}</s-text>
-              <s-number-field
-                label="Making (₹, flat for the line)"
-                value={row.making}
-                disabled={lineBusy ? "" : undefined}
-                onChange={(e) => setRowMaking(i, e.target.value ?? "")}
-              />
               {row.discounts.map((d, di) => (
                 <s-stack key={di} direction="inline" gap="small-500" alignItems="center">
                   <s-select
@@ -891,7 +1015,7 @@ export default function MetafieldManager({ surface = "block" } = {}) {
             loading={lineBusy ? "" : undefined}
             disabled={lineBusy ? "" : undefined}
           >
-            Apply per-line pricing
+            Apply per-line discounts
           </s-button>
           {lineNote ? <s-text>{lineNote}</s-text> : null}
         </s-stack>
@@ -960,6 +1084,27 @@ export default function MetafieldManager({ surface = "block" } = {}) {
           {recalcNote}
         </s-banner>
       ) : null}
+      {staleP.staleKeys.length ? (
+        <s-banner tone="critical" heading="Line items changed - the pricing overrides on this draft are misaligned">
+          <s-stack direction="block" gap="small-500">
+            <s-text>
+              These values are held per line position, and the lines have changed since they were
+              entered, so each is now being applied to a different product:
+              {" "}{staleP.staleKeys.map((k) => FIELD_CONFIG[k]?.label || k).join(", ")}.
+              Clear them and price this order fresh before going any further.
+            </s-text>
+            <s-button
+              variant="primary"
+              onClick={clearStalePricing}
+              loading={staleBusy ? "" : undefined}
+              disabled={staleBusy ? "" : undefined}
+            >
+              Clear overrides and reprice
+            </s-button>
+            {staleNote ? <s-text>{staleNote}</s-text> : null}
+          </s-stack>
+        </s-banner>
+      ) : null}
     </>
   );
 
@@ -976,7 +1121,7 @@ export default function MetafieldManager({ surface = "block" } = {}) {
           </s-stack>
         </s-section>
       );
-      // The per-line pricing & discount editor belongs WITH the Pricing section (gold rate / making),
+      // The per-line discount editor belongs WITH the Pricing section (gold rate / making),
       // so it renders right after it rather than at the top of the panel.
       if (section.title === "Pricing") {
         const lp = renderLinePricing();

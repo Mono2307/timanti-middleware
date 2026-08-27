@@ -1205,6 +1205,100 @@ function resolveDiscount({ kind, mode, rate, lines }) {
   return { perLine, total };
 }
 
+// ── Stale positional pricing ─────────────────────────────────────────────────────────────────────
+// custom.gold_rate, custom.making, the four jewelcode_* weights and custom.line_discounts are all
+// indexed by PRODUCT LINE POSITION, never by line id. Remove, add or reorder a line and every one of
+// them lands on a different product. The reprice that follows is internally consistent and wrong,
+// which is precisely why nobody catches it.
+//
+// custom.pricing_basis records the line composition those values were entered against; the admin
+// panel stamps it on every save that touches a positional value. This checks it on EVERY draft
+// update, so the wipe happens whether or not anyone opens the panel — which is the whole point, since
+// the panel cannot observe an edit made in Shopify's own item table.
+//
+// custom.discount_applied is cleared with the rest because readDiscountIntent falls back to it as a
+// legacy flat discount whenever discount_rate is unset: clearing the others without it does not
+// remove the discount, it re-routes the same one through the legacy path.
+//
+// Silent no-op when no basis is recorded. Absence is not evidence that anything changed, and every
+// draft priced before this shipped has none.
+const POSITIONAL_PRICING_KEYS = [
+  'gold_rate', 'making',
+  'jewelcode_net_weight', 'jewelcode_gross_weight',
+  'jewelcode_diamond_carats', 'jewelcode_gemstone_weight',
+  'jewelcode_diamond_pieces', 'line_discounts',
+  'discount_rate', 'discount_kind', 'discount_mode', 'discount_applied',
+];
+const PRICING_BASIS_KEY = 'pricing_basis';
+
+// Must match basisHash() in the admin extension EXACTLY, or every draft looks stale forever. Built
+// from variant id + quantity rather than line id: the panel sees GraphQL gids and this sees bare REST
+// numbers, and those would never agree. Product lines only — a line with no variant is a custom line
+// (exchange notes and negative discount lines both), and the positional arrays are indexed within the
+// product-line list, exactly as productItems is built below.
+function pricingBasisHash(lineItems) {
+  const raw = (lineItems || [])
+    .filter(li => li.variant_id)
+    .map(li => `${li.variant_id}:${li.quantity || 1}`)
+    .join('|');
+  if (!raw) return '';
+  let h = 5381;
+  for (let i = 0; i < raw.length; i++) h = ((h << 5) + h + raw.charCodeAt(i)) >>> 0;
+  return h.toString(16);
+}
+
+async function wipeStalePositionalPricing(draft) {
+  const draftOrderId = draft.id;
+  if (!draftOrderId) return;
+
+  const base    = process.env.SHOPIFY_STORE_URL;
+  const token   = await getShopifyToken();
+  const headers = { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' };
+
+  const { data } = await axios.get(
+    `${base}/admin/api/2024-01/draft_orders/${draftOrderId}/metafields.json`,
+    { headers, timeout: 10000 }
+  );
+  const all    = data.metafields || [];
+  const stored = (all.find(m => m.namespace === 'custom' && m.key === PRICING_BASIS_KEY)?.value || '').trim();
+  if (!stored) return;
+
+  const current = pricingBasisHash(draft.line_items);
+  if (!current || current === stored) return;
+
+  const isSet  = v => { const s = String(v ?? '').trim(); return s !== '' && s !== '[]' && s !== '0'; };
+  const doomed = all.filter(m =>
+    m.namespace === 'custom' &&
+    (m.key === PRICING_BASIS_KEY || (POSITIONAL_PRICING_KEYS.includes(m.key) && isSet(m.value)))
+  );
+
+  for (const mf of doomed) {
+    try {
+      await axios.delete(
+        `${base}/admin/api/2024-01/draft_orders/${draftOrderId}/metafields/${mf.id}.json`,
+        { headers, timeout: 10000 }
+      );
+    } catch (err) {
+      console.error(`[stale-pricing] #${draft.name}: could not delete custom.${mf.key} — ${err.message}`);
+    }
+  }
+
+  const cleared = doomed.map(m => m.key).filter(k => k !== PRICING_BASIS_KEY);
+  console.log(`[stale-pricing] #${draft.name}: line composition changed (${stored} -> ${current}) — cleared ${cleared.length ? cleared.join(', ') : 'nothing but the basis'}`);
+
+  // Deleting a metafield does NOT fire the draft webhook, so without this the draft would keep the
+  // prices those cleared overrides produced. The tag fires one more update, and by then the basis is
+  // gone, so this guard no-ops on that pass instead of looping.
+  if (cleared.length) {
+    const tags = (draft.tags || '').split(',').map(t => t.trim()).filter(Boolean);
+    if (!tags.some(t => t.toLowerCase() === 'reprice')) {
+      await axios.put(`${base}/admin/api/2024-01/draft_orders/${draftOrderId}.json`,
+        { draft_order: { id: draftOrderId, tags: [...new Set([...tags, 'reprice'])].join(', ') } },
+        { headers, timeout: 10000 });
+    }
+  }
+}
+
 // Per-line, stackable discounts entered per line item. Stored on the draft as custom.line_discounts —
 // a JSON array indexed by product-line position; each element is an array of entries. An empty array /
 // null for a line means "no per-line discount" so the caller falls back to the order-level discount
@@ -2766,6 +2860,9 @@ app.post('/api/shopify-draft-updated', async (req, res) => {
       try { await fn(); }
       catch (err) { console.error(`Draft updated webhook — ${name} failed for #${draft.name}:`, err.message); }
     };
+    // FIRST, ahead of every reprice below: if the line composition moved, the positional overrides
+    // are pointing at the wrong products and must be gone before anything prices off them.
+    await step('stale-pricing',    () => wipeStalePositionalPricing(draft));
     await step('send-link',        () => handleSendLinkTag(draft));
     await step('cash-payment',     () => handleCashPaymentTag(draft));
     await step('recalc-price',     () => handleRecalculatePriceTag(draft, { force: false }));
