@@ -117,8 +117,9 @@ async function collectOrders(deps, { from, to }, rows, draftByOrderId = {}) {
       const shipState  = n.shippingAddress?.provinceCode || '';
       // Collections come from the installment legs. amount_paid is the middleware's running sum of
       // them and stays authoritative (it also covers orders predating the migration, which have no
-      // legs). cad_advance legs are excluded from the sum by readInstallments' consumers — a design
-      // advance reduces amount_to_be_collected instead, so counting it here would deduct it twice.
+      // legs). cad_advance legs are INCLUDED in that sum: a design advance is money settled against
+      // this order. It is not also deducted from amount_to_be_collected unless the CAD Advance line
+      // item is on the document, in which case the deduction is cancelling that line's own charge.
       const legs    = readInstallments(mf);
       const paid    = num(mf.amount_paid);
       const net     = mf.amount_to_be_collected != null ? num(mf.amount_to_be_collected)

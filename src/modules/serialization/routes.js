@@ -48,6 +48,7 @@ const { log } = require('../../core/logger');
 
 const serialization     = require('./index');
 const creditInstruments = require('../adjustments/credit_instruments');
+const { isCadAdvanceOnly } = require('../adjustments/cad_advance');
 
 const SERIAL_CUSTOMER_ORDER       = config.serial.customerOrder;
 const SERIAL_CUSTOMER_ORDER_START = config.serial.customerOrderStart;
@@ -229,6 +230,19 @@ app.post('/api/serial/order-serial', async (req, res) => {
   const _orderCreated  = order.created_at ? new Date(order.created_at) : null;
   if (_orderCreated && !isNaN(_serialCutoff.getTime()) && _orderCreated < _serialCutoff) {
     console.log(`[serial] order ${order.name || order.id} created ${order.created_at} < start ${SERIAL_CUSTOMER_ORDER_START} — skip mint`);
+    return;
+  }
+
+  // A CAD-advance-only order is NOT an invoice. Nothing was sold: it is a receipt for money taken
+  // against a purchase that may never happen, and it is deliberately unnumbered — the customer gets
+  // a payment confirmation, and the sale that eventually absorbs the advance carries the invoice
+  // number. Minting here would burn a permanent number (customer-order serials have no cancellation
+  // path by design) and leave a document in the GST series with no supply behind it.
+  //
+  // isCadAdvanceOnly is false when the payload carries no line items at all, so a truncated webhook
+  // can never silently suppress a real invoice number.
+  if (isCadAdvanceOnly(order)) {
+    console.log(`[serial] order ${order.name || order.id} is a CAD advance receipt — no serial minted (by design)`);
     return;
   }
 

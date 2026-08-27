@@ -66,6 +66,9 @@ const config = {
     hq:            process.env.HQ_EMAIL,
     hqCc:          process.env.HQ_CC_EMAIL,
     store:         process.env.STORE_EMAIL,
+    /** Monthly CAD-advance digest recipient. Falls back to HQ, then the store, so the alert always
+     *  lands somewhere rather than being silently dropped when the var is unset. */
+    accounts:      process.env.ACCOUNTS_EMAIL || process.env.HQ_EMAIL || process.env.STORE_EMAIL,
     /** Credit-note email is gated so it can be dark-launched. */
     cnEnabled:     flagOn(process.env.CN_EMAIL_ENABLED),
   },

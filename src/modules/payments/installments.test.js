@@ -28,13 +28,13 @@ t('ignores zero, negative and non-numeric values', () => {
   assert.strictEqual(readInstallments({ installment_1_value: '' }).length, 0);
   assert.strictEqual(readInstallments({ installment_1_value: 'abc' }).length, 0);
 });
-t('only slot 1 can be cad_advance', () => {
+t('any slot can be cad_advance — a Path B advance lands wherever is free', () => {
   const rows = readInstallments({
-    installment_1_value: '5000', installment_1_type: 'cad_advance',
-    installment_2_value: '2000', installment_2_type: 'cad_advance', // must be ignored
+    installment_1_value: '20000', installment_1_mode: 'card',                 // deposit taken first
+    installment_2_value: '5000',  installment_2_type: 'cad_advance',          // advance absorbed after
   });
-  assert.strictEqual(rows[0].type, 'cad_advance');
-  assert.strictEqual(rows[1].type, 'payment');
+  assert.strictEqual(rows[0].type, 'payment');
+  assert.strictEqual(rows[1].type, 'cad_advance');
 });
 t('caps at MAX_INSTALLMENTS', () => {
   const map = {};
@@ -51,38 +51,75 @@ t('sums the founder scenario: 15000 upi + 20000 card + 6379.49 cash', () => {
   });
   assert.strictEqual(sumInstallments(rows), 41379.49);
 });
-t('EXCLUDES a cad_advance leg — the double-deduction guard', () => {
+t('COUNTS a cad_advance leg — it is settlement, not decoration', () => {
   const rows = readInstallments({
     installment_1_value: '5000', installment_1_mode: 'upi', installment_1_type: 'cad_advance',
     installment_2_value: '20000', installment_2_mode: 'card',
   });
-  assert.strictEqual(sumInstallments(rows), 20000);
+  assert.strictEqual(sumInstallments(rows), 25000);
 });
-t('a cad_advance-only draft has zero collected', () => {
+t('a cad_advance-only draft has the advance collected', () => {
   const rows = readInstallments({ installment_1_value: '5000', installment_1_type: 'cad_advance' });
-  assert.strictEqual(sumInstallments(rows), 0);
+  assert.strictEqual(sumInstallments(rows), 5000);
 });
 t('handles empty input', () => {
   assert.strictEqual(sumInstallments([]), 0);
   assert.strictEqual(sumInstallments(null), 0);
 });
 
-console.log('CAD advance end-to-end arithmetic (decision 1a)');
-t('Path A: advance netted exactly once, customer still owes the product', () => {
-  // Draft total INCLUDES the CAD Advance line: product 40000 + advance 5000.
-  const total = 45000, advance = 5000;
-  const rows = readInstallments({
-    installment_1_value: '5000', installment_1_mode: 'upi', installment_1_type: 'cad_advance',
-  });
-  const netBase = total - advance;               // syncAmountToCollect
-  const pending = Math.max(0, netBase - sumInstallments(rows));
-  assert.strictEqual(pending, 40000);            // the product price, deducted once
+console.log('CAD advance end-to-end arithmetic (CAD_ADVANCE_TRACKING_SPEC §1)');
+// The rule under test: a CAD advance is a PAYMENT. It is never deducted post-tax anywhere — the bill
+// is whatever was actually sold, and the advance sits in amount_paid as a leg like any other money.
+// A ₹50,000 ring is billed at ₹50,000 in every path. It is never 55,000.
+const pendingOn = (total, rows) => Math.max(0, total - sumInstallments(rows));
+const outlay    = (paidLegs, pending) => paidLegs + pending;
+
+t('standalone advance draft: the CAD line IS the bill, and it is settled', () => {
+  const rows = readInstallments({ installment_1_value: '5000', installment_1_mode: 'cash', installment_1_type: 'cad_advance' });
+  assert.strictEqual(pendingOn(5000, rows), 0);
+  assert.strictEqual(outlay(5000, 0), 5000);
 });
-t('without the cad_advance flag the same rupees would be deducted twice', () => {
-  const total = 45000, advance = 5000;
-  const rows = readInstallments({ installment_1_value: '5000', installment_1_mode: 'upi' });
-  const pending = Math.max(0, (total - advance) - sumInstallments(rows));
-  assert.strictEqual(pending, 35000);            // 5000 short — the bug the flag prevents
+
+t('Path A: ring added — the CAD line comes off, so the bill is the ring', () => {
+  // handleAdvanceLineRemoval strips the CAD Advance line once a product joins it, so the total here
+  // is 50000, NOT 55000. The advance stands as installment 1 and nothing is deducted.
+  const rows = readInstallments({
+    installment_1_value: '5000', installment_1_mode: 'cash', installment_1_type: 'cad_advance',
+  });
+  const pending = pendingOn(50000, rows);
+  assert.strictEqual(pending, 45000);
+  assert.strictEqual(outlay(5000, pending), 50000);   // the ring price, once
+});
+
+t('Path B: advance absorbed onto a later sale — identical outlay', () => {
+  // The new order never had a CAD line. The advance arrives as its own leg, mode 'CAD Advance'.
+  const rows = readInstallments({
+    installment_1_value: '5000', installment_1_mode: 'CAD Advance', installment_1_type: 'cad_advance',
+  });
+  const pending = pendingOn(50000, rows);
+  assert.strictEqual(pending, 45000);
+  assert.strictEqual(outlay(5000, pending), 50000);   // month 1 or month 8, the ring costs the same
+});
+
+t('a ring is NEVER billed at ring + advance', () => {
+  // Regression guard for the model this replaced, which left the CAD line on the draft (total 55000)
+  // and deducted the advance back off post-tax. Same final figure, but it printed the advance as a
+  // charge and a credit facing each other, and any slip in the deduction over-collected by 5000.
+  const rows = readInstallments({
+    installment_1_value: '5000', installment_1_mode: 'cash', installment_1_type: 'cad_advance',
+  });
+  const billedWithCadLine = 55000;
+  const missedDeduction   = Math.max(0, billedWithCadLine - sumInstallments(rows));
+  assert.strictEqual(missedDeduction, 50000);                        // what that model risked
+  assert.strictEqual(pendingOn(50000, rows), 45000);                 // what it does now
+  assert.notStrictEqual(missedDeduction, pendingOn(50000, rows));
+});
+
+t('a part-paid advance still leaves the advance as the only settled money', () => {
+  // The customer paid the advance and nothing since. Balance is the whole ring less the advance.
+  const rows = readInstallments({ installment_1_value: '5000', installment_1_mode: 'upi', installment_1_type: 'cad_advance' });
+  assert.strictEqual(sumInstallments(rows), 5000);
+  assert.strictEqual(pendingOn(50000, rows), 45000);
 });
 
 console.log('installmentModes');

@@ -306,8 +306,13 @@ app.get('/api/adjustment-report', async (req, res) => {
           // amount_paid is the cumulative sum of the installment legs and stands alone;
           // amount_paid_final is legacy, pinned to 0, and added only so orders written before the
           // installment migration (which still split the two) tie out to the same figure.
-          // `advance` stays a SEPARATE column above — the CAD design advance is tax-free at
-          // collection, and folding it into amount_paid would make that treatment unauditable.
+          //
+          // NOTE for whoever reads these two columns together: `advance` above and `amount_paid`
+          // here are NOT additive. Since CAD_ADVANCE_TRACKING_SPEC §1, a design advance is counted
+          // as a collection like any other leg, so it is already inside amount_paid. The `advance`
+          // column exists to show the tax-free treatment separately — it is the same rupees viewed
+          // from the other side, not a second sum. It is only ever non-zero on a document that also
+          // carries the CAD Advance line, where it cancels that line's charge.
           amount_paid:            (num(mf.amount_paid) + num(mf.amount_paid_final)).toFixed(2),
           total_price:            num(n.totalPriceSet.shopMoney.amount).toFixed(2),
           instruments_issued:     (bySource[n.name] || []).join(' | '),   // credits generated on this order

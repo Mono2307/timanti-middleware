@@ -68,6 +68,11 @@ async function apply(supabase, p) {
   const now = new Date().toISOString();
   const patch = { status: 'applied', applied_at: now, updated_at: now };
   if (p.targetDraftId) patch.target_draft_id = String(p.targetDraftId);
+  // A CAD advance consumed on its OWN draft (Path A) is terminal at conversion, not a reservation —
+  // it knows its order there and then, so it records it. Vouchers/notes pass neither and are
+  // unaffected: for them 'applied' still means reserved until promoteApplied.
+  if (p.targetOrderId)   patch.target_order_id   = String(p.targetOrderId);
+  if (p.targetOrderName) patch.target_order_name = p.targetOrderName;
 
   const { data, error } = await supabase.from(TABLE).update(patch)
     .eq('instrument_type', p.instrumentType).eq('serial_code', p.serialCode).select('id');
@@ -164,10 +169,62 @@ async function fetchAll(supabase, { from, to, instrumentType } = {}) {
   return data || [];
 }
 
+// Move a row to a new serial_code. Vouchers and exchange notes never need this — their code is
+// minted once and is permanent. A CAD advance has no minted number at all: the row opens under the
+// DRAFT name (the only identifier that exists when the money lands) and is rekeyed to the ORDER name
+// when that draft converts, because the order name is what staff reference later. Extra columns can
+// be set in the same write via `patch`.
+// No-ops when the destination key already exists, so a replayed conversion webhook cannot collide.
+async function rekey(supabase, { instrumentType, fromSerialCode, toSerialCode, patch = {} }) {
+  if (!fromSerialCode || !toSerialCode || fromSerialCode === toSerialCode) return false;
+  const existing = await getBySerial(supabase, { instrumentType, serialCode: toSerialCode });
+  if (existing) return false;
+  const { data, error } = await supabase.from(TABLE)
+    .update({ ...patch, serial_code: toSerialCode, updated_at: new Date().toISOString() })
+    .eq('instrument_type', instrumentType).eq('serial_code', fromSerialCode).select('id');
+  if (error) throw new Error(`rekey ${fromSerialCode}→${toSerialCode}: ${error.message}`);
+  return !!(data && data.length);
+}
+
+// Flip every still-open row past its expiry to a STORED 'expired'. effectiveStatus() already derives
+// expiry on read, but derived state cannot gate a write: the redeem path reads advance_status off the
+// Shopify document, so the expiry has to actually be written somewhere to refuse a redemption.
+// Returns the rows it expired, which is what the accounts digest reports.
+async function expireOverdue(supabase, { instrumentType, asOf } = {}) {
+  const cutoff = asOf || new Date().toISOString().slice(0, 10);
+  let q = supabase.from(TABLE)
+    .select('instrument_type,serial_code,value,customer_name,source_order_name,issued_at,expires_at')
+    .eq('status', 'open').lt('expires_at', cutoff);
+  if (instrumentType) q = q.eq('instrument_type', instrumentType);
+  const { data, error } = await q;
+  if (error) throw new Error(`expireOverdue: ${error.message}`);
+  const rows = data || [];
+  if (!rows.length) return [];
+
+  const now = new Date().toISOString();
+  const { error: updErr } = await supabase.from(TABLE)
+    .update({ status: 'expired', updated_at: now })
+    .eq('status', 'open').lt('expires_at', cutoff)
+    .in('serial_code', rows.map(r => r.serial_code));
+  if (updErr) throw new Error(`expireOverdue update: ${updErr.message}`);
+  return rows;
+}
+
+// Open rows whose expiry falls inside [from, to] — the "about to cross" half of the accounts digest.
+async function listExpiringBetween(supabase, { instrumentType, from, to }) {
+  let q = supabase.from(TABLE)
+    .select('instrument_type,serial_code,value,customer_name,source_order_name,issued_at,expires_at')
+    .eq('status', 'open').gte('expires_at', from).lte('expires_at', to);
+  if (instrumentType) q = q.eq('instrument_type', instrumentType);
+  const { data, error } = await q.order('expires_at', { ascending: true });
+  if (error) throw new Error(`listExpiringBetween: ${error.message}`);
+  return data || [];
+}
+
 // Effective status on read: an 'open' row past its expiry counts as 'expired' (derived, not stored).
 function effectiveStatus(row, nowMs) {
   if (row.status === 'open' && row.expires_at && new Date(row.expires_at).getTime() < nowMs) return 'expired';
   return row.status;
 }
 
-module.exports = { upsertIssued, apply, promoteApplied, revertApplied, reopen, redeem, voidInstrument, getBySerial, listOpenForCustomer, fetchAll, effectiveStatus };
+module.exports = { upsertIssued, apply, promoteApplied, revertApplied, reopen, redeem, voidInstrument, getBySerial, listOpenForCustomer, fetchAll, effectiveStatus, rekey, expireOverdue, listExpiringBetween };

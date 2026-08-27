@@ -540,7 +540,57 @@ function buildRefundConfirmationHtml({ orderName, item, refundMethod, refundAmou
     + foot();
 }
 
+// Monthly CAD-advance digest — INTERNAL, to accounts. Not a customer email: no store links, no
+// buttons, no marketing footer. Its whole job is to tell accounts which advances have stopped being
+// trade advances and which are about to.
+//
+// `crossed`  — completed 365 days in the month just ended. Treatment must change now.
+// `upcoming` — complete 365 days in the next 30 days. Early warning.
+// Rows: { serial_code, value, customer_name, source_order_name, issued_at, expires_at }.
+function buildCadAdvanceDigestHtml({ monthLabel, crossed = [], upcoming = [] }) {
+  const total = (rows) => rows.reduce((s, r) => s + (parseFloat(r.value) || 0), 0);
+  const date  = (d) => (d ? new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—');
+
+  const table = (rows) => `
+    <table width="100%" cellpadding="0" cellspacing="0" border="0" style="font-size:13px; color:#333333;">
+      <tr style="color:#999999; font-size:12px;">
+        <td style="padding:0 0 6px;">Reference</td>
+        <td style="padding:0 0 6px;">Customer</td>
+        <td style="padding:0 0 6px;">Taken</td>
+        <td style="padding:0 0 6px;">1 year on</td>
+        <td style="padding:0 0 6px; text-align:right;">Amount</td>
+      </tr>
+      ${rows.map(r => `
+      <tr style="border-top:1px solid #f0f0f0;">
+        <td style="padding:8px 0;">${esc(r.source_order_name || r.serial_code)}</td>
+        <td style="padding:8px 0;">${esc(r.customer_name || '—')}</td>
+        <td style="padding:8px 0;">${esc(date(r.issued_at))}</td>
+        <td style="padding:8px 0;">${esc(date(r.expires_at))}</td>
+        <td style="padding:8px 0; text-align:right;">${money(r.value)}</td>
+      </tr>`).join('')}
+    </table>`;
+
+  const block = (title, rows, blurb) => section(
+    h3(`${title} — ${rows.length} advance${rows.length === 1 ? '' : 's'}, ${money(total(rows))}`)
+    + `<p style="font-size:13px; color:#777777; line-height:1.6; margin:0 0 14px;">${blurb}</p>`
+    + (rows.length ? table(rows) : `<p style="font-size:13px; color:#999999; margin:0;">Nothing this month.</p>`)
+  );
+
+  return head()
+    + contentBlock({
+        ref: 'Accounts — internal',
+        heading: `CAD advances — ${esc(monthLabel)}`,
+        body: 'Design advances are held as trade advances until they are redeemed or their one-year validity runs out. These have reached, or are about to reach, that point.',
+      })
+    + block('Crossed one year', crossed,
+        'Validity has lapsed. These are no longer redeemable against a purchase, and their accounting treatment needs to change. They have already been marked expired in the system, so the counter cannot apply them.')
+    + block('Crossing within 30 days', upcoming,
+        'Still redeemable today. If a customer is expected back, this is the window to tell the store.')
+    + foot();
+}
+
 module.exports = {
+  buildCadAdvanceDigestHtml,
   buildRepairReceivedHtml,
   buildRepairEstimateV2Html,
   buildRepairConfirmedHtml,

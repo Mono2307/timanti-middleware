@@ -10,6 +10,7 @@ const { sendEmail, sendDepositEmail, withStoreCc } = require('./src/integrations
 // Customer-facing voucher / exchange-note bodies use the v2 templates (2026-08-07 redesign).
 const { buildVoucherV2Html, buildExchangeNoteV2Html } = require('./src/integrations/email/templates');
 const { startVoucherExpirySweep } = require('./src/modules/adjustments/voucher_expiry_sweep');
+const { startCadAdvanceSweep, runCadAdvanceSweep } = require('./src/modules/adjustments/cad_advance_sweep');
 const { handlePoWebhook } = require('./src/modules/procurement/webhook');
 const { handlePoAction }  = require('./src/modules/procurement/action');
 const { syncDraftOrderToSheet, syncOrderToSheet, syncAllDraftOrders, syncAllOrders, removeDraftFromSheet, pruneOrphans } = require('./src/modules/procurement/sync');
@@ -1961,9 +1962,9 @@ async function copyDraftMetafieldsToOrder(draftOrderId, orderId, token) {
 //               total:Rs{n}, pmodes:{m1}/{m2}/... (+ legacy pmode-advance:/pmode-final: while
 //               dual-write is on).
 //
-// paid is the SUM of the installment legs (cad_advance excluded — custom.advance already reduces
-// the net, so counting it again would deduct it twice). pending is derived against the net, never
-// gross. Everything here is arithmetic only.
+// paid is the SUM of the installment legs, cad_advance INCLUDED — a design advance is money settled
+// against this document. pending is derived against the net, never gross. Everything here is
+// arithmetic only.
 async function applyPaymentTagsToOrder(orderId, token) {
   const headers = { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' };
 
@@ -2014,11 +2015,11 @@ async function applyPaymentTagsToOrder(orderId, token) {
   const isPartial = !isFull && amountPaid > 0;
 
   // Persist the derived balance + status on the order so re-downloads/reporting read them.
-  // A cad_advance-only order has amountPaid 0 by design but still has a real balance to publish.
+  // The legs.length arm keeps a document publishable even when nothing sums to a status yet.
   if (isFull || isPartial || legs.length) {
     const patch = Object.assign({}, legacyFold.patch);
     // amount_paid is DERIVED from the legs. The admin panel writes legs but never the total (it is
-    // read-only there), and the CAD flip changes the sum without touching any leg value — so
+    // read-only there), and a leg edited by hand changes the sum this figure must follow — so
     // re-summing here is what keeps the figure the invoice prints actually true.
     if (legs.length) {
       const curPaid = parseFloat(mf('amount_paid'));
@@ -2111,8 +2112,8 @@ async function applyPaymentTagsToDraftOrder(draftOrderId, token) {
   // drives there. String() normalises both shapes.
   const isFinalized   = String(mf('is_finalized')) === 'true';
   // Payments are recorded as up to MAX_INSTALLMENTS legs, each with its own value + mode + date.
-  // What's been paid is their sum, with cad_advance legs excluded (custom.advance already reduces
-  // amount_to_be_collected, so counting it here too would deduct the same rupees twice).
+  // What's been paid is their sum, cad_advance legs included — the advance is settlement, and
+  // custom.advance only reduces amount_to_be_collected where the CAD line is charging for it.
   // Legacy fallback covers drafts predating the migration, which carry only the two-slot pair.
   const mfMap = {};
   for (const m of (mfData.metafields || [])) if (m.namespace === 'custom') mfMap[m.key] = m.value;
@@ -2148,11 +2149,11 @@ async function applyPaymentTagsToDraftOrder(draftOrderId, token) {
 
   // Persist the derived balance + status so the invoice/collection surfaces read them (not just tags).
   // Metafield writes don't fire the draft webhook → no loop.
-  // A cad_advance-only draft has amountPaid 0 by design but still has a real balance to publish.
+  // The legs.length arm keeps a document publishable even when nothing sums to a status yet.
   if (isFull || isPartial || legs.length) {
     const patch = Object.assign({}, legacyFold.patch);
     // amount_paid is DERIVED from the legs. The admin panel writes legs but never the total (it is
-    // read-only there), and the CAD flip changes the sum without touching any leg value — so
+    // read-only there), and a leg edited by hand changes the sum this figure must follow — so
     // re-summing here is what keeps the figure the invoice prints actually true.
     if (legs.length) {
       const curPaid = parseFloat(mf('amount_paid'));
@@ -2291,7 +2292,18 @@ async function syncAmountToCollect(draft) {
     }
   }
 
-  const net = Math.max(0, total - adj('exchange_note_value') - adj('voucher_value') - oldGoldVal - adj('advance'));
+  // custom.advance is deliberately NOT in this list. A CAD advance is a PAYMENT, not a post-tax
+  // adjustment: it is cash the customer has already handed over, so it belongs in amount_paid as an
+  // installment leg and nowhere else. The bill is whatever was actually sold.
+  //
+  //   advance-only draft    → 5,000 billed (the CAD line), 5,000 leg, nothing pending.
+  //   Path A (ring added)   → the CAD line is REMOVED (handleAdvanceLineRemoval), so the bill is the
+  //                           ring at 50,000; the 5,000 leg stands, 45,000 pending.
+  //   Path B (ring, no CAD) → 50,000 billed, 5,000 absorbed leg, 45,000 pending.
+  //
+  // A ring is never billed at 55,000. Deducting the advance here as well would take the same rupees
+  // off twice. See CAD_ADVANCE_TRACKING_SPEC §1.
+  const net = Math.max(0, total - adj('exchange_note_value') - adj('voucher_value') - oldGoldVal);
   const current = mf('amount_to_be_collected');
   if (current === null || Math.abs(parseFloat(current) - net) >= 0.005) patch.amount_to_be_collected = net.toFixed(2);
   if (Object.keys(patch).length === 0) return; // nothing changed → skip (no-op guard)
@@ -2299,134 +2311,57 @@ async function syncAmountToCollect(draft) {
   console.log(`Draft ${draftOrderId}: amount_to_be_collected = ${net.toFixed(2)} (total ${total} − adjustments)`);
 }
 
-// A draft carries a CAD advance if it has a "CAD Advance" line item (one product, fixed-price variants).
-function hasCadAdvanceLine(draft) {
-  return (draft.line_items || []).some(li =>
-    /cad advance/i.test(String(li.title || '')) || /^CAD-ADV/i.test(String(li.sku || '')));
-}
+// CAD advance line-item predicates + constants live in the shared module: the serial minter and the
+// sweeps need exactly the same answers as this file, and must never drift from it.
 
-// CAD Advance CAPTURE (draft update): a draft carrying a CAD-Advance line + a recorded payment → stamp
-// custom.advance / advance_date (starts the 365-day clock) / advance_status='open'. The draft stays open;
-// syncAmountToCollect nets `advance` post-tax. Idempotent once advance_status is set. Never throws into
-// the webhook chain.
+// The four CAD advance handlers live in src/modules/adjustments/cad_advance_handlers.js, next to the
+// predicates and sweeps they share a model with. gqlSetDraftLineItems is injected because Shopify
+// REST resets line-item prices to catalog — the GraphQL writer above is the only safe way to rewrite
+// a draft, and Path A has to remove the CAD Advance line.
+const {
+  handleAdvanceCapture, handleAdvanceLineRemoval, handleAdvanceRedeem, handleAdvanceConversion,
+} = require('./src/modules/adjustments/cad_advance_handlers').createCadAdvanceHandlers({
+  axios, storeUrl: process.env.SHOPIFY_STORE_URL, supabase, getShopifyToken,
+  updateDraftOrderMetafields, updateOrderMetafields, gqlSetDraftLineItems,
+});
+
+// Dependency bundle for the CAD advance sweeps.
 //
-// Path A also claims INSTALLMENT SLOT 1. The payment path has already recorded the collection as
-// installment 1 (value + mode + date); when that leg is the advance, we flip its type to
-// cad_advance. That leaves it visible on the invoice payment table as "Design Advance" — carrying
-// the real mode and date, which the advance metafields themselves never captured — while removing
-// it from amount_paid. Without the flip the same rupees are deducted twice: once by custom.advance
-// reducing amount_to_be_collected, and again as money received.
-//
-// The flip only fires when the leg MATCHES the advance. A customer who paid more than the advance
-// in one go has real collected money in that leg, and zeroing it would lose it — so we leave it as
-// a payment leg and log for a human.
-async function handleAdvanceCapture(draft) {
+// completeDraftOrder calls completeShopifyOrder DIRECTLY rather than convertDraftToOrder, on purpose:
+// AUTO_CONVERT_DRAFT_TO_ORDER is off in production and convertDraftToOrder early-returns when it is,
+// which would leave the stale-draft sweep quietly doing nothing forever with nothing in the logs to
+// say so. That flag governs automatic conversion the moment a draft is paid off — a different
+// question from converting a 30-day-old advance receipt, which is a deliberate act, exactly like
+// /api/convert-to-order. The flag stays off; this is the only place that steps around it.
+const CAD_SWEEP_DEPS = () => ({
+  supabase, axios,
+  storeUrl: process.env.SHOPIFY_STORE_URL,
+  getShopifyToken, updateOrderMetafields,
+  completeDraftOrder: (draftId) => completeShopifyOrder(draftId, null),
+  sendEmail, withStoreCc,
+  buildCadAdvanceDigestHtml: require('./src/integrations/email/templates').buildCadAdvanceDigestHtml,
+  accountsEmail: config.email.accounts,
+});
+
+// GET/POST /api/cad-advance/sweep — run the advance sweeps on demand instead of waiting for the
+// daily loop. Exposed on GET as well because it is operated by a human pasting a URL, like the
+// serial recovery routes.
+//   ?dryRun=true   report what would happen, change nothing (safe to run any time)
+//   ?force=true    re-send the monthly digest even though the marker says it already went out
+const runCadSweepRoute = async (req, res) => {
+  const p = { ...(req.query || {}), ...(req.body || {}) };
+  const dryRun = String(p.dryRun) === 'true';
+  const force  = String(p.force)  === 'true';
   try {
-    if (!hasCadAdvanceLine(draft)) return;
-    const draftOrderId = draft.id.toString();
-    const token = await getShopifyToken();
-    const { data: mfData } = await axios.get(
-      `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}/metafields.json`,
-      { headers: { 'X-Shopify-Access-Token': token }, timeout: 10000 }
-    );
-    const mfMap = {};
-    for (const m of (mfData.metafields || [])) if (m.namespace === 'custom') mfMap[m.key] = m.value;
-    const mf = (key) => (mfMap[key] === undefined ? null : mfMap[key]);
-    if (mf('advance_status')) return;                       // already captured
-    if (!(parseFloat(mf('amount_paid') || 0) > 0)) return;  // advance is money collected, not intent
-    const advanceAmount = (draft.line_items || [])
-      .filter(li => /cad advance/i.test(String(li.title || '')) || /^CAD-ADV/i.test(String(li.sku || '')))
-      .reduce((s, li) => s + parseFloat(li.price || 0) * (li.quantity || 0), 0);
-    if (!(advanceAmount > 0)) return;
-    const today = new Date().toISOString().slice(0, 10);
-    const patch = { advance: advanceAmount.toFixed(2), advance_date: today, advance_status: 'open' };
-
-    const legs = readInstallments(mfMap);
-    const first = legs.find(r => r.slot === 1);
-    if (first && first.type !== 'cad_advance' && Math.abs(first.value - advanceAmount) < 0.5) {
-      patch.installment_1_type = 'cad_advance';
-      // amount_paid must drop by the advance in the same write, or the balance is briefly wrong.
-      patch.amount_paid = sumInstallments(legs.map(r => (r.slot === 1 ? { ...r, type: 'cad_advance' } : r))).toFixed(2);
-      console.log(`[cad-advance] installment 1 (Rs${first.value.toFixed(2)} ${first.mode || 'mode unknown'}) reclassified as the design advance on draft ${draft.name || draftOrderId}`);
-    } else if (first && first.type !== 'cad_advance') {
-      console.warn(`[cad-advance] draft ${draft.name || draftOrderId}: installment 1 is Rs${first.value.toFixed(2)} but the CAD advance line is Rs${advanceAmount.toFixed(2)} — leaving it as a payment leg. Balance will net the advance once via custom.advance and count the full leg as paid; check this draft by hand.`);
-    } else if (!first) {
-      // Advance recorded without a payment leg (e.g. a panel-entered amount_paid). Synthesize the
-      // leg so the invoice payment table still shows it; mode is unknown by construction.
-      patch.installment_1_value = advanceAmount.toFixed(2);
-      patch.installment_1_date  = today;
-      patch.installment_1_type  = 'cad_advance';
-    }
-
-    await updateDraftOrderMetafields(draftOrderId, patch);
-    console.log(`[cad-advance] captured ${advanceAmount.toFixed(2)} on draft ${draft.name || draftOrderId} (date ${today})`);
-  } catch (e) {
-    console.error(`[cad-advance] capture failed for draft ${draft?.id}:`, e.message);
+    const result = await runCadAdvanceSweep(CAD_SWEEP_DEPS(), { dryRun, force });
+    return res.json({ success: true, dryRun, force, ...result });
+  } catch (err) {
+    console.error('[cad-sweep] on-demand run failed:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
   }
-}
-
-// CAD Advance REDEEM (Path B): staff put the advance order # in intake.advance_ref on a NEW sale draft.
-// Resolve it, gate (advance_status==='open' AND ≤365 days from advance_date), then apply the advance
-// POST-tax on the new draft (custom.advance → netted by syncAmountToCollect), mark the SOURCE order
-// advance_status='redeemed' + redeemed_against, and clear the ref. On failure, tag advance-invalid:<why>.
-// Transient lookup errors leave the ref in place to retry; never throws into the chain.
-async function handleAdvanceRedeem(draft) {
-  try {
-    const draftOrderId = draft.id.toString();
-    const base = process.env.SHOPIFY_STORE_URL;
-    const token = await getShopifyToken();
-    const headers = { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' };
-    const { data: mfData } = await axios.get(
-      `${base}/admin/api/2024-01/draft_orders/${draftOrderId}/metafields.json`, { headers, timeout: 10000 });
-    const findMf = (ns, key) => (mfData.metafields || []).find(x => x.namespace === ns && x.key === key) || null;
-    const refMf = findMf('intake', 'advance_ref');
-    const ref = refMf ? String(refMf.value || '').trim() : '';
-    if (!ref) return;
-
-    const delRef = async () => {
-      try { await axios.delete(`${base}/admin/api/2024-01/metafields/${refMf.id}.json`, { headers, timeout: 10000 }); }
-      catch (e) { console.error(`[cad-advance] clear ref: ${e.message}`); }
-    };
-    const failTag = async (reason) => {
-      const tags = (draft.tags || '').split(',').map(t => t.trim()).filter(Boolean).concat([`advance-invalid: ${reason}`]);
-      await axios.put(`${base}/admin/api/2024-01/draft_orders/${draftOrderId}.json`,
-        { draft_order: { id: draftOrderId, tags: [...new Set(tags)].join(', ') } }, { headers, timeout: 10000 });
-      console.warn(`[cad-advance] ${draft.name || draftOrderId}: ${reason}`);
-    };
-
-    // Idempotent: advance already applied on this draft → just clear the ref.
-    const already = findMf('custom', 'advance');
-    if (already && parseFloat(already.value) > 0) { await delRef(); return; }
-
-    // Resolve the advance ORDER by name ("#1042" or "1042"). Transient failure → keep ref, retry later.
-    const name = ref.startsWith('#') ? ref : '#' + ref;
-    let advOrder = null, lookupFailed = false;
-    try {
-      const { data } = await axios.get(
-        `${base}/admin/api/2024-01/orders.json?status=any&name=${encodeURIComponent(name)}`, { headers, timeout: 15000 });
-      advOrder = (data.orders || []).find(o => o.name === name) || (data.orders || [])[0] || null;
-    } catch (e) { lookupFailed = true; console.error(`[cad-advance] resolve ${ref}: ${e.message}`); }
-    if (lookupFailed) return;
-    if (!advOrder) { await failTag(`not found ${ref}`); await delRef(); return; }
-
-    const { data: aMfData } = await axios.get(
-      `${base}/admin/api/2024-01/orders/${advOrder.id}/metafields.json`, { headers, timeout: 10000 });
-    const a = {}; for (const m of (aMfData.metafields || [])) if (m.namespace === 'custom') a[m.key] = m.value;
-    const advVal = parseFloat(a.advance || 0);
-    if (!(advVal > 0))               { await failTag(`no advance on ${ref}`); await delRef(); return; }
-    if (a.advance_status !== 'open') { await failTag(`already ${a.advance_status || 'used'}`); await delRef(); return; }
-    const days = a.advance_date ? (Date.now() - new Date(a.advance_date).getTime()) / 864e5 : 1e9;
-    if (days > 365)                  { await failTag(`expired ${a.advance_date}`); await delRef(); return; }
-
-    // PASS — apply on the new draft, mark the source redeemed, clear the ref.
-    await updateDraftOrderMetafields(draftOrderId, { advance: advVal.toFixed(2) });
-    await updateOrderMetafields(String(advOrder.id), { advance_status: 'redeemed', redeemed_against: draft.name || draftOrderId }, token);
-    await delRef();
-    console.log(`[cad-advance] redeemed ${advVal.toFixed(2)} from ${ref} → ${draft.name || draftOrderId}`);
-  } catch (e) {
-    console.error(`[cad-advance] redeem failed for draft ${draft?.id}:`, e.message);
-  }
-}
+};
+app.get('/api/cad-advance/sweep', runCadSweepRoute);
+app.post('/api/cad-advance/sweep', runCadSweepRoute);
 
 // Strip a voucher / exchange-note adjustment off a draft — delete its value metafield, remove its tags,
 // and recompute net-to-collect — WITHOUT touching the ledger. Used by the apply handlers for "latest-one-
@@ -2771,6 +2706,10 @@ app.post('/api/shopify-draft-updated', async (req, res) => {
             `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/orders/${orderId}.json?fields=name`,
             { headers: { 'X-Shopify-Access-Token': token }, timeout: 10000 });
           const orderName = od?.order?.name || '';
+          // CAD advance: mark a same-draft advance consumed, back-fill Path B's order refs, rekey
+          // the register row off the draft name. Isolated — never breaks the conversion.
+          await handleAdvanceConversion(draft, orderId, orderName, token)
+            .catch(e => console.error(`[cad-advance] conversion handler for ${orderName || orderId}:`, e.message));
           const dtags = (draft.tags || '').split(',').map(t => t.trim());
           const codeFrom = (re) => { const t = dtags.find(x => re.test(x)); return t ? t.slice(t.indexOf(':') + 1).trim() : ''; };
           const toRedeem = [
@@ -2833,6 +2772,7 @@ app.post('/api/shopify-draft-updated', async (req, res) => {
     await step('recalc-price+force', () => handleRecalculatePriceTag(draft, { force: true }));
     await step('weighted-reprice', () => handleWeightedDocReprice(draft));   // memo-custom / transfer weighted pricing (before serial + net-to-collect)
     await step('advance-capture',  () => handleAdvanceCapture(draft));       // CAD: stamp advance metafields once a payment lands
+    await step('advance-line',     () => handleAdvanceLineRemoval(draft));   // CAD: drop the advance line once a real product joins it (before net-to-collect)
     await step('advance-redeem',   () => handleAdvanceRedeem(draft));        // CAD: apply a referenced advance (Path B), gates + refs
     await step('apply-voucher',    () => handleApplyVoucherTag(draft));      // admin action: apply-voucher:<code> → redeem from ledger
     await step('apply-exc',        () => handleApplyExcTag(draft));          // admin action: apply-exc:<number> → redeem exchange note from ledger
@@ -4121,6 +4061,7 @@ app.listen(PORT, async () => {
     buildVoucherExpiryHtml: require('./src/integrations/email/templates').buildVoucherExpiryHtml,
     storeUrl: config.shopify.storeUrl,
   });
+  startCadAdvanceSweep(CAD_SWEEP_DEPS());
   await initShopifyToken();
   console.log('🔄 Background poller started (30s)');
   setInterval(() => pine.pollActiveTxns(ctx), 30000);

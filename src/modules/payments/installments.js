@@ -5,7 +5,7 @@
 //   custom.installment_N_value  (number_decimal)
 //   custom.installment_N_mode   (text + choices enum)
 //   custom.installment_N_date   (date)
-// plus custom.installment_1_type ('payment' | 'cad_advance').
+// plus custom.installment_N_type ('payment' | 'cad_advance') on every slot.
 //
 // Flat scalars rather than one JSON array so staff can type into them in the native Shopify editor
 // (and Metafields Guru), each field gets a real widget in the admin extension, and Liquid renders
@@ -15,8 +15,15 @@
 // (invoices, sales/adjustment reports, recon, the CAD capture gate) — it is now the SUM of these
 // legs rather than one of two named slots.
 //
-// A cad_advance row is DISPLAY ONLY. custom.advance already reduces amount_to_be_collected as a
-// post-tax adjustment, so counting it as money paid too would deduct the same rupees twice.
+// A cad_advance row is SETTLEMENT, not decoration — it counts toward amount_paid like any other leg.
+// Path A: the design advance is real money received on this same draft (its mode is the real tender).
+// Path B: it is the advance from an earlier order, absorbed onto this sale (its mode is 'CAD Advance',
+// because no money moves on this document).
+//
+// It does not collide with the post-tax custom.advance deduction, because that deduction only applies
+// while the CAD Advance LINE ITEM is still on the document — i.e. exactly when the advance is a CHARGE
+// on this bill that the deduction cancels, rather than a RECEIPT against it. See syncAmountToCollect
+// in server.js and §1 of CAD_ADVANCE_TRACKING_SPEC.md.
 //
 // No I/O here — everything takes a plain { key: value } map over the custom namespace so it can be
 // unit tested and reused by the backfill script.
@@ -36,16 +43,18 @@ function readInstallments(mfMap) {
       value,
       mode: String(map[`installment_${n}_mode`] || '').trim(),
       date: String(map[`installment_${n}_date`] || '').trim(),
-      // Only slot 1 can carry a CAD design advance — it absorbs the FIRST payment by definition.
-      type: n === 1 ? (String(map.installment_1_type || '').trim() || 'payment') : 'payment',
+      // ANY slot can carry a CAD design advance. Path A puts it in slot 1 (it absorbs the first
+      // payment by definition), but a Path B advance absorbed onto a later sale lands in whatever
+      // slot is free at redemption time — often after a deposit already taken on that sale.
+      type: String(map[`installment_${n}_type`] || '').trim() || 'payment',
     });
   }
   return rows;
 }
 
-// What was actually COLLECTED. Excludes cad_advance — see the double-deduction note above.
+// What has been SETTLED on this document — every leg, cad_advance included (see the note above).
 function sumInstallments(rows) {
-  return (rows || []).reduce((s, r) => s + (r.type === 'cad_advance' ? 0 : r.value), 0);
+  return (rows || []).reduce((s, r) => s + r.value, 0);
 }
 
 // Distinct modes across all legs, in slot order. Feeds the aggregate `pmodes:` tag that replaces
@@ -99,7 +108,12 @@ function materializeLegacyLeg(mfMap, rows) {
 // Metafield patch placing one new leg in the next free slot.
 // Slots exhausted → fold the overflow into the last slot rather than dropping the payment; the
 // money must never disappear just because someone took a 5th instalment.
-function installmentLegPatch(rows, { value, mode, date }) {
+//
+// `type` ('cad_advance') is written only when the leg lands in a slot of its own. A folded leg is
+// deliberately left at whatever type the slot already had: merging an absorbed advance into a leg of
+// real collected money and calling the result an advance would mislabel the money, and the reverse
+// would hide the advance. The warning below is the signal that a human has to split it by hand.
+function installmentLegPatch(rows, { value, mode, date, type }) {
   const used = new Set((rows || []).map(r => r.slot));
   let slot = 0;
   for (let n = 1; n <= MAX_INSTALLMENTS; n++) { if (!used.has(n)) { slot = n; break; } }
@@ -114,11 +128,13 @@ function installmentLegPatch(rows, { value, mode, date }) {
       [`installment_${slot}_date`]:  date,
     };
   }
-  return {
+  const patch = {
     [`installment_${slot}_value`]: value.toFixed(2),
     [`installment_${slot}_mode`]:  mode || '',
     [`installment_${slot}_date`]:  date,
   };
+  if (type && type !== 'payment') patch[`installment_${slot}_type`] = type;
+  return patch;
 }
 
 module.exports = {

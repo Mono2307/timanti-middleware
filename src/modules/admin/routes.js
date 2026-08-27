@@ -56,6 +56,7 @@ const backfillInstallments = require('../payments/backfill-installments');
 // lived in server.js, a free variable once it moved — so /api/metafield-definitions/ensure threw
 // the moment it was called. It is exported by the payments module; take it from there.
 const { MAX_INSTALLMENTS } = require('../payments/installments');
+const { CAD_ADVANCE_MODE } = require('../adjustments/cad_advance');
 
 let _priceUpdateRunning = false;
 const PRICE_UPDATE_FLAG = '/app/Outputs/price_update.running';
@@ -577,7 +578,7 @@ const ADJUSTMENT_MF_DEFS = [
 // validation. Mirrors the live enum as of 2026-08-07, plus the modes this server writes itself.
 // Note 'bank transfer' has a space where 'online_link' has an underscore — both are real, do NOT
 // normalise, existing records depend on the exact strings.
-const PAYMENT_MODE_FALLBACK = ['cash', 'upi', 'card', 'online_link', 'bank transfer', 'pos'];
+const PAYMENT_MODE_FALLBACK = ['cash', 'upi', 'card', 'online_link', 'bank transfer', 'pos', CAD_ADVANCE_MODE];
 
 // Reads the authoritative payment-mode enum off the existing payment_mode_advance definition so
 // the installment mode dropdowns offer exactly the same values as the field they replace.
@@ -616,12 +617,17 @@ function buildInstallmentMfDefs(modeChoices) {
     defs.push({ key: `installment_${n}_date`, name: `Installment ${n} — Date`, type: 'date',
       description: `Date installment ${n} was received. Stamped when the payment lands; editable so a late-recorded payment can be corrected (this date prints on the customer invoice).` });
   }
-  // Only slot 1 can hold a CAD design advance (it absorbs the FIRST payment), so one flag suffices.
-  // cad_advance rows render as "Design Advance" and are excluded from amount_paid — custom.advance
-  // already reduces amount_to_be_collected, so counting it again would deduct it twice.
-  defs.push({ key: 'installment_1_type', name: 'Installment 1 — Type', type: 'single_line_text_field',
-    description: 'payment (default) or cad_advance. cad_advance means installment 1 mirrors custom.advance for display only and is excluded from amount_paid.',
-    validations: choices(['payment', 'cad_advance']) });
+  // ANY slot can hold a CAD design advance. Path A labels slot 1 (it absorbs the first payment by
+  // definition); a Path B advance absorbed onto a later sale lands in whatever slot is free, often
+  // after a deposit was already taken on that sale.
+  //
+  // A cad_advance leg renders as "Design Advance" on the invoice and COUNTS toward amount_paid like
+  // any other leg — it is money settled, not decoration. See CAD_ADVANCE_TRACKING_SPEC §1/§2.
+  for (let n = 1; n <= MAX_INSTALLMENTS; n++) {
+    defs.push({ key: `installment_${n}_type`, name: `Installment ${n} — Type`, type: 'single_line_text_field',
+      description: `payment (default) or cad_advance. cad_advance labels installment ${n} as the CAD design advance on the invoice; it still counts toward amount_paid.`,
+      validations: choices(['payment', 'cad_advance']) });
+  }
   return defs;
 }
 
@@ -648,7 +654,10 @@ async function runEnsureMetafieldDefinitions(req, res) {
     // emit or that payment silently fails to record a leg. 'pos' is the fallback when a transaction
     // carries no mode of its own and is not in the staff-facing list. Union rather than replace —
     // never narrow an enum below what the writer emits.
-    const serverWrites = ['pos'];
+    // 'pos' is the fallback when a transaction carries no mode of its own. CAD_ADVANCE_MODE is
+    // written by the Path B redeem handler — if it is missing from the enum the absorbed leg is
+    // REJECTED on write and the advance silently fails to reach the payments table.
+    const serverWrites = ['pos', CAD_ADVANCE_MODE];
     const missing = serverWrites.filter(m => !modeChoices.includes(m));
     if (missing.length) {
       modeChoices = modeChoices.concat(missing);
