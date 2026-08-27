@@ -41,6 +41,55 @@ function createCadAdvanceHandlers(deps) {
     axios, storeUrl, supabase, getShopifyToken,
     updateDraftOrderMetafields, updateOrderMetafields, gqlSetDraftLineItems,
   } = deps;
+
+  // Is 'CAD Advance' actually an allowed value for an installment mode?
+  //
+  // A choices validation is enforced by Shopify ON WRITE. The installment_N_mode definitions were
+  // created before this mode existed, and the ensure endpoint only CREATES definitions — it cannot
+  // widen one that is already there without the update path added alongside this. So on any store
+  // where that widening has not been run, writing the mode is REJECTED.
+  //
+  // That matters far more than a missing dropdown label, because updateMetafields writes field by
+  // field and never throws: a rejected mode aborts the rest of the patch silently, leaving the leg
+  // value written but amount_paid untouched. So we ask first, and fall back to a blank mode rather
+  // than gambling the write. The leg still prints as "Design Advance" — that label comes from
+  // installment_N_type, not from the mode — so the customer-facing document is unaffected.
+  //
+  // Cached only when TRUE: a false or errored answer is re-checked next time, so widening the enum
+  // starts working without a restart. Redemptions are rare; the extra query costs nothing.
+  let _modeAllowed = false;
+  async function cadModeIsAllowed(token) {
+    if (_modeAllowed) return true;
+    const QUERY = `query {
+      metafieldDefinitions(first: 1, ownerType: DRAFTORDER, namespace: "custom", key: "installment_1_mode") {
+        nodes { validations { name value } }
+      }
+    }`;
+    try {
+      const { data } = await axios.post(`${storeUrl}/admin/api/2024-01/graphql.json`,
+        { query: QUERY }, { headers: { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' }, timeout: 15000 });
+      const v = (data?.data?.metafieldDefinitions?.nodes?.[0]?.validations || []).find(x => x.name === 'choices');
+      // No choices validation at all means the field is unconstrained — anything writes.
+      if (!v?.value) { _modeAllowed = true; return true; }
+      const allowed = JSON.parse(v.value) || [];
+      _modeAllowed = allowed.includes(CAD_ADVANCE_MODE);
+      return _modeAllowed;
+    } catch (e) {
+      console.warn(`[cad-advance] could not read the installment mode enum (${e.message}) — writing the leg without a mode`);
+      return false;
+    }
+  }
+
+  // Read back the custom metafields of a draft. Used to CONFIRM a write landed before anything
+  // irreversible happens on the back of it.
+  async function readDraftCustom(draftOrderId, token) {
+    const { data } = await axios.get(
+      `${storeUrl}/admin/api/2024-01/draft_orders/${draftOrderId}/metafields.json`,
+      { headers: { 'X-Shopify-Access-Token': token }, timeout: 10000 });
+    const out = {};
+    for (const m of (data.metafields || [])) if (m.namespace === 'custom') out[m.key] = m.value;
+    return out;
+  }
   // CAD Advance CAPTURE (draft update): a draft carrying a CAD-Advance line + a recorded payment → stamp
   // custom.advance / advance_date (starts the 365-day clock) / advance_status='open'. The draft stays open;
   // syncAmountToCollect nets `advance` post-tax. Idempotent once advance_status is set. Never throws into
@@ -249,12 +298,32 @@ function createCadAdvanceHandlers(deps) {
       for (const m of (mfData.metafields || [])) if (m.namespace === 'custom') newMfMap[m.key] = m.value;
       const newLegs = readInstallments(newMfMap);
       const today   = new Date().toISOString().slice(0, 10);
+      const legMode = (await cadModeIsAllowed(token)) ? CAD_ADVANCE_MODE : '';
+      if (!legMode) {
+        console.warn(`[cad-advance] "${CAD_ADVANCE_MODE}" is not in the installment mode enum — absorbing the leg without a mode. Run /api/metafield-definitions/ensure?apply=true to widen it.`);
+      }
       const legPatch = installmentLegPatch(newLegs, {
-        value: advVal, mode: CAD_ADVANCE_MODE, date: today, type: 'cad_advance',
+        value: advVal, mode: legMode, date: today, type: 'cad_advance',
       });
       // amount_paid must move in the SAME write, or the balance is briefly wrong on the invoice.
-      legPatch.amount_paid = (sumInstallments(newLegs) + advVal).toFixed(2);
+      const expectedPaid = sumInstallments(newLegs) + advVal;
+      legPatch.amount_paid = expectedPaid.toFixed(2);
       await updateDraftOrderMetafields(draftOrderId, legPatch);
+
+      // CONFIRM before consuming. updateDraftOrderMetafields writes field by field and never throws,
+      // so any single rejected value silently abandons the rest of the patch — the leg value lands
+      // while amount_paid does not. Everything below this point is irreversible from the customer's
+      // side: the source advance goes 'redeemed' and the ref is cleared. Marking an advance spent
+      // while this bill still asks for the full amount would take the money twice.
+      //
+      // On failure we stop, leaving the ref in place so the next draft edit retries, and tag the
+      // draft so staff can see why nothing happened.
+      const after = await readDraftCustom(draftOrderId, token);
+      if (Math.abs((parseFloat(after.amount_paid) || 0) - expectedPaid) >= 0.5) {
+        await failTag('advance not absorbed — payment write rejected');
+        console.error(`[cad-advance] ${draft.name || draftOrderId}: expected amount_paid ${expectedPaid.toFixed(2)} after absorbing ${ref}, found ${after.amount_paid}. Source advance left UNTOUCHED and the ref kept for retry.`);
+        return;
+      }
 
       // Source order: single-use closes immediately, so the same advance cannot be referenced on a
       // second draft while this one is still being built. redeemed_against holds the draft name for

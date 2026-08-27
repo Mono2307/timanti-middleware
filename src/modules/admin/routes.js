@@ -631,6 +631,61 @@ function buildInstallmentMfDefs(modeChoices) {
   return defs;
 }
 
+// Widen an EXISTING definition's choices to include everything the new definition wants.
+//
+// Strictly additive, and that is the whole safety argument: values already stored on live documents
+// stay valid, so this can never invalidate a recorded payment. It never narrows — dropping a choice
+// that documents already use would be the one genuinely destructive thing this could do — and it
+// no-ops when the existing enum is already a superset.
+async function widenChoices(def, token) {
+  const wanted = (() => {
+    const c = (def.validations || []).find(v => v.name === 'choices');
+    try { return c ? JSON.parse(c.value) : null; } catch { return null; }
+  })();
+  if (!wanted || !wanted.length) return { status: 'exists' };
+
+  const READ = `query {
+    metafieldDefinitions(first: 1, ownerType: ${def.ownerType}, namespace: "${def.namespace}", key: "${def.key}") {
+      nodes { id validations { name value } }
+    }
+  }`;
+  const gql = (query, variables) => axios.post(
+    `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/graphql.json`,
+    variables ? { query, variables } : { query },
+    { headers: { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' }, timeout: 15000 });
+
+  try {
+    const { data } = await gql(READ);
+    const node = data?.data?.metafieldDefinitions?.nodes?.[0];
+    if (!node) return { status: 'exists' };
+    const cur = (node.validations || []).find(v => v.name === 'choices');
+    // No choices validation at all: the field is unconstrained, so anything already writes. Adding
+    // one now could invalidate values already stored, so leave it alone.
+    if (!cur?.value) return { status: 'exists', detail: { note: 'no choices validation — left unconstrained' } };
+
+    const existing = JSON.parse(cur.value) || [];
+    const missing  = wanted.filter(w => !existing.includes(w));
+    if (!missing.length) return { status: 'exists' };
+
+    const UPDATE = `mutation($def: MetafieldDefinitionUpdateInput!) {
+      metafieldDefinitionUpdate(definition: $def) {
+        updatedDefinition { id key }
+        userErrors { field message code }
+      }
+    }`;
+    const merged = existing.concat(missing);
+    const { data: upd } = await gql(UPDATE, { def: {
+      namespace: def.namespace, key: def.key, ownerType: def.ownerType,
+      validations: [{ name: 'choices', value: JSON.stringify(merged) }],
+    } });
+    const uerrs = upd?.data?.metafieldDefinitionUpdate?.userErrors || [];
+    if (uerrs.length) return { status: 'error', detail: { errors: uerrs } };
+    return { status: 'widened', detail: { added: missing, choices: merged } };
+  } catch (e) {
+    return { status: 'error', detail: { errors: [{ message: e.message }] } };
+  }
+}
+
 async function runEnsureMetafieldDefinitions(req, res) {
   const p = { ...(req.query || {}), ...(req.body || {}) };
   const apply = (p.apply === 'true' || p.apply === true);
@@ -697,10 +752,19 @@ async function runEnsureMetafieldDefinitions(req, res) {
         const payload = data?.data?.metafieldDefinitionCreate;
         const errs = payload?.userErrors || [];
         if (errs.length) {
-          // TAKEN = a definition for this namespace/key/owner already exists. Not an error for us.
+          // TAKEN = a definition for this namespace/key/owner already exists. Not an error for us —
+          // but "exists" is not the same as "correct". A definition created before a new enum value
+          // existed keeps its old choices, and Shopify enforces choices ON WRITE, so the server
+          // would emit a value the field refuses. Create-only was how 'CAD Advance' could never
+          // reach installment_N_mode no matter how many times this endpoint was run.
           const taken = errs.some(e => e.code === 'TAKEN');
-          results.push({ key: def.key, ownerType: def.ownerType, status: taken ? 'exists' : 'error',
-                         errors: taken ? undefined : errs });
+          if (taken && def.validations) {
+            const widened = await widenChoices(def, token);
+            results.push({ key: def.key, ownerType: def.ownerType, status: widened.status, ...(widened.detail || {}) });
+          } else {
+            results.push({ key: def.key, ownerType: def.ownerType, status: taken ? 'exists' : 'error',
+                           errors: taken ? undefined : errs });
+          }
         } else {
           results.push({ key: def.key, ownerType: def.ownerType, status: 'created', id: payload?.createdDefinition?.id });
         }
