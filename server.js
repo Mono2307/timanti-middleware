@@ -1211,10 +1211,10 @@ function resolveDiscount({ kind, mode, rate, lines }) {
 // them lands on a different product. The reprice that follows is internally consistent and wrong,
 // which is precisely why nobody catches it.
 //
-// custom.pricing_basis records the line composition those values were entered against; the admin
-// panel stamps it on every save that touches a positional value. This checks it on EVERY draft
-// update, so the wipe happens whether or not anyone opens the panel — which is the whole point, since
-// the panel cannot observe an edit made in Shopify's own item table.
+// custom.pricing_basis records the line composition those values belong to. The middleware writes it
+// AND checks it, on every draft update — nothing else has to participate, no panel has to be opened,
+// and staff never see or think about it. First sighting of a draft records the composition; every
+// update after that compares against it.
 //
 // custom.discount_applied is cleared with the rest because readDiscountIntent falls back to it as a
 // legacy flat discount whenever discount_rate is unset: clearing the others without it does not
@@ -1231,9 +1231,7 @@ const POSITIONAL_PRICING_KEYS = [
 ];
 const PRICING_BASIS_KEY = 'pricing_basis';
 
-// Must match basisHash() in the admin extension EXACTLY, or every draft looks stale forever. Built
-// from variant id + quantity rather than line id: the panel sees GraphQL gids and this sees bare REST
-// numbers, and those would never agree. Product lines only — a line with no variant is a custom line
+// Built from variant id + quantity. Product lines only — a line with no variant is a custom line
 // (exchange notes and negative discount lines both), and the positional arrays are indexed within the
 // product-line list, exactly as productItems is built below.
 function pricingBasisHash(lineItems) {
@@ -1251,6 +1249,9 @@ async function wipeStalePositionalPricing(draft) {
   const draftOrderId = draft.id;
   if (!draftOrderId) return;
 
+  const current = pricingBasisHash(draft.line_items);
+  if (!current) return;   // no product lines yet — nothing to fingerprint
+
   const base    = process.env.SHOPIFY_STORE_URL;
   const token   = await getShopifyToken();
   const headers = { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' };
@@ -1261,15 +1262,21 @@ async function wipeStalePositionalPricing(draft) {
   );
   const all    = data.metafields || [];
   const stored = (all.find(m => m.namespace === 'custom' && m.key === PRICING_BASIS_KEY)?.value || '').trim();
-  if (!stored) return;
 
-  const current = pricingBasisHash(draft.line_items);
-  if (!current || current === stored) return;
+  if (stored === current) return;   // lines unchanged since we last looked
 
+  // First sighting: record what this draft is made of and stop. A missing basis is not evidence that
+  // anything moved, and this is what lets the guard adopt every draft that already exists — each one
+  // bootstraps on its next update, with no migration and nothing for anyone to run.
+  if (!stored) {
+    await updateDraftOrderMetafields(draftOrderId, { [PRICING_BASIS_KEY]: current });
+    return;
+  }
+
+  // Composition changed. Everything positional now points at a different product.
   const isSet  = v => { const s = String(v ?? '').trim(); return s !== '' && s !== '[]' && s !== '0'; };
   const doomed = all.filter(m =>
-    m.namespace === 'custom' &&
-    (m.key === PRICING_BASIS_KEY || (POSITIONAL_PRICING_KEYS.includes(m.key) && isSet(m.value)))
+    m.namespace === 'custom' && POSITIONAL_PRICING_KEYS.includes(m.key) && isSet(m.value)
   );
 
   for (const mf of doomed) {
@@ -1283,19 +1290,22 @@ async function wipeStalePositionalPricing(draft) {
     }
   }
 
-  const cleared = doomed.map(m => m.key).filter(k => k !== PRICING_BASIS_KEY);
-  console.log(`[stale-pricing] #${draft.name}: line composition changed (${stored} -> ${current}) — cleared ${cleared.length ? cleared.join(', ') : 'nothing but the basis'}`);
+  // Move the basis on to the new composition BEFORE anything else, so a failure below cannot leave
+  // this draft re-wiping itself on every subsequent update.
+  await updateDraftOrderMetafields(draftOrderId, { [PRICING_BASIS_KEY]: current });
 
-  // Deleting a metafield does NOT fire the draft webhook, so without this the draft would keep the
-  // prices those cleared overrides produced. The tag fires one more update, and by then the basis is
-  // gone, so this guard no-ops on that pass instead of looping.
-  if (cleared.length) {
-    const tags = (draft.tags || '').split(',').map(t => t.trim()).filter(Boolean);
-    if (!tags.some(t => t.toLowerCase() === 'reprice')) {
-      await axios.put(`${base}/admin/api/2024-01/draft_orders/${draftOrderId}.json`,
-        { draft_order: { id: draftOrderId, tags: [...new Set([...tags, 'reprice'])].join(', ') } },
-        { headers, timeout: 10000 });
-    }
+  const cleared = doomed.map(m => m.key);
+  console.log(`[stale-pricing] #${draft.name}: line composition changed (${stored} -> ${current}) — ${cleared.length ? 'cleared ' + cleared.join(', ') : 'no overrides were set'}`);
+  if (!cleared.length) return;
+
+  // Deleting a metafield does NOT fire the draft webhook, so without the tag below the draft would
+  // keep the prices those cleared overrides produced. The tag fires one more update, and by then the
+  // basis already matches, so this guard no-ops on that pass instead of looping.
+  const tags = (draft.tags || '').split(',').map(t => t.trim()).filter(Boolean);
+  if (!tags.some(t => t.toLowerCase() === 'reprice')) {
+    await axios.put(`${base}/admin/api/2024-01/draft_orders/${draftOrderId}.json`,
+      { draft_order: { id: draftOrderId, tags: [...new Set([...tags, 'reprice'])].join(', ') } },
+      { headers, timeout: 10000 });
   }
 }
 

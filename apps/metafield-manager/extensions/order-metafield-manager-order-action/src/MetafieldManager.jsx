@@ -350,59 +350,6 @@ const PAYMENT_TRIGGER_KEYS = [
 // one used to add a `reprice` tag that the handler then refused to act on, because it aborts unless
 // jewelcode_net_weight is present. A cosmetic correction should not be routed through the pricing
 // engine at all, let alone rejected by it.
-// Everything the reprice engine reads BY LINE POSITION, plus the order-level discount intent that
-// outlives a line edit. The positional values are indexed by product-line position (the middleware
-// reads them as CSV, or as a JSON array for line_discounts), so removing, adding or reordering a
-// line shifts every one of them onto a different product. The prices that come out are internally
-// consistent and wrong, which is why nobody notices.
-//
-// discount_applied is in the list because readDiscountIntent falls back to it as a legacy flat
-// discount whenever discount_rate is unset: clearing the others without it does not remove the
-// discount, it just re-routes the same one through the legacy path.
-const POSITIONAL_PRICING_KEYS = [
-  "gold_rate",
-  "making",
-  "jewelcode_net_weight",
-  "jewelcode_gross_weight",
-  "jewelcode_diamond_carats",
-  "jewelcode_gemstone_weight",
-  "jewelcode_diamond_pieces",
-  "line_discounts",
-  "discount_rate",
-  "discount_kind",
-  "discount_mode",
-  "discount_applied",
-];
-
-// Fingerprint of the line composition those values were entered against, stored as a short hash of
-// "<lineId>:<qty>|...". Line ids catch removal, addition, reordering and variant swaps (Shopify
-// issues a new line id on a swap); quantity catches the rest, because custom.making is the whole
-// line's labour, already multiplied by quantity.
-//
-// Stored unstructured - metafieldsSet accepts a key with no definition, exactly as
-// custom.line_discounts already does. Hashed rather than kept verbatim so the value stays short
-// whatever the line count.
-const PRICING_BASIS_KEY = "pricing_basis";
-
-// The fingerprint has to be computable from BOTH sides: here, off GraphQL nodes, and in the
-// middleware, off a REST webhook payload. So it is built from values that mean the same thing in
-// both - the variant id and the quantity - and never from line ids, which arrive as a gid here and
-// as a bare number there and would never agree.
-//
-// PRODUCT lines only, matching how the middleware indexes its positional arrays: it builds
-// productItems by dropping everything without a variant (exchange-note lines and custom negative
-// discount lines are both custom lines), and positions are counted within THAT list.
-function basisHash(lineNodes) {
-  const raw = (lineNodes || [])
-    .filter((n) => n?.variant?.id)
-    .map((n) => String(n.variant.id).split("/").pop() + ":" + (n.quantity ?? 1))
-    .join("|");
-  if (!raw) return "";
-  let h = 5381;
-  for (let i = 0; i < raw.length; i++) h = ((h << 5) + h + raw.charCodeAt(i)) >>> 0;
-  return h.toString(16);
-}
-
 const REPRICE_TRIGGER_KEYS = [
   "gold_rate", "gold_rate_date", "making",
   "jewelcode_net_weight",
@@ -464,12 +411,6 @@ export default function MetafieldManager({ surface = "block" } = {}) {
   const [lineRows, setLineRows] = useState([]); // [{ id, title, discounts:[{ t, m, v }] }]
   const [lineBusy, setLineBusy] = useState(false);
   const [lineNote, setLineNote] = useState("");
-  // Stale-pricing guard. basis = the current line composition's hash; staleKeys = the positional
-  // values that were entered against a different one.
-  const [staleP, setStaleP] = useState({ basis: "", setKeys: [], staleKeys: [] });
-  const [staleNs, setStaleNs] = useState({});
-  const [staleBusy, setStaleBusy] = useState(false);
-  const [staleNote, setStaleNote] = useState("");
   const baselineRef = useRef({});
   const editsRef = useRef({});
 
@@ -478,10 +419,8 @@ export default function MetafieldManager({ surface = "block" } = {}) {
 
     async function load() {
       const valuesByKey = {};
-      const nsByKey = {};
       const defsByKey = {};
       const warnings = [];
-      let currentBasis = "";
 
       // Values — best-effort.
       if (ownerId) {
@@ -490,9 +429,6 @@ export default function MetafieldManager({ surface = "block" } = {}) {
           if (res?.errors?.length) warnings.push(res.errors.map((e) => e.message).join("; "));
           for (const n of res?.data?.[ctx.resourceField]?.metafields?.nodes ?? []) {
             valuesByKey[n.key] = n.value ?? "";
-            // Kept for the stale-pricing wipe: metafieldsDelete identifies by namespace + key, and
-            // these keys are not all in FIELD_CONFIG, so defs[] cannot supply the namespace.
-            nsByKey[n.key] = n.namespace;
           }
         } catch (e) {
           warnings.push(`Couldn't load values: ${e?.message || e}`);
@@ -524,11 +460,10 @@ export default function MetafieldManager({ surface = "block" } = {}) {
       if (ctx.scope === "draft" && ownerId) {
         try {
           const liRes = await shopify.query(
-            `query LineItemsForPricing($id: ID!) { ${ctx.resourceField}(id: $id) { lineItems(first: 50) { nodes { id title name quantity variant { id } } } } }`,
+            `query LineItemsForPricing($id: ID!) { ${ctx.resourceField}(id: $id) { lineItems(first: 50) { nodes { id title name } } } }`,
             { variables: { id: ownerId } },
           );
           const nodes = liRes?.data?.[ctx.resourceField]?.lineItems?.nodes ?? [];
-          currentBasis = basisHash(nodes);
           let lineDisc = [];
           try { lineDisc = JSON.parse(valuesByKey["line_discounts"] || "[]"); } catch { lineDisc = []; }
           lineRowsInit = nodes.map((n, i) => ({
@@ -555,22 +490,6 @@ export default function MetafieldManager({ surface = "block" } = {}) {
       setDefs(defsByKey);
       setValues(valuesByKey);
       setLineRows(lineRowsInit);
-      // A positional value only means anything against the line composition it was entered for. If
-      // that has moved on, every one of them now points at a different product. A draft with no
-      // recorded basis is left alone: absence is not evidence the lines changed, and every draft
-      // priced before this shipped has none.
-      const storedBasis = (valuesByKey[PRICING_BASIS_KEY] ?? "").trim();
-      const isSet = (k) => {
-        const v = (valuesByKey[k] ?? "").trim();
-        return v !== "" && v !== "[]" && v !== "0";
-      };
-      // setKeys is every override currently carried, drift or no drift: it drives the manual control,
-      // which has to work on drafts that predate pricing_basis entirely - which, on the day this
-      // shipped, is all of them.
-      const setKeys = POSITIONAL_PRICING_KEYS.filter(isSet);
-      const drifted = storedBasis && currentBasis && storedBasis !== currentBasis;
-      setStaleNs(nsByKey);
-      setStaleP({ basis: currentBasis, setKeys, staleKeys: drifted ? setKeys : [] });
       // On a post-save refresh the user may have started typing again — keep those in-progress edits and
       // don't clobber them; adopt fresh server values as the new baseline for everything else.
       const priorEdits = editsRef.current || {};
@@ -653,18 +572,6 @@ export default function MetafieldManager({ surface = "block" } = {}) {
       // A metafield save never fires the resource webhook, so the middleware won't recompute on its own.
       // Add trigger tags for what actually changed: `reprice` re-runs the price calc (gold rate × weight,
       // discount, GST); `sync-payment` recomputes net-to-collect + balance. Best-effort (non-blocking).
-      // Record which line composition these values were entered against, so a later line edit can be
-      // detected. Written whenever a positional value is touched; best-effort, and never allowed to
-      // fail the save that produced it.
-      if (changed.some((k) => POSITIONAL_PRICING_KEYS.includes(k)) && staleP.basis) {
-        try {
-          await shopify.query(SET_MUTATION, { variables: { metafields: [{
-            ownerId, namespace: "custom", key: PRICING_BASIS_KEY,
-            type: "single_line_text_field", value: staleP.basis,
-          }] } });
-        } catch { /* non-blocking */ }
-      }
-
       const triggerTags = [];
       if (changed.some((k) => REPRICE_TRIGGER_KEYS.includes(k))) triggerTags.push("reprice");
       if (changed.some((k) => RECOMPUTE_TRIGGER_KEYS.includes(k))) triggerTags.push("sync-payment");
@@ -771,39 +678,6 @@ export default function MetafieldManager({ surface = "block" } = {}) {
     }
   }
 
-  // Clear every positional pricing value that was entered against a superseded line composition,
-  // then reprice. Deliberately a button rather than an automatic wipe on open: this moves
-  // customer-facing prices, and doing that as a side effect of opening a panel leaves nothing to
-  // trace afterwards.
-  //
-  // The basis is deleted along with the values, so the draft returns to "nothing recorded" rather
-  // than to a basis with no values under it.
-  async function clearPricingOverrides(keys) {
-    if (!ownerId || !keys || !keys.length) return;
-    setStaleBusy(true);
-    setStaleNote("");
-    try {
-      const toDelete = [...keys, PRICING_BASIS_KEY].map((key) => ({
-        ownerId,
-        namespace: staleNs[key] || defs[key]?.namespace || "custom",
-        key,
-      }));
-      const res = await shopify.query(DELETE_MUTATION, { variables: { metafields: toDelete } });
-      const errs = collectErrors(res, "metafieldsDelete");
-      if (errs.length) throw new Error(errs.join("; "));
-      try {
-        await shopify.query(TAGS_ADD_MUTATION, { variables: { id: ownerId, tags: ["reprice"] } });
-      } catch { /* non-blocking - the values are already gone, which is the part that matters */ }
-      setStaleP({ basis: staleP.basis, setKeys: [], staleKeys: [] });
-      setStaleNote("Cleared. Repricing off the catalogue now - re-enter any rate, labour, weight or discount this order needs.");
-      setTimeout(() => setRefreshTick((t) => t + 1), 3000);
-    } catch (e) {
-      setStaleNote("Couldn't clear: " + (e?.message || e));
-    } finally {
-      setStaleBusy(false);
-    }
-  }
-
   // Per-line discount editor mutations.
   const addRowDiscount = (i) =>
     setLineRows((rows) => rows.map((r, j) => (j === i ? { ...r, discounts: [...r.discounts, { t: "dia", m: "pct", v: "" }] } : r)));
@@ -838,14 +712,6 @@ export default function MetafieldManager({ surface = "block" } = {}) {
       const toSet = [
         { ownerId, namespace: ldDef.namespace, key: "line_discounts", type: ldDef.type, value: lineDiscJson },
       ];
-      // Same basis stamp as save(). line_discounts is positional too, and is the value most likely to
-      // be left behind on a line that no longer exists.
-      if (staleP.basis) {
-        toSet.push({
-          ownerId, namespace: "custom", key: PRICING_BASIS_KEY,
-          type: "single_line_text_field", value: staleP.basis,
-        });
-      }
       const res = await shopify.query(SET_MUTATION, { variables: { metafields: toSet } });
       const errs = collectErrors(res, "metafieldsSet");
       if (errs.length) throw new Error(errs.join("; "));
@@ -967,40 +833,6 @@ export default function MetafieldManager({ surface = "block" } = {}) {
       </s-stack>
     </s-section>
   );
-
-  // Pricing overrides carried by this document, with a way to drop them.
-  //
-  // Separate from the drift banner above on purpose. The banner only fires when custom.pricing_basis
-  // proves the lines moved, which cannot work on a document priced before that field existed, and
-  // cannot work at all when someone edits the item table and never opens this panel. This is the
-  // manual escape hatch: it shows what is actually set, whenever anything is set, and clears it on
-  // request without needing to prove anything first.
-  const renderPricingOverrides = () => {
-    if (!staleP.setKeys.length) return null;
-    return (
-      <s-section heading="Pricing overrides">
-        <s-stack direction="block" gap="base">
-          <s-text tone="subdued">
-            These values override catalogue pricing on this document, and every one of them is held
-            per line position - so if the line items have changed since they were entered, they are
-            now applied to different products. Clearing them reprices off the catalogue; re-enter
-            whatever this order genuinely needs.
-          </s-text>
-          <s-text>
-            {staleP.setKeys.map((k) => FIELD_CONFIG[k]?.label || k).join(", ")}
-          </s-text>
-          <s-button
-            onClick={() => clearPricingOverrides(staleP.setKeys)}
-            loading={staleBusy ? "" : undefined}
-            disabled={staleBusy ? "" : undefined}
-          >
-            Clear all pricing overrides and reprice
-          </s-button>
-          {staleNote ? <s-text>{staleNote}</s-text> : null}
-        </s-stack>
-      </s-section>
-    );
-  };
 
   // Per-line discount editor — draft scope only (reprice runs on the draft webhook). One card per
   // line item: a stack of discounts, each targeting Diamond, Making, or the whole product (%/₹).
@@ -1131,27 +963,6 @@ export default function MetafieldManager({ surface = "block" } = {}) {
           {recalcNote}
         </s-banner>
       ) : null}
-      {staleP.staleKeys.length ? (
-        <s-banner tone="critical" heading="Line items changed - the pricing overrides on this draft are misaligned">
-          <s-stack direction="block" gap="small-500">
-            <s-text>
-              These values are held per line position, and the lines have changed since they were
-              entered, so each is now being applied to a different product:
-              {" "}{staleP.staleKeys.map((k) => FIELD_CONFIG[k]?.label || k).join(", ")}.
-              Clear them and price this order fresh before going any further.
-            </s-text>
-            <s-button
-              variant="primary"
-              onClick={() => clearPricingOverrides(staleP.staleKeys)}
-              loading={staleBusy ? "" : undefined}
-              disabled={staleBusy ? "" : undefined}
-            >
-              Clear overrides and reprice
-            </s-button>
-            {staleNote ? <s-text>{staleNote}</s-text> : null}
-          </s-stack>
-        </s-banner>
-      ) : null}
     </>
   );
 
@@ -1171,12 +982,8 @@ export default function MetafieldManager({ surface = "block" } = {}) {
       // The per-line discount editor belongs WITH the Pricing section (gold rate / making),
       // so it renders right after it rather than at the top of the panel.
       if (section.title === "Pricing") {
-        const out = [block];
-        const po = renderPricingOverrides();
-        if (po) out.push(<s-stack key="pricing-overrides" direction="block">{po}</s-stack>);
         const lp = renderLinePricing();
-        if (lp) out.push(<s-stack key="line-pricing" direction="block">{lp}</s-stack>);
-        return out;
+        if (lp) return [block, <s-stack key="line-pricing" direction="block">{lp}</s-stack>];
       }
       return [block];
     });
