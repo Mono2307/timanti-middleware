@@ -177,7 +177,16 @@ const FIELD_CONFIG = {
   // Weighed in front of the customer when the piece is taken in. Editable because it is a staff
   // observation, not a computed value, and it is the number any later weight dispute is settled
   // against — the post-repair weight on the Mark Complete form is a different measurement.
-  repair_intake_gross_weight: { section: "Repair", label: "Gross Weight at Intake (g)", editable: true, applies: "draft" },
+  // Both scopes: a weight dispute surfaces after the piece has gone back, by which point the draft
+  // is a converted order. The ORDER-side metafield definition already exists (the ensure endpoint
+  // creates every REPAIR_MF_DEF for DRAFTORDER and ORDER alike), so this still saves on an order.
+  repair_intake_gross_weight: { section: "Repair", label: "Gross Weight at Intake (g)", editable: true, applies: "both" },
+  // The other end of the same job: written by the Mark Complete form after the repair
+  // (after-sales/index.js -> writeDraftOrderMetafields, custom.gross_weight_g). Read-only here
+  // because it is captured by that form rather than typed into this panel - which also means it
+  // needs no metafield definition, since display needs none and only saving would. Sits next to the
+  // intake weight because the entire point of keeping both is putting them side by side.
+  gross_weight_g: { section: "Repair", label: "Gross Weight at Delivery (g)", editable: false, applies: "both" },
   repair_intake_at: { section: "Repair", label: "Repair Intake At", editable: false, applies: "draft" },
   repair_estimate_sent_at: { section: "Repair", label: "Estimate Sent At", editable: false, applies: "draft" },
   repair_completed_at: { section: "Repair", label: "Repair Completed At", editable: false, applies: "draft" },
