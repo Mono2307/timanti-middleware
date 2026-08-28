@@ -1263,17 +1263,29 @@ async function wipeStalePositionalPricing(draft) {
   const all    = data.metafields || [];
   const stored = (all.find(m => m.namespace === 'custom' && m.key === PRICING_BASIS_KEY)?.value || '').trim();
 
-  if (stored === current) return;   // lines unchanged since we last looked
+  // A line added — or dropped and re-added — in Shopify's item table arrives carrying NO properties
+  // at all. Hydration stamps _jewel_code on every product line unconditionally, reprice stamps it
+  // again, and this guard runs ahead of both. So an unstamped product line means the line-up changed
+  // in the edit that produced THIS webhook, and it says so in the payload alone, with nothing
+  // remembered from last time.
+  //
+  // That matters because it is the one signal that works on a draft nobody has ever recorded a basis
+  // for — which, the day this shipped, was every draft in the store.
+  const lineAdded = (draft.line_items || []).some(li =>
+    li.variant_id && !(li.properties || []).some(p => p.name === '_jewel_code'));
 
-  // First sighting: record what this draft is made of and stop. A missing basis is not evidence that
-  // anything moved, and this is what lets the guard adopt every draft that already exists — each one
-  // bootstraps on its next update, with no migration and nothing for anyone to run.
-  if (!stored) {
+  if (!lineAdded && stored === current) return;   // same line-up as last time, nothing added
+
+  // Nothing observably changed and there is nothing recorded yet: note what this draft is made of so
+  // a later removal can be spotted, and leave its values alone. A missing basis is not evidence that
+  // anything moved.
+  if (!lineAdded && !stored) {
     await updateDraftOrderMetafields(draftOrderId, { [PRICING_BASIS_KEY]: current });
     return;
   }
 
-  // Composition changed. Everything positional now points at a different product.
+  // The line-up changed: either a line arrived unstamped, or the recorded basis disagrees with what
+  // is here now. Everything positional points at a different product.
   const isSet  = v => { const s = String(v ?? '').trim(); return s !== '' && s !== '[]' && s !== '0'; };
   const doomed = all.filter(m =>
     m.namespace === 'custom' && POSITIONAL_PRICING_KEYS.includes(m.key) && isSet(m.value)
@@ -1295,7 +1307,8 @@ async function wipeStalePositionalPricing(draft) {
   await updateDraftOrderMetafields(draftOrderId, { [PRICING_BASIS_KEY]: current });
 
   const cleared = doomed.map(m => m.key);
-  console.log(`[stale-pricing] #${draft.name}: line composition changed (${stored} -> ${current}) — ${cleared.length ? 'cleared ' + cleared.join(', ') : 'no overrides were set'}`);
+  const why = lineAdded ? 'a line item was added or re-added' : `basis ${stored} -> ${current}`;
+  console.log(`[stale-pricing] #${draft.name}: line composition changed (${why}) — ${cleared.length ? 'cleared ' + cleared.join(', ') : 'no overrides were set'}`);
   if (!cleared.length) return;
 
   // Deleting a metafield does NOT fire the draft webhook, so without the tag below the draft would
