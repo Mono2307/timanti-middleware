@@ -466,7 +466,7 @@ export default function MetafieldManager({ surface = "block" } = {}) {
   const [lineNote, setLineNote] = useState("");
   // Stale-pricing guard. basis = the current line composition's hash; staleKeys = the positional
   // values that were entered against a different one.
-  const [staleP, setStaleP] = useState({ basis: "", staleKeys: [] });
+  const [staleP, setStaleP] = useState({ basis: "", setKeys: [], staleKeys: [] });
   const [staleNs, setStaleNs] = useState({});
   const [staleBusy, setStaleBusy] = useState(false);
   const [staleNote, setStaleNote] = useState("");
@@ -564,9 +564,13 @@ export default function MetafieldManager({ surface = "block" } = {}) {
         const v = (valuesByKey[k] ?? "").trim();
         return v !== "" && v !== "[]" && v !== "0";
       };
+      // setKeys is every override currently carried, drift or no drift: it drives the manual control,
+      // which has to work on drafts that predate pricing_basis entirely - which, on the day this
+      // shipped, is all of them.
+      const setKeys = POSITIONAL_PRICING_KEYS.filter(isSet);
       const drifted = storedBasis && currentBasis && storedBasis !== currentBasis;
       setStaleNs(nsByKey);
-      setStaleP({ basis: currentBasis, staleKeys: drifted ? POSITIONAL_PRICING_KEYS.filter(isSet) : [] });
+      setStaleP({ basis: currentBasis, setKeys, staleKeys: drifted ? setKeys : [] });
       // On a post-save refresh the user may have started typing again — keep those in-progress edits and
       // don't clobber them; adopt fresh server values as the new baseline for everything else.
       const priorEdits = editsRef.current || {};
@@ -774,12 +778,12 @@ export default function MetafieldManager({ surface = "block" } = {}) {
   //
   // The basis is deleted along with the values, so the draft returns to "nothing recorded" rather
   // than to a basis with no values under it.
-  async function clearStalePricing() {
-    if (!ownerId || !staleP.staleKeys.length) return;
+  async function clearPricingOverrides(keys) {
+    if (!ownerId || !keys || !keys.length) return;
     setStaleBusy(true);
     setStaleNote("");
     try {
-      const toDelete = [...staleP.staleKeys, PRICING_BASIS_KEY].map((key) => ({
+      const toDelete = [...keys, PRICING_BASIS_KEY].map((key) => ({
         ownerId,
         namespace: staleNs[key] || defs[key]?.namespace || "custom",
         key,
@@ -790,7 +794,7 @@ export default function MetafieldManager({ surface = "block" } = {}) {
       try {
         await shopify.query(TAGS_ADD_MUTATION, { variables: { id: ownerId, tags: ["reprice"] } });
       } catch { /* non-blocking - the values are already gone, which is the part that matters */ }
-      setStaleP({ basis: staleP.basis, staleKeys: [] });
+      setStaleP({ basis: staleP.basis, setKeys: [], staleKeys: [] });
       setStaleNote("Cleared. Repricing off the catalogue now - re-enter any rate, labour, weight or discount this order needs.");
       setTimeout(() => setRefreshTick((t) => t + 1), 3000);
     } catch (e) {
@@ -964,6 +968,40 @@ export default function MetafieldManager({ surface = "block" } = {}) {
     </s-section>
   );
 
+  // Pricing overrides carried by this document, with a way to drop them.
+  //
+  // Separate from the drift banner above on purpose. The banner only fires when custom.pricing_basis
+  // proves the lines moved, which cannot work on a document priced before that field existed, and
+  // cannot work at all when someone edits the item table and never opens this panel. This is the
+  // manual escape hatch: it shows what is actually set, whenever anything is set, and clears it on
+  // request without needing to prove anything first.
+  const renderPricingOverrides = () => {
+    if (!staleP.setKeys.length) return null;
+    return (
+      <s-section heading="Pricing overrides">
+        <s-stack direction="block" gap="base">
+          <s-text tone="subdued">
+            These values override catalogue pricing on this document, and every one of them is held
+            per line position - so if the line items have changed since they were entered, they are
+            now applied to different products. Clearing them reprices off the catalogue; re-enter
+            whatever this order genuinely needs.
+          </s-text>
+          <s-text>
+            {staleP.setKeys.map((k) => FIELD_CONFIG[k]?.label || k).join(", ")}
+          </s-text>
+          <s-button
+            onClick={() => clearPricingOverrides(staleP.setKeys)}
+            loading={staleBusy ? "" : undefined}
+            disabled={staleBusy ? "" : undefined}
+          >
+            Clear all pricing overrides and reprice
+          </s-button>
+          {staleNote ? <s-text>{staleNote}</s-text> : null}
+        </s-stack>
+      </s-section>
+    );
+  };
+
   // Per-line discount editor — draft scope only (reprice runs on the draft webhook). One card per
   // line item: a stack of discounts, each targeting Diamond, Making, or the whole product (%/₹).
   // Everything folds into the single pre-tax Discount on Taxable on the invoice. Labour itself is set
@@ -1104,7 +1142,7 @@ export default function MetafieldManager({ surface = "block" } = {}) {
             </s-text>
             <s-button
               variant="primary"
-              onClick={clearStalePricing}
+              onClick={() => clearPricingOverrides(staleP.staleKeys)}
               loading={staleBusy ? "" : undefined}
               disabled={staleBusy ? "" : undefined}
             >
@@ -1133,8 +1171,12 @@ export default function MetafieldManager({ surface = "block" } = {}) {
       // The per-line discount editor belongs WITH the Pricing section (gold rate / making),
       // so it renders right after it rather than at the top of the panel.
       if (section.title === "Pricing") {
+        const out = [block];
+        const po = renderPricingOverrides();
+        if (po) out.push(<s-stack key="pricing-overrides" direction="block">{po}</s-stack>);
         const lp = renderLinePricing();
-        if (lp) return [block, <s-stack key="line-pricing" direction="block">{lp}</s-stack>];
+        if (lp) out.push(<s-stack key="line-pricing" direction="block">{lp}</s-stack>);
+        return out;
       }
       return [block];
     });
