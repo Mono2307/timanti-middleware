@@ -404,7 +404,27 @@ async function mintSerial(deps, { docType, storeCode, deliveryCode, resourceType
   }).select().single();
 
   if (error) {
-    // Lost a race on resource_id → return the row that won (the seq we drew is burned).
+    // Lost a race on resource_id → another pass recorded this resource first. The number WE drew is
+    // now unattached, and until 2026-08-31 it was simply abandoned: no row, no stamp, no log. That is
+    // how TM27-KAHSR-00005 and 00006 vanished from the invoice series on order #1073, and it took
+    // three days and a printed invoice to notice. See RCA_INVOICE_COUNTER_2026-08-29.md.
+    //
+    // So: hand it back. The conditional WHERE makes this a no-op if anything has been issued since —
+    // the same guard the re-issue path uses — so it can never rewind a number another document is
+    // already using. Best-effort: failing to reclaim must not turn a survivable race into a throw.
+    if (alloc && alloc.seq != null) {
+      try {
+        const { data: rolled } = await deps.supabase.from('serial_counters')
+          .update({ current_value: alloc.seq - 1, updated_at: new Date().toISOString() })
+          .eq('doc_type', docType).eq('state_code', alloc.counterKey).eq('current_value', alloc.seq)
+          .select();
+        console.error(`[serial] LOST RACE on ${docType} ${ridStr}: drew ${alloc.code} (seq ${alloc.seq}) ` +
+          `and another pass recorded first — ${rolled && rolled.length ? 'counter rolled back, number reusable' : 'counter had already moved on, NUMBER IS LOST'}`);
+      } catch (rollbackErr) {
+        console.error(`[serial] LOST RACE on ${docType} ${ridStr}: drew ${alloc.code}; rollback failed — ${rollbackErr.message}`);
+      }
+    }
+
     if (ridStr) {
       const { data: won } = await deps.supabase.from('serial_ledger')
         .select('*').eq('doc_type', docType).eq('resource_id', ridStr).maybeSingle();

@@ -50,6 +50,19 @@ const serialization     = require('./index');
 const creditInstruments = require('../adjustments/credit_instruments');
 const { isCadAdvanceOnly } = require('../adjustments/cad_advance');
 
+// Single-flight guard for order numbering, the order-side twin of processingDrafts in
+// modules/after-sales. One staff action produces SEVERAL orders/updated deliveries, because this
+// middleware writes tags to the very order whose webhook it is handling and each write makes Shopify
+// fire again — five deliveries for one conversion on 2026-08-29. Without this, two of those passes
+// can both pass the "already numbered?" check before either has recorded a number, and each draws
+// one from the counter. Only one can record it; the others are burned. That is exactly how
+// TM27-KAHSR-00005 and 00006 were destroyed on order #1073.
+//
+// In-process only, which is sufficient: the app runs a single machine, and the race is between
+// concurrent handlers inside one process, not across instances. If this ever runs multi-instance the
+// lock must move to the database — see RCA_INVOICE_COUNTER_2026-08-29.md.
+const _numberingInFlight = new Set();
+
 const SERIAL_CUSTOMER_ORDER       = config.serial.customerOrder;
 const SERIAL_CUSTOMER_ORDER_START = config.serial.customerOrderStart;
 
@@ -246,6 +259,13 @@ app.post('/api/serial/order-serial', async (req, res) => {
     return;
   }
 
+  const _numKey = String(order.id);
+  if (_numberingInFlight.has(_numKey)) {
+    console.log(`[serial] order ${order.name || order.id} — numbering already in flight, duplicate webhook ignored`);
+    return;
+  }
+  _numberingInFlight.add(_numKey);
+
   (async () => {
     const deps = SERIAL_DEPS();
     const mf = await serialization.readSerialMetafields(deps, 'orders', String(order.id), token);
@@ -258,7 +278,11 @@ app.post('/api/serial/order-serial', async (req, res) => {
       stamp: true,
     });
     if (r.minted) console.log(`[serial] customer_order order ${order.name || order.id} → ${r.serial_code}`);
-  })().catch(e => console.error(`[serial] order-serial failed for ${order.id}:`, e.message));
+  })()
+    .catch(e => console.error(`[serial] order-serial failed for ${order.id}:`, e.message))
+    // Released in finally, never on the happy path alone: a throw between the read and the mint would
+    // otherwise leave the order permanently unnumberable until the process restarts.
+    .finally(() => _numberingInFlight.delete(_numKey));
 });
 
 // NOTE: customer-order serials are PERMANENT once minted — there is intentionally NO cancellation
@@ -491,6 +515,67 @@ async function runSerialRestamp(req, res) {
 }
 app.get('/api/serial/restamp-from-ledger', runSerialRestamp);
 app.post('/api/serial/restamp-from-ledger', runSerialRestamp);
+
+// GET /api/serial/drift — does every counter agree with its ledger?
+//
+// A counter and its ledger must satisfy: current_value == highest seq recorded, and the recorded
+// seqs must be 1..current_value with nothing missing. Anything else means a number left the counter
+// without a document behind it — which is what happened on 2026-08-29 and went unnoticed for three
+// days because nothing was comparing these two numbers.
+//
+// Pure read. Safe to poll, safe to run from a health check, safe to hand to accounts. Returns
+// ok:false and a non-2xx when any counter has drifted, so a monitor can alert on the status alone.
+async function runSerialDrift(req, res) {
+  try {
+    const { data: counters, error: cErr } = await supabase
+      .from('serial_counters').select('doc_type, state_code, current_value');
+    if (cErr) throw new Error(cErr.message);
+
+    const { data: ledger, error: lErr } = await supabase
+      .from('serial_ledger').select('doc_type, store_code, seq, status, serial_code, resource_name');
+    if (lErr) throw new Error(lErr.message);
+
+    const report = [];
+    for (const c of (counters || [])) {
+      const rows = (ledger || []).filter(r => r.doc_type === c.doc_type && r.store_code === c.state_code);
+      const seqs = new Set(rows.map(r => Number(r.seq)));
+      const current = Number(c.current_value);
+
+      // Every number from 1 to the counter's current value should be accounted for by a ledger row,
+      // cancelled ones included — a cancelled number was still issued and still explains its slot.
+      const missing = [];
+      for (let s = 1; s <= current; s++) if (!seqs.has(s)) missing.push(s);
+
+      report.push({
+        doc_type: c.doc_type,
+        store_code: c.state_code,
+        counter: current,
+        recorded: rows.length,
+        cancelled: rows.filter(r => r.status === 'cancelled').length,
+        missing_seqs: missing,
+        ok: missing.length === 0,
+      });
+    }
+
+    const drifted = report.filter(r => !r.ok);
+    const status  = drifted.length ? 409 : 200;
+    return res.status(status).json({
+      ok: drifted.length === 0,
+      checkedCounters: report.length,
+      driftedCounters: drifted.length,
+      // Named plainly so an alert body reads as a sentence rather than a data dump.
+      summary: drifted.length
+        ? drifted.map(d => `${d.doc_type}/${d.store_code}: counter at ${d.counter} but ${d.missing_seqs.length} number(s) unaccounted for (${d.missing_seqs.join(', ')})`)
+        : ['every counter agrees with its ledger'],
+      report,
+    });
+  } catch (err) {
+    console.error('[serial] drift check failed:', err.message);
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+}
+app.get('/api/serial/drift', runSerialDrift);
+app.post('/api/serial/drift', runSerialDrift);
 
 // GET/POST /api/serial/counter — read / set / delete a single counter row. Browser-clickable.
 //   ?docType=customer_order&state=KA-HSR            → read current + next
