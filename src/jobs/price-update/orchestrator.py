@@ -34,7 +34,7 @@ from config import (
     BASE, OUTPUTS, LOGS_DIR, SCRIPTS,
     GOLD_RATE_FILE, IMPORT_SCRIPT,
     SUPABASE_URL, SUPABASE_KEY, SUPABASE_TOKEN_KEY,
-    STORE_DOMAIN, GOLD_RATE_MAX_AGE_HOURS,
+    STORE_DOMAIN, API_VERSION, GOLD_RATE_MAX_AGE_HOURS,
     RATIO_18K, RATIO_14K, RATIO_22K, RATIO_24K,
 )
 
@@ -261,6 +261,87 @@ def _fmt_dur(seconds: float) -> str:
     return f'{m}m {s}s'
 
 
+
+# ── Post-import verification ─────────────────────────────────────────────────
+_VERIFY_Q = """
+query($cursor: String) {
+  productVariants(first: 250, after: $cursor) {
+    pageInfo { hasNextPage endCursor }
+    nodes {
+      id sku price
+      product { status }
+      tot: metafield(namespace: "custom", key: "price_total") { value }
+    }
+  }
+}
+"""
+
+
+def verify_prices(token: str, log: logging.Logger, out_dir: Path, run_id: str):
+    """Re-read the catalogue and assert the price charged equals price_total.
+
+    Phase 2 writes the price and Phase 3 writes the breakup. A run that dies
+    between them leaves a variant whose metafields are self-consistent at the
+    PREVIOUS rate sitting under a price at the CURRENT one - nothing about that
+    set looks wrong on inspection, so it has to be caught by comparing the two.
+
+    Returns (mismatch_count, csv_path_or_empty).
+    """
+    import csv as _csv
+    import json as _json
+    import urllib.request as _url
+
+    endpoint = f'https://{STORE_DOMAIN}/admin/api/{API_VERSION}/graphql.json'
+
+    def _q(cursor):
+        body = _json.dumps({'query': _VERIFY_Q,
+                            'variables': {'cursor': cursor}}).encode()
+        req = _url.Request(endpoint, data=body, method='POST', headers={
+            'X-Shopify-Access-Token': token, 'Content-Type': 'application/json'})
+        with _url.urlopen(req, timeout=120) as r:
+            out = _json.loads(r.read().decode())
+        if out.get('errors'):
+            raise RuntimeError(_json.dumps(out['errors'])[:300])
+        return out['data']['productVariants']
+
+    bad, seen, cursor = [], 0, None
+    while True:
+        page = _q(cursor)
+        for n in page['nodes']:
+            if (n.get('product') or {}).get('status') == 'ARCHIVED':
+                continue
+            seen += 1
+            tot_obj = n.get('tot') or {}
+            try:
+                tot = float((tot_obj.get('value') or '').strip())
+                price = float(n.get('price'))
+            except (TypeError, ValueError):
+                continue
+            if abs(tot - price) > 0.01:
+                bad.append({'sku': n.get('sku', ''),
+                            'variant_id': (n.get('id') or '').rsplit('/', 1)[-1],
+                            'price_charged': price, 'price_total_metafield': tot,
+                            'gap': round(tot - price, 2)})
+        if not page['pageInfo']['hasNextPage']:
+            break
+        cursor = page['pageInfo']['endCursor']
+
+    log.info(f'Verification — {seen:,} live variants checked, {len(bad)} mismatched')
+    if not bad:
+        return 0, ''
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / f'PRICE_MISMATCH_{run_id}.csv'
+    with open(path, 'w', newline='', encoding='utf-8') as f:
+        w = _csv.DictWriter(f, fieldnames=['sku', 'variant_id', 'price_charged',
+                                           'price_total_metafield', 'gap'])
+        w.writeheader()
+        w.writerows(sorted(bad, key=lambda r: -abs(r['gap'])))
+    log.error(f'  {len(bad)} variants carry a breakup that contradicts the price '
+              f'charged -> {path.name}')
+    return len(bad), str(path)
+
+
 def _write_summary(run_id, gold_rate, snapshot_stats, import_stats, log_path):
     summary = {
         'run_id':    run_id,
@@ -390,15 +471,47 @@ def run(test_gati: str = None, dry_run: bool = False):
         # 4. Import to Shopify
         import_stats = _run_importer(token, preview_csv, log, resume=resuming)
 
-        # 5. Emails
-        from notifier import send_run_report, send_rates_confirmation
-        log.info('Sending emails...')
-        send_run_report(gold_rate, snapshot_stats, import_stats, run_id, log_path,
-                        is_test=bool(test_gati), test_gati=test_gati or '',
-                        no_weight_csv=snapshot_stats.get('no_weight_csv', ''))
-        if not test_gati:
-            send_rates_confirmation(gold_rate, snapshot_stats, import_stats)
-        log.info('Emails sent')
+        # 5. Verify before telling anyone it worked.
+        #
+        # A run that dies between the price write and the breakup write leaves
+        # variants that look fine field by field but whose stored total does not
+        # match what the customer is charged. Sending a success mail on top of
+        # that is worse than sending nothing, so the check gates the mail.
+        log.info('Verifying prices against stored totals...')
+        try:
+            mismatches, mismatch_csv = verify_prices(
+                token, log, preview_csv.parent, run_id)
+        except Exception as exc:
+            log.error(f'Verification could not run: {exc}')
+            mismatches, mismatch_csv = -1, ''
+        import_stats['price_mismatches'] = mismatches
+        import_stats['mismatch_csv'] = mismatch_csv
+
+        # 6. Emails
+        from notifier import send_run_report, send_rates_confirmation, send_alert
+        if mismatches != 0:
+            detail = (f'{mismatches} variant(s) carry a price breakup that '
+                      f'contradicts the price charged.'
+                      if mismatches > 0 else
+                      'Post-import verification could not run.')
+            log.error(f'HOLDING the success mail — {detail}')
+            send_alert(
+                f'{detail}\n\n'
+                f'The price update wrote {import_stats.get("variants_written", 0):,} '
+                f'variants, but the stored totals do not agree with the live prices. '
+                f'This is the signature of a run interrupted between the price write '
+                f'and the metafield write.\n\n'
+                + (f'Affected variants: {mismatch_csv}' if mismatch_csv else ''),
+                run_id, gold_rate)
+            log.info('Alert sent instead of the run report')
+        else:
+            log.info('Verification clean — sending emails...')
+            send_run_report(gold_rate, snapshot_stats, import_stats, run_id, log_path,
+                            is_test=bool(test_gati), test_gati=test_gati or '',
+                            no_weight_csv=snapshot_stats.get('no_weight_csv', ''))
+            if not test_gati:
+                send_rates_confirmation(gold_rate, snapshot_stats, import_stats)
+            log.info('Emails sent')
 
         # 6. Summary JSON
         summary_path = _write_summary(run_id, gold_rate, snapshot_stats, import_stats, log_path)

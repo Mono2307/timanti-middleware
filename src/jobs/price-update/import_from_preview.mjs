@@ -73,6 +73,10 @@ const GRAPHQL_URL     = `https://${STORE_DOMAIN}/admin/api/2024-10/graphql.json`
 const MAX_RETRIES      = 6;
 const THROTTLE_WAIT_MS = 2000;
 const PRICE_BATCH_SIZE = 50;   // max variants per productVariantsBulkUpdate call
+const MF_PER_CALL      = 25;   // Shopify's cap on metafieldsSet
+// Values batch across variants the way prices already do. One call per variant
+// is what made a full run take hours: 15k variants, 15k calls.
+const MF_VARIANTS_PER_CALL = Math.floor(MF_PER_CALL / METAFIELD_COLS.length);
 
 // ── GraphQL ───────────────────────────────────────────────────────────────────
 
@@ -171,14 +175,17 @@ const M_METAFIELDS = `
 // Only fields that change with every gold rate update.
 // Static fields (weights, diamond, making) are written once at product creation
 // by the Generate/Update scripts — no need to rewrite them daily.
+// The value fields, written first. gold_last_updated_at is deliberately NOT in
+// this list - it is the commit marker and is written separately, after these
+// have landed without error. See Phase 3 below.
 const METAFIELD_COLS = [
   'mf_price_breakup_gold',
   'mf_price_breakup_gst',
   'mf_price_total',
   'mf_price_subtotal',
   'mf_gold_rate',
-  'mf_gold_last_updated_at',
 ];
+const STAMP_COL = 'mf_gold_last_updated_at';
 const MF_KEY = {
   mf_price_breakup_gold:    'price_breakup_gold',
   mf_price_breakup_gst:     'price_breakup_gst',
@@ -316,37 +323,108 @@ async function run() {
     }
   }
 
-  // ── Phase 3: Metafields per variant ──────────────────────────────────────
-  console.log('\nPhase 3 — writing metafields per variant...');
+  // ── Phase 3a: value metafields per variant ───────────────────────────────
+  //
+  // The stamp is NOT written here. Phase 2 has already changed the price, so
+  // between that write and this one a variant carries a new price under an old
+  // breakup - self-consistent at the previous rate and therefore invisible on
+  // inspection. Stamping in the same call as the values would mark such a
+  // variant done even when the values failed, and the next run would skip it.
+  //
+  // Writing the stamp only after the values land means an interruption leaves
+  // the variant reading NOT done. The next run re-prices it, which is the
+  // recoverable failure rather than the silent one.
+  console.log(`\nPhase 3a — writing value metafields, ${MF_VARIANTS_PER_CALL} variants per call...`);
   let mfDone = 0;
+  const stamped = [];          // variants whose values landed cleanly
 
+  // Flatten to a work list so batches can span products, as the price phase does.
+  const mfWork = [];
   for (const [, entries] of byProduct) {
     for (const { row, variantId } of entries) {
-      mfDone++;
-      if (mfDone % 500 === 0) console.log(`  Metafields written: ${mfDone}`);
-
       const metafields = [];
       for (const col of METAFIELD_COLS) {
         const type = MF_TYPE[col] || 'number_decimal';
-        const val  = type === 'date_time'
-          ? (row[col] && row[col].trim() ? row[col].trim() : null)
-          : cleanNum(row[col]);
+        const val  = cleanNum(row[col]);
         if (val !== null) {
           metafields.push({ ownerId: variantId, namespace: 'custom', key: MF_KEY[col], type, value: val });
         }
       }
+      if (metafields.length > 0) mfWork.push({ variantId, row, metafields });
+    }
+  }
 
-      if (metafields.length > 0) {
-        const mRes    = await gql(M_METAFIELDS, { m: metafields });
-        const mErrors = mRes?.data?.metafieldsSet?.userErrors || [];
-        if (mErrors.length > 0) {
-          console.error(`  ERR metafields ${row.shopify_sku}: ${mErrors[0].message}`);
-          errors.push({ variantId, sku: row.shopify_sku, stage: 'metafields', message: mErrors[0].message });
+  for (let i = 0; i < mfWork.length; i += MF_VARIANTS_PER_CALL) {
+    const chunk   = mfWork.slice(i, i + MF_VARIANTS_PER_CALL);
+    const payload = chunk.flatMap(w => w.metafields);
+
+    const mRes    = await gql(M_METAFIELDS, { m: payload });
+    const mErrors = mRes?.data?.metafieldsSet?.userErrors || [];
+
+    if (mErrors.length === 0) {
+      for (const w of chunk) stamped.push({ variantId: w.variantId, row: w.row });
+    } else {
+      // A rejected batch says nothing about which variant caused it, so retry
+      // the chunk one at a time. One bad variant must not cost the four
+      // beside it their update.
+      for (const w of chunk) {
+        const r  = await gql(M_METAFIELDS, { m: w.metafields });
+        const es = r?.data?.metafieldsSet?.userErrors || [];
+        if (es.length > 0) {
+          console.error(`  ERR metafields ${w.row.shopify_sku}: ${es[0].message}`);
+          errors.push({ variantId: w.variantId, sku: w.row.shopify_sku, stage: 'metafields', message: es[0].message });
+        } else {
+          stamped.push({ variantId: w.variantId, row: w.row });
         }
       }
-
-      await markDone(variantId);
     }
+
+    mfDone += chunk.length;
+    if (mfDone % 500 < MF_VARIANTS_PER_CALL) console.log(`  Value metafields written: ${mfDone}`);
+  }
+
+  // ── Phase 3b: the commit marker ──────────────────────────────────────────
+  // Only variants whose values were accepted get stamped.
+  console.log(`\nPhase 3b — stamping ${stamped.length} variants whose values landed...`);
+  const stampWork = stamped
+    .map(({ variantId, row }) => {
+      const raw = row[STAMP_COL];
+      const val = raw && raw.trim() ? raw.trim() : null;
+      return val === null ? null : { variantId, row, mf: {
+        ownerId: variantId, namespace: 'custom', key: MF_KEY[STAMP_COL],
+        type: MF_TYPE[STAMP_COL] || 'date_time', value: val } };
+    })
+    .filter(Boolean);
+
+  let stampDone = 0;
+  for (let i = 0; i < stampWork.length; i += MF_PER_CALL) {
+    const chunk = stampWork.slice(i, i + MF_PER_CALL);
+    const sRes  = await gql(M_METAFIELDS, { m: chunk.map(w => w.mf) });
+    const sErrs = sRes?.data?.metafieldsSet?.userErrors || [];
+
+    if (sErrs.length === 0) {
+      for (const w of chunk) await markDone(w.variantId);
+    } else {
+      for (const w of chunk) {
+        const r  = await gql(M_METAFIELDS, { m: [w.mf] });
+        const es = r?.data?.metafieldsSet?.userErrors || [];
+        if (es.length > 0) {
+          console.error(`  ERR stamp ${w.row.shopify_sku}: ${es[0].message}`);
+          errors.push({ variantId: w.variantId, sku: w.row.shopify_sku, stage: 'stamp', message: es[0].message });
+        } else {
+          await markDone(w.variantId);
+        }
+      }
+    }
+
+    stampDone += chunk.length;
+    if (stampDone % 500 < MF_PER_CALL) console.log(`  Stamped: ${stampDone}`);
+  }
+
+  const unstamped = mfDone - stamped.length;
+  if (unstamped > 0) {
+    console.warn(`  ${unstamped} variant(s) were NOT stamped because their values failed. ` +
+                 `They will be re-priced on the next run.`);
   }
 
   // ── Summary ───────────────────────────────────────────────────────────────
