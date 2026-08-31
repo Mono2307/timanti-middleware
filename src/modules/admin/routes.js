@@ -644,12 +644,16 @@ function buildInstallmentMfDefs(modeChoices) {
 // describes the fields.
 function buildRefundMfDefs(modeChoices) {
   const choices = (list) => [{ name: 'choices', value: JSON.stringify(list) }];
+  // Every payment tender EXCEPT 'CAD Advance'. That mode means "no money moved on this document" —
+  // a Path B advance absorbed from an earlier order — so it can never be how a refund was sent.
+  // Offering it would only invite someone to pick it and record a refund that never happened.
+  const refundModes = (modeChoices || []).filter(m => m !== CAD_ADVANCE_MODE);
   const defs = [];
   for (let n = 1; n <= MAX_REFUNDS; n++) {
     defs.push({ key: `refund_${n}_value`, name: `Refund ${n} — Value`, type: 'number_decimal',
       description: `Amount refunded to the customer in refund ${n}. Always positive — amount_paid is never reduced; amount_refunded is the sum of the refund legs and the balance is derived from both.` });
     defs.push({ key: `refund_${n}_mode`, name: `Refund ${n} — Mode`, type: 'single_line_text_field',
-      description: `Tender the refund ${n} money went back by.`, validations: choices(modeChoices) });
+      description: `Tender the refund ${n} money went back by.`, validations: choices(refundModes) });
     defs.push({ key: `refund_${n}_date`, name: `Refund ${n} — Date`, type: 'date',
       description: `Date refund ${n} actually left the bank. This date prints on the customer invoice, so record the transfer date rather than the date it was keyed in.` });
     // Text, not a number: a UTR can carry a leading zero, and it is a reference, never a quantity.
