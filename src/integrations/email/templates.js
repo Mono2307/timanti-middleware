@@ -540,6 +540,89 @@ function buildRefundConfirmationHtml({ orderName, item, refundMethod, refundAmou
     + foot();
 }
 
+// ── draft-order refund ────────────────────────────────────────────────────────
+//
+// A deposit taken on a DRAFT going back to the customer. Shopify sends nothing here — a draft has no
+// refund object — so this is the only notification the customer ever gets for that money.
+//
+// Deliberately mimics templates/refund-confirmation.liquid (the Shopify notification that fires for
+// an ORDER refund) so the two read as one family: the same black amount callout with the orange
+// figure, and the same refund-timeline box. A customer who has seen one should recognise the other.
+//
+// Two things from that template are deliberately NOT carried over. Its heading is "Your return is
+// confirmed" and its body is an "Items returned" table built from refund_line_items — both are wrong
+// here, because nothing was returned. A deposit came back. The item table is replaced with the
+// payment position, which is what the customer actually needs to know: what they had paid, what has
+// gone back, and whether anything is still due.
+//
+// Sent ONLY when staff press the button in the Metafield Manager. A refund recorded because the
+// order value contracted, where the customer immediately settles a new balance, should not tell them
+// their money is on its way — see refund_handlers.js.
+
+// The Shopify template's .refund-amount-box, inlined. Email clients strip <style> unpredictably, and
+// the rest of this file is inline-styled for the same reason.
+function refundAmountBox({ amount, method }) {
+  return `
+    <table align="center" cellpadding="0" cellspacing="0" border="0" style="margin:20px auto; max-width:320px; width:100%;">
+      <tr><td align="center" style="background:#000000; border-radius:6px; padding:18px 24px;">
+        <p style="color:#aaaaaa; font-size:13px; margin:0 0 6px;">Refund amount</p>
+        <div style="color:#fc7d27; font-size:28px; font-weight:600; line-height:1.2;">${esc(money(amount))}</div>
+        ${method ? `<div style="color:#cccccc; font-size:12px; margin-top:6px;">${esc(method)}</div>` : ''}
+      </td></tr>
+    </table>`;
+}
+
+// The Shopify template's .timanti-info-box. Copy reproduced verbatim — these are the timelines the
+// store already commits to in writing, and two different answers to "when will I see it" is worse
+// than either answer on its own.
+function refundTimelineBox() {
+  return `
+    <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:18px 0;">
+      <tr><td style="background:#f7f7f7; border-radius:6px; padding:16px 20px; text-align:left;">
+        <h4 style="font-family:'Helvetica Neue', Arial, sans-serif; font-size:14px; font-weight:600; color:#000000; margin:0 0 12px;">Refund Timeline</h4>
+        <p style="font-size:14px; color:#000000; line-height:1.7;"><strong style="color:#000000; font-weight:600;">UPI / Net Banking:</strong> 3&ndash;5 business days</p>
+        <p style="font-size:14px; color:#000000; line-height:1.7;"><strong style="color:#000000; font-weight:600;">Credit / Debit Card:</strong> 5&ndash;7 business days</p>
+        <p style="font-size:14px; color:#000000; line-height:1.7;"><strong style="color:#000000; font-weight:600;">EMI / Wallet:</strong> 7&ndash;10 business days</p>
+        <p style="margin-top:10px; font-size:13px; color:#666666; line-height:1.5;">Timelines depend on your bank. If you have questions, reply to this email or WhatsApp us.</p>
+      </td></tr>
+    </table>`;
+}
+
+function buildDraftRefundHtml({
+  draftRef, customerName, refundAmount, refundMode,
+  amountPaid, amountRefunded, amountPending, isFullRefund,
+}) {
+  const body = isFullRefund
+    ? `Hi <strong>${esc(customerName || 'there')}</strong>, we&rsquo;ve returned your payment in full. Nothing further is due, and your order will not proceed.`
+    : `Hi <strong>${esc(customerName || 'there')}</strong>, part of your payment has been returned. The rest of your order is unaffected and continues as planned.`;
+
+  const rows = [
+    { label: 'Amount paid',   value: money(amountPaid) },
+    { label: 'Refunded',      value: money(amountRefunded), tone: 'refund' },
+  ];
+  // Only claim a balance when one is actually outstanding. Printing "Balance due INR 0" under a
+  // refund reads as a demand, and on a full refund it is simply false — nothing is due.
+  if (!isFullRefund && amountPending > 0) {
+    rows.push({ label: 'Balance due', value: money(amountPending), total: true, tone: 'due' });
+  }
+
+  return head()
+    + contentBlock({
+        ref: draftRef,
+        heading: 'Your refund is on its way',
+        body,
+        storeLinkHtml: storeLink('Visit our online store', SITE_URL),
+      })
+    + section(
+        refundAmountBox({ amount: refundAmount, method: refundMode })
+        + refundTimelineBox()
+        + h3('Payment summary')
+        + summary(rows)
+      )
+    + standardFooter()
+    + foot();
+}
+
 // Monthly CAD-advance digest — INTERNAL, to accounts. Not a customer email: no store links, no
 // buttons, no marketing footer. Its whole job is to tell accounts which advances have stopped being
 // trade advances and which are about to.
@@ -599,6 +682,7 @@ module.exports = {
   buildVoucherExpiryHtml,
   buildExchangeNoteV2Html,
   buildRefundConfirmationHtml,
+  buildDraftRefundHtml,
   // exposed for reuse / testing
   standardFooter, itemRow, summary, section, REPAIR_TURNAROUND
 };

@@ -56,6 +56,7 @@ const backfillInstallments = require('../payments/backfill-installments');
 // lived in server.js, a free variable once it moved — so /api/metafield-definitions/ensure threw
 // the moment it was called. It is exported by the payments module; take it from there.
 const { MAX_INSTALLMENTS } = require('../payments/installments');
+const { MAX_REFUNDS } = require('../payments/refunds');
 const { CAD_ADVANCE_MODE } = require('../adjustments/cad_advance');
 
 let _priceUpdateRunning = false;
@@ -554,7 +555,7 @@ app.post('/api/backfill-order-tags', async (req, res) => {
 // bites here) the admin extension renders it as a free-text box instead of a typed widget.
 // Re-runnable: an existing definition returns userError code TAKEN, reported as 'exists'.
 // DRY RUN BY DEFAULT — pass ?apply=true to actually create.
-// ?group=adjustments|installments|all (default all) scopes the run.
+// ?group=adjustments|installments|refunds|repair|all (default all) scopes the run.
 // ─────────────────────────────────────────
 // Gross weight recorded at repair intake, with the customer present. Distinct from
 // custom.gross_weight_g, which the Mark Complete form writes AFTER the repair — the two are
@@ -628,6 +629,35 @@ function buildInstallmentMfDefs(modeChoices) {
       description: `payment (default) or cad_advance. cad_advance labels installment ${n} as the CAD design advance on the invoice; it still counts toward amount_paid.`,
       validations: choices(['payment', 'cad_advance']) });
   }
+  return defs;
+}
+
+// Definitions for the refund legs — money OUT, the mirror of the installment legs above.
+//
+// They deliberately reuse the same payment-mode enum: a refund goes back by one of the same tenders
+// it came in by, and a second list would drift from the first.
+//
+// These MUST exist on both owner types before anything writes them, for two separate reasons.
+// core/metafields never throws, so a write against a MISSING definition fails SILENTLY and the
+// refund is simply lost. And the admin extension aborts the ENTIRE save with "no definition found"
+// when a key exists on DRAFTORDER but not ORDER. The caller's `owners` loop covers both — this only
+// describes the fields.
+function buildRefundMfDefs(modeChoices) {
+  const choices = (list) => [{ name: 'choices', value: JSON.stringify(list) }];
+  const defs = [];
+  for (let n = 1; n <= MAX_REFUNDS; n++) {
+    defs.push({ key: `refund_${n}_value`, name: `Refund ${n} — Value`, type: 'number_decimal',
+      description: `Amount refunded to the customer in refund ${n}. Always positive — amount_paid is never reduced; amount_refunded is the sum of the refund legs and the balance is derived from both.` });
+    defs.push({ key: `refund_${n}_mode`, name: `Refund ${n} — Mode`, type: 'single_line_text_field',
+      description: `Tender the refund ${n} money went back by.`, validations: choices(modeChoices) });
+    defs.push({ key: `refund_${n}_date`, name: `Refund ${n} — Date`, type: 'date',
+      description: `Date refund ${n} actually left the bank. This date prints on the customer invoice, so record the transfer date rather than the date it was keyed in.` });
+    // Text, not a number: a UTR can carry a leading zero, and it is a reference, never a quantity.
+    defs.push({ key: `refund_${n}_ref`, name: `Refund ${n} — Gateway Ref`, type: 'single_line_text_field',
+      description: `UTR / gateway reference for refund ${n}. The join key back to the settlement report when a refund has to be tied out.` });
+  }
+  defs.push({ key: 'amount_refunded', name: 'Amount Refunded', type: 'number_decimal',
+    description: 'SYSTEM — sum of the refund legs, recomputed on every pass; do not hand-edit. The balance is amount_to_be_collected − amount_paid + amount_refunded.' });
   return defs;
 }
 
@@ -723,6 +753,7 @@ async function runEnsureMetafieldDefinitions(req, res) {
   const defs = [];
   if (group === 'all' || group === 'adjustments')  defs.push(...ADJUSTMENT_MF_DEFS);
   if (group === 'all' || group === 'installments') defs.push(...buildInstallmentMfDefs(modeChoices));
+  if (group === 'all' || group === 'refunds')      defs.push(...buildRefundMfDefs(modeChoices));
   if (group === 'all' || group === 'repair')       defs.push(...REPAIR_MF_DEFS);
 
   const planned = [];

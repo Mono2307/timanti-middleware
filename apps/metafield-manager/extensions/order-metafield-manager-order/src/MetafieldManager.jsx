@@ -32,6 +32,9 @@ import { useEffect, useRef, useState } from "preact/hooks";
 const SECTION_ORDER = [
   "Installments",
   "Payments",
+  // Money OUT sits directly under money IN, because the two are read together — a balance only makes
+  // sense alongside what has already gone back.
+  "Refunds",
   "Pricing",
   "Product Metadata",
   "Adjustments",
@@ -113,6 +116,33 @@ const FIELD_CONFIG = {
   amount_paid: { section: "Payments", label: "Total Received", editable: false, applies: "both" },
   amount_pending: { section: "Payments", label: "Amount Pending", editable: false, applies: "both" },
   amount_to_be_collected: { section: "Payments", label: "Amount To Be Collected", editable: false, applies: "both" },
+
+  // REFUNDS — money returned to the customer. Up to 2 legs, same shape as the installments above.
+  //
+  // Record the refund AFTER you have actually made the transfer at the gateway. Nothing here moves
+  // money; this records what already happened, emails the customer (only when you press the button)
+  // and puts the refund into the after-sales ledger and the reports.
+  //
+  // Total Received is deliberately NOT reduced by a refund. It stays what was actually collected —
+  // the audit figure — and Amount Pending goes back up by the refunded amount instead. So a Rs50,000
+  // deposit with Rs10,000 returned still reads 50,000 received, 10,000 refunded, and 10,000 more to
+  // collect than before.
+  //
+  // Date is the date the money LEFT THE BANK, not the day you keyed it in — it prints on the invoice
+  // and drives which month the refund lands in on the reports.
+  refund_1_value: { section: "Refunds", label: "1 · Amount", editable: true, applies: "both" },
+  refund_1_mode: { section: "Refunds", label: "1 · Mode", editable: true, applies: "both" },
+  refund_1_date: { section: "Refunds", label: "1 · Date", editable: true, applies: "both" },
+  // The gateway UTR. Text, so a leading zero survives. This is what accounts match against the
+  // settlement report when a customer says the money never arrived.
+  refund_1_ref: { section: "Refunds", label: "1 · Gateway Ref", editable: true, applies: "both" },
+  refund_2_value: { section: "Refunds", label: "2 · Amount", editable: true, applies: "both" },
+  refund_2_mode: { section: "Refunds", label: "2 · Mode", editable: true, applies: "both" },
+  refund_2_date: { section: "Refunds", label: "2 · Date", editable: true, applies: "both" },
+  refund_2_ref: { section: "Refunds", label: "2 · Gateway Ref", editable: true, applies: "both" },
+  // Sum of the refund legs, recomputed server-side on every save. Shown here rather than under
+  // Payments so the running total sits with the fields staff type into.
+  amount_refunded: { section: "Refunds", label: "Total Refunded", editable: false, applies: "both" },
 
   gold_rate: { section: "Pricing", label: "Gold Rate", editable: true, applies: "both" },
   gold_rate_date: { section: "Pricing", label: "Gold Rate Date", editable: true, applies: "both" },
@@ -360,6 +390,17 @@ const RECOMPUTE_TRIGGER_KEYS = [
   "old_gold_weight", "old_gold_purity", "old_gold_value",
   "exchange_note_value", "voucher_value", "advance", "advance_ref",
 ];
+// Editing a refund leg needs its own nudge: `sync-refund` writes the refund into the after-sales
+// ledger and re-sums amount_refunded. It is deliberately NOT part of RECOMPUTE_TRIGGER_KEYS — the
+// balance recompute must run AFTER the refund is recorded, and the middleware orders the two.
+//
+// Recording does NOT email the customer. That is the button below, because a refund raised only
+// because the order value contracted — where the customer immediately pays a new balance — should
+// not be announced as "your refund is on its way".
+const REFUND_TRIGGER_KEYS = [
+  "refund_1_value", "refund_1_mode", "refund_1_date", "refund_1_ref",
+  "refund_2_value", "refund_2_mode", "refund_2_date", "refund_2_ref",
+];
 
 function collectErrors(result, mutationField) {
   const errs = (result?.errors ?? []).map((e) => e.message);
@@ -395,6 +436,8 @@ export default function MetafieldManager({ surface = "block" } = {}) {
   const [excCode, setExcCode] = useState("");
   const [excBusy, setExcBusy] = useState(false);
   const [excNote, setExcNote] = useState("");
+  const [refundEmailBusy, setRefundEmailBusy] = useState(false);
+  const [refundEmailNote, setRefundEmailNote] = useState("");
   // Unified adjustments selector + discount inputs.
   const [adjType, setAdjType] = useState(""); // "" | "exchange" | "voucher" | "discount"
   const [discountSubmode, setDiscountSubmode] = useState("code"); // "code" | "custom"
@@ -575,6 +618,12 @@ export default function MetafieldManager({ surface = "block" } = {}) {
       const triggerTags = [];
       if (changed.some((k) => REPRICE_TRIGGER_KEYS.includes(k))) triggerTags.push("reprice");
       if (changed.some((k) => RECOMPUTE_TRIGGER_KEYS.includes(k))) triggerTags.push("sync-payment");
+      // A refund also has to move the balance, so it asks for BOTH. The middleware runs refund-sync
+      // before payment-sync, so amount_refunded is on the document before the balance derives off it.
+      if (changed.some((k) => REFUND_TRIGGER_KEYS.includes(k))) {
+        triggerTags.push("sync-refund");
+        if (!triggerTags.includes("sync-payment")) triggerTags.push("sync-payment");
+      }
       if (triggerTags.length) {
         try {
           await shopify.query(TAGS_ADD_MUTATION, { variables: { id: ownerId, tags: triggerTags } });
@@ -620,6 +669,29 @@ export default function MetafieldManager({ surface = "block" } = {}) {
       setVoucherNote(`Couldn't apply: ${e?.message || e}`);
     } finally {
       setVoucherBusy(false);
+    }
+  }
+
+  // Tell the customer about a refund. Deliberately a BUTTON and not something the save does on its
+  // own: a refund raised because the order value contracted, where the customer immediately settles
+  // a new balance, should not be announced as "your refund is on its way". Staff decide.
+  //
+  // Safe to press twice — the middleware only emails refund legs it has never emailed before, so a
+  // second press sends nothing, and pressing it for a NEW refund never re-announces an older one.
+  async function sendRefundEmail() {
+    if (!ownerId) return;
+    setRefundEmailBusy(true);
+    setRefundEmailNote("");
+    try {
+      const res = await shopify.query(TAGS_ADD_MUTATION, { variables: { id: ownerId, tags: ["send-refund-email"] } });
+      const errs = collectErrors(res, "tagsAdd");
+      if (errs.length) throw new Error(errs.join("; "));
+      setRefundEmailNote("Sending… the customer gets a refund confirmation in a few seconds. Refunds already emailed are skipped.");
+      setTimeout(() => setRefreshTick((t) => t + 1), 3000);
+    } catch (e) {
+      setRefundEmailNote(`Couldn't send: ${e?.message || e}`);
+    } finally {
+      setRefundEmailBusy(false);
     }
   }
 
@@ -778,6 +850,34 @@ export default function MetafieldManager({ surface = "block" } = {}) {
     </s-section>
   );
 
+  // Only offered once a refund actually exists on the document — there is nothing to tell the
+  // customer about otherwise. Reads the saved value, not the in-progress edit, because the
+  // middleware has to have recorded the refund before it can email it.
+  const renderRefundEmail = () => {
+    const refunded = parseFloat(values.amount_refunded || "0") || 0;
+    if (!(refunded > 0)) return null;
+    return (
+      <s-section heading="Refund Confirmation Email">
+        <s-stack direction="block" gap="base">
+          <s-text tone="subdued">
+            Rs.{refunded.toLocaleString("en-IN")} has been recorded as refunded. Nothing has been sent to the
+            customer — send the confirmation only if they should hear about this money coming back. If the
+            refund was just a correction because the order value changed and they are paying a new balance,
+            you can skip it. Refunds already emailed are never sent twice.
+          </s-text>
+          <s-button
+            onClick={sendRefundEmail}
+            loading={refundEmailBusy ? "" : undefined}
+            disabled={refundEmailBusy ? "" : undefined}
+          >
+            Send refund email
+          </s-button>
+          {refundEmailNote ? <s-text>{refundEmailNote}</s-text> : null}
+        </s-stack>
+      </s-section>
+    );
+  };
+
   const renderDiscountApply = () => (
     <s-section heading="Apply a Discount">
       <s-stack direction="block" gap="base">
@@ -935,6 +1035,7 @@ export default function MetafieldManager({ surface = "block" } = {}) {
       {creditsAllowed && adjType === "exchange" ? renderExcApply() : null}
       {creditsAllowed && adjType === "voucher" ? renderVoucherApply() : null}
       {adjType === "discount" ? renderDiscountApply() : null}
+      {renderRefundEmail()}
     </>
   );
 

@@ -36,6 +36,16 @@ t('installment_1_type falls through to text', () => assert.strictEqual(getMetafi
 t('installment_0_value is NOT matched (slots are 1-based)', () =>
   assert.strictEqual(getMetafieldType('installment_0_value'), 'single_line_text_field'));
 
+console.log('refund legs');
+t('refund_1_value is number_decimal', () => assert.strictEqual(getMetafieldType('refund_1_value'), 'number_decimal'));
+t('refund_2_date is date',            () => assert.strictEqual(getMetafieldType('refund_2_date'),  'date'));
+t('refund_1_mode falls through to text', () => assert.strictEqual(getMetafieldType('refund_1_mode'), 'single_line_text_field'));
+// The gateway UTR is a reference, not a quantity — typing it as a number would eat a leading zero.
+t('refund_1_ref falls through to text',  () => assert.strictEqual(getMetafieldType('refund_1_ref'),  'single_line_text_field'));
+t('amount_refunded is number_decimal',   () => assert.strictEqual(getMetafieldType('amount_refunded'), 'number_decimal'));
+t('refund_0_value is NOT matched (slots are 1-based)', () =>
+  assert.strictEqual(getMetafieldType('refund_0_value'), 'single_line_text_field'));
+
 console.log('typed singletons');
 t('is_finalized is boolean',        () => assert.strictEqual(getMetafieldType('is_finalized'),   'boolean'));
 t('gold_rate_date is date_time',    () => assert.strictEqual(getMetafieldType('gold_rate_date'), 'date_time'));

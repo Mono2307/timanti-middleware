@@ -25,16 +25,19 @@ const { log } = require('./logger');
  *    comma-separated list ("9713,10200") for a multi-product reprice. Readers parseFloat each
  *    position, so the text type costs nothing and buys multi-line support.
  *  - installment_N_value / _date are matched by pattern; _mode and _type fall through to text.
+ *  - refund_N_value / _date likewise; _mode and _ref (the gateway UTR) fall through to text.
  */
 function getMetafieldType(key) {
   if (key === 'gold_rate' || key === 'making') return 'single_line_text_field';
   if (/^installment_[1-9]\d*_value$/.test(key)) return 'number_decimal';
   if (/^installment_[1-9]\d*_date$/.test(key))  return 'date';
+  if (/^refund_[1-9]\d*_value$/.test(key))      return 'number_decimal';
+  if (/^refund_[1-9]\d*_date$/.test(key))       return 'date';
   if (key === 'amount_paid' || key === 'amount_paid_final' || key === 'amount_pending' ||
       key === 'exchange_note_value' || key === 'voucher_value' || key === 'amount_to_be_collected' ||
       key === 'old_gold_value' || key === 'old_gold_weight' || key === 'old_gold_purity' ||
       key === 'gross_value' || key === 'discount_applied' || key === 'discount_rate' ||
-      key === 'advance') return 'number_decimal';
+      key === 'advance' || key === 'amount_refunded') return 'number_decimal';
   if (key === 'is_finalized') return 'boolean';
   if (key === 'gold_rate_date') return 'date_time';
   if (key === 'advance_date') return 'date';

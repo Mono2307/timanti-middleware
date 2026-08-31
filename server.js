@@ -276,6 +276,13 @@ const {
   MAX_INSTALLMENTS, readInstallments, sumInstallments, installmentModes, installmentLegPatch,
   materializeLegacyLeg,
 } = require('./src/modules/payments/installments');
+// Refunds — money OUT, a parallel dimension to the legs above. amount_paid is never written down;
+// paymentState is the single place the net-of-refund balance is derived, so the four call sites that
+// compute one cannot drift. See src/modules/payments/refunds.js.
+const {
+  readRefunds, sumRefunds, paymentState,
+} = require('./src/modules/payments/refunds');
+const { createRefundHandlers } = require('./src/modules/payments/refund_handlers');
 const backfillInstallments = require('./src/modules/payments/backfill-installments');
 
 // What a draft has been paid, in Rs — read from the metafields. The metafields are the surface
@@ -395,8 +402,13 @@ async function handlePaymentCompletion(transaction, overrides = {}) {
     // Reconcile against the net-to-collect (refreshed here so adjustments applied AFTER the deposit
     // row was created still land), never the gross total.
     const collectionBase   = await getCollectionBase(transaction.shopify_draft_id, deposit.total_amount);
-    const newAmountPending = collectionBase - newAmountPaid;
-    const newStatus        = newAmountPending < PAID_EPSILON ? 'paid' : 'partial';
+    // Money already refunded on this draft still counts against the balance: a customer who paid
+    // 50k, had 10k returned, and now pays again owes 10k MORE than paid-so-far alone would suggest.
+    // Without this term the top-up would settle the draft ten thousand rupees short.
+    const alreadyRefunded  = parseFloat(deposit.amount_refunded) || 0;
+    const refundState      = paymentState({ amountPaid: newAmountPaid, amountRefunded: alreadyRefunded, collectionBase, epsilon: PAID_EPSILON });
+    const newAmountPending = refundState.amountPending;
+    const newStatus        = refundState.isFull ? 'paid' : 'partial';
 
     await supabase.from('store_deposits').update({
       total_amount:   collectionBase,
@@ -943,8 +955,11 @@ async function handleCashPaymentTag(draft) {
   // Reconcile against the net-to-collect (refreshed here so adjustments applied AFTER the deposit
   // row was created still land), never the gross total.
   const collectionBase   = await getCollectionBase(draftOrderId, deposit.total_amount);
-  const newAmountPending = collectionBase - newAmountPaid;
-  const newStatus        = newAmountPending < PAID_EPSILON ? 'paid' : 'partial';
+  // Money already refunded on this draft still counts against the balance — see the gateway path.
+  const alreadyRefunded  = parseFloat(deposit.amount_refunded) || 0;
+  const refundState      = paymentState({ amountPaid: newAmountPaid, amountRefunded: alreadyRefunded, collectionBase, epsilon: PAID_EPSILON });
+  const newAmountPending = refundState.amountPending;
+  const newStatus        = refundState.isFull ? 'paid' : 'partial';
 
   await supabase.from('store_deposits').update({
     total_amount:   collectionBase,
@@ -2125,15 +2140,22 @@ async function applyPaymentTagsToOrder(orderId, token) {
   // amount_pending is DERIVED. Fallback to gross when the net field is absent.
   const netRaw  = parseFloat(mf('amount_to_be_collected'));
   const netBase = Number.isFinite(netRaw) && netRaw >= 0 ? netRaw : totalPrice;
-  const amountPending = Math.max(0, netBase - amountPaid);
+  // Refunds carry through from the draft (copyDraftMetafieldsToOrder brings the legs across), so an
+  // order converted after a partial refund keeps a correct balance. Same rule as the draft twin:
+  // amount_paid stays GROSS and the settled figure is derived. See payments/refunds.
+  const refundLegs     = readRefunds(mfMap);
+  const amountRefunded = refundLegs.length ? sumRefunds(refundLegs) : (parseFloat(mf('amount_refunded')) || 0);
   // "Fully paid" is ARITHMETIC ONLY — see the draft variant for why payment_status/is_finalized must
-  // never feed back in as inputs here (one-way latch).
-  const isFull    = amountPaid > 0 && amountPending < PAID_EPSILON;
-  const isPartial = !isFull && amountPaid > 0;
+  // never feed back in as inputs here (one-way latch), and for what isUnpaid is guarding against.
+  const st = paymentState({ amountPaid, amountRefunded, collectionBase: netBase, epsilon: PAID_EPSILON });
+  const amountPending = Math.max(0, st.amountPending);
+  const isFull    = st.isFull;
+  const isPartial = st.isPartial;
+  const isUnpaid  = st.isUnpaid && amountPaid > 0;  // fully refunded, as distinct from never paid
 
   // Persist the derived balance + status on the order so re-downloads/reporting read them.
   // The legs.length arm keeps a document publishable even when nothing sums to a status yet.
-  if (isFull || isPartial || legs.length) {
+  if (isFull || isPartial || isUnpaid || legs.length) {
     const patch = Object.assign({}, legacyFold.patch);
     // amount_paid is DERIVED from the legs. The admin panel writes legs but never the total (it is
     // read-only there), and a leg edited by hand changes the sum this figure must follow — so
@@ -2146,28 +2168,40 @@ async function applyPaymentTagsToOrder(orderId, token) {
     }
     const curPending = mf('amount_pending');
     if (curPending === null || Math.abs(parseFloat(curPending) - amountPending) >= 0.5) patch.amount_pending = amountPending.toFixed(2);
-    const wantStatus = isFull ? 'Full' : 'Partial';  // choice-list values: Partial|Full|None
-    if (paymentStatus !== wantStatus) patch.payment_status = wantStatus;
+    const wantStatus = isUnpaid ? 'None' : (isFull ? 'Full' : 'Partial');  // choice-list: Partial|Full|None
     // is_finalized drives is_fully_paid on the tax invoice, so it must track the balance BOTH ways —
-    // a top-up that reopens a balance has to clear it, or the invoice keeps printing "fully paid".
+    // a top-up or a refund that reopens a balance has to clear it, or the invoice keeps printing
+    // "fully paid".
     if (isFull !== isFinalized) patch.is_finalized = isFull ? 'true' : 'false';
+    // Assigned LAST — see the draft twin. payment_status is a choice list, Shopify enforces choices
+    // on write, and updateMetafields abandons the rest of the patch on a 422. 'None' is the value a
+    // pre-refund definition may not carry, and it is the safest one to lose.
+    if (paymentStatus !== wantStatus) patch.payment_status = wantStatus;
     if (Object.keys(patch).length) await updateOrderMetafields(orderId, patch, token);
   }
-  if (!isFull && !isPartial && !legs.length) return false;
+  if (!isFull && !isPartial && !isUnpaid && !legs.length) return false;
 
   const existingTags = (order.tags || '').split(',').map(t => t.trim()).filter(Boolean);
   const cleanedTags  = existingTags.filter(t =>
     // sync-payment is the admin panel's nudge; consume it here exactly as the draft twin does.
     t.toLowerCase() !== 'sync-payment' &&
     !t.startsWith('deposit:') && !t.startsWith('paid:') && !t.startsWith('pending:') &&
-    !t.startsWith('pmode-') && !t.startsWith('pmodes:') && !/^i[1-9]:/.test(t) && !t.startsWith('total:')
+    !t.startsWith('pmode-') && !t.startsWith('pmodes:') && !/^i[1-9]:/.test(t) && !t.startsWith('total:') &&
+    // Rewritten from the metafields on every pass, exactly like the payment tags — a stale
+    // refunded:/r1: left behind by an edited leg would print a refund that no longer exists.
+    !t.startsWith('refunded:') && !/^r[1-9]:/.test(t)
   );
 
   const paymentTags = [
-    isFull ? 'deposit:fully-paid' : 'deposit:partial',
+    isUnpaid ? 'deposit:refunded' : (isFull ? 'deposit:fully-paid' : 'deposit:partial'),
     `paid:Rs${Math.round(amountPaid)}`,
-    ...(isPartial && amountPending > 0 ? [`pending:Rs${Math.round(amountPending)}`] : []),
+    ...((isPartial || isUnpaid) && amountPending > 0 ? [`pending:Rs${Math.round(amountPending)}`] : []),
     `total:Rs${totalPrice}`,
+    // Money returned. Same tag-fallback reasoning as the installment tags below: Order Printer can
+    // hand a template empty order.metafields at print time, so the invoice reads refunds off tags
+    // too. One tag per leg — tags cap at 40 chars, so a single packed tag would 422.
+    ...(amountRefunded > 0 ? [`refunded:Rs${Math.round(amountRefunded)}`] : []),
+    ...refundLegs.map(r => `r${r.slot}:${r.value}@${r.mode || ''}@${r.date || ''}`),
     // One aggregate mode tag covering every leg. Recon reads modes off tags to disambiguate
     // same-amount candidates, so it needs all of them without fetching metafields.
     ...(modes.length ? [`pmodes:${modes.join('/')}`] : []),
@@ -2251,7 +2285,11 @@ async function applyPaymentTagsToDraftOrder(draftOrderId, token) {
   // paid, not what's pending). Fallback to gross when the net field is absent (legacy/online).
   const netRaw  = parseFloat(mf('amount_to_be_collected'));
   const netBase = Number.isFinite(netRaw) && netRaw >= 0 ? netRaw : totalPrice;
-  const amountPending = Math.max(0, netBase - amountPaid);
+  // Refunds are a PARALLEL dimension to the legs, never a negative leg (readInstallments drops
+  // values <= 0, and the four slots belong to payments). amount_paid above stays GROSS collected and
+  // is never written down; what the customer has actually settled is derived. See payments/refunds.
+  const refundLegs     = readRefunds(mfMap);
+  const amountRefunded = refundLegs.length ? sumRefunds(refundLegs) : (parseFloat(mf('amount_refunded')) || 0);
   // "Fully paid" is ARITHMETIC ONLY: what is owed vs what is paid, right now.
   //
   // It previously read `isFinalized || payment_status === 'full' || ...`, which made payment_status
@@ -2261,13 +2299,21 @@ async function applyPaymentTagsToDraftOrder(draftOrderId, token) {
   // forever, and the is_finalized write below then sealed it. amount_pending kept correcting itself
   // while the status could not, which is how #D172 ended up reading Full at 10,000 paid of 47,573.19
   // owed — and why a later payment never re-registered as partial vs final.
-  const isFull    = amountPaid > 0 && amountPending < PAID_EPSILON;
-  const isPartial = !isFull && amountPaid > 0;
+  //
+  // isUnpaid is the third state refunds introduce. isPartial used to be `amountPaid > 0`; after a
+  // full refund the GROSS amountPaid is still 50,000 while nothing is net settled, so that test
+  // stayed true forever and the draft went on advertising "deposit:partial, paid:Rs50000" over money
+  // that had already gone back to the customer.
+  const st = paymentState({ amountPaid, amountRefunded, collectionBase: netBase, epsilon: PAID_EPSILON });
+  const amountPending = Math.max(0, st.amountPending);
+  const isFull    = st.isFull;
+  const isPartial = st.isPartial;
+  const isUnpaid  = st.isUnpaid && amountPaid > 0;  // fully refunded, as distinct from never paid
 
   // Persist the derived balance + status so the invoice/collection surfaces read them (not just tags).
   // Metafield writes don't fire the draft webhook → no loop.
   // The legs.length arm keeps a document publishable even when nothing sums to a status yet.
-  if (isFull || isPartial || legs.length) {
+  if (isFull || isPartial || isUnpaid || legs.length) {
     const patch = Object.assign({}, legacyFold.patch);
     // amount_paid is DERIVED from the legs. The admin panel writes legs but never the total (it is
     // read-only there), and a leg edited by hand changes the sum this figure must follow — so
@@ -2280,28 +2326,43 @@ async function applyPaymentTagsToDraftOrder(draftOrderId, token) {
     }
     const curPending = mf('amount_pending');
     if (curPending === null || Math.abs(parseFloat(curPending) - amountPending) >= 0.5) patch.amount_pending = amountPending.toFixed(2);
-    const wantStatus = isFull ? 'Full' : 'Partial';  // choice-list values: Partial|Full|None
-    if (paymentStatus !== wantStatus) patch.payment_status = wantStatus;
+    const wantStatus = isUnpaid ? 'None' : (isFull ? 'Full' : 'Partial');  // choice-list: Partial|Full|None
     // is_finalized drives is_fully_paid on the tax invoice (mto-invoice-template.liquid), so it must
     // track the balance in BOTH directions — otherwise a draft that reopens a balance (top-up, price
-    // change, adjustment removed) keeps printing "fully paid" on a customer-facing invoice.
+    // change, adjustment removed, or a refund) keeps printing "fully paid" on a customer-facing invoice.
     if (isFull !== isFinalized) patch.is_finalized = isFull ? 'true' : 'false';
+    // payment_status is assigned LAST on purpose. It is a CHOICE LIST and Shopify enforces choices on
+    // write, while updateMetafields loops the patch inside ONE try/catch — so a 422 on any field
+    // abandons every field after it, silently. 'None' is the one value here that a definition created
+    // before refunds existed may not carry. Losing the status label is survivable; losing
+    // is_finalized or amount_pending behind it would leave a customer-facing invoice printing
+    // "fully paid" over a document whose money has gone back. Object.entries preserves insertion
+    // order, so assigning it here puts it at the end of the write loop.
+    if (paymentStatus !== wantStatus) patch.payment_status = wantStatus;
     if (Object.keys(patch).length) await updateDraftOrderMetafields(draftOrderId, patch);
   }
-  if (!isFull && !isPartial && !legs.length) return false;
+  if (!isFull && !isPartial && !isUnpaid && !legs.length) return false;
 
   const existingTags = (draft.tags || '').split(',').map(t => t.trim()).filter(Boolean);
   const cleanedTags  = existingTags.filter(t =>
     t.toLowerCase() !== 'sync-payment' &&
     !t.startsWith('deposit:') && !t.startsWith('paid:') && !t.startsWith('pending:') &&
-    !t.startsWith('pmode-') && !t.startsWith('pmodes:') && !/^i[1-9]:/.test(t) && !t.startsWith('total:')
+    !t.startsWith('pmode-') && !t.startsWith('pmodes:') && !/^i[1-9]:/.test(t) && !t.startsWith('total:') &&
+    // Refund tags are rewritten from the metafields on every pass, exactly like the payment ones —
+    // a stale refunded:/r1: left behind by an edited leg would print a refund that no longer exists.
+    !t.startsWith('refunded:') && !/^r[1-9]:/.test(t)
   );
 
   const paymentTags = [
-    isFull ? 'deposit:fully-paid' : 'deposit:partial',
+    isUnpaid ? 'deposit:refunded' : (isFull ? 'deposit:fully-paid' : 'deposit:partial'),
     `paid:Rs${Math.round(amountPaid)}`,
-    ...(isPartial && amountPending > 0 ? [`pending:Rs${Math.round(amountPending)}`] : []),
+    ...((isPartial || isUnpaid) && amountPending > 0 ? [`pending:Rs${Math.round(amountPending)}`] : []),
     `total:Rs${totalPrice}`,
+    // Money returned. Same tag-fallback reasoning as the payment tags below: Order Printer can hand
+    // a template empty order.metafields at print time, so the invoice reads refunds off tags too.
+    // One tag per leg — tags cap at 40 chars, so a single packed tag would 422.
+    ...(amountRefunded > 0 ? [`refunded:Rs${Math.round(amountRefunded)}`] : []),
+    ...refundLegs.map(r => `r${r.slot}:${r.value}@${r.mode || ''}@${r.date || ''}`),
     // Aggregate mode tag — the draft-side sales report and recon both read modes off tags.
     ...(modes.length ? [`pmodes:${modes.join('/')}`] : []),
     // The whole installment table, encoded in ONE tag: value@mode@date, legs separated by ~.
@@ -2440,6 +2501,19 @@ const {
 } = require('./src/modules/adjustments/cad_advance_handlers').createCadAdvanceHandlers({
   axios, storeUrl: process.env.SHOPIFY_STORE_URL, supabase, getShopifyToken,
   updateDraftOrderMetafields, updateOrderMetafields, gqlSetDraftLineItems,
+});
+
+// Draft refunds — recording money OUT. Record-only: nothing here calls a gateway refund API, the
+// bank transfer is still made by hand. Recording and notifying are separate handlers on purpose, so
+// a refund raised because the order value contracted does not email the customer about it.
+const {
+  handleRefundSync, handleRefundEmailTag, handleRefundConversion, handleDraftDeletedRefunds,
+} = createRefundHandlers({
+  axios, storeUrl: process.env.SHOPIFY_STORE_URL, supabase, getShopifyToken,
+  updateDraftOrderMetafields, removeTagFromDraft,
+  sendEmail, withStoreCc,
+  buildDraftRefundHtml: require('./src/integrations/email/templates').buildDraftRefundHtml,
+  getCollectionBase, paidEpsilon: PAID_EPSILON,
 });
 
 // Dependency bundle for the CAD advance sweeps.
@@ -2827,6 +2901,12 @@ app.post('/api/shopify-draft-updated', async (req, res) => {
           // the register row off the draft name. Isolated — never breaks the conversion.
           await handleAdvanceConversion(draft, orderId, orderName, token)
             .catch(e => console.error(`[cad-advance] conversion handler for ${orderName || orderId}:`, e.message));
+          // Refunds recorded on the draft were filed under the DRAFT name — the only identifier that
+          // existed when the transfer was made. Rekey them onto the order, same as a CAD advance, or
+          // they stay invisible to the order-keyed adjustment report. Isolated: never breaks a
+          // conversion.
+          await handleRefundConversion(draft, orderId, orderName)
+            .catch(e => console.error(`[refunds] conversion rekey for ${orderName || orderId}:`, e.message));
           const dtags = (draft.tags || '').split(',').map(t => t.trim());
           const codeFrom = (re) => { const t = dtags.find(x => re.test(x)); return t ? t.slice(t.indexOf(':') + 1).trim() : ''; };
           const toRedeem = [
@@ -2903,6 +2983,11 @@ app.post('/api/shopify-draft-updated', async (req, res) => {
     // (voucher / advance / exchange / old-gold), and amount_pending is DERIVED off that fresh net —
     // so the payment sync runs LAST. (Previously it ran before the adjustments, leaving pending stale.)
     await step('sync-net',         () => syncAmountToCollect(draft));        // recompute net-to-collect after ALL adjustments above
+    // Refunds must land BETWEEN the two: amount_refunded is written off the fresh net, and
+    // payment-sync then derives amount_pending from paid AND refunded. Reversed, the balance would
+    // be one edit behind every refund.
+    await step('refund-sync',      () => handleRefundSync(draft));           // record refund legs → ledger + amount_refunded
+    await step('refund-email',     () => handleRefundEmailTag(draft));       // the panel's "Send refund email" button
     await step('payment-sync',     () => handlePaymentMetafieldSync(draft)); // derive amount_pending off the FRESH net (must run last)
 
     console.log(`Draft updated webhook: #${draft.name} — tag handlers complete`);
@@ -4074,7 +4159,9 @@ app.get('/api/credit-instrument/open', async (req, res) => {
 // The joinable reconciliation report over credit_instruments. (Distinct from the ad-hoc /api/recon
 // CSV tool.) detail: EVERY instrument, one row, with its state + both order refs (issued-against /
 // redeemed-against). state 'applied' = reserved on a draft (pending); 'redeemed' = draft converted to
-// an order (true redemption). summary: issued = redeemed + applied + outstanding + voided + expired.
+// an order (true redemption). summary: issued = redeemed + applied + outstanding + voided + expired
+// + refunded. `refunded` is terminal and is NOT an outstanding credit — money that has already gone
+// back is the opposite of a liability, so it gets its own bucket rather than falling into that one.
 // outstanding: the open-credit liability register. tieout: redeemed instruments and their target order.
 // ─────────────────────────────────────────
 // GET /api/adjustment-report?from=YYYY-MM-DD&to=YYYY-MM-DD&format=json|csv
@@ -4091,6 +4178,20 @@ app.post('/api/recompute-payment', async (req, res) => {
   }
   try {
     const token = await getShopifyToken();
+    // Refunds first, for the same reason the webhook chain runs refund-sync before payment-sync:
+    // amount_refunded has to be on the document before the balance is derived from it. Forcing the
+    // tag on makes this the by-hand equivalent of the panel save, which is what the endpoint is for.
+    if (draftOrderId) {
+      const { data: d } = await axios.get(
+        `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}.json`,
+        { headers: { 'X-Shopify-Access-Token': token }, timeout: 10000 });
+      const draft = d?.draft_order;
+      if (draft) {
+        const tags = (draft.tags || '').split(',').map(t => t.trim()).filter(Boolean);
+        if (!tags.some(t => t.toLowerCase() === 'sync-refund')) tags.push('sync-refund');
+        await handleRefundSync({ ...draft, tags: tags.join(', ') });
+      }
+    }
     const applied = draftOrderId
       ? await applyPaymentTagsToDraftOrder(String(draftOrderId), token)
       : await applyPaymentTagsToOrder(String(orderId), token);
@@ -4123,6 +4224,10 @@ const ctx = {
   // terminal logic, so it stays here and is injected; that is what keeps the Pine module liftable
   // into the admin actions app later without dragging the bootstrap along with it.
   handlePaymentCompletion,
+  // procurement owns the draft_orders/delete branch. A fully refunded draft is normally deleted, and
+  // the refund ledger row has to survive that — this lets the delete hook mark the document gone
+  // without touching the refund itself.
+  handleDraftDeletedRefunds,
 };
 
 registerRepairRoutes(app, getShopifyToken);

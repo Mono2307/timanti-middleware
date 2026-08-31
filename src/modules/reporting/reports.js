@@ -122,17 +122,25 @@ async function collectOrders(deps, { from, to }, rows, draftByOrderId = {}) {
       // item is on the document, in which case the deduction is cancelling that line's own charge.
       const legs    = readInstallments(mf);
       const paid    = num(mf.amount_paid);
+      // Money returned to the customer. amount_paid deliberately stays GROSS collected (see
+      // payments/refunds), so what was actually KEPT is paid − refunded — and that, not paid, is
+      // what a sales figure is entitled to claim.
+      const refunded = num(mf.amount_refunded);
+      const netPaid  = r2(paid - refunded);
       const net     = mf.amount_to_be_collected != null ? num(mf.amount_to_be_collected)
                                                         : num(n.totalPriceSet?.shopMoney?.amount);
-      const pending = Math.max(0, r2(net - paid));
-      const isFull  = mf.is_finalized === 'true' || String(mf.payment_status || '').toLowerCase() === 'full' || (paid > 0 && pending < 1);
-      const stage   = isFull ? 'completed-paid' : (paid > 0 ? 'partial' : 'unpaid');
+      const pending = Math.max(0, r2(net - netPaid));
+      const isFull  = mf.is_finalized === 'true' || String(mf.payment_status || '').toLowerCase() === 'full' || (netPaid > 0 && pending < 1);
+      // A document whose collections all went back is not a partial sale, whatever the gross says.
+      const isRefunded = refunded > 0 && netPaid < 1;
+      const stage   = isRefunded ? 'refunded' : (isFull ? 'completed-paid' : (netPaid > 0 ? 'partial' : 'unpaid'));
       const pmode   = legs.length ? installmentModes(legs).join(' / ')
                                   : [mf.payment_mode_advance, mf.payment_mode_final].filter(Boolean).join(' / ');
       // How the money arrived: one payment or several. Counted off the legs rather than inferred
       // from which of two named mode fields happened to be set.
       const legCount = legs.length || (mf.payment_mode_advance && mf.payment_mode_final ? 2 : (paid > 0 ? 1 : 0));
-      const paymentType = isFull ? (legCount > 1 ? `full: ${legCount} installments` : 'full: one-time')
+      const paymentType = isRefunded ? 'refunded' :
+                          isFull ? (legCount > 1 ? `full: ${legCount} installments` : 'full: one-time')
                                  : (paid > 0 ? `partial${legCount > 1 ? `: ${legCount} installments` : ''}` : 'unpaid');
       // the draft this order was converted from, if it started life as one
       const orderLegacyId = String(n.id || '').split('/').pop();
@@ -166,6 +174,10 @@ async function collectOrders(deps, { from, to }, rows, draftByOrderId = {}) {
           custom_serial:   mf.serial_code || '',
           // order-level money on the FIRST line only, so summing a column never double-counts a doc
           amount_paid:     idx === 0 ? r2(paid) : '',
+          amount_refunded: idx === 0 ? r2(refunded) : '',
+          // What was actually kept. amount_paid stays gross so the two figures reconcile against the
+          // ledger; this is the one to sum for a collections total.
+          net_collected:   idx === 0 ? netPaid  : '',
           amount_pending:  idx === 0 ? pending  : '',
           net_to_collect:  idx === 0 ? r2(net)  : '',
           payment_mode:    idx === 0 ? pmode    : '',
@@ -221,13 +233,22 @@ async function collectDrafts(deps, { from, to }, rows) {
         const tag  = (prefix) => { const t = tags.find(x => x.startsWith(prefix)); return t ? t.slice(prefix.length) : ''; };
         const deposit = tag('deposit:');
         const paid    = num((tag('paid:') || '').replace(/Rs/i, ''));
+        // Money returned. The draft side reads TAGS only, which is why the tag writer emits
+        // `refunded:Rs…` alongside `paid:Rs…` — there is no metafield fetch here to fall back on.
+        const refunded = num((tag('refunded:') || '').replace(/Rs/i, ''));
+        const netPaid  = r2(paid - refunded);
         const pending = num((tag('pending:') || '').replace(/Rs/i, ''));
         const total   = num((tag('total:') || '').replace(/Rs/i, '')) || r2(paid + pending);
         // Sales report only counts drafts with a RECORDED payment (an advance/partial or a full
         // pre-payment) — plain open/unpaid drafts are not sales yet, so skip them.
-        if (!(paid > 0 || deposit === 'partial' || deposit === 'fully-paid')) continue;
-        const stage   = deposit === 'fully-paid' ? 'draft-paid' : (paid > 0 ? 'partial' : 'open-draft');
-        const paymentType = deposit === 'fully-paid' ? 'full: paid-in-advance' : 'partial';
+        //
+        // The test is on NET paid, so a draft whose deposit was refunded in full drops out: the money
+        // came back, and it is no longer a recorded partial. `deposit:refunded` is excluded for the
+        // same reason — it is the tag the writer emits precisely for that case.
+        if (!(netPaid > 0 || deposit === 'partial' || deposit === 'fully-paid')) continue;
+        const stage   = deposit === 'fully-paid' ? 'draft-paid' : (netPaid > 0 ? 'partial' : 'open-draft');
+        const paymentType = deposit === 'fully-paid' ? 'full: paid-in-advance'
+                          : (refunded > 0 ? 'partial: part-refunded' : 'partial');
         // Modes come off tags on the draft side (no metafield fetch here). `pmodes:` is the
         // aggregate covering every leg; the two-slot tags are the pre-migration fallback.
         const pmodesTag = tag('pmodes:');
@@ -275,11 +296,13 @@ async function collectDrafts(deps, { from, to }, rows) {
             qty:             item.quantity || 0,
             ...money,
             custom_serial:   '',
-            amount_paid:     idx === 0 ? r2(paid)    : '',
-            amount_pending:  idx === 0 ? r2(pending) : '',
-            net_to_collect:  idx === 0 ? r2(total)   : '',
-            payment_mode:    idx === 0 ? pmode       : '',
-            installments:    idx === 0 ? legCount    : '',
+            amount_paid:     idx === 0 ? r2(paid)     : '',
+            amount_refunded: idx === 0 ? r2(refunded) : '',
+            net_collected:   idx === 0 ? netPaid      : '',
+            amount_pending:  idx === 0 ? r2(pending)  : '',
+            net_to_collect:  idx === 0 ? r2(total)    : '',
+            payment_mode:    idx === 0 ? pmode        : '',
+            installments:    idx === 0 ? legCount     : '',
           });
         });
       }
@@ -294,7 +317,10 @@ const SALES_COLS = [
   'stage', 'payment_type', 'draft_name', 'order_name', 'day', 'customer', 'place_of_supply', 'shipping_state',
   'product_title', 'variant_title', 'sku', 'hsn', 'qty',
   'gross_sales', 'discount', 'net_sales', 'taxable_value', 'igst', 'sgst', 'cgst',
-  'custom_serial', 'amount_paid', 'amount_pending', 'net_to_collect', 'payment_mode', 'installments',
+  // amount_paid is GROSS collected and amount_refunded what went back; net_collected is the one to
+  // sum for a collections total. All three are carried so a refund can be reconciled, not just netted.
+  'custom_serial', 'amount_paid', 'amount_refunded', 'net_collected', 'amount_pending', 'net_to_collect',
+  'payment_mode', 'installments',
 ];
 
 async function buildSalesReport(deps, { from, to, state, paymentStatus } = {}) {

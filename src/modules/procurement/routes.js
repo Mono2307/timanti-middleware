@@ -53,7 +53,7 @@ const PO_DEPS = () => ({
 });
 
 function register(app, ctx) {
-  const { handleRecalculatePriceTag, gqlSetDraftLineItems } = ctx;
+  const { handleRecalculatePriceTag, gqlSetDraftLineItems, handleDraftDeletedRefunds } = ctx;
 
 
 app.post('/api/po-webhook', async (req, res) => {
@@ -74,6 +74,14 @@ app.post('/api/po-webhook', async (req, res) => {
     creditInstruments.revertApplied(supabase, { targetDraftId: String(req.body.id) })
       .then(r => { if (r.length) console.log(`[ledger] draft ${req.body.id} deleted → reverted ${r.join(', ')} to open`); })
       .catch(e => console.error('[ledger] revert on draft delete:', e.message));
+    // Refund rows must SURVIVE the delete — a refunded draft is usually deleted, and the money
+    // having gone back stays true when the document is gone. revertApplied only matches
+    // status='applied', so it already cannot reach them; this only records that the draft no longer
+    // exists, so a later report can tell "outside the window" from "no longer there".
+    if (handleDraftDeletedRefunds) {
+      handleDraftDeletedRefunds(String(req.body.id))
+        .catch(e => console.error('[ledger] refund bookkeeping on draft delete:', e.message));
+    }
   }
   return handlePoWebhook(req, res, deps);
 });

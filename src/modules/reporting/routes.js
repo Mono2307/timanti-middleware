@@ -155,7 +155,7 @@ app.get('/api/recon-ledger', async (req, res) => {
         return {
           instrument_type:  r.instrument_type,
           serial_code:      r.serial_code,
-          state:            st === 'open' ? 'outstanding' : st,   // outstanding|redeemed|voided|expired
+          state:            st === 'open' ? 'outstanding' : st,   // outstanding|redeemed|refunded|voided|expired
           value:            parseFloat(r.value).toFixed(2),
           customer_name:    r.customer_name || '',
           issued_against:   r.source_order_name || '',            // order it was generated on
@@ -166,6 +166,12 @@ app.get('/api/recon-ledger', async (req, res) => {
           redeemed_at:      r.redeemed_at || '',
           voided_at:        r.voided_at || '',
           expires_at:       r.expires_at || '',
+          // Refund rows only. Purely additive, so the Apps Script consumer is unaffected — its
+          // fallback keys off an HTTP 400 (an older deployment not knowing view=detail at all),
+          // never off the field list, and the CSV header derives from Object.keys.
+          refunded_at:      r.refunded_at || '',
+          refund_mode:      r.refund_mode || '',
+          gateway_ref:      r.gateway_ref || '',
         };
       }).sort((a, b) => (a.instrument_type + a.serial_code).localeCompare(b.instrument_type + b.serial_code));
 
@@ -179,7 +185,7 @@ app.get('/api/recon-ledger', async (req, res) => {
           issued_count: 0, issued_value: 0, redeemed_count: 0, redeemed_value: 0,
           applied_count: 0, applied_value: 0,
           outstanding_count: 0, outstanding_value: 0, voided_count: 0, voided_value: 0,
-          expired_count: 0, expired_value: 0,
+          expired_count: 0, expired_value: 0, refunded_count: 0, refunded_value: 0,
         });
         const val = parseFloat(r.value) || 0;
         g.issued_count++; g.issued_value += val;
@@ -188,6 +194,10 @@ app.get('/api/recon-ledger', async (req, res) => {
         else if (st === 'applied')  { g.applied_count++;     g.applied_value     += val; }  // reserved on a draft (not yet a true redemption)
         else if (st === 'voided')   { g.voided_count++;      g.voided_value      += val; }
         else if (st === 'expired')  { g.expired_count++;     g.expired_value     += val; }
+        // Refunds MUST have their own bucket. They are terminal, and money that has already left the
+        // bank is the opposite of an outstanding credit — without this arm they fall through to the
+        // else below and inflate the outstanding-credit liability by the whole refunded amount.
+        else if (st === 'refunded') { g.refunded_count++;    g.refunded_value    += val; }
         else                        { g.outstanding_count++; g.outstanding_value += val; }
       }
       out = Object.values(groups).map(g => ({
@@ -195,8 +205,9 @@ app.get('/api/recon-ledger', async (req, res) => {
         issued_value: g.issued_value.toFixed(2), redeemed_value: g.redeemed_value.toFixed(2),
         applied_value: g.applied_value.toFixed(2),
         outstanding_value: g.outstanding_value.toFixed(2), voided_value: g.voided_value.toFixed(2),
-        expired_value: g.expired_value.toFixed(2),
-        balances: (g.redeemed_count + g.applied_count + g.outstanding_count + g.voided_count + g.expired_count) === g.issued_count,
+        expired_value: g.expired_value.toFixed(2), refunded_value: g.refunded_value.toFixed(2),
+        balances: (g.redeemed_count + g.applied_count + g.outstanding_count + g.voided_count
+                   + g.expired_count + g.refunded_count) === g.issued_count,
       })).sort((a, b) => (a.instrument_type + a.month).localeCompare(b.instrument_type + b.month));
 
     } else if (view === 'outstanding') {
@@ -250,10 +261,27 @@ app.get('/api/adjustment-report', async (req, res) => {
     // on (source) and redeemed on (target), tagging each with its state + the counterpart order.
     const nowMs = Date.now();
     const bySource = {}, byTarget = {};
+    // Refund rows are kept aside as well as indexed: those whose draft never converted have no order
+    // row to hang off, and are appended after the order walk below.
+    const refundRows = [];
+    const refundByDoc = {};
     for (const r of await creditInstruments.fetchAll(supabase, {})) {
       const st = creditInstruments.effectiveStatus(r, nowMs);
       const stateLbl = st === 'open' ? 'outstanding' : st;
       const money = `₹${(parseFloat(r.value) || 0).toFixed(0)}`;
+      // A refund has no counterpart document — the money left the business rather than moving to
+      // another order — so the voucher arrow format would print a dangling "→". Label it by how it
+      // went back instead, which is what someone reconciling against the gateway actually needs.
+      if (r.instrument_type === 'refund') {
+        refundRows.push(r);
+        const detail = [r.refund_mode, r.gateway_ref].filter(Boolean).join(' ');
+        if (r.source_order_name) {
+          (bySource[r.source_order_name] = bySource[r.source_order_name] || [])
+            .push(`${r.serial_code} ${money} [refunded]${detail ? ' via ' + detail : ''}`);
+          refundByDoc[r.source_order_name] = (refundByDoc[r.source_order_name] || 0) + (parseFloat(r.value) || 0);
+        }
+        continue;
+      }
       if (r.source_order_name) (bySource[r.source_order_name] = bySource[r.source_order_name] || [])
         .push(`${r.serial_code} ${money} [${stateLbl}]${r.target_order_name ? ' → ' + r.target_order_name : ''}`);
       if (r.target_order_name) (byTarget[r.target_order_name] = byTarget[r.target_order_name] || [])
@@ -315,6 +343,10 @@ app.get('/api/adjustment-report', async (req, res) => {
           // carries the CAD Advance line, where it cancels that line's charge.
           amount_paid:            (num(mf.amount_paid) + num(mf.amount_paid_final)).toFixed(2),
           total_price:            num(n.totalPriceSet.shopMoney.amount).toFixed(2),
+          // Money returned on this document. Its own column, NOT netted off amount_paid — that
+          // figure stays gross collected so the two reconcile against the ledger.
+          refund_value:           (refundByDoc[n.name] || 0).toFixed(2),
+          document_state:         '',
           instruments_issued:     (bySource[n.name] || []).join(' | '),   // credits generated on this order
           instruments_redeemed:   (byTarget[n.name] || []).join(' | '),   // credits used on this order
         });
@@ -322,12 +354,45 @@ app.get('/api/adjustment-report', async (req, res) => {
       cursor = conn.pageInfo.hasNextPage ? conn.pageInfo.endCursor : null;
     } while (cursor && ++page < 50);
 
+    // Refunds on drafts that never became orders — the sale-fell-through case.
+    //
+    // This report walks Shopify ORDERS, so those refunds have no row to attach to and would simply
+    // vanish: real money left the business and the report would not show it. They are appended from
+    // the ledger instead, which is exactly why the ledger row carries a full snapshot (name,
+    // customer, value, store) — the draft it names is usually deleted by this point.
+    //
+    // A refund on a draft that DID convert is not duplicated here: handleRefundConversion rekeys it
+    // onto the order name, so it is already on that order's row via bySource.
+    const orderNames = new Set(rows.map(r => r.name));
+    for (const r of refundRows) {
+      if (!r.source_order_name || orderNames.has(r.source_order_name)) continue;
+      const detail = [r.refund_mode, r.gateway_ref].filter(Boolean).join(' ');
+      rows.push({
+        name:            r.source_order_name,
+        created_at:      (r.issued_at || '').slice(0, 10),
+        customer:        r.customer_name || '',
+        place_of_supply: r.state_code || '',
+        shipping_state:  '',
+        custom_serial:   '',
+        hsn:             '',
+        // No sale happened, so every sales column stays empty rather than zero — a zero would read
+        // as a Rs0 sale and be summed into the totals as one.
+        refund_value:    num(r.value).toFixed(2),
+        document_state:  r.voided_at ? 'draft deleted' : 'draft open',
+        instruments_issued:   `${r.serial_code} ₹${num(r.value).toFixed(0)} [refunded]${detail ? ' via ' + detail : ''}`,
+        instruments_redeemed: '',
+      });
+    }
+
     const sumKeys = ['qty','gross_value','discount_applied','taxable_value','igst','sgst','cgst','voucher_value','exchange_note_value','old_gold_value','advance','amount_to_be_collected','amount_paid','total_price'];
-    const totals = { name: 'TOTAL', created_at: '', customer: `${rows.length} orders` };
+    // Refunds are money OUT and are NOT part of any sales sum — kept in their own column so the
+    // existing totals keep meaning exactly what they meant before.
+    const totals = { name: 'TOTAL', created_at: '', customer: `${rows.length} rows` };
     for (const k of sumKeys) totals[k] = rows.reduce((s, r) => s + num(r[k]), 0).toFixed(2);
+    totals.refund_value = rows.reduce((s, r) => s + num(r.refund_value), 0).toFixed(2);
 
     if ((req.query.format || '').toLowerCase() === 'csv') {
-      const cols = ['name','created_at','customer','place_of_supply','shipping_state','custom_serial','hsn', ...sumKeys, 'instruments_issued','instruments_redeemed'];
+      const cols = ['name','created_at','customer','place_of_supply','shipping_state','custom_serial','hsn', ...sumKeys, 'refund_value','document_state','instruments_issued','instruments_redeemed'];
       const all = rows.concat([totals]);
       const csv = [cols.join(',')].concat(all.map(r => cols.map(c => {
         const v = r[c] == null ? '' : String(r[c]);
