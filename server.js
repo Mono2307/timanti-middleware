@@ -11,6 +11,7 @@ const { sendEmail, sendDepositEmail, withStoreCc } = require('./src/integrations
 const { buildVoucherV2Html, buildExchangeNoteV2Html } = require('./src/integrations/email/templates');
 const { startVoucherExpirySweep } = require('./src/modules/adjustments/voucher_expiry_sweep');
 const { startCadAdvanceSweep, runCadAdvanceSweep } = require('./src/modules/adjustments/cad_advance_sweep');
+const { startSerialDriftSweep } = require('./src/modules/serialization/drift_sweep');
 const { handlePoWebhook } = require('./src/modules/procurement/webhook');
 const { handlePoAction }  = require('./src/modules/procurement/action');
 const { syncDraftOrderToSheet, syncOrderToSheet, syncAllDraftOrders, syncAllOrders, removeDraftFromSheet, pruneOrphans } = require('./src/modules/procurement/sync');
@@ -4287,6 +4288,16 @@ app.listen(PORT, async () => {
     storeUrl: config.shopify.storeUrl,
   });
   startCadAdvanceSweep(CAD_SWEEP_DEPS());
+
+  // Counter-vs-ledger reconciliation. Emails accounts only when a document number has gone missing;
+  // silence means the counters and the ledger agree. This is the layer that catches a cause we have
+  // not thought of — see RCA_INVOICE_COUNTER_2026-08-29.md.
+  startSerialDriftSweep({
+    supabase,
+    sendEmail,
+    withStoreCc,
+    accountsEmail: config.email.accounts,
+  });
   await initShopifyToken();
   console.log('🔄 Background poller started (30s)');
   setInterval(() => pine.pollActiveTxns(ctx), 30000);

@@ -527,48 +527,10 @@ app.post('/api/serial/restamp-from-ledger', runSerialRestamp);
 // ok:false and a non-2xx when any counter has drifted, so a monitor can alert on the status alone.
 async function runSerialDrift(req, res) {
   try {
-    const { data: counters, error: cErr } = await supabase
-      .from('serial_counters').select('doc_type, state_code, current_value');
-    if (cErr) throw new Error(cErr.message);
-
-    const { data: ledger, error: lErr } = await supabase
-      .from('serial_ledger').select('doc_type, store_code, seq, status, serial_code, resource_name');
-    if (lErr) throw new Error(lErr.message);
-
-    const report = [];
-    for (const c of (counters || [])) {
-      const rows = (ledger || []).filter(r => r.doc_type === c.doc_type && r.store_code === c.state_code);
-      const seqs = new Set(rows.map(r => Number(r.seq)));
-      const current = Number(c.current_value);
-
-      // Every number from 1 to the counter's current value should be accounted for by a ledger row,
-      // cancelled ones included — a cancelled number was still issued and still explains its slot.
-      const missing = [];
-      for (let s = 1; s <= current; s++) if (!seqs.has(s)) missing.push(s);
-
-      report.push({
-        doc_type: c.doc_type,
-        store_code: c.state_code,
-        counter: current,
-        recorded: rows.length,
-        cancelled: rows.filter(r => r.status === 'cancelled').length,
-        missing_seqs: missing,
-        ok: missing.length === 0,
-      });
-    }
-
-    const drifted = report.filter(r => !r.ok);
-    const status  = drifted.length ? 409 : 200;
-    return res.status(status).json({
-      ok: drifted.length === 0,
-      checkedCounters: report.length,
-      driftedCounters: drifted.length,
-      // Named plainly so an alert body reads as a sentence rather than a data dump.
-      summary: drifted.length
-        ? drifted.map(d => `${d.doc_type}/${d.store_code}: counter at ${d.counter} but ${d.missing_seqs.length} number(s) unaccounted for (${d.missing_seqs.join(', ')})`)
-        : ['every counter agrees with its ledger'],
-      report,
-    });
+    const result = await serialization.computeSerialDrift(SERIAL_DEPS());
+    // 409 rather than 200 when drifted, so a monitor can alert on the status code alone without
+    // parsing the body — the whole point is that nobody has to remember to read this.
+    return res.status(result.ok ? 200 : 409).json(result);
   } catch (err) {
     console.error('[serial] drift check failed:', err.message);
     return res.status(500).json({ ok: false, error: err.message });

@@ -438,6 +438,59 @@ async function mintSerial(deps, { docType, storeCode, deliveryCode, resourceType
   return { ...row, minted: true, stampErrors };
 }
 
+// ─── drift: does every counter agree with its ledger? ────────────────────────
+// A counter and its ledger must satisfy one invariant: every seq from 1 to the counter's current
+// value is accounted for by a ledger row — cancelled rows included, because a cancelled number was
+// still issued and still explains its slot. Anything missing is a number that left the counter with
+// no document behind it.
+//
+// That is precisely what happened on 2026-08-29 (TM27-KAHSR-00005 and 00006) and went unnoticed for
+// three days, because nothing in the system compared these two numbers. Now three things do: the
+// /api/serial/drift endpoint, the daily sweep, and tools/health.js — all through this one function,
+// so they can never disagree about what "drifted" means.
+async function computeSerialDrift(deps) {
+  const { data: counters, error: cErr } = await deps.supabase
+    .from('serial_counters').select('doc_type, state_code, current_value');
+  if (cErr) throw new Error(cErr.message);
+
+  const { data: ledger, error: lErr } = await deps.supabase
+    .from('serial_ledger').select('doc_type, store_code, seq, status');
+  if (lErr) throw new Error(lErr.message);
+
+  const report = [];
+  for (const c of (counters || [])) {
+    const rows    = (ledger || []).filter(r => r.doc_type === c.doc_type && r.store_code === c.state_code);
+    const seqs    = new Set(rows.map(r => Number(r.seq)));
+    const current = Number(c.current_value);
+
+    const missing = [];
+    for (let s = 1; s <= current; s++) if (!seqs.has(s)) missing.push(s);
+
+    report.push({
+      doc_type:   c.doc_type,
+      store_code: c.state_code,
+      counter:    current,
+      recorded:   rows.length,
+      cancelled:  rows.filter(r => r.status === 'cancelled').length,
+      missing_seqs: missing,
+      ok: missing.length === 0,
+    });
+  }
+
+  const drifted = report.filter(r => !r.ok);
+  return {
+    ok: drifted.length === 0,
+    checkedCounters: report.length,
+    driftedCounters: drifted.length,
+    // Phrased as sentences so an alert body reads like a finding, not a data dump.
+    summary: drifted.length
+      ? drifted.map(d => `${d.doc_type}/${d.store_code}: counter at ${d.counter} but ${d.missing_seqs.length} number(s) unaccounted for (${d.missing_seqs.join(', ')})`)
+      : ['every counter agrees with its ledger'],
+    report,
+    drifted,
+  };
+}
+
 // cancelSerial: retire a number (status=cancelled). Never reused — GST-clean.
 // Identify the row by resourceId (the usual path) OR by seq (credit notes, whose customer-facing
 // CNTM-YYYY-NNNN number shares only the seq with the ledger's serial_code).
@@ -457,6 +510,7 @@ module.exports = {
   SERIAL_KEYS,
   getRegistry,
   allocateSerial,
+  computeSerialDrift,
   fyEnd,
   resolveState,
   resolveStateFromLocation,

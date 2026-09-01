@@ -29,6 +29,10 @@ const CHECKS = [
   { path: '/api/serial-report?docType=customer_order',          why: 'document numbering' },
   { path: '/api/price-update-diag',                             why: 'gold-rate job files present in the image' },
   { path: '/api/serial/peek?docType=customer_order',            why: 'next serial readable (does not consume it)' },
+  // Returns 409 while any counter disagrees with its ledger, so this line fails loudly rather than
+  // quietly reporting a number nobody cross-checked. A FAIL here means an invoice number was issued
+  // with no document behind it — see RCA_INVOICE_COUNTER_2026-08-29.md.
+  { path: '/api/serial/drift',                                  why: 'every counter balances against its ledger' },
 ];
 
 const fetchWithTimeout = (url, ms = 45000) => {
