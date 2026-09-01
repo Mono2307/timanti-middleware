@@ -346,7 +346,9 @@ app.get('/api/adjustment-report', async (req, res) => {
           // Money returned on this document. Its own column, NOT netted off amount_paid — that
           // figure stays gross collected so the two reconcile against the ledger.
           refund_value:           (refundByDoc[n.name] || 0).toFixed(2),
-          document_state:         '',
+          // Says what the document IS, on every row — not just on appended ones. Left blank it read
+          // as a broken column in any month with no abandoned-draft refunds.
+          document_state:         'order',
           instruments_issued:     (bySource[n.name] || []).join(' | '),   // credits generated on this order
           instruments_redeemed:   (byTarget[n.name] || []).join(' | '),   // credits used on this order
         });
@@ -363,9 +365,21 @@ app.get('/api/adjustment-report', async (req, res) => {
     //
     // A refund on a draft that DID convert is not duplicated here: handleRefundConversion rekeys it
     // onto the order name, so it is already on that order's row via bySource.
-    const orderNames = new Set(rows.map(r => r.name));
     for (const r of refundRows) {
-      if (!r.source_order_name || orderNames.has(r.source_order_name)) continue;
+      if (!r.source_order_name) continue;
+      // A refund whose draft CONVERTED is already on that order's row via bySource/refundByDoc —
+      // handleRefundConversion rekeys it onto the order name and stamps target_order_name. Test that
+      // directly. Testing membership of the in-window order set instead was wrong: an order outside
+      // [from,to] is absent from that set, so its refund was appended a second time AND mislabelled
+      // as a draft row under an order name.
+      if (r.target_order_name) continue;
+      // Window it. fetchAll is unfiltered so the bySource index can see instruments issued before the
+      // window and redeemed inside it — but an APPENDED row is a row, and without this every refund
+      // ever recorded on a never-converted draft was pushed into every monthly run and summed into
+      // totals.refund_value again each time. Same re-counting failure the drafts side of the sales
+      // report already had to fix once.
+      const when = String(r.refunded_at || r.issued_at || '').slice(0, 10);
+      if (!when || when < from || when > to) continue;
       const detail = [r.refund_mode, r.gateway_ref].filter(Boolean).join(' ');
       rows.push({
         name:            r.source_order_name,

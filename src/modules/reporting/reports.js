@@ -14,6 +14,7 @@
 
 const { runRecon, toCSV: reconToCSV } = require('./recon');
 const { readInstallments, installmentModes } = require('../payments/installments');
+const { readRefunds } = require('../payments/refunds');
 
 // ── Small helpers ────────────────────────────────────────────────────────────
 
@@ -41,12 +42,96 @@ function lineMoney({ grossValue, discount, taxableProp, storeState, shipState })
   const gross   = r2(grossValue);
   const disc    = r2(discount);
   const netIncl = r2(gross - disc);                 // tax-inclusive, post-discount
-  const taxable = taxableProp != null ? r2(taxableProp) : r2(netIncl / 1.03);
+  // taxable = gross/1.03 − discount. The discount is ALREADY pre-tax rupees (it is applied to the
+  // diamond/making component, which is itself a pre-tax value), so it must be subtracted AFTER the
+  // gross is converted, never divided along with it.
+  //
+  // This previously computed (gross − disc)/1.03, which divides the discount too and so overstates
+  // taxable value — and the GST on it — by exactly discount × 2.91%. On a Rs10,000 discount that is
+  // Rs291 of taxable value and Rs8.74 of tax that never existed. The adjustment report
+  // (reporting/routes.js) has always had this right and carries a comment forbidding the divide, so
+  // the two reports disagreed on the same document whenever the explicit "Taxable Value" line
+  // property was absent. Max(0) mirrors the adjustment report: a discount larger than the pre-tax
+  // value floors at zero rather than inventing negative tax.
+  const taxable = taxableProp != null ? r2(taxableProp) : r2(Math.max(0, gross / 1.03 - disc));
   const gst     = gstSplit(taxable, storeState, shipState);
   return {
     gross_sales: gross, discount: disc, net_sales: netIncl, taxable_value: taxable,
     igst: gst.igst, sgst: gst.sgst, cgst: gst.cgst,
   };
+}
+
+// ── Payment + refund legs, spread rightward ──────────────────────────────────
+//
+// Every collection and every refund gets its own set of columns, so the report shows WHAT was taken
+// and WHEN and BY WHAT TENDER — not just a total and a count. This replaces the old advance/final
+// two-slot framing: there is no "advance" and "final" any more, only leg 1..4 in the order the money
+// actually arrived, plus refund legs 1..2 going the other way.
+//
+// `type` on an installment leg is 'payment' or 'cad_advance'. A cad_advance leg IS settled money and
+// counts toward amount_paid like any other (CAD_ADVANCE_TRACKING_SPEC §1) — the column exists so a
+// reader can separate a design advance from a real collection without having to guess from the mode.
+//
+// `ref` on a refund leg is the gateway UTR: the join key back to a bank statement.
+//
+// Emitted on the first line of a document only, like every other document-level figure here, so
+// summing a column never multiplies by the number of line items.
+const MAX_INST_COLS   = 4;
+const MAX_REFUND_COLS = 2;
+
+function legColumns(instLegs, refundLegs) {
+  const out = {};
+  for (let n = 1; n <= MAX_INST_COLS; n++) {
+    const leg = (instLegs || []).find(r => r.slot === n);
+    out[`i${n}_value`] = leg ? r2(leg.value) : '';
+    out[`i${n}_mode`]  = leg ? (leg.mode || '') : '';
+    out[`i${n}_date`]  = leg ? (leg.date || '') : '';
+    out[`i${n}_type`]  = leg ? (leg.type || 'payment') : '';
+  }
+  for (let n = 1; n <= MAX_REFUND_COLS; n++) {
+    const leg = (refundLegs || []).find(r => r.slot === n);
+    out[`r${n}_value`] = leg ? r2(leg.value) : '';
+    out[`r${n}_mode`]  = leg ? (leg.mode || '') : '';
+    out[`r${n}_date`]  = leg ? (leg.date || '') : '';
+    out[`r${n}_ref`]   = leg ? (leg.ref  || '') : '';
+  }
+  return out;
+}
+
+// Blank leg columns, for the non-first line of every document.
+const BLANK_LEG_COLUMNS = legColumns([], []);
+
+// The drafts side has no metafields to read — it works off tags. The tag writer packs each leg into
+// one tag precisely so a reader with no metafield access can still reconstruct the table:
+//   i{slot}:value@mode@date[@c]     @c marks a cad_advance leg
+//   r{slot}:value@mode@date
+// Same encoding the invoice templates parse. Values are whole rupees here (the writer rounds), so a
+// draft row and the order it becomes can differ by under a rupee — see the note on SALES_COLS.
+function legsFromTags(tags) {
+  const inst = [];
+  const refunds = [];
+  for (const raw of (tags || [])) {
+    const t = String(raw).trim();
+    let m = /^i([1-9]\d*):(.*)$/.exec(t);
+    if (m) {
+      const p = m[2].split('@');
+      const value = parseFloat(p[0]);
+      if (Number.isFinite(value) && value > 0) {
+        inst.push({ slot: +m[1], value, mode: p[1] || '', date: p[2] || '',
+                    type: p[3] === 'c' ? 'cad_advance' : 'payment' });
+      }
+      continue;
+    }
+    m = /^r([1-9]\d*):(.*)$/.exec(t);
+    if (m) {
+      const p = m[2].split('@');
+      const value = parseFloat(p[0]);
+      if (Number.isFinite(value) && value > 0) {
+        refunds.push({ slot: +m[1], value, mode: p[1] || '', date: p[2] || '' });
+      }
+    }
+  }
+  return { inst, refunds };
 }
 
 // ── Draft → order lineage ────────────────────────────────────────────────────
@@ -90,7 +175,7 @@ async function collectOrders(deps, { from, to }, rows, draftByOrderId = {}) {
         id name createdAt customer{ displayName }
         shippingAddress{ provinceCode province }
         totalPriceSet{ shopMoney{ amount } }
-        metafields(namespace:"custom", first:40){ edges{ node{ key value } } }
+        metafields(namespace:"custom", first:250){ edges{ node{ key value } } }
         lineItems(first:50){ edges{ node{
           title variantTitle quantity sku
           originalTotalSet{ shopMoney{ amount } }
@@ -125,6 +210,8 @@ async function collectOrders(deps, { from, to }, rows, draftByOrderId = {}) {
       // Money returned to the customer. amount_paid deliberately stays GROSS collected (see
       // payments/refunds), so what was actually KEPT is paid − refunded — and that, not paid, is
       // what a sales figure is entitled to claim.
+      const refundLegs = readRefunds(mf);
+      const legCols    = legColumns(legs, refundLegs);
       const refunded = num(mf.amount_refunded);
       const netPaid  = r2(paid - refunded);
       const net     = mf.amount_to_be_collected != null ? num(mf.amount_to_be_collected)
@@ -172,6 +259,9 @@ async function collectOrders(deps, { from, to }, rows, draftByOrderId = {}) {
           qty:             li.quantity || 0,
           ...money,
           custom_serial:   mf.serial_code || '',
+          // Every leg, spread rightward — what was taken, when, and by what tender. Blanked off the
+          // first line like every other document-level figure.
+          ...(idx === 0 ? legCols : BLANK_LEG_COLUMNS),
           // order-level money on the FIRST line only, so summing a column never double-counts a doc
           amount_paid:     idx === 0 ? r2(paid) : '',
           amount_refunded: idx === 0 ? r2(refunded) : '',
@@ -249,15 +339,21 @@ async function collectDrafts(deps, { from, to }, rows) {
         const stage   = deposit === 'fully-paid' ? 'draft-paid' : (netPaid > 0 ? 'partial' : 'open-draft');
         const paymentType = deposit === 'fully-paid' ? 'full: paid-in-advance'
                           : (refunded > 0 ? 'partial: part-refunded' : 'partial');
+        // Every leg, reconstructed from the i{n}:/r{n}: tags. Same table the orders side reads off
+        // metafields, and the same table the invoice prints — the tag encoding exists precisely so a
+        // reader with no metafield access can rebuild it.
+        const draftLegs = legsFromTags(tags);
+        const legCols   = legColumns(draftLegs.inst, draftLegs.refunds);
         // Modes come off tags on the draft side (no metafield fetch here). `pmodes:` is the
         // aggregate covering every leg; the two-slot tags are the pre-migration fallback.
         const pmodesTag = tag('pmodes:');
         const pmode   = pmodesTag ? pmodesTag.split('/').filter(Boolean).join(' / ')
                                   : [tag('pmode-advance:'), tag('pmode-final:')].filter(Boolean).join(' / ');
-        // The draft side reads tags only, and `pmodes:` carries DISTINCT modes — two cash legs look
-        // like one. Leaving the count blank rather than printing an undercount; the converted-order
-        // row carries the real figure.
-        const legCount = '';
+        // Now a real count. This used to be blank on purpose: the only leg signal on a draft was
+        // `pmodes:`, which carries DISTINCT modes, so two cash legs looked like one and a count off
+        // it would have under-reported. The i{n}: tags are per leg, so the figure is now exact and
+        // matches what the converted-order row will say.
+        const legCount = draftLegs.inst.length || '';
 
         const shipState  = d.shipping_address?.province_code || '';
         // Draft has no custom.state_code inline. Mirror the invoice's supplier default (KA) so the
@@ -296,6 +392,7 @@ async function collectDrafts(deps, { from, to }, rows) {
             qty:             item.quantity || 0,
             ...money,
             custom_serial:   '',
+            ...(idx === 0 ? legCols : BLANK_LEG_COLUMNS),
             amount_paid:     idx === 0 ? r2(paid)     : '',
             amount_refunded: idx === 0 ? r2(refunded) : '',
             net_collected:   idx === 0 ? netPaid      : '',
@@ -317,9 +414,26 @@ const SALES_COLS = [
   'stage', 'payment_type', 'draft_name', 'order_name', 'day', 'customer', 'place_of_supply', 'shipping_state',
   'product_title', 'variant_title', 'sku', 'hsn', 'qty',
   'gross_sales', 'discount', 'net_sales', 'taxable_value', 'igst', 'sgst', 'cgst',
-  // amount_paid is GROSS collected and amount_refunded what went back; net_collected is the one to
-  // sum for a collections total. All three are carried so a refund can be reconciled, not just netted.
-  'custom_serial', 'amount_paid', 'amount_refunded', 'net_collected', 'amount_pending', 'net_to_collect',
+  'custom_serial',
+  // ── Money movement, leg by leg, spread rightward ──
+  // Replaces the old advance/final two-slot framing: there is no "advance" and "final" any more,
+  // only legs in the order the money arrived. i* is money in, r* money out. i*_type separates a
+  // cad_advance leg from a real collection; r*_ref is the gateway UTR, the join back to a bank
+  // statement. Blank on every line but the first of a document.
+  'i1_value', 'i1_mode', 'i1_date', 'i1_type',
+  'i2_value', 'i2_mode', 'i2_date', 'i2_type',
+  'i3_value', 'i3_mode', 'i3_date', 'i3_type',
+  'i4_value', 'i4_mode', 'i4_date', 'i4_type',
+  'r1_value', 'r1_mode', 'r1_date', 'r1_ref',
+  'r2_value', 'r2_mode', 'r2_date', 'r2_ref',
+  // ── Totals, to the right of the legs they are computed from ──
+  // amount_paid is GROSS collected (the sum of the i* legs) and amount_refunded what went back (the
+  // sum of the r* legs); net_collected is the one to sum for a collections total. All three are
+  // carried so a refund can be reconciled against the legs, not just netted away.
+  //
+  // Draft-side figures are WHOLE RUPEES — the tag writer rounds — while order-side figures are 2dp.
+  // A draft row and the order it becomes can therefore differ by under a rupee.
+  'amount_paid', 'amount_refunded', 'net_collected', 'amount_pending', 'net_to_collect',
   'payment_mode', 'installments',
 ];
 
@@ -423,6 +537,11 @@ module.exports = {
   SALES_COLS,
   toCSV,
   gstSplit,
+  // exported for unit tests — the leg flattening and the tag reconstruction are the two places the
+  // orders side and the drafts side have to agree, and nothing else would catch them drifting
+  lineMoney,
+  legColumns,
+  legsFromTags,
   supplierState,
   // re-exported so the reporting module is the single entry point for every report
   runRecon,
