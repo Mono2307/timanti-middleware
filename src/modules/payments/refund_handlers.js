@@ -43,17 +43,44 @@ const REFUND_INSTRUMENT = 'refund';
 function createRefundHandlers(deps) {
   const {
     axios, storeUrl, supabase, getShopifyToken,
-    updateDraftOrderMetafields, removeTagFromDraft,
+    updateDraftOrderMetafields, updateOrderMetafields,
+    removeTagFromDraft, removeTagFromOrder,
     sendEmail, buildDraftRefundHtml, withStoreCc,
     getCollectionBase, paidEpsilon = 1,
   } = deps;
 
-  const hasTag = (draft, tag) => (draft?.tags || '').split(',')
+  const hasTag = (doc, tag) => (doc?.tags || '').split(',')
     .some(t => t.trim().toLowerCase() === tag);
 
-  async function readDraftCustom(draftOrderId, token) {
+  // A refund can be recorded on a DRAFT (the deposit went back before the sale completed) or on an
+  // ORDER (the sale completed and money went back afterwards). The pipeline is identical — read the
+  // custom metafields, write the ledger, stamp amount_refunded, consume the tag — only the Shopify
+  // resource differs. This resolves that once so neither path can drift from the other.
+  //
+  // Wiring only the draft half, as this first shipped, was worse than either: applyPaymentTagsToOrder
+  // already READS refund_N_* off an order and derives the balance and tags from them, so staff typing
+  // a refund onto a converted order got correct tags and a correct balance while both reports read
+  // zero, because nothing ever wrote amount_refunded or a ledger row.
+  const RESOURCES = {
+    draft_orders: {
+      path: 'draft_orders',
+      docKey: 'draft_order',
+      writeMetafields: updateDraftOrderMetafields,
+      removeTag: removeTagFromDraft,
+      label: 'draft',
+    },
+    orders: {
+      path: 'orders',
+      docKey: 'order',
+      writeMetafields: updateOrderMetafields,
+      removeTag: removeTagFromOrder,
+      label: 'order',
+    },
+  };
+
+  async function readCustom(res, id, token) {
     const { data } = await axios.get(
-      `${storeUrl}/admin/api/2024-01/draft_orders/${draftOrderId}/metafields.json`,
+      `${storeUrl}/admin/api/2024-01/${res.path}/${id}/metafields.json`,
       { headers: { 'X-Shopify-Access-Token': token }, timeout: 10000 });
     const out = {};
     for (const m of (data.metafields || [])) if (m.namespace === 'custom') out[m.key] = m.value;
@@ -70,32 +97,37 @@ function createRefundHandlers(deps) {
   // be safe to replay. Upserting under the key '#D189-R1' with ignoreDuplicates means a replayed
   // pass writes nothing — and tells us so, since an empty returned set IS the "already recorded"
   // signal. No bespoke dedup column is needed.
-  async function handleRefundSync(draft) {
-    const draftOrderId = draft?.id?.toString();
-    if (!draftOrderId) return;
-    if (!hasTag(draft, 'sync-refund')) return;
+  async function handleRefundSync(doc, resourceKey = 'draft_orders') {
+    const res = RESOURCES[resourceKey];
+    const docId = doc?.id?.toString();
+    if (!res || !docId) return;
+    if (!hasTag(doc, 'sync-refund')) return;
+    const isOrder = resourceKey === 'orders';
 
     try {
       const token = await getShopifyToken();
-      const mf    = await readDraftCustom(draftOrderId, token);
+      const mf    = await readCustom(res, docId, token);
       const legs  = readRefunds(mf);
 
       // Tag present but no legs: staff added it by hand, or blanked the fields again. Consume it, or
-      // it sits on the draft re-triggering this on every future edit.
+      // it sits on the document re-triggering this on every future edit.
       if (!legs.length) {
-        console.log(`[refunds] draft ${draftOrderId}: sync-refund with no refund legs — nothing to record`);
-        await removeTagFromDraft(draftOrderId, 'sync-refund');
+        console.log(`[refunds] ${res.label} ${docId}: sync-refund with no refund legs — nothing to record`);
+        await res.removeTag(docId, 'sync-refund');
         return;
       }
 
-      const draftName    = draft.name || `#${draftOrderId}`;
-      const customer     = draft.customer || {};
+      const docName      = doc.name || `#${docId}`;
+      const customer     = doc.customer || {};
       const customerName = [customer.first_name, customer.last_name].filter(Boolean).join(' ')
-        || draft.billing_address?.name || '';
+        || doc.billing_address?.name || '';
       const totalRefunded = sumRefunds(legs);
 
       for (const leg of legs) {
-        const serialCode = refundLedgerKey(draftName, leg.slot);
+        // Keyed on the DOCUMENT's own name either way. A refund raised on a draft that later converts
+        // is rekeyed to the order name by handleRefundConversion — so when this runs again on the
+        // order it computes the same key, the upsert no-ops, and there is no second row.
+        const serialCode = refundLedgerKey(docName, leg.slot);
         // The row carries a FULL snapshot — name, customer, value, store — because it has to outlive
         // the document. A fully refunded draft is usually deleted, and the refund is still true once
         // the draft is gone, so nothing may need to read back through the draft id to describe it.
@@ -108,9 +140,14 @@ function createRefundHandlers(deps) {
           value:             leg.value,
           customer_id:       customer.id != null ? String(customer.id) : null,
           customer_name:     customerName || null,
-          source_order_id:   draftOrderId,
-          source_order_name: draftName,
-          target_draft_id:   draftOrderId,
+          source_order_id:   docId,
+          source_order_name: docName,
+          // On an order both target fields are set, which is what keeps it OFF the adjustment
+          // report's "refund on a draft that never converted" append — that block skips any row
+          // carrying a target_order_name, because the order's own row already shows it.
+          ...(isOrder
+            ? { target_order_id: docId, target_order_name: docName }
+            : { target_draft_id: docId }),
           state_code:        mf.state_code || null,
           status:            'refunded',
           refund_mode:       leg.mode || null,
@@ -136,18 +173,21 @@ function createRefundHandlers(deps) {
         }
       }
 
-      // The document's own derived total. Change-guarded: a metafield write does not fire the draft
-      // webhook, but a no-op write is still a wasted call on every unrelated edit.
+      // The document's own derived total. Change-guarded: a metafield write does not fire the
+      // resource webhook, but a no-op write is still a wasted call on every unrelated edit.
       const recorded = parseFloat(mf.amount_refunded);
       if (!Number.isFinite(recorded) || Math.abs(recorded - totalRefunded) >= 0.5) {
-        await updateDraftOrderMetafields(draftOrderId, { amount_refunded: totalRefunded.toFixed(2) });
+        await res.writeMetafields(docId, { amount_refunded: totalRefunded.toFixed(2) });
       }
 
-      await syncDepositRow(draftOrderId, mf, totalRefunded);
-      await removeTagFromDraft(draftOrderId, 'sync-refund');
-      console.log(`[refunds] draft ${draftOrderId}: ${legs.length} refund leg(s), Rs${totalRefunded.toFixed(2)} recorded`);
+      // store_deposits is keyed on draft_order_id and only ever exists for a draft — an order that
+      // converted keeps the row under its ORIGINATING draft id, which this document is not. Skipping
+      // on the order path is correct, not an omission: the metafields stay authoritative either way.
+      if (!isOrder) await syncDepositRow(docId, mf, totalRefunded);
+      await res.removeTag(docId, 'sync-refund');
+      console.log(`[refunds] ${res.label} ${docId}: ${legs.length} refund leg(s), Rs${totalRefunded.toFixed(2)} recorded`);
     } catch (err) {
-      console.error(`[refunds] handleRefundSync draft ${draftOrderId} failed: ${err.message}`);
+      console.error(`[refunds] handleRefundSync ${res.label} ${docId} failed: ${err.message}`);
     }
   }
 
@@ -194,52 +234,58 @@ function createRefundHandlers(deps) {
   // The guard is email_sent_at on the ledger row, so a second press sends nothing — and a refund
   // announced weeks ago cannot be re-announced by someone pressing the button for a NEW refund on
   // the same draft. Only rows that have never been emailed are picked up.
-  async function handleRefundEmailTag(draft) {
-    const draftOrderId = draft?.id?.toString();
-    if (!draftOrderId) return;
-    if (!hasTag(draft, 'send-refund-email')) return;
+  async function handleRefundEmailTag(document, resourceKey = 'draft_orders') {
+    const res = RESOURCES[resourceKey];
+    const docId = document?.id?.toString();
+    if (!res || !docId) return;
+    if (!hasTag(document, 'send-refund-email')) return;
+    const isOrder = resourceKey === 'orders';
 
     try {
-      const { data: rows, error } = await supabase.from('credit_instruments')
+      // Match on whichever side of the ledger row points at THIS document. A refund raised on a draft
+      // that later converted was rekeyed and now carries target_order_id, so an order press finds it.
+      const q = supabase.from('credit_instruments')
         .select('*')
         .eq('instrument_type', REFUND_INSTRUMENT)
-        .eq('target_draft_id', draftOrderId)
         .is('email_sent_at', null)
         .order('issued_at', { ascending: true });
+      const { data: rows, error } = await (isOrder
+        ? q.eq('target_order_id', docId)
+        : q.eq('target_draft_id', docId));
       if (error) throw new Error(error.message);
 
       if (!rows || !rows.length) {
-        console.log(`[refunds] draft ${draftOrderId}: nothing unsent — button press ignored`);
-        await removeTagFromDraft(draftOrderId, 'send-refund-email');
+        console.log(`[refunds] ${res.label} ${docId}: nothing unsent — button press ignored`);
+        await res.removeTag(docId, 'send-refund-email');
         return;
       }
 
       const token = await getShopifyToken();
-      const { data: draftData } = await axios.get(
-        `${storeUrl}/admin/api/2024-01/draft_orders/${draftOrderId}.json`,
+      const { data: docData } = await axios.get(
+        `${storeUrl}/admin/api/2024-01/${res.path}/${docId}.json`,
         { headers: { 'X-Shopify-Access-Token': token }, timeout: 10000 });
-      const doc = draftData.draft_order;
+      const doc = docData[res.docKey];
 
       // No address to send to is not an error — the rule sendDepositEmail already follows. But do
       // NOT stamp email_sent_at: the customer never heard, so a later press must still be able to
       // tell them once an address exists.
       if (!doc || !doc.email) {
-        console.log(`[refunds] draft ${draftOrderId} has no email — skipping refund notification`);
-        await removeTagFromDraft(draftOrderId, 'send-refund-email');
+        console.log(`[refunds] ${res.label} ${docId} has no email — skipping refund notification`);
+        await res.removeTag(docId, 'send-refund-email');
         return;
       }
 
-      const mf = await readDraftCustom(draftOrderId, token);
+      const mf = await readCustom(res, docId, token);
       const amountPaid     = parseFloat(mf.amount_paid) || 0;
       const amountRefunded = parseFloat(mf.amount_refunded) || sumRefunds(readRefunds(mf));
-      const collectionBase = parseFloat(mf.amount_to_be_collected) || parseFloat(doc.total_price) || 0;
+      const collectionBase = parseFloat(mf.amount_to_be_collected) || parseFloat(doc.total_price) || parseFloat(doc.current_total_price) || 0;
       const st = paymentState({ amountPaid, amountRefunded, collectionBase, epsilon: paidEpsilon });
 
       const refundAmount = rows.reduce((s, r) => s + (parseFloat(r.value) || 0), 0);
       const modes = [...new Set(rows.map(r => r.refund_mode).filter(Boolean))];
 
       const html = buildDraftRefundHtml({
-        draftRef:      doc.name || `#${draftOrderId}`,
+        draftRef:      doc.name || `#${docId}`,
         customerName:  doc.billing_address?.first_name || doc.customer?.first_name || 'there',
         refundAmount,
         refundMode:    modes.join(' / '),
@@ -261,11 +307,11 @@ function createRefundHandlers(deps) {
         .update({ email_sent_at: now, updated_at: now })
         .in('id', rows.map(r => r.id));
 
-      await removeTagFromDraft(draftOrderId, 'send-refund-email');
-      console.log(`[refunds] draft ${draftOrderId}: refund email sent for ${rows.length} leg(s), Rs${refundAmount.toFixed(2)}`);
+      await res.removeTag(docId, 'send-refund-email');
+      console.log(`[refunds] ${res.label} ${docId}: refund email sent for ${rows.length} leg(s), Rs${refundAmount.toFixed(2)}`);
     } catch (err) {
       // Leave the tag in place: the press has not been honoured, and the next webhook retries it.
-      console.error(`[refunds] handleRefundEmailTag draft ${draftOrderId} failed: ${err.message}`);
+      console.error(`[refunds] handleRefundEmailTag ${res.label} ${docId} failed: ${err.message}`);
     }
   }
 

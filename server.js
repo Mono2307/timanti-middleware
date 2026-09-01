@@ -826,6 +826,32 @@ async function removeTagFromDraft(draftOrderId, tagToRemove) {
   }
 }
 
+// Order twin of removeTagFromDraft. Same shape deliberately: read, no-op if the tag is already gone
+// (so a replayed webhook cannot loop), strip case-insensitively, single PUT.
+//
+// Exists because refunds can now be recorded on an ORDER as well as a draft, and the trigger tags the
+// panel adds have to be consumed on both. Never throws — it hangs off webhook handling.
+async function removeTagFromOrder(orderId, tagToRemove) {
+  try {
+    const token = await getShopifyToken();
+    const { data } = await axios.get(
+      `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/orders/${orderId}.json?fields=id,tags`,
+      { headers: { 'X-Shopify-Access-Token': token }, timeout: 10000 }
+    );
+    const tagList = (data.order.tags || '').split(',').map(t => t.trim());
+    if (!tagList.some(t => t.toLowerCase() === tagToRemove.toLowerCase())) return;
+    const newTags = tagList.filter(t => t && t.toLowerCase() !== tagToRemove.toLowerCase()).join(', ');
+    await axios.put(
+      `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/orders/${orderId}.json`,
+      { order: { id: parseInt(orderId), tags: newTags } },
+      { headers: { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' }, timeout: 10000 }
+    );
+    console.log(`✅ Tag "${tagToRemove}" removed from order ${orderId}`);
+  } catch (err) {
+    console.error(`❌ removeTagFromOrder failed for order ${orderId}:`, err.response?.data || err.message);
+  }
+}
+
 // Tag format: send-link-AMOUNT  e.g. send-link-5000 or send-link-5000.50
 // Phone + name + email come from draft.customer; total from draft.total_price
 async function handleSendLinkTag(draft) {
@@ -2511,7 +2537,8 @@ const {
   handleRefundSync, handleRefundEmailTag, handleRefundConversion, handleDraftDeletedRefunds,
 } = createRefundHandlers({
   axios, storeUrl: process.env.SHOPIFY_STORE_URL, supabase, getShopifyToken,
-  updateDraftOrderMetafields, removeTagFromDraft,
+  updateDraftOrderMetafields, updateOrderMetafields,
+  removeTagFromDraft, removeTagFromOrder,
   sendEmail, withStoreCc,
   buildDraftRefundHtml: require('./src/integrations/email/templates').buildDraftRefundHtml,
   getCollectionBase, paidEpsilon: PAID_EPSILON,
@@ -4190,7 +4217,17 @@ app.post('/api/recompute-payment', async (req, res) => {
       if (draft) {
         const tags = (draft.tags || '').split(',').map(t => t.trim()).filter(Boolean);
         if (!tags.some(t => t.toLowerCase() === 'sync-refund')) tags.push('sync-refund');
-        await handleRefundSync({ ...draft, tags: tags.join(', ') });
+        await handleRefundSync({ ...draft, tags: tags.join(', ') }, 'draft_orders');
+      }
+    } else {
+      const { data: o } = await axios.get(
+        `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/orders/${orderId}.json`,
+        { headers: { 'X-Shopify-Access-Token': token }, timeout: 10000 });
+      const order = o?.order;
+      if (order) {
+        const tags = (order.tags || '').split(',').map(t => t.trim()).filter(Boolean);
+        if (!tags.some(t => t.toLowerCase() === 'sync-refund')) tags.push('sync-refund');
+        await handleRefundSync({ ...order, tags: tags.join(', ') }, 'orders');
       }
     }
     const applied = draftOrderId
@@ -4229,6 +4266,12 @@ const ctx = {
   // the refund ledger row has to survive that — this lets the delete hook mark the document gone
   // without touching the refund itself.
   handleDraftDeletedRefunds,
+  // ...and the orders/* branch, which is the only webhook this app receives for orders. Refunds can
+  // be recorded on a converted order as well as a draft, and the panel adds the same trigger tags
+  // there, so they have to be consumed on that side too. Bound to the order resource here so the
+  // procurement module never has to know the resource vocabulary.
+  handleOrderRefundSync:  (order) => handleRefundSync(order, 'orders'),
+  handleOrderRefundEmail: (order) => handleRefundEmailTag(order, 'orders'),
 };
 
 registerRepairRoutes(app, getShopifyToken);

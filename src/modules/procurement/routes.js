@@ -65,7 +65,8 @@ const PO_DEPS = () => ({
 });
 
 function register(app, ctx) {
-  const { handleRecalculatePriceTag, gqlSetDraftLineItems, handleDraftDeletedRefunds } = ctx;
+  const { handleRecalculatePriceTag, gqlSetDraftLineItems, handleDraftDeletedRefunds,
+          handleOrderRefundSync, handleOrderRefundEmail, applyPaymentTagsToOrder } = ctx;
 
 
 app.post('/api/po-webhook', async (req, res) => {
@@ -79,6 +80,34 @@ app.post('/api/po-webhook', async (req, res) => {
     getShopifyToken()
       .then(token => syncOrderToSheet(req.body, token, deps.shopifyStoreUrl))
       .catch(e => console.error('[SYNC] order webhook error:', e.message));
+    // This is the ONLY webhook this app receives for orders, so it is where the order-side refund
+    // trigger tags get consumed. Both handlers no-op unless their tag is present, and each strips its
+    // own tag, so an unrelated orders/updated (the great majority) costs one early return.
+    //
+    // Isolated from the sheet sync above and from each other: neither may take the other down.
+    if (handleOrderRefundSync) {
+      handleOrderRefundSync(req.body)
+        .catch(e => console.error('[refunds] order sync on webhook:', e.message));
+    }
+    if (handleOrderRefundEmail) {
+      handleOrderRefundEmail(req.body)
+        .catch(e => console.error('[refunds] order email on webhook:', e.message));
+    }
+    // The panel adds sync-payment on an ORDER too (its payment fields apply to both), and until now
+    // nothing on this side consumed it — so the tag sat there forever and the balance never
+    // recomputed after an order-side edit. Run the same recompute the draft chain runs, AFTER the
+    // refund sync above, so amount_pending derives off a fresh amount_refunded.
+    //
+    // Deliberately gated on the trigger tags rather than firing on every orders/updated: this webhook
+    // is high volume, and a blanket recompute would rewrite tags across the whole store. The tag
+    // writer's own idempotence guard ("payment tags unchanged, skipping PUT") stops the PUT it makes
+    // from re-triggering this forever.
+    const otags = (req.body.tags || '').split(',').map(t => t.trim().toLowerCase());
+    if (applyPaymentTagsToOrder && (otags.includes('sync-payment') || otags.includes('sync-refund'))) {
+      getShopifyToken()
+        .then(token => applyPaymentTagsToOrder(String(req.body.id), token))
+        .catch(e => console.error('[payments] order tag recompute on webhook:', e.message));
+    }
   } else if (topic === 'draft_orders/delete' && req.body?.id) {
     removeDraftFromSheet(req.body.id)
       .catch(e => console.error('[SYNC] delete webhook error:', e.message));
