@@ -42,7 +42,7 @@ t('net_sales stays tax-INCLUSIVE post-discount', () => {
 console.log('legColumns — legs spread rightward');
 t('every slot gets four columns, empty when absent', () => {
   const c = legColumns([], []);
-  assert.strictEqual(Object.keys(c).length, 4 * 4 + 2 * 4);
+  assert.strictEqual(Object.keys(c).length, 4 * 3 + 2 * 3);
   assert.strictEqual(c.i1_value, '');
   assert.strictEqual(c.r2_ref, '');
 });
@@ -99,6 +99,13 @@ t('a missing mode or date yields empty strings, not undefined', () => {
   const { inst } = legsFromTags(['i1:1000']);
   assert.strictEqual(inst[0].mode, '');
   assert.strictEqual(inst[0].date, '');
+});
+t('legs still CARRY their dates — they are just not report columns', () => {
+  const { inst, refunds } = legsFromTags(['i1:5000@cash@2026-08-28', 'r1:1000@upi@2026-08-30']);
+  assert.strictEqual(inst[0].date, '2026-08-28');
+  assert.strictEqual(refunds[0].date, '2026-08-30');
+  const cols = legColumns(inst, refunds);
+  assert.ok(!Object.keys(cols).some(k => k.endsWith('_date')), 'no _date column may be emitted');
 });
 t('drafts and orders agree: the same document reads identically both ways', () => {
   // What the tag writer emits for this document, vs what the metafields say.

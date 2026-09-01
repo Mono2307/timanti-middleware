@@ -79,20 +79,21 @@ function lineMoney({ grossValue, discount, taxableProp, storeState, shipState })
 const MAX_INST_COLS   = 4;
 const MAX_REFUND_COLS = 2;
 
+// Per-leg DATES are deliberately not emitted. The legs still carry them (the parsers below read
+// them, and they print on the invoice) — they are simply not report columns. The document's own
+// `day` is the date this report is keyed on.
 function legColumns(instLegs, refundLegs) {
   const out = {};
   for (let n = 1; n <= MAX_INST_COLS; n++) {
     const leg = (instLegs || []).find(r => r.slot === n);
     out[`i${n}_value`] = leg ? r2(leg.value) : '';
     out[`i${n}_mode`]  = leg ? (leg.mode || '') : '';
-    out[`i${n}_date`]  = leg ? (leg.date || '') : '';
     out[`i${n}_type`]  = leg ? (leg.type || 'payment') : '';
   }
   for (let n = 1; n <= MAX_REFUND_COLS; n++) {
     const leg = (refundLegs || []).find(r => r.slot === n);
     out[`r${n}_value`] = leg ? r2(leg.value) : '';
     out[`r${n}_mode`]  = leg ? (leg.mode || '') : '';
-    out[`r${n}_date`]  = leg ? (leg.date || '') : '';
     out[`r${n}_ref`]   = leg ? (leg.ref  || '') : '';
   }
   return out;
@@ -420,12 +421,15 @@ const SALES_COLS = [
   // only legs in the order the money arrived. i* is money in, r* money out. i*_type separates a
   // cad_advance leg from a real collection; r*_ref is the gateway UTR, the join back to a bank
   // statement. Blank on every line but the first of a document.
-  'i1_value', 'i1_mode', 'i1_date', 'i1_type',
-  'i2_value', 'i2_mode', 'i2_date', 'i2_type',
-  'i3_value', 'i3_mode', 'i3_date', 'i3_type',
-  'i4_value', 'i4_mode', 'i4_date', 'i4_type',
-  'r1_value', 'r1_mode', 'r1_date', 'r1_ref',
-  'r2_value', 'r2_mode', 'r2_date', 'r2_ref',
+  //
+  // No per-leg date columns: the document's own `day` is the date this report is keyed on. The legs
+  // still carry their dates — they print on the invoice — they are just not reported here.
+  'i1_value', 'i1_mode', 'i1_type',
+  'i2_value', 'i2_mode', 'i2_type',
+  'i3_value', 'i3_mode', 'i3_type',
+  'i4_value', 'i4_mode', 'i4_type',
+  'r1_value', 'r1_mode', 'r1_ref',
+  'r2_value', 'r2_mode', 'r2_ref',
   // ── Totals, to the right of the legs they are computed from ──
   // amount_paid is GROSS collected (the sum of the i* legs) and amount_refunded what went back (the
   // sum of the r* legs); net_collected is the one to sum for a collections total. All three are
