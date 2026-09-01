@@ -854,16 +854,30 @@ export default function MetafieldManager({ surface = "block" } = {}) {
   // customer about otherwise. Reads the saved value, not the in-progress edit, because the
   // middleware has to have recorded the refund before it can email it.
   const renderRefundEmail = () => {
+    // Show as soon as a refund exists ANYWHERE on the document — a saved leg counts, not just the
+    // server-computed total. amount_refunded is written by the middleware on the next webhook pass,
+    // so gating on it alone meant staff entered a refund, saved, and the button they needed was
+    // simply absent until they reloaded. Legs are the thing staff actually type, so they are the
+    // honest signal that a refund is on this document.
+    //
+    // Reading `values` (saved) rather than `edits` (in progress) is deliberate: the middleware can
+    // only email a refund it has already recorded, so offering the button over an unsaved figure
+    // would produce a press that silently does nothing.
     const refunded = parseFloat(values.amount_refunded || "0") || 0;
-    if (!(refunded > 0)) return null;
+    const legTotal = (parseFloat(values.refund_1_value || "0") || 0)
+                   + (parseFloat(values.refund_2_value || "0") || 0);
+    const shown = refunded > 0 ? refunded : legTotal;
+    if (!(shown > 0)) return null;
     return (
       <s-section heading="Refund Confirmation Email">
         <s-stack direction="block" gap="base">
           <s-text tone="subdued">
-            Rs.{refunded.toLocaleString("en-IN")} has been recorded as refunded. Nothing has been sent to the
-            customer — send the confirmation only if they should hear about this money coming back. If the
-            refund was just a correction because the order value changed and they are paying a new balance,
-            you can skip it. Refunds already emailed are never sent twice.
+            {refunded > 0
+              ? `Rs.${refunded.toLocaleString("en-IN")} has been recorded as refunded.`
+              : `Rs.${legTotal.toLocaleString("en-IN")} entered — still being recorded, this takes a few seconds.`}
+            {" "}Nothing has been sent to the customer — send the confirmation only if they should hear about
+            this money coming back. If the refund was just a correction because the order value changed and
+            they are paying a new balance, you can skip it. Refunds already emailed are never sent twice.
           </s-text>
           <s-button
             onClick={sendRefundEmail}
