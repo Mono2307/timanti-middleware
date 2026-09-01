@@ -79,16 +79,21 @@ function lineMoney({ grossValue, discount, taxableProp, storeState, shipState })
 const MAX_INST_COLS   = 4;
 const MAX_REFUND_COLS = 2;
 
-// Per-leg DATES are deliberately not emitted. The legs still carry them (the parsers below read
-// them, and they print on the invoice) — they are simply not report columns. The document's own
-// `day` is the date this report is keyed on.
+// Per-leg DATE and TYPE are deliberately not emitted. The legs still carry both (the parsers below
+// read them, and both drive what the invoice prints) — they are simply not report columns. The
+// document's own `day` is the date this report is keyed on, and the leg's mode already carries the
+// tender.
+//
+// One case the mode does NOT cover: a Path A design advance puts the REAL tender in the mode and
+// marks the leg cad_advance, so on those documents nothing in this report distinguishes it from an
+// ordinary collection. (A Path B advance is unambiguous — its mode is literally 'CAD Advance'.)
+// custom.installment_N_type still holds it if that ever needs reporting again.
 function legColumns(instLegs, refundLegs) {
   const out = {};
   for (let n = 1; n <= MAX_INST_COLS; n++) {
     const leg = (instLegs || []).find(r => r.slot === n);
     out[`i${n}_value`] = leg ? r2(leg.value) : '';
     out[`i${n}_mode`]  = leg ? (leg.mode || '') : '';
-    out[`i${n}_type`]  = leg ? (leg.type || 'payment') : '';
   }
   for (let n = 1; n <= MAX_REFUND_COLS; n++) {
     const leg = (refundLegs || []).find(r => r.slot === n);
@@ -418,16 +423,16 @@ const SALES_COLS = [
   'custom_serial',
   // ── Money movement, leg by leg, spread rightward ──
   // Replaces the old advance/final two-slot framing: there is no "advance" and "final" any more,
-  // only legs in the order the money arrived. i* is money in, r* money out. i*_type separates a
-  // cad_advance leg from a real collection; r*_ref is the gateway UTR, the join back to a bank
-  // statement. Blank on every line but the first of a document.
+  // only legs in the order the money arrived. i* is money in, r* money out. r*_ref is the gateway
+  // UTR, the join back to a bank statement. Blank on every line but the first of a document.
   //
-  // No per-leg date columns: the document's own `day` is the date this report is keyed on. The legs
-  // still carry their dates — they print on the invoice — they are just not reported here.
-  'i1_value', 'i1_mode', 'i1_type',
-  'i2_value', 'i2_mode', 'i2_type',
-  'i3_value', 'i3_mode', 'i3_type',
-  'i4_value', 'i4_mode', 'i4_type',
+  // No per-leg date or type columns: `day` is the date this report is keyed on, and the mode already
+  // carries the tender. The legs still hold both — they drive what the invoice prints — they are
+  // just not reported here. See legColumns for the one case the mode does not cover.
+  'i1_value', 'i1_mode',
+  'i2_value', 'i2_mode',
+  'i3_value', 'i3_mode',
+  'i4_value', 'i4_mode',
   'r1_value', 'r1_mode', 'r1_ref',
   'r2_value', 'r2_mode', 'r2_ref',
   // ── Totals, to the right of the legs they are computed from ──

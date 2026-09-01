@@ -42,7 +42,7 @@ t('net_sales stays tax-INCLUSIVE post-discount', () => {
 console.log('legColumns — legs spread rightward');
 t('every slot gets four columns, empty when absent', () => {
   const c = legColumns([], []);
-  assert.strictEqual(Object.keys(c).length, 4 * 3 + 2 * 3);
+  assert.strictEqual(Object.keys(c).length, 4 * 2 + 2 * 3);
   assert.strictEqual(c.i1_value, '');
   assert.strictEqual(c.r2_ref, '');
 });
@@ -66,13 +66,11 @@ t('is sparse-safe — a leg in slot 3 lands in slot 3, not slot 1', () => {
   assert.strictEqual(c.i3_value, 900);
   assert.strictEqual(c.i3_mode, 'card');
 });
-t('a cad_advance leg is labelled, so a design advance is separable from a real collection', () => {
-  const c = legColumns(readInstallments({ installment_1_value: '5000', installment_1_type: 'cad_advance' }), []);
-  assert.strictEqual(c.i1_type, 'cad_advance');
-});
-t('a plain leg reads as payment', () => {
-  const c = legColumns(readInstallments({ installment_1_value: '5000' }), []);
-  assert.strictEqual(c.i1_type, 'payment');
+t('legs still CARRY their type — it is just not a report column', () => {
+  const legs = readInstallments({ installment_1_value: '5000', installment_1_type: 'cad_advance' });
+  assert.strictEqual(legs[0].type, 'cad_advance');
+  const c = legColumns(legs, []);
+  assert.ok(!Object.keys(c).some(k => k.endsWith('_type')), 'no _type column may be emitted');
 });
 
 console.log('legsFromTags — the drafts side rebuilds the same table');
@@ -81,7 +79,9 @@ t('parses the writer tag format', () => {
   assert.deepStrictEqual(inst,    [{ slot: 1, value: 50000, mode: 'cash', date: '2026-08-28', type: 'payment' }]);
   assert.deepStrictEqual(refunds, [{ slot: 1, value: 10000, mode: 'upi',  date: '2026-08-30' }]);
 });
-t('the trailing @c marks a cad_advance leg', () => {
+t('the trailing @c is still parsed as a cad_advance leg', () => {
+  // Not a report column any more, but the parser must keep understanding the tag format — the
+  // invoice reads the same encoding, and dropping it here would silently change what a leg means.
   const { inst } = legsFromTags(['i2:5000@CAD Advance@2026-08-20@c']);
   assert.strictEqual(inst[0].type, 'cad_advance');
   assert.strictEqual(inst[0].mode, 'CAD Advance');   // a mode containing a space survives
