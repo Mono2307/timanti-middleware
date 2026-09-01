@@ -58,6 +58,9 @@ const REQUIRED_FIELDS = [
   "channel",
   "state_code",
   "employee_name",
+  // Last in the list on purpose: it is the question staff answer as they close the sale, and adding
+  // it mid-list would reshuffle a section they fill from muscle memory.
+  "in_store_sale",
 ];
 // Label on the blank entry of every choice dropdown. It is also the sentinel we normalise back to
 // "" — see renderEditable and save(). Never let this string reach Shopify: it is not a valid
@@ -86,6 +89,13 @@ const FIELD_CONFIG = {
   order_type: { section: "Order Details", label: "Order Type", editable: true, applies: "both" },
   channel: { section: "Order Details", label: "Channel", editable: true, applies: "both" },
   employee_name: { section: "Order Details", label: "Sales Staff", editable: true, applies: "both" },
+  // Yes/No, and the answer must be given BEFORE the draft is converted. Shopify emails the order
+  // confirmation the moment the order is created, and that email decides between "Download Tax
+  // Invoice" and a plain summary purely on the in-store-sale tag. Draft tags carry across at
+  // conversion; anything applied to the order afterwards arrives after the customer was emailed.
+  // Draft-only for the same reason — on an order it would be a control that can no longer change
+  // anything.
+  in_store_sale: { section: "Order Details", label: "Send Tax Invoice in Email", editable: true, applies: "draft", required: true },
 
   // Payments are captured as up to 4 INSTALLMENTS, each with its own value, mode and date. Enter
   // each collection in its own leg — never re-type a running total, and never skip a slot. The
@@ -360,6 +370,14 @@ const TAGS_ADD_MUTATION = `
     tagsAdd(id: $id, tags: $tags) { userErrors { field message } }
   }
 `;
+// Needed because in_store_sale can be turned back OFF. Every other tag this panel writes is a
+// one-way trigger the middleware strips itself; in-store-sale is a standing flag, so switching it to
+// No has to actually remove it or the confirmation would still carry the tax invoice.
+const TAGS_REMOVE_MUTATION = `
+  mutation RemoveWorkflowTags($id: ID!, $tags: [String!]!) {
+    tagsRemove(id: $id, tags: $tags) { userErrors { field message } }
+  }
+`;
 // Editing any installment leg must nudge the middleware to re-sum amount_paid and re-derive the
 // balance — the values themselves are staff-entered, but the totals are always server-computed.
 const PAYMENT_TRIGGER_KEYS = [
@@ -615,6 +633,18 @@ export default function MetafieldManager({ surface = "block" } = {}) {
       // A metafield save never fires the resource webhook, so the middleware won't recompute on its own.
       // Add trigger tags for what actually changed: `reprice` re-runs the price calc (gold rate × weight,
       // discount, GST); `sync-payment` recomputes net-to-collect + balance. Best-effort (non-blocking).
+      // in_store_sale is stored as a metafield so the panel can render and remember it, but what the
+      // order-confirmation email actually reads is the TAG. Keep the two in step on every save:
+      // Yes adds it, anything else removes it. Best-effort — a tag write failing must not fail the
+      // save, and the metafield still records what staff chose.
+      if (changed.includes("in_store_sale")) {
+        const wantTag = (editsRef.current["in_store_sale"] || "").trim().toLowerCase() === "yes";
+        try {
+          await shopify.query(wantTag ? TAGS_ADD_MUTATION : TAGS_REMOVE_MUTATION,
+            { variables: { id: ownerId, tags: ["in-store-sale"] } });
+        } catch { /* non-blocking */ }
+      }
+
       const triggerTags = [];
       if (changed.some((k) => REPRICE_TRIGGER_KEYS.includes(k))) triggerTags.push("reprice");
       if (changed.some((k) => RECOMPUTE_TRIGGER_KEYS.includes(k))) triggerTags.push("sync-payment");

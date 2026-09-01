@@ -570,6 +570,19 @@ const REPAIR_MF_DEFS = [
     description: 'Gross weight of the piece when taken in for repair, recorded in the presence of the customer. The number any later weight dispute is settled against.' },
 ];
 
+// Staff-set on the DRAFT. Yes means the draft carries the in-store-sale tag, which rides through
+// conversion onto the order — and that tag is the only thing Shopify's order-confirmation email can
+// branch on to offer the tax invoice instead of a plain summary.
+//
+// It cannot be decided after conversion: Shopify sends that email the instant the order is created,
+// so a tag applied a few seconds later by a webhook is always too late. Hence a required input at
+// the counter, before the sale is completed.
+const SALES_MF_DEFS = [
+  { key: 'in_store_sale', name: 'Send Tax Invoice in Email', type: 'single_line_text_field',
+    description: 'Yes = the order confirmation carries the tax invoice (adds the in-store-sale tag at conversion). No / blank = plain order confirmation.',
+    validations: [{ name: 'choices', value: JSON.stringify(['Yes', 'No']) }] },
+];
+
 const ADJUSTMENT_MF_DEFS = [
   { key: 'exchange_note_code', name: 'Exchange Note Applied', type: 'single_line_text_field', description: 'Serial code of the exchange note applied to this order (e.g. EXC27-KAHSR-0001).' },
   { key: 'voucher_code',       name: 'Voucher Applied',       type: 'single_line_text_field', description: 'Serial code of the voucher applied to this order (e.g. VCH27-KAHSR-0001).' },
@@ -756,6 +769,7 @@ async function runEnsureMetafieldDefinitions(req, res) {
 
   const defs = [];
   if (group === 'all' || group === 'adjustments')  defs.push(...ADJUSTMENT_MF_DEFS);
+  if (group === 'all' || group === 'sales')        defs.push(...SALES_MF_DEFS);
   if (group === 'all' || group === 'installments') defs.push(...buildInstallmentMfDefs(modeChoices));
   if (group === 'all' || group === 'refunds')      defs.push(...buildRefundMfDefs(modeChoices));
   if (group === 'all' || group === 'repair')       defs.push(...REPAIR_MF_DEFS);
