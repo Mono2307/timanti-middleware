@@ -38,8 +38,20 @@ const { log } = require('../../core/logger');
 const serialization = require('../serialization');
 const { handlePoWebhook } = require('./webhook');
 const { handlePoAction }  = require('./action');
-const { syncAllDraftOrders, syncAllOrders, pruneOrphans } = require('./sync');
+// syncDraftOrderToSheet / syncOrderToSheet / removeDraftFromSheet were used below but never
+// imported — a ReferenceError on EVERY draft and order webhook since the src/ restructure, swallowed
+// by the .catch() beside each call. 56 'syncDraftOrderToSheet is not defined' lines in one hour of
+// production logs on 2026-08-29. The PO sheet has not been kept in step with Shopify since.
+// Same class as the _buyingTableCache fault that once took the whole process down.
+const { syncDraftOrderToSheet, syncOrderToSheet, removeDraftFromSheet,
+        syncAllDraftOrders, syncAllOrders, pruneOrphans } = require('./sync');
 const { batchRaisePo } = require('./batch');
+// Same omission as the sync trio above, one branch further down: the draft-delete handler calls
+// creditInstruments.revertApplied and this was never imported. It is a bare identifier, so the
+// ReferenceError is thrown while EVALUATING the expression — before the trailing .catch() can ever
+// attach — which aborts the whole else-if branch. Two consequences, both silent: a voucher applied
+// to a deleted draft was never freed back to 'open', and the refund bookkeeping below it never ran.
+const creditInstruments = require('../adjustments/credit_instruments');
 
 const SERIAL_PO = config.serial.po;
 

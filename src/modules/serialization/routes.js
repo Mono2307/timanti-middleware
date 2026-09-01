@@ -386,8 +386,8 @@ async function runSerialBackfill(req, res) {
     return res.status(500).json({ success: false, error: err.message });
   }
 }
-app.get('/api/serial/backfill', runSerialBackfill);   // browser-clickable
-app.post('/api/serial/backfill', runSerialBackfill);
+app.get('/api/serial/backfill', requireAdmin, runSerialBackfill);   // browser-clickable, with ?secret=
+app.post('/api/serial/backfill', requireAdmin, runSerialBackfill);
 
 // GET/POST /api/serial/clear — removes the machine-written serial metafields
 // (document_type, serial_no, serial_code, serial_display) so a resource can be re-numbered.
@@ -448,8 +448,8 @@ async function runSerialClear(req, res) {
     return res.status(500).json({ success: false, error: err.message });
   }
 }
-app.get('/api/serial/clear', runSerialClear);
-app.post('/api/serial/clear', runSerialClear);
+app.get('/api/serial/clear', requireAdmin, runSerialClear);
+app.post('/api/serial/clear', requireAdmin, runSerialClear);
 
 // GET/POST /api/serial/restamp-from-ledger — re-mirror serial metafields onto resources from the
 // serial_ledger (the source of truth). Recovers orders whose metafields a clear stripped AND
@@ -513,8 +513,39 @@ async function runSerialRestamp(req, res) {
     return res.status(500).json({ success: false, error: err.message });
   }
 }
-app.get('/api/serial/restamp-from-ledger', runSerialRestamp);
-app.post('/api/serial/restamp-from-ledger', runSerialRestamp);
+app.get('/api/serial/restamp-from-ledger', requireAdmin, runSerialRestamp);
+app.post('/api/serial/restamp-from-ledger', requireAdmin, runSerialRestamp);
+
+// ── admin gate ───────────────────────────────────────────────────────────────
+// These endpoints rewrite the document-numbering series: set a counter to any value, delete one,
+// strip an invoice number off an order, bulk-allocate, bulk-restamp. Every one of them was reachable
+// by an unauthenticated GET on the public internet — a URL in a browser, a bookmark, a link-preview
+// bot. That was not the cause of the 2026-08-29 incident (ruled out via browser history and log
+// search) but it is the same series a customer's tax invoice is drawn from.
+//
+// FAILS CLOSED. With ADMIN_API_SECRET unset these endpoints refuse rather than run: for something
+// that can renumber a GST series, unusable is a better default than open. Nothing automated calls
+// them — the Apps Script uses /allocate and /cancel-by-code, which are deliberately NOT gated here,
+// and tools/health.js uses /peek and /drift, which are read-only.
+//
+// Accepts the secret as the x-admin-secret header or ?secret= in the query, so the browser-clickable
+// admin flows still work by pasting it onto the URL.
+function requireAdmin(req, res, next) {
+  const expected = process.env.ADMIN_API_SECRET;
+  if (!expected) {
+    console.error(`[serial] ADMIN_API_SECRET is not set — refusing ${req.method} ${req.path}`);
+    return res.status(503).json({
+      success: false,
+      error: 'ADMIN_API_SECRET is not configured on this deployment. Set it as a Fly secret; these endpoints stay closed until you do.',
+    });
+  }
+  const given = req.headers['x-admin-secret'] || (req.query || {}).secret || (req.body || {}).secret;
+  if (given !== expected) {
+    console.warn(`[serial] rejected ${req.method} ${req.path} — bad or missing admin secret`);
+    return res.status(401).json({ success: false, error: 'Unauthorized' });
+  }
+  return next();
+}
 
 // GET /api/serial/drift — does every counter agree with its ledger?
 //
@@ -571,8 +602,8 @@ async function runSerialCounter(req, res) {
     return res.status(500).json({ success: false, error: err.message });
   }
 }
-app.get('/api/serial/counter', runSerialCounter);
-app.post('/api/serial/counter', runSerialCounter);
+app.get('/api/serial/counter', requireAdmin, runSerialCounter);
+app.post('/api/serial/counter', requireAdmin, runSerialCounter);
 
 // GET/POST /api/serial/set-state — bulk-set custom.state_code (store code) on an order range
 // or one resource. Use to retag historical orders before re-numbering. Browser-clickable.
@@ -620,8 +651,8 @@ async function runSerialSetState(req, res) {
     return res.status(500).json({ success: false, error: err.message });
   }
 }
-app.get('/api/serial/set-state', runSerialSetState);
-app.post('/api/serial/set-state', runSerialSetState);
+app.get('/api/serial/set-state', requireAdmin, runSerialSetState);
+app.post('/api/serial/set-state', requireAdmin, runSerialSetState);
 
 // GET/POST /api/serial/ledger-backfill — load already-stamped orders into serial_ledger.
 // Non-breaking (Stage 1). ?docType=customer_order&code=KA-HSR&nameFrom=1038&nameTo=1056
@@ -668,8 +699,8 @@ async function runSerialLedgerBackfill(req, res) {
     return res.status(500).json({ success: false, error: err.message });
   }
 }
-app.get('/api/serial/ledger-backfill', runSerialLedgerBackfill);
-app.post('/api/serial/ledger-backfill', runSerialLedgerBackfill);
+app.get('/api/serial/ledger-backfill', requireAdmin, runSerialLedgerBackfill);
+app.post('/api/serial/ledger-backfill', requireAdmin, runSerialLedgerBackfill);
 
 }
 
