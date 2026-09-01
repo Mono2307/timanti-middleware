@@ -259,9 +259,31 @@ function createCadAdvanceHandlers(deps) {
       const ref = refMf ? String(refMf.value || '').trim() : '';
       if (!ref) return;
 
+      // Clear the staff-entered reference once it has been acted on. Verified, not fired and
+      // forgotten: on 2026-09-01 the ref survived a successful redemption, so the box staff typed
+      // into still showed a number that had already been used. The delete endpoint itself is fine —
+      // tested by hand, 200 and gone — so the failure was in this call, silently swallowed.
+      //
+      // Now it reads back, and falls back to the owner-scoped path before giving up. Both forms work
+      // on draft-order metafields; having the second costs one request in the rare failing case and
+      // removes a whole class of "it just didn't happen".
       const delRef = async () => {
+        const stillThere = async () => {
+          try {
+            const { data } = await axios.get(
+              `${base}/admin/api/2024-01/draft_orders/${draftOrderId}/metafields.json`, { headers, timeout: 10000 });
+            return (data.metafields || []).some(x => x.namespace === 'intake' && x.key === 'advance_ref');
+          } catch { return false; }   // cannot verify → do not loop on it
+        };
         try { await axios.delete(`${base}/admin/api/2024-01/metafields/${refMf.id}.json`, { headers, timeout: 10000 }); }
         catch (e) { console.error(`[cad-advance] clear ref: ${e.message}`); }
+        if (!(await stillThere())) return;
+        console.warn(`[cad-advance] advance_ref survived the first delete on ${draft.name || draftOrderId} — retrying on the scoped path`);
+        try { await axios.delete(`${base}/admin/api/2024-01/draft_orders/${draftOrderId}/metafields/${refMf.id}.json`, { headers, timeout: 10000 }); }
+        catch (e) { console.error(`[cad-advance] clear ref (scoped): ${e.message}`); }
+        if (await stillThere()) {
+          console.error(`[cad-advance] advance_ref on ${draft.name || draftOrderId} could NOT be cleared — staff will see a stale reference. Clear it by hand.`);
+        }
       };
       const failTag = async (reason) => {
         const tags = (draft.tags || '').split(',').map(t => t.trim()).filter(Boolean).concat([`advance-invalid: ${reason}`]);
@@ -319,9 +341,28 @@ function createCadAdvanceHandlers(deps) {
       const legPatch = installmentLegPatch(newLegs, {
         value: advVal, mode: legMode, date: today, type: 'cad_advance',
       });
-      // amount_paid must move in the SAME write, or the balance is briefly wrong on the invoice.
+      // Everything the staff-facing screen needs goes in ONE write.
+      //
+      // amount_pending used to be left to the payment-sync step at the end of the webhook chain.
+      // That step re-reads the metafields, and on 2026-09-01 it read them back BEFORE this write had
+      // landed — saw no legs, concluded there was nothing to publish, and wrote nothing. The draft
+      // sat showing Rs5,000 received and NO amount due until somebody edited it again, which is
+      // precisely the moment staff are standing at the counter trying to collect. Deriving it here,
+      // from figures we already hold, removes the dependency on reading back our own write.
+      //
+      // custom.advance is stamped on this sale too, so the design advance is visible on the document
+      // and in reporting rather than being inferable only from a leg. Safe now that NOTHING deducts
+      // it — see syncAmountToCollect. It is display and audit only.
       const expectedPaid = sumInstallments(newLegs) + advVal;
       legPatch.amount_paid = expectedPaid.toFixed(2);
+      legPatch.advance     = advVal.toFixed(2);
+
+      const netRaw  = parseFloat(newMfMap.amount_to_be_collected);
+      const netBase = Number.isFinite(netRaw) && netRaw >= 0 ? netRaw : (parseFloat(draft.total_price || 0) || 0);
+      const pending = Math.max(0, netBase - expectedPaid);
+      legPatch.amount_pending = pending.toFixed(2);
+      legPatch.payment_status = pending < 1 ? 'Full' : 'Partial';
+
       await updateDraftOrderMetafields(draftOrderId, legPatch);
 
       // CONFIRM before consuming. updateDraftOrderMetafields writes field by field and never throws,

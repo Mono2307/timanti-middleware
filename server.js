@@ -2607,7 +2607,10 @@ async function stripInstrumentFromDraft(draftId, type, token) {
     if (m) await axios.delete(`${base}/admin/api/2024-01/metafields/${m.id}.json`, { headers, timeout: 10000 });
   }
   const adj = (key) => { const m = mfs.find(x => x.namespace === 'custom' && x.key === key); return m ? Math.abs(parseFloat(m.value) || 0) : 0; };
-  const remaining = ['exchange_note_value', 'voucher_value', 'old_gold_value', 'advance']
+  // 'advance' is deliberately NOT in this list. A CAD advance is a payment, not a post-tax
+  // adjustment — syncAmountToCollect stopped deducting it, and this recompute has to agree or
+  // stripping a voucher would silently knock the advance off the bill as well.
+  const remaining = ['exchange_note_value', 'voucher_value', 'old_gold_value']
     .filter(k => k !== valueKey).reduce((s, k) => s + adj(k), 0);
   const net = Math.max(0, parseFloat(draft.total_price || 0) - remaining).toFixed(2);
   await updateDraftOrderMetafields(draftId, { amount_to_be_collected: net });
