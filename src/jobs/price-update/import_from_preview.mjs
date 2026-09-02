@@ -74,9 +74,6 @@ const MAX_RETRIES      = 6;
 const THROTTLE_WAIT_MS = 2000;
 const PRICE_BATCH_SIZE = 50;   // max variants per productVariantsBulkUpdate call
 const MF_PER_CALL      = 25;   // Shopify's cap on metafieldsSet
-// Values batch across variants the way prices already do. One call per variant
-// is what made a full run take hours: 15k variants, 15k calls.
-const MF_VARIANTS_PER_CALL = Math.floor(MF_PER_CALL / METAFIELD_COLS.length);
 
 // ── GraphQL ───────────────────────────────────────────────────────────────────
 
@@ -110,7 +107,63 @@ async function gql(query, variables, attempt = 0) {
     return gql(query, variables, attempt + 1);
   }
 
+  // Remember what is left of the cost budget so the metafield loop can pace itself
+  // rather than drive the bucket to empty and then live at the retry ceiling.
+  const avail = json?.extensions?.cost?.throttleStatus?.currentlyAvailable;
+  if (typeof avail === 'number') _costAvailable = avail;
+
+  // A response carrying errors and NO data is a failed call and has to be raised as one.
+  //
+  // Shopify answers a throttled or rejected mutation with {"errors":[...]} and no "data"
+  // key at all. A caller that only inspects data.<mutation>.userErrors therefore reads
+  // undefined, falls through its "|| []", sees an empty array and concludes the call
+  // succeeded. That is exactly how variants ended up priced at the new rate with a breakup
+  // still at the old one — and then stamped as done, which put them beyond the reach of
+  // every recovery path the job has.
+  //
+  // Phase 2 already checked bulkRes.errors. Phase 3 did not, which is why prices landed
+  // and breakups silently did not.
+  if (errorsArr.length > 0 && !json?.data) {
+    throw new Error(`GraphQL call failed: ${JSON.stringify(errorsArr).slice(0, 300)}`);
+  }
+
   return json;
+}
+
+// Cost budget remaining after the most recent call, and a pre-emptive pause when it runs
+// low. The value phase sends 25 metafields per call — about five times the old per-variant
+// payload — so an unpaced loop empties the bucket and then spends the rest of the run being
+// throttled. Waiting for a refill is cheaper than retrying, and it keeps calls out of the
+// failure path rather than relying on the failure path being correct.
+let _costAvailable = Infinity;
+const COST_FLOOR   = 300;
+
+async function paceForCost() {
+  if (_costAvailable >= COST_FLOOR) return;
+  const wait = Math.min(5000, Math.ceil((COST_FLOOR - _costAvailable) / 50) * 1000);
+  if (wait > 0) {
+    await new Promise(r => setTimeout(r, wait));
+    _costAvailable = COST_FLOOR;   // refreshed for real by the next call's response
+  }
+}
+
+// One metafieldsSet call, reduced to a plain did-it-work answer.
+//
+// Three different things count as failure and all three used to be invisible here: a
+// transport error, a GraphQL-level error with no data, and userErrors on the mutation
+// itself. Anything that is not an unambiguous success is a failure, because the caller
+// uses this answer to decide whether to stamp the variant as done.
+async function setMetafields(list) {
+  await paceForCost();
+  try {
+    const res = await gql(M_METAFIELDS, { m: list });
+    const set = res?.data?.metafieldsSet;
+    if (!set) return { ok: false, message: 'response carried no metafieldsSet payload' };
+    const ue = set.userErrors || [];
+    return ue.length > 0 ? { ok: false, message: ue[0].message } : { ok: true, message: '' };
+  } catch (err) {
+    return { ok: false, message: err.message };
+  }
 }
 
 // ── Product status cache ──────────────────────────────────────────────────────
@@ -186,6 +239,17 @@ const METAFIELD_COLS = [
   'mf_gold_rate',
 ];
 const STAMP_COL = 'mf_gold_last_updated_at';
+
+// Values batch across variants the way prices already do. One call per variant is what made
+// a full run take hours: 15k variants, 15k calls.
+//
+// This MUST be declared after METAFIELD_COLS, not up in the config block with the other
+// tunables. A const is in the temporal dead zone until its declaration runs, so reading
+// METAFIELD_COLS.length from higher up the file threw
+//   ReferenceError: Cannot access 'METAFIELD_COLS' before initialization
+// at module load - the importer died before its first line of work, every single run, and
+// the orchestrator saw no 'Variants written' line to parse and reported 0.
+const MF_VARIANTS_PER_CALL = Math.floor(MF_PER_CALL / METAFIELD_COLS.length);
 const MF_KEY = {
   mf_price_breakup_gold:    'price_breakup_gold',
   mf_price_breakup_gst:     'price_breakup_gst',
@@ -358,23 +422,22 @@ async function run() {
     const chunk   = mfWork.slice(i, i + MF_VARIANTS_PER_CALL);
     const payload = chunk.flatMap(w => w.metafields);
 
-    const mRes    = await gql(M_METAFIELDS, { m: payload });
-    const mErrors = mRes?.data?.metafieldsSet?.userErrors || [];
+    const out = await setMetafields(payload);
 
-    if (mErrors.length === 0) {
+    if (out.ok) {
       for (const w of chunk) stamped.push({ variantId: w.variantId, row: w.row });
     } else {
-      // A rejected batch says nothing about which variant caused it, so retry
-      // the chunk one at a time. One bad variant must not cost the four
-      // beside it their update.
+      // A rejected batch says nothing about which variant caused it, so retry the chunk
+      // one at a time. One bad variant must not cost the four beside it their update —
+      // and a batch that failed for capacity reasons usually succeeds singly.
+      console.error(`  Batch failed (${out.message}) — retrying ${chunk.length} variants singly`);
       for (const w of chunk) {
-        const r  = await gql(M_METAFIELDS, { m: w.metafields });
-        const es = r?.data?.metafieldsSet?.userErrors || [];
-        if (es.length > 0) {
-          console.error(`  ERR metafields ${w.row.shopify_sku}: ${es[0].message}`);
-          errors.push({ variantId: w.variantId, sku: w.row.shopify_sku, stage: 'metafields', message: es[0].message });
-        } else {
+        const one = await setMetafields(w.metafields);
+        if (one.ok) {
           stamped.push({ variantId: w.variantId, row: w.row });
+        } else {
+          console.error(`  ERR metafields ${w.row.shopify_sku}: ${one.message}`);
+          errors.push({ variantId: w.variantId, sku: w.row.shopify_sku, stage: 'metafields', message: one.message });
         }
       }
     }
@@ -399,20 +462,19 @@ async function run() {
   let stampDone = 0;
   for (let i = 0; i < stampWork.length; i += MF_PER_CALL) {
     const chunk = stampWork.slice(i, i + MF_PER_CALL);
-    const sRes  = await gql(M_METAFIELDS, { m: chunk.map(w => w.mf) });
-    const sErrs = sRes?.data?.metafieldsSet?.userErrors || [];
+    const out   = await setMetafields(chunk.map(w => w.mf));
 
-    if (sErrs.length === 0) {
+    if (out.ok) {
       for (const w of chunk) await markDone(w.variantId);
     } else {
+      console.error(`  Stamp batch failed (${out.message}) — retrying ${chunk.length} singly`);
       for (const w of chunk) {
-        const r  = await gql(M_METAFIELDS, { m: [w.mf] });
-        const es = r?.data?.metafieldsSet?.userErrors || [];
-        if (es.length > 0) {
-          console.error(`  ERR stamp ${w.row.shopify_sku}: ${es[0].message}`);
-          errors.push({ variantId: w.variantId, sku: w.row.shopify_sku, stage: 'stamp', message: es[0].message });
-        } else {
+        const one = await setMetafields([w.mf]);
+        if (one.ok) {
           await markDone(w.variantId);
+        } else {
+          console.error(`  ERR stamp ${w.row.shopify_sku}: ${one.message}`);
+          errors.push({ variantId: w.variantId, sku: w.row.shopify_sku, stage: 'stamp', message: one.message });
         }
       }
     }
@@ -428,11 +490,17 @@ async function run() {
   }
 
   // ── Summary ───────────────────────────────────────────────────────────────
-  const totalWritten = [...byProduct.values()].reduce((s, e) => s + e.length, 0);
+  // "Written" now means the value metafields actually landed. It used to be the size of
+  // byProduct — the number of variants the run INTENDED to touch, counted before a single
+  // call was made and never reduced by a failure, so a run in which every write failed
+  // still reported the whole catalogue as written.
+  const attempted = [...byProduct.values()].reduce((s, e) => s + e.length, 0);
 
   console.log('\n' + '='.repeat(80));
   console.log('DONE');
-  console.log(`  Variants written         : ${totalWritten}`);
+  console.log(`  Variants processed       : ${attempted}`);
+  console.log(`  Variants written         : ${stamped.length}`);
+  console.log(`  Values failed            : ${attempted - stamped.length}`);
   console.log(`  Skipped (ARCHIVED)       : ${skipped.length}`);
   console.log(`  Errors                   : ${errors.length}`);
 

@@ -101,7 +101,18 @@ def save_gold_rate_supabase(pure: float, set_at: str):
 def _fetch_gold_rate_supabase(log: logging.Logger):
     """Read gold rate from Supabase. Returns parsed dict or None on any failure."""
     import requests as _req
-    url     = f'{SUPABASE_URL}/rest/v1/config?key=eq.gold_rate&select=value'
+    # ORDER BY, and take the newest. This used to select 'value' with no ordering and read
+    # rows[0], which is whatever Postgres happened to return first. The trigger route upserts
+    # this key, and if the table ever holds more than one gold_rate row - which the route
+    # cannot rule out, because it reads with .maybeSingle() and treats the resulting
+    # "multiple rows" error as "no previous rate" - then rows[0] is the OLDEST row, and the
+    # job reads a stale rate forever while the form appears to work perfectly.
+    #
+    # That is not a hypothetical failure: set_at doubles as the RUN ID, so a stale set_at
+    # makes the snapshot believe every variant already carries this run's stamp. It skips
+    # the entire catalogue, writes nothing, and reports "0 variants" with no error anywhere.
+    url     = (f'{SUPABASE_URL}/rest/v1/config?key=eq.gold_rate'
+               f'&select=value,updated_at&order=updated_at.desc')
     headers = {'apikey': SUPABASE_KEY, 'Authorization': f'Bearer {SUPABASE_KEY}'}
     try:
         r = _req.get(url, headers=headers, timeout=10)
@@ -109,6 +120,12 @@ def _fetch_gold_rate_supabase(log: logging.Logger):
         rows = r.json()
         if not rows:
             return None
+        if len(rows) > 1:
+            log.error(
+                f'{len(rows)} gold_rate rows in Supabase config - reading the newest '
+                f'({rows[0].get("updated_at")}) and IGNORING {len(rows) - 1} older one(s). '
+                f'The config table needs a unique constraint on "key"; until it has one the '
+                f'trigger route can keep inserting duplicates instead of updating.')
         return json.loads(rows[0]['value'])
     except Exception as e:
         log.warning(f'Supabase gold rate fetch failed: {e}')
@@ -263,6 +280,10 @@ def _fmt_dur(seconds: float) -> str:
 
 
 # ── Post-import verification ─────────────────────────────────────────────────
+# The import leaves the API's cost bucket empty, so verification waits for it to refill
+# before starting and retries rather than giving up on the first refusal.
+VERIFY_SETTLE_SECONDS = 20
+VERIFY_MAX_RETRIES    = 5
 _VERIFY_Q = """
 query($cursor: String) {
   productVariants(first: 250, after: $cursor) {
@@ -293,15 +314,45 @@ def verify_prices(token: str, log: logging.Logger, out_dir: Path, run_id: str):
 
     endpoint = f'https://{STORE_DOMAIN}/admin/api/{API_VERSION}/graphql.json'
 
-    def _q(cursor):
+    # The importer has just spent the cost budget on ~4,000 metafield writes. Opening a
+    # 60-page pagination the instant it stops guarantees the first call is throttled, and
+    # this path used to turn that into "verification could not run" - which then produced
+    # an alert asserting the catalogue was wrong without a single variant being compared.
+    time.sleep(VERIFY_SETTLE_SECONDS)
+
+    def _q(cursor, attempt=0):
         body = _json.dumps({'query': _VERIFY_Q,
                             'variables': {'cursor': cursor}}).encode()
         req = _url.Request(endpoint, data=body, method='POST', headers={
             'X-Shopify-Access-Token': token, 'Content-Type': 'application/json'})
-        with _url.urlopen(req, timeout=120) as r:
-            out = _json.loads(r.read().decode())
-        if out.get('errors'):
-            raise RuntimeError(_json.dumps(out['errors'])[:300])
+        try:
+            with _url.urlopen(req, timeout=120) as r:
+                out = _json.loads(r.read().decode())
+        except Exception:
+            if attempt >= VERIFY_MAX_RETRIES:
+                raise
+            time.sleep(3 * (attempt + 1))
+            return _q(cursor, attempt + 1)
+
+        errs = out.get('errors') or []
+        throttled = any((e.get('extensions') or {}).get('code') == 'THROTTLED'
+                        for e in errs if isinstance(e, dict))
+
+        # Retry anything that came back without data, not only an explicit THROTTLED.
+        # A response with errors and no data is a failed call whatever its label.
+        if (throttled or not out.get('data')) and attempt < VERIFY_MAX_RETRIES:
+            time.sleep(4 * (attempt + 1))
+            return _q(cursor, attempt + 1)
+        if errs and not out.get('data'):
+            raise RuntimeError(_json.dumps(errs)[:300])
+
+        # Pace off the remaining budget the way repair_stale_metafields.py already does,
+        # so a long pagination does not walk straight back into the throttle it just
+        # backed away from.
+        cost = ((out.get('extensions') or {}).get('cost') or {}).get('throttleStatus') or {}
+        if cost.get('currentlyAvailable', 999) < 200:
+            time.sleep(2)
+
         return out['data']['productVariants']
 
     bad, seen, cursor = [], 0, None
@@ -434,30 +485,54 @@ def run(test_gati: str = None, dry_run: bool = False):
         else:
             preview_csv = OUTPUTS / f'PREVIEW_VARIANT_IMPORT_{today}_r{run_tag}_v2.csv'
 
-        # Resume if THIS RUN's CSV already exists and has data (e.g. after OOM/deploy restart)
-        resuming = (
-            not test_gati and
-            not dry_run and
-            preview_csv.exists() and
-            preview_csv.stat().st_size > 500
+        # THE SNAPSHOT ALWAYS RUNS. A file on disk is no longer a reason to skip it.
+        #
+        # Resume is answered by SHOPIFY, not by local files: build_snapshot skips any variant
+        # already carrying this run's set_at stamp, and that marker survives restarts, deploys
+        # and an empty /app/Outputs. This block used to sit in FRONT of that mechanism and
+        # override it - if a CSV with this run's name happened to exist, the snapshot was
+        # skipped entirely and the importer was pointed at that file plus its progress log.
+        #
+        # What that cost, 2026-09-02: the same rate was submitted twice. The second trigger
+        # reused the same set_at (by design - identical rate, same UTC day), found the first
+        # attempt's CSV still on disk (the machine had not been restarted, so /app/Outputs was
+        # intact), skipped the snapshot, and handed the importer a progress log that already
+        # listed every variant as done. It wrote nothing and mailed "0 product variants
+        # updated" as a SUCCESS, while the catalogue stayed on the previous day's rates.
+        #
+        # Confirmed by replaying build_snapshot against the live catalogue: a fresh set_at
+        # yields 15,106 outstanding variants and the stale one yields 60. Neither yields 0,
+        # so a run reporting 0 cannot have called the snapshot at all.
+        #
+        # Rebuilding costs ~60 paged reads at ~90 cost points each - negligible against a
+        # 2,000-point budget - and it makes "what is outstanding" authoritative instead of
+        # inferred from files on storage that is thrown away by every deploy.
+        resuming = False
+        log.info(f'Building snapshot → {preview_csv.name}')
+        snapshot_stats = build_snapshot(token, gold_rate, preview_csv, log,
+                                        test_gati=test_gati)
+        log.info(
+            f'Snapshot summary — '
+            f'{snapshot_stats["variants_priced"]:,} priced, '
+            f'{snapshot_stats["products_covered"]} products, '
+            f'{snapshot_stats["archived_skipped"]} archived skipped, '
+            f'{snapshot_stats["variants_no_weight"]} missing weight, '
+            f'{snapshot_stats.get("variants_with_gemstone", 0):,} with a gemstone value'
         )
 
-        if resuming:
-            log.info(f'RESUMING — existing CSV found ({preview_csv.stat().st_size:,} bytes), skipping snapshot')
-            snapshot_stats = {'variants_priced': 0, 'products_covered': 0,
-                              'archived_skipped': 0, 'variants_no_weight': 0}
-        else:
-            log.info(f'Building snapshot → {preview_csv.name}')
-            snapshot_stats = build_snapshot(token, gold_rate, preview_csv, log,
-                                            test_gati=test_gati)
-            log.info(
-                f'Snapshot summary — '
-                f'{snapshot_stats["variants_priced"]:,} priced, '
-                f'{snapshot_stats["products_covered"]} products, '
-                f'{snapshot_stats["archived_skipped"]} archived skipped, '
-                f'{snapshot_stats["variants_no_weight"]} missing weight, '
-                f'{snapshot_stats.get("variants_with_gemstone", 0):,} with a gemstone value'
-            )
+        # 0 outstanding is only legitimate when the snapshot says everything already carries
+        # THIS run's stamp. Any other route to 0 means the run is about to report success for
+        # work it never did, which is the failure this whole block exists to prevent.
+        _outstanding = snapshot_stats.get('variants_priced', 0)
+        _already     = snapshot_stats.get('variants_already_done', 0)
+        if _outstanding == 0 and _already == 0:
+            raise RuntimeError(
+                'Snapshot produced 0 variants to price and 0 already carrying this run\'s '
+                'stamp. That is not a no-op, it is a read that returned nothing - refusing to '
+                'report a successful run over it.')
+        if _outstanding == 0:
+            log.info(f'Nothing outstanding — all {_already:,} variants already carry this '
+                     f'run\'s stamp. This run is a no-op by design.')
 
         if dry_run:
             log.info('=' * 70)
@@ -490,19 +565,48 @@ def run(test_gati: str = None, dry_run: bool = False):
         # 6. Emails
         from notifier import send_run_report, send_rates_confirmation, send_alert
         if mismatches != 0:
-            detail = (f'{mismatches} variant(s) carry a price breakup that '
-                      f'contradicts the price charged.'
-                      if mismatches > 0 else
-                      'Post-import verification could not run.')
+            written = import_stats.get('variants_written', 0)
+
+            # 0 written is not a failure on its own. The snapshot skips variants already
+            # carrying this run's set_at, so re-submitting the SAME rate on the same UTC
+            # day resumes the same run and correctly finds nothing outstanding. Say so,
+            # because the alert otherwise reads as "the job did nothing" when the real
+            # meaning is "there was nothing left to do".
+            zero_note = (
+                '\n\nNOTE: 0 variants were written because every variant already carries '
+                'this run\'s stamp. Re-submitting the SAME rate on the same day resumes '
+                'this run and will keep writing nothing. To force a full re-price, submit '
+                'a different rate.' if written == 0 else '')
+
+            if mismatches > 0:
+                detail = (f'{mismatches:,} variant(s) carry a price breakup that '
+                          f'contradicts the price charged.')
+                body = (
+                    f'{detail}\n\n'
+                    f'The price update wrote {written:,} variants. A stored total that '
+                    f'disagrees with the live price is the signature of a run interrupted '
+                    f'between the price write and the metafield write.\n\n'
+                    f'Fix: run repair_stale_metafields.py (no flags = dry run, then '
+                    f'--apply).' + zero_note + '\n\n'
+                    + (f'Affected variants: {mismatch_csv}' if mismatch_csv else ''))
+            else:
+                # NOTHING WAS COMPARED. This branch used to send the same body as the one
+                # above, asserting that the stored totals disagreed with the live prices -
+                # a claim it had no evidence for, because the check it depends on had just
+                # failed to run. "I could not look" and "I looked and it is wrong" are
+                # different messages and must not share wording.
+                detail = 'Post-import verification could not run.'
+                body = (
+                    f'{detail}\n\n'
+                    f'The catalogue has NOT been checked. This is not a report that '
+                    f'anything is wrong - it is a report that nothing was verified.\n\n'
+                    f'The price update wrote {written:,} variants.' + zero_note + '\n\n'
+                    f'To find out whether the catalogue is actually consistent, run '
+                    f'repair_stale_metafields.py with no flags - it is a dry run and '
+                    f'writes nothing.')
+
             log.error(f'HOLDING the success mail — {detail}')
-            send_alert(
-                f'{detail}\n\n'
-                f'The price update wrote {import_stats.get("variants_written", 0):,} '
-                f'variants, but the stored totals do not agree with the live prices. '
-                f'This is the signature of a run interrupted between the price write '
-                f'and the metafield write.\n\n'
-                + (f'Affected variants: {mismatch_csv}' if mismatch_csv else ''),
-                run_id, gold_rate)
+            send_alert(body, run_id, gold_rate)
             log.info('Alert sent instead of the run report')
         else:
             log.info('Verification clean — sending emails...')

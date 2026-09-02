@@ -11,6 +11,7 @@ Called by orchestrator.py — not run directly.
 """
 
 import csv
+import json
 import time
 import logging
 import requests
@@ -77,9 +78,13 @@ def _gql(url, headers, query, variables, log, attempt=0):
                       .get('cost', {})
                       .get('throttleStatus', {})
                       .get('currentlyAvailable', 999))
-        errors = j.get('errors', [])
+        # Shopify reports auth failures as a STRING here ("[API] Invalid API key...") and
+        # everything else as a list, so normalise before iterating - a string would otherwise
+        # raise AttributeError inside the generator below and surface as a network error.
+        _raw   = j.get('errors')
+        errors = _raw if isinstance(_raw, list) else ([{'message': str(_raw)}] if _raw else [])
         throttled = available == 0 or any(
-            e.get('extensions', {}).get('code') == 'THROTTLED' for e in errors
+            (e.get('extensions') or {}).get('code') == 'THROTTLED' for e in errors
         )
         if throttled and attempt < MAX_RETRIES:
             wait = 3 * (attempt + 1)
@@ -161,8 +166,20 @@ def build_snapshot(token: str, gold_rate: dict, output_csv: Path, log: logging.L
     while True:
         page_num  += 1
         variables  = {'cursor': cursor} if cursor else {}
-        res        = _gql(url, headers, _Q, variables, log)
-        page       = res.get('data', {}).get('productVariants', {})
+        res = _gql(url, headers, _Q, variables, log)
+
+        # A response with no usable data ENDS THE LOOP if it is allowed through, because the
+        # missing pageInfo reads as hasNextPage=false. That is how a throttle that outlasted
+        # _gql's retries turned into "0 active variants" - a silent empty catalogue, reported
+        # as a clean run that simply had nothing to do. Fail loudly instead: an empty page is
+        # never a legitimate answer for a catalogue with 15,000 variants in it.
+        data = res.get('data') or {}
+        page = data.get('productVariants') or {}
+        if not page:
+            raise RuntimeError(
+                f'Snapshot page {page_num} returned no data - '
+                f'{json.dumps(res.get("errors"))[:300] if res.get("errors") else "empty response"}')
+
         nodes      = page.get('nodes', [])
 
         for node in nodes:
@@ -180,6 +197,13 @@ def build_snapshot(token: str, gold_rate: dict, output_csv: Path, log: logging.L
         cursor = page['pageInfo']['endCursor']
 
     log.info(f'Snapshot done — {len(all_variants)} active, {archived_count} archived skipped')
+
+    # Fetching nothing is a fault, never a result. Guarding here as well as per-page means no
+    # future failure mode can quietly hand the importer an empty catalogue to write.
+    if not all_variants:
+        raise RuntimeError(
+            'Snapshot fetched 0 active variants. The catalogue is not empty, so this is a '
+            'read failure - check the Shopify token and the API response above.')
 
     # ── Test mode: restrict to one product ───────────────────────────────────
     if test_gati:
