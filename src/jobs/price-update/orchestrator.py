@@ -247,8 +247,21 @@ def _run_importer(token: str, preview_csv: Path, log: logging.Logger,
     proc.wait()
     duration = time.time() - t0
 
+    # A crashed importer is a FAILED RUN, not a footnote. This used to log and carry on, so
+    # when the importer died at module load - printing a stack trace and no summary - the
+    # 'Variants written' regex below simply found no match, returned 0, and the run went on to
+    # verify an untouched catalogue, find it self-consistent, and mail success. Three days of
+    # stale gold prices reported as three clean runs.
+    #
+    # Raising here puts the importer's own last words into the FATAL alert, which is where the
+    # ReferenceError should have been on day one.
     if proc.returncode != 0:
         log.error(f'Importer exited with code {proc.returncode}')
+        nl   = chr(10)
+        tail = nl.join(output_lines[-15:]) or '(no output)'
+        raise RuntimeError(
+            f'Importer exited with code {proc.returncode}. Nothing can be trusted to have '
+            f'been written.' + nl + nl + 'Last output:' + nl + tail)
 
     full = '\n'.join(output_lines)
 
