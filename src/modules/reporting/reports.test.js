@@ -1,5 +1,6 @@
 const assert = require('assert');
-const { lineMoney, legColumns, legsFromTags, SALES_COLS } = require('./reports');
+const { lineMoney, legColumns, legsFromTags, optionColumns, optionValuesFromVariantTitle,
+        SALES_COLS } = require('./reports');
 const { readInstallments } = require('../payments/installments');
 const { readRefunds } = require('../payments/refunds');
 
@@ -124,7 +125,52 @@ t('drafts and orders agree: the same document reads identically both ways', () =
   assert.strictEqual(fromTags.r1_ref, '');
 });
 
+console.log('option columns');
+t('splits the variant title into positional columns', () => {
+  const c = optionColumns(optionValuesFromVariantTitle('18K / YG / 18"'));
+  assert.strictEqual(c.option_1, '18K');
+  assert.strictEqual(c.option_2, 'YG');
+  assert.strictEqual(c.option_3, '18"');
+});
+t('a single-option product fills only option_1', () => {
+  const c = optionColumns(optionValuesFromVariantTitle('22K'));
+  assert.deepStrictEqual(c, { option_1: '22K', option_2: '', option_3: '' });
+});
+t('"Default Title" is not an option — it reads as none', () => {
+  assert.deepStrictEqual(optionValuesFromVariantTitle('Default Title'), []);
+  assert.deepStrictEqual(optionColumns(optionValuesFromVariantTitle('Default Title')),
+    { option_1: '', option_2: '', option_3: '' });
+});
+t('a blank or missing variant title yields empty columns, never undefined', () => {
+  for (const v of ['', null, undefined]) {
+    assert.deepStrictEqual(optionColumns(optionValuesFromVariantTitle(v)),
+      { option_1: '', option_2: '', option_3: '' });
+  }
+});
+t('a fourth option is dropped rather than shifting the columns', () => {
+  const c = optionColumns(optionValuesFromVariantTitle('A / B / C / D'));
+  assert.deepStrictEqual(c, { option_1: 'A', option_2: 'B', option_3: 'C' });
+});
+t('drafts and orders agree: split title matches the real selectedOptions', () => {
+  // Orders read variant.selectedOptions; drafts split variant_title. Shopify builds the title by
+  // joining those same values with " / ", so the two must produce identical columns.
+  const selected = [{ name: 'Metal', value: '18K' }, { name: 'Colour', value: 'YG' }, { name: 'Size', value: '18"' }];
+  const fromOrder = optionColumns(selected.map(o => o.value));
+  const fromDraft = optionColumns(optionValuesFromVariantTitle('18K / YG / 18"'));
+  assert.deepStrictEqual(fromDraft, fromOrder);
+});
+
 console.log('SALES_COLS');
+t('carries the new sales-staff, category and option columns', () => {
+  for (const k of ['sales_staff', 'category', 'option_1', 'option_2', 'option_3']) {
+    assert.ok(SALES_COLS.includes(k), `SALES_COLS is missing ${k}`);
+  }
+});
+t('option columns sit beside variant_title, not off in the money block', () => {
+  assert.strictEqual(SALES_COLS.indexOf('option_1'), SALES_COLS.indexOf('variant_title') + 1);
+  assert.ok(SALES_COLS.indexOf('category') < SALES_COLS.indexOf('variant_title'));
+  assert.ok(SALES_COLS.indexOf('option_3') < SALES_COLS.indexOf('sku'));
+});
 t('carries every leg column the collectors emit', () => {
   for (const k of Object.keys(legColumns([], []))) {
     assert.ok(SALES_COLS.includes(k), `SALES_COLS is missing ${k} — it would be dropped from the CSV`);

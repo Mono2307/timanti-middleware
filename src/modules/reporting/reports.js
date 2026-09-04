@@ -61,6 +61,32 @@ function lineMoney({ grossValue, discount, taxableProp, storeState, shipState })
   };
 }
 
+// Variant options as their own columns. The orders side has the real option list
+// (selectedOptions, name + value); the drafts side only has the concatenated variant_title, which
+// Shopify builds by joining the values with " / " — the same split the invoice templates already do
+// to derive Metal. Splitting it here keeps both sides producing the same three columns.
+//
+// Positional on purpose: option_1 is whatever the product's FIRST option is. That is Metal on almost
+// every product here, but it is not guaranteed across the catalogue, so treat these as "the option
+// values in product order", not as named fields.
+const MAX_OPTION_COLS = 3;
+
+function optionColumns(values) {
+  const out = {};
+  for (let i = 0; i < MAX_OPTION_COLS; i++) {
+    out[`option_${i + 1}`] = (values && values[i] != null) ? String(values[i]).trim() : '';
+  }
+  return out;
+}
+
+// Shopify writes the literal string "Default Title" for a product with no real options. It is noise
+// in a report column, so it reads as no option at all.
+function optionValuesFromVariantTitle(variantTitle) {
+  const t = String(variantTitle || '').trim();
+  if (!t || t === 'Default Title') return [];
+  return t.split(' / ').map(s => s.trim()).filter(Boolean);
+}
+
 // ── Payment + refund legs, spread rightward ──────────────────────────────────
 //
 // Every collection and every refund gets its own set of columns, so the report shows WHAT was taken
@@ -186,7 +212,8 @@ async function collectOrders(deps, { from, to }, rows, draftByOrderId = {}) {
           title variantTitle quantity sku
           originalTotalSet{ shopMoney{ amount } }
           discountedTotalSet{ shopMoney{ amount } }
-          product{ hsn: metafield(namespace:"custom", key:"hsn_code"){ value } }
+          product{ productType hsn: metafield(namespace:"custom", key:"hsn_code"){ value } }
+          variant{ selectedOptions{ name value } }
           customAttributes{ key value }
         } } }
       } }
@@ -256,10 +283,16 @@ async function collectOrders(deps, { from, to }, rows, draftByOrderId = {}) {
           order_name:   n.name || '',
           day:          fmtDay(n.createdAt),
           customer:     (n.customer && n.customer.displayName) || '',
+          // Who raised the sale. Staff-filled on the document; already in the metafield map.
+          sales_staff:  mf.employee_name || '',
           place_of_supply: supplierState(storeState),
           shipping_state:  shipState,
           product_title:   li.title || '',
+          category:        (li.product && li.product.productType) || '',
           variant_title:   li.variantTitle || '',
+          // Real option list here — name and value, in product order. The drafts side has to split
+          // variant_title instead, which yields the same values.
+          ...optionColumns((li.variant?.selectedOptions || []).map(o => o.value)),
           sku:             li.sku || '',
           hsn:             (li.product && li.product.hsn && li.product.hsn.value) || HSN_DEFAULT,
           qty:             li.quantity || 0,
@@ -283,6 +316,39 @@ async function collectOrders(deps, { from, to }, rows, draftByOrderId = {}) {
     }
     cursor = conn.pageInfo.hasNextPage ? conn.pageInfo.endCursor : null;
   } while (cursor && ++page < 50);
+}
+
+// Product type ("category") for a set of product ids, in one batched GraphQL call per 250.
+//
+// The drafts side needs this because the REST draft_orders list carries product_id but no product
+// type, and a per-LINE lookup would be hundreds of calls on a busy month. Ids are collected across
+// the whole window first and resolved in one pass, so the cost is (products / 250) calls total
+// rather than one per line.
+//
+// Best-effort by design: it feeds one display column, so a failure blanks that column and the report
+// still returns. It must never take a sales report down.
+async function fetchProductTypes(deps, productIds) {
+  const { axios, storeUrl, token } = deps;
+  const out = {};
+  const ids = [...new Set((productIds || []).filter(Boolean).map(String))];
+  if (!ids.length) return out;
+
+  for (let i = 0; i < ids.length; i += 250) {
+    const chunk = ids.slice(i, i + 250).map(id => `gid://shopify/Product/${id}`);
+    try {
+      const { data } = await axios.post(
+        `${storeUrl}/admin/api/2024-01/graphql.json`,
+        { query: `query($ids:[ID!]!){ nodes(ids:$ids){ ... on Product { id productType } } }`,
+          variables: { ids: chunk } },
+        { headers: { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' }, timeout: 30000 });
+      for (const nd of (data?.data?.nodes || [])) {
+        if (nd && nd.id) out[String(nd.id).split('/').pop()] = nd.productType || '';
+      }
+    } catch (e) {
+      console.warn(`[sales-report] product type lookup failed for ${chunk.length} products — category left blank: ${e.message}`);
+    }
+  }
+  return out;
 }
 
 // ── Sales report — drafts side (REST: open + invoice_sent) ───────────────────
@@ -311,6 +377,15 @@ async function collectDrafts(deps, { from, to }, rows) {
   };
   const seen = new Set();
 
+  // Paging collects the qualifying drafts first, and rows are built afterwards.
+  //
+  // Two of the columns cannot be answered from the draft list payload alone: sales staff lives in a
+  // metafield (the list endpoint carries none) and category is the product's type (the list carries
+  // product_id only). Resolving either inline would mean one call per draft or per LINE, on every
+  // page. Collecting first lets the product types be fetched in one batched pass for the whole
+  // window, and the per-draft metafield reads to run bounded and in parallel.
+  const qualifying = [];
+
   for (const status of ['open', 'invoice_sent']) {
     const qp = new URLSearchParams({ limit: '250', status });
     let pageUrl = `${storeUrl}/admin/api/2024-01/draft_orders.json?${qp}`;
@@ -325,100 +400,141 @@ async function collectDrafts(deps, { from, to }, rows) {
         if (seen.has(d.id)) continue;
         seen.add(d.id);
         if (!inWindow(d.created_at)) continue;
-        const tags = (d.tags || '').split(',').map(t => t.trim()).filter(Boolean);
-        const tag  = (prefix) => { const t = tags.find(x => x.startsWith(prefix)); return t ? t.slice(prefix.length) : ''; };
-        const deposit = tag('deposit:');
-        const paid    = num((tag('paid:') || '').replace(/Rs/i, ''));
-        // Money returned. The draft side reads TAGS only, which is why the tag writer emits
-        // `refunded:Rs…` alongside `paid:Rs…` — there is no metafield fetch here to fall back on.
-        const refunded = num((tag('refunded:') || '').replace(/Rs/i, ''));
-        const netPaid  = r2(paid - refunded);
-        const pending = num((tag('pending:') || '').replace(/Rs/i, ''));
-        const total   = num((tag('total:') || '').replace(/Rs/i, '')) || r2(paid + pending);
-        // Sales report only counts drafts with a RECORDED payment (an advance/partial or a full
-        // pre-payment) — plain open/unpaid drafts are not sales yet, so skip them.
-        //
-        // The test is on NET paid, so a draft whose deposit was refunded in full drops out: the money
-        // came back, and it is no longer a recorded partial. `deposit:refunded` is excluded for the
-        // same reason — it is the tag the writer emits precisely for that case.
-        if (!(netPaid > 0 || deposit === 'partial' || deposit === 'fully-paid')) continue;
-        const stage   = deposit === 'fully-paid' ? 'draft-paid' : (netPaid > 0 ? 'partial' : 'open-draft');
-        const paymentType = deposit === 'fully-paid' ? 'full: paid-in-advance'
-                          : (refunded > 0 ? 'partial: part-refunded' : 'partial');
-        // Every leg, reconstructed from the i{n}:/r{n}: tags. Same table the orders side reads off
-        // metafields, and the same table the invoice prints — the tag encoding exists precisely so a
-        // reader with no metafield access can rebuild it.
-        const draftLegs = legsFromTags(tags);
-        const legCols   = legColumns(draftLegs.inst, draftLegs.refunds);
-        // Modes come off tags on the draft side (no metafield fetch here). `pmodes:` is the
-        // aggregate covering every leg; the two-slot tags are the pre-migration fallback.
-        const pmodesTag = tag('pmodes:');
-        const pmode   = pmodesTag ? pmodesTag.split('/').filter(Boolean).join(' / ')
-                                  : [tag('pmode-advance:'), tag('pmode-final:')].filter(Boolean).join(' / ');
-        // Now a real count. This used to be blank on purpose: the only leg signal on a draft was
-        // `pmodes:`, which carries DISTINCT modes, so two cash legs looked like one and a count off
-        // it would have under-reported. The i{n}: tags are per leg, so the figure is now exact and
-        // matches what the converted-order row will say.
-        const legCount = draftLegs.inst.length || '';
-
-        const shipState  = d.shipping_address?.province_code || '';
-        // Draft has no custom.state_code inline. Mirror the invoice's supplier default (KA) so the
-        // intra/inter split against the shipping state stays meaningful; the completed-order row
-        // carries the authoritative place-of-supply.
-        const storeState = 'KA';
-        const customer   = d.customer
-          ? `${d.customer.first_name || ''} ${d.customer.last_name || ''}`.trim()
-          : (d.billing_address?.name || '');
-
-        const productItems = (d.line_items || []).filter(
-          item => !((item.title || '').toLowerCase().includes('discount') && parseFloat(item.price) < 0)
-        );
-        productItems.forEach((item, idx) => {
-          const attrs = item.properties || [];
-          const gv = lineProp(attrs, 'Gross Value');
-          const money = lineMoney({
-            grossValue: gv != null ? gv : (parseFloat(item.price) * item.quantity),
-            discount:   lineProp(attrs, 'Discount Applied') || 0,
-            taxableProp: lineProp(attrs, 'Taxable Value'),
-            storeState, shipState,
-          });
-          rows.push({
-            stage,
-            payment_type: paymentType,
-            draft_name:  d.name || '',
-            order_name:  '',
-            day:         fmtDay(d.created_at),
-            customer,
-            place_of_supply: supplierState(storeState),
-            shipping_state:  shipState,
-            product_title:   item.title || '',
-            variant_title:   item.variant_title || '',
-            sku:             item.sku || '',
-            hsn:             HSN_DEFAULT,
-            qty:             item.quantity || 0,
-            ...money,
-            custom_serial:   '',
-            ...(idx === 0 ? legCols : BLANK_LEG_COLUMNS),
-            amount_paid:     idx === 0 ? r2(paid)     : '',
-            amount_refunded: idx === 0 ? r2(refunded) : '',
-            net_collected:   idx === 0 ? netPaid      : '',
-            amount_pending:  idx === 0 ? r2(pending)  : '',
-            net_to_collect:  idx === 0 ? r2(total)    : '',
-            payment_mode:    idx === 0 ? pmode        : '',
-            installments:    idx === 0 ? legCount     : '',
-          });
-        });
+        qualifying.push(d);
       }
       const link = headers['link'] || '';
       const next = link.match(/<([^>]+)>;\s*rel="next"/);
       pageUrl = next ? next[1] : null;
     }
   }
+
+  // Category, for every product across the window, in one batched pass.
+  const productTypes = await fetchProductTypes(deps, qualifying.flatMap(
+    d => (d.line_items || []).map(li => li.product_id)));
+
+  // Sales staff, one metafield read per draft. Bounded concurrency: unbounded Promise.all over a
+  // busy month would fire hundreds of requests at once and hit Shopify's rate limit, which returns
+  // 429 and would blank the column for the whole batch. Best-effort per draft — a failure blanks
+  // that one cell, never the report.
+  const staffByDraft = {};
+  const CONCURRENCY = 5;
+  for (let i = 0; i < qualifying.length; i += CONCURRENCY) {
+    await Promise.all(qualifying.slice(i, i + CONCURRENCY).map(async (d) => {
+      try {
+        const { data } = await axios.get(
+          `${storeUrl}/admin/api/2024-01/draft_orders/${d.id}/metafields.json`,
+          { headers: hdrs, timeout: 15000 });
+        const m = (data.metafields || []).find(x => x.namespace === 'custom' && x.key === 'employee_name');
+        if (m) staffByDraft[d.id] = m.value || '';
+      } catch (e) {
+        console.warn(`[sales-report] sales staff lookup failed for draft ${d.id}: ${e.message}`);
+      }
+    }));
+  }
+
+  for (const d of qualifying) {
+    const tags = (d.tags || '').split(',').map(t => t.trim()).filter(Boolean);
+    const tag  = (prefix) => { const t = tags.find(x => x.startsWith(prefix)); return t ? t.slice(prefix.length) : ''; };
+    const deposit = tag('deposit:');
+    const paid    = num((tag('paid:') || '').replace(/Rs/i, ''));
+    // Money returned. The draft side reads TAGS only, which is why the tag writer emits
+    // `refunded:Rs…` alongside `paid:Rs…` — there is no metafield fetch here to fall back on.
+    const refunded = num((tag('refunded:') || '').replace(/Rs/i, ''));
+    const netPaid  = r2(paid - refunded);
+    const pending = num((tag('pending:') || '').replace(/Rs/i, ''));
+    const total   = num((tag('total:') || '').replace(/Rs/i, '')) || r2(paid + pending);
+    // Sales report only counts drafts with a RECORDED payment (an advance/partial or a full
+    // pre-payment) — plain open/unpaid drafts are not sales yet, so skip them.
+    //
+    // The test is on NET paid, so a draft whose deposit was refunded in full drops out: the money
+    // came back, and it is no longer a recorded partial. `deposit:refunded` is excluded for the
+    // same reason — it is the tag the writer emits precisely for that case.
+    if (!(netPaid > 0 || deposit === 'partial' || deposit === 'fully-paid')) continue;
+    const stage   = deposit === 'fully-paid' ? 'draft-paid' : (netPaid > 0 ? 'partial' : 'open-draft');
+    const paymentType = deposit === 'fully-paid' ? 'full: paid-in-advance'
+                      : (refunded > 0 ? 'partial: part-refunded' : 'partial');
+    // Every leg, reconstructed from the i{n}:/r{n}: tags. Same table the orders side reads off
+    // metafields, and the same table the invoice prints — the tag encoding exists precisely so a
+    // reader with no metafield access can rebuild it.
+    const draftLegs = legsFromTags(tags);
+    const legCols   = legColumns(draftLegs.inst, draftLegs.refunds);
+    // Modes come off tags on the draft side (no metafield fetch here). `pmodes:` is the
+    // aggregate covering every leg; the two-slot tags are the pre-migration fallback.
+    const pmodesTag = tag('pmodes:');
+    const pmode   = pmodesTag ? pmodesTag.split('/').filter(Boolean).join(' / ')
+                              : [tag('pmode-advance:'), tag('pmode-final:')].filter(Boolean).join(' / ');
+    // Now a real count. This used to be blank on purpose: the only leg signal on a draft was
+    // `pmodes:`, which carries DISTINCT modes, so two cash legs looked like one and a count off
+    // it would have under-reported. The i{n}: tags are per leg, so the figure is now exact and
+    // matches what the converted-order row will say.
+    const legCount = draftLegs.inst.length || '';
+
+    const shipState  = d.shipping_address?.province_code || '';
+    // Draft has no custom.state_code inline. Mirror the invoice's supplier default (KA) so the
+    // intra/inter split against the shipping state stays meaningful; the completed-order row
+    // carries the authoritative place-of-supply.
+    const storeState = 'KA';
+    const customer   = d.customer
+      ? `${d.customer.first_name || ''} ${d.customer.last_name || ''}`.trim()
+      : (d.billing_address?.name || '');
+
+    const productItems = (d.line_items || []).filter(
+      item => !((item.title || '').toLowerCase().includes('discount') && parseFloat(item.price) < 0)
+    );
+    productItems.forEach((item, idx) => {
+      const attrs = item.properties || [];
+      const gv = lineProp(attrs, 'Gross Value');
+      const money = lineMoney({
+        grossValue: gv != null ? gv : (parseFloat(item.price) * item.quantity),
+        discount:   lineProp(attrs, 'Discount Applied') || 0,
+        taxableProp: lineProp(attrs, 'Taxable Value'),
+        storeState, shipState,
+      });
+      rows.push({
+        stage,
+        payment_type: paymentType,
+        draft_name:  d.name || '',
+        order_name:  '',
+        day:         fmtDay(d.created_at),
+        customer,
+        sales_staff:     staffByDraft[d.id] || '',
+        place_of_supply: supplierState(storeState),
+        shipping_state:  shipState,
+        product_title:   item.title || '',
+        category:        productTypes[String(item.product_id)] || '',
+        variant_title:   item.variant_title || '',
+        // No selectedOptions on the REST draft payload — split the concatenated variant_title,
+        // which Shopify builds by joining the same values with " / ".
+        ...optionColumns(optionValuesFromVariantTitle(item.variant_title)),
+        sku:             item.sku || '',
+        hsn:             HSN_DEFAULT,
+        qty:             item.quantity || 0,
+        ...money,
+        custom_serial:   '',
+        ...(idx === 0 ? legCols : BLANK_LEG_COLUMNS),
+        amount_paid:     idx === 0 ? r2(paid)     : '',
+        amount_refunded: idx === 0 ? r2(refunded) : '',
+        net_collected:   idx === 0 ? netPaid      : '',
+        amount_pending:  idx === 0 ? r2(pending)  : '',
+        net_to_collect:  idx === 0 ? r2(total)    : '',
+        payment_mode:    idx === 0 ? pmode        : '',
+        installments:    idx === 0 ? legCount     : '',
+      });
+    });
+  }
 }
 
 const SALES_COLS = [
-  'stage', 'payment_type', 'draft_name', 'order_name', 'day', 'customer', 'place_of_supply', 'shipping_state',
-  'product_title', 'variant_title', 'sku', 'hsn', 'qty',
+  'stage', 'payment_type', 'draft_name', 'order_name', 'day', 'customer',
+  // Who raised the sale (custom.employee_name). Free on the orders side; the drafts side pays one
+  // metafield read per draft, because the draft list endpoint carries no metafields at all.
+  'sales_staff',
+  'place_of_supply', 'shipping_state',
+  // category is the Shopify product type. variant_title is the whole option string as Shopify
+  // renders it; option_1..3 are those same values split out so they can be filtered and pivoted.
+  // Positional, in product order — option_1 is Metal on almost every product here, but that is a
+  // property of the catalogue, not a guarantee.
+  'product_title', 'category', 'variant_title', 'option_1', 'option_2', 'option_3', 'sku', 'hsn', 'qty',
   'gross_sales', 'discount', 'net_sales', 'taxable_value', 'igst', 'sgst', 'cgst',
   'custom_serial',
   // ── Money movement, leg by leg, spread rightward ──
@@ -551,6 +667,8 @@ module.exports = {
   lineMoney,
   legColumns,
   legsFromTags,
+  optionColumns,
+  optionValuesFromVariantTitle,
   supplierState,
   // re-exported so the reporting module is the single entry point for every report
   runRecon,
