@@ -1130,14 +1130,27 @@ async function hydrateItemFromVariant(item, token) {
   const goldVal    = parseFloat(varMf.price_breakup_gold    || 0) * item.quantity;
   const diaVal     = parseFloat(varMf.price_breakup_diamond || 0) * item.quantity;
   const makingVal  = parseFloat(varMf.price_breakup_making  || 0) * item.quantity;
-  const grossVal   = goldVal + diaVal + makingVal;
+  // Coloured stones are a component in their own right. Cataloguing split gemstone VALUE out of
+  // price_breakup_diamond into variant custom.gemstone_charges on 2026-08-12 (see the price-update
+  // job's config.py); nothing here read it until now, so Gross Value came out short by the whole
+  // gemstone value on every gemstone piece. The PRICE charged was still right — this function never
+  // touches price — but the printed component sum was not, and every document sums these props.
+  const gemVal     = parseFloat(varMf.gemstone_charges || 0) * item.quantity;
+  const grossVal   = goldVal + diaVal + makingVal + gemVal;
+  // Per-unit RATES are product-level (the design spec); the VALUES they produce are variant-level.
+  // Carried onto the line as hidden props purely so a document can print the rate it was quoted at
+  // instead of back-deriving one. Nothing prices off them here.
+  const makingRate = parseFloat(prodMf.making_charges_rate || 0);
+  const gemRate    = parseFloat(prodMf.gemstone_price      || 0);
   const jewel_code = varMf.jewel_code || '';
   const goldRate   = varMf.gold_rate  || '';
   const hydratedProps = { '_jewel_code': jewel_code };
-  if (grossWt > 0)   hydratedProps['_gross_wt']     = grossWt.toFixed(3);
-  if (netWt > 0)     hydratedProps['_net_wt']       = netWt.toFixed(3);
-  if (diaCts > 0)    hydratedProps['_diamond_cts']  = diaCts.toFixed(2);
-  if (gemCts > 0)    hydratedProps['_gemstone_cts'] = gemCts.toFixed(2);
+  if (grossWt > 0)    hydratedProps['_gross_wt']      = grossWt.toFixed(3);
+  if (netWt > 0)      hydratedProps['_net_wt']        = netWt.toFixed(3);
+  if (diaCts > 0)     hydratedProps['_diamond_cts']   = diaCts.toFixed(2);
+  if (gemCts > 0)     hydratedProps['_gemstone_cts']  = gemCts.toFixed(2);
+  if (makingRate > 0) hydratedProps['_making_rate']   = makingRate.toFixed(2);
+  if (gemRate > 0)    hydratedProps['_gemstone_rate'] = gemRate.toFixed(2);
   // Taxable Value is written only by reprice/recalculate — its presence means the item has
   // already been through the pricing engine. Don't overwrite the computed Gold/Making/Gross Value
   // with the stale catalog values from the variant metafield (price_breakup_*).
@@ -1146,6 +1159,7 @@ async function hydrateItemFromVariant(item, token) {
     if (goldVal > 0)   hydratedProps['Gold']         = `Rs${goldVal.toFixed(2)}`;
     if (diaVal > 0)    hydratedProps['Diamond']      = `Rs${diaVal.toFixed(2)}`;
     if (makingVal > 0) hydratedProps['Making']       = `Rs${makingVal.toFixed(2)}`;
+    if (gemVal > 0)    hydratedProps['Gemstone']     = `Rs${gemVal.toFixed(2)}`;
     if (grossVal > 0)  hydratedProps['Gross Value']  = `Rs${(grossVal * 1.03).toFixed(2)}`;  // tax-inclusive (components + 3% GST), matches the charged catalog price
   }
   const updatedProps = (item.properties || [])
@@ -1588,6 +1602,12 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
           const mkgVal = mkOverride != null
             ? mkOverride
             : (parseFloat((iProps['Making'] || iProps['Making Charges'] || '').replace('Rs', '').trim()) || parseFloat(vMf.price_breakup_making || 0) * item.quantity);
+          // Coloured stones: held flat like diamond. This branch means staff changed only the gold rate
+          // or labour, so there are no new carats to scale against — but the value must still be COUNTED,
+          // or a gold-rate change on a gemstone piece would silently drop the gemstone from its price.
+          const gemVal = parseFloat((iProps['Gemstone'] || '').replace('Rs', '').trim())
+                      || parseFloat(vMf.gemstone_charges || 0) * item.quantity
+                      || 0;
 
           // Gold: recompute only when a rate was given; otherwise hold the locked value.
           const newGold = rateForItem ? r2(netWt * rateForItem) : r2(lockedGold);
@@ -1595,7 +1615,7 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
           // newMaking is carried out so the Making PROP is rewritten to whatever fed the price math
           // (custom.making override, else the held value). Without this the no-weights branch moved
           // Taxable/Gross/price to the new labour but left the stale Making prop behind.
-          return { newPreTaxGross: r2(newGold + diaVal + mkgVal), newGold, newMaking: mkgVal };
+          return { newPreTaxGross: r2(newGold + diaVal + mkgVal + gemVal), newGold, newMaking: mkgVal, newGemstone: gemVal };
         });
     const anyGoldRecalc = itemRecalc.some(r => r !== null);
 
@@ -1660,11 +1680,12 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
       const unitPrice   = r2(itemFinal / (item.quantity || 1));
       // Strip financial fields; also strip Gold for this item when we have new gold data to replace it
       const thisItemRecalc = itemRecalc[idx];
-      const FINANCIAL   = new Set(['Taxable Value', 'GST', 'Gross Value', 'Discount Applied', 'Diamond (After Discount)', 'Making (After Discount)', '_gold_rate', ...(thisItemRecalc ? ['Gold', 'Making'] : [])]);
+      const FINANCIAL   = new Set(['Taxable Value', 'GST', 'Gross Value', 'Discount Applied', 'Diamond (After Discount)', 'Making (After Discount)', '_gold_rate', ...(thisItemRecalc ? ['Gold', 'Making', 'Gemstone'] : [])]);
       const filteredProps = h.properties.filter(p => !FINANCIAL.has(p.name));
       if (thisItemRecalc) {
         filteredProps.push({ name: 'Gold',   value: `Rs${thisItemRecalc.newGold.toFixed(2)}` });
         filteredProps.push({ name: 'Making', value: `Rs${thisItemRecalc.newMaking.toFixed(2)}` });
+        if (thisItemRecalc.newGemstone > 0) filteredProps.push({ name: 'Gemstone', value: `Rs${thisItemRecalc.newGemstone.toFixed(2)}` });
       }
       // Post-discount component values (display only); only the target-matched portion reduces each.
       const diaAfterDisc = r2(Math.max(0, (diaArr[idx] || 0) - df.dia));
@@ -1745,25 +1766,40 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
     // Old stone carats from product metafields (fixed design spec)
     const oldDiaCts = parseFloat(prodMf.totaldiamondweight || 0);
     const oldGemCts = parseFloat(prodMf.gemstone_weight    || 0);
-    const totalOldCts = oldDiaCts + oldGemCts;
 
     // New stone carats: draft metafield override → product fallback → 0
     const newDiaCts   = diaCtsArr[idx] ?? oldDiaCts;
     const newGemCts   = gemWtArr[idx]  ?? oldGemCts;
-    const totalNewCts = (newDiaCts || 0) + (newGemCts || 0);
 
     // Gold: net weight × gold rate — already variant/rate-anchored (never re-derived from the moving Gold prop).
     const newGoldValue = newNetWt * goldRate;
 
-    // Diamond+gemstone: the per-carat rate ALWAYS comes from the variant/product design spec
-    // (price_breakup_diamond ÷ design carats), scaled to the entered carats. It is NEVER re-derived from
-    // the moving Diamond prop — doing so compounds the value down (÷ product cts, × entered cts) on every
+    // Diamond: the per-carat rate ALWAYS comes from the variant design spec (price_breakup_diamond ÷
+    // design DIAMOND carats), scaled to the entered diamond carats. It is NEVER re-derived from the
+    // moving Diamond prop — doing so compounds the value down (÷ product cts, × entered cts) on every
     // reprice. Falls back to the prop only when the variant carries no diamond breakup.
+    //
+    // This used to divide by diamond + gemstone carats and re-multiply by the combined new carats,
+    // which was correct only while gemstone value sat INSIDE price_breakup_diamond. Cataloguing moved
+    // it out to custom.gemstone_charges on 2026-08-12, so that spread a diamond-only value across
+    // gemstone carats. A diamond-only piece (no gemstone carats) is unaffected either way — the two
+    // forms are identical when oldGemCts and newGemCts are 0.
     const varDiamondValue = parseFloat(varMf.price_breakup_diamond || 0) * (item.quantity || 1);
     const oldDiamondValue = parseFloat((props['Diamond'] || '0').replace('Rs', '').trim());
-    const stoneRateBasis  = varDiamondValue || oldDiamondValue;
-    const perCtRate       = totalOldCts > 0 ? stoneRateBasis / totalOldCts : 0;
-    const newDiamondValue = totalOldCts > 0 ? perCtRate * totalNewCts : stoneRateBasis;
+    const diaBasis        = varDiamondValue || oldDiamondValue;
+    const diaPerCtRate    = oldDiaCts > 0 ? diaBasis / oldDiaCts : 0;
+    const newDiamondValue = diaPerCtRate > 0 ? diaPerCtRate * (newDiaCts || 0) : diaBasis;
+
+    // Coloured stones: same shape, its own rate. The rate comes from the product design spec
+    // (custom.gemstone_price, ₹/ct), falling back to the variant's gemstone VALUE divided by the
+    // design carats. Held flat when neither a rate nor design carats exist — better a stale value
+    // than one derived from nothing. Never re-derived from the moving Gemstone prop.
+    const varGemValue      = parseFloat(varMf.gemstone_charges || 0) * (item.quantity || 1);
+    const oldGemValue      = parseFloat((props['Gemstone'] || '0').replace('Rs', '').trim());
+    const gemBasis         = varGemValue || oldGemValue || 0;
+    const gemRateSpec      = parseFloat(prodMf.gemstone_price || 0);
+    const gemRateUsed      = gemRateSpec > 0 ? gemRateSpec : (oldGemCts > 0 ? gemBasis / oldGemCts : 0);
+    const newGemstoneValue = gemRateUsed > 0 ? gemRateUsed * (newGemCts || 0) : gemBasis;
 
     // Making (labour) is PER-GRAM — it scales with net weight, the same way gold does. Labour is quoted
     // per gram of metal, so a heavier piece of the same design costs more to make.
@@ -1777,25 +1813,44 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
     // Precedence:
     //   1. custom.making  — positional CSV override, per item ("1900,2500"). A FLAT rupee amount for the
     //      line, used verbatim: it is the staff-agreed labour, not a rate, so it never scales.
-    //   2. the variant design spec, scaled per gram (the normal path)
-    //   3. the existing Making prop (a line already priced, e.g. by the manual endpoint) — held flat,
+    //   2. product custom.making_charges_rate — the quoted labour RATE per gram, scaled to net weight.
+    //      Authoritative when it exists: it is what the design was quoted at.
+    //   3. the variant design spec, scaled per gram (value ÷ catalogue weight)
+    //   4. the existing Making prop (a line already priced, e.g. by the manual endpoint) — held flat,
     //      since without a catalogue weight there is no rate to scale by.
+    //
+    // makingRateUsed is the rate the value actually came from, and is written to the line only when a
+    // rate genuinely drove it. A flat override leaves it 0, so a document can tell "₹2,500/g × 4.82g"
+    // apart from "₹1,900 agreed" instead of back-deriving a rate that was never quoted.
     const makingOverride  = makingForIdx(idx);
     const qty             = item.quantity || 1;
     const varMakingValue  = parseFloat(varMf.price_breakup_making || 0) * qty;
     const oldMakingValue  = parseFloat((props['Making'] || props['Making Charges'] || '0').replace('Rs', '').trim());
     const makingBasis     = varMakingValue || oldMakingValue || 0;                       // line-total Rs
     const catNetWtLine    = parseFloat(varMf.net_wt || varMf.net_metal_weight_g || 0) * qty; // line-total g
-    const newMakingValue  = makingOverride != null
-      ? makingOverride
-      : (catNetWtLine > 0 ? (makingBasis / catNetWtLine) * newNetWt : makingBasis);
+    const makingRateSpec  = parseFloat(prodMf.making_charges_rate || 0);
+    let newMakingValue, makingRateUsed = 0;
+    if (makingOverride != null) {
+      newMakingValue = makingOverride;
+    } else if (makingRateSpec > 0) {
+      makingRateUsed = makingRateSpec;
+      newMakingValue = makingRateSpec * newNetWt;
+    } else if (catNetWtLine > 0) {
+      makingRateUsed = makingBasis / catNetWtLine;
+      newMakingValue = makingRateUsed * newNetWt;
+    } else {
+      newMakingValue = makingBasis;
+    }
 
-    // Gross = components, made GST-inclusive (unified convention: components + 3% GST, same as the catalog price).
-    const newGrossValue = (newGoldValue + newDiamondValue + newMakingValue) * 1.03;
+    // Gross = components, made GST-inclusive (unified convention: components + 3% GST, same as the
+    // catalog price). Gemstone is one of the components — the catalogue prices it, so omitting it here
+    // repriced every gemstone piece below its own catalogue price.
+    const newGrossValue = (newGoldValue + newDiamondValue + newMakingValue + newGemstoneValue) * 1.03;
 
     return {
       item, idx, skip: false, hydrate: false,
-      newNetWt, newGrossWt, newGoldValue, newDiamondValue, newMakingValue, newGrossValue,
+      newNetWt, newGrossWt, newGoldValue, newDiamondValue, newMakingValue, newGemstoneValue, newGrossValue,
+      makingRateUsed, gemRateUsed,
       goldRate, bootstrapGoldRate, goldRateOverridden, oldNetWt, delta,
       newDiaCts: newDiaCts || 0, newGemCts: newGemCts || 0,
       metal: (item.variant_title || '').split(' / ')[0] || '',
@@ -1848,7 +1903,8 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
     if (result.skip) return;
 
     const {
-      newNetWt, newGrossWt, newGoldValue, newDiamondValue, newMakingValue, newGrossValue,
+      newNetWt, newGrossWt, newGoldValue, newDiamondValue, newMakingValue, newGemstoneValue, newGrossValue,
+      makingRateUsed, gemRateUsed,
       goldRate, bootstrapGoldRate, goldRateOverridden, delta, newDiaCts, newGemCts,
       metal, category, jewel_code, props,
     } = result;
@@ -1865,6 +1921,9 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
       '_gemstone_cts': newGemCts.toFixed(2),
       '_jewel_code':   jewel_code,
     };
+    // Only written when a rate genuinely produced the value — see the making precedence note above.
+    if (makingRateUsed > 0) jewelHiddenProps['_making_rate']   = makingRateUsed.toFixed(2);
+    if (gemRateUsed > 0)    jewelHiddenProps['_gemstone_rate'] = gemRateUsed.toFixed(2);
 
     if (!force && delta <= 0.05 && !goldRateOverridden) {
       const jewel_data = JSON.stringify({
@@ -1900,6 +1959,7 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
     const jewel_data = JSON.stringify({
       jewel_code, gross_wt: newGrossWt, net_wt: newNetWt,
       diamond_cts: newDiaCts, gemstone_cts: newGemCts,
+      gemstone_value: parseFloat(newGemstoneValue.toFixed(2)),
       metal, category, gold_rate_locked: goldRate,
       weight_delta_pct: parseFloat((delta * 100).toFixed(2)), repriced: true,
     });
@@ -1916,6 +1976,7 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
       'Diamond (After Discount)': `Rs${newDiamondAfterDiscount.toFixed(2)}`,
       'Making':                 `Rs${newMakingValue.toFixed(2)}`,
       'Making (After Discount)': `Rs${newMakingAfterDiscount.toFixed(2)}`,
+      'Gemstone':               `Rs${newGemstoneValue.toFixed(2)}`,
       'Gross Value':            `Rs${newGrossValue.toFixed(2)}`,
       'Taxable Value':          `Rs${newTaxableValue.toFixed(2)}`,
       'GST':                    `Rs${newGst.toFixed(2)}`,
@@ -3251,7 +3312,12 @@ app.post('/api/form-reprice', async (req, res) => {
         const dia    = pick(diaArr,    idx, existingPropNum(item, 'Diamond'));
         const making = pick(makingArr, idx, existingPropNum(item, 'Making'));
         const disc   = pick(discArr,   idx, existingPropNum(item, 'Discount Applied'));
-        const grossComponents = gold + dia + making;
+        // Coloured stones: no manual input for it, so whatever the line already carries (written by
+        // hydrate from custom.gemstone_charges, or by a prior reprice) is preserved and COUNTED. It is
+        // not in OVERWRITE_PROPS, so the Gemstone prop passes through untouched — but leaving it out of
+        // this sum would drop the gemstone from the price on any manually repriced gemstone piece.
+        const gem    = existingPropNum(item, 'Gemstone');
+        const grossComponents = gold + dia + making + gem;
         const taxable         = grossComponents - disc;
         const gst             = taxable * 0.03;
         const grossValue      = taxable + gst;
