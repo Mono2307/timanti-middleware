@@ -29,9 +29,12 @@ function withStoreCc(cc) {
   return list;
 }
 
-async function sendEmail({ to, subject, html, cc }) {
+async function sendEmail({ to, subject, html, cc, bcc }) {
   const payload = { from: 'Timanti <hello@timanti.in>', to, subject, html };
   if (cc) payload.cc = Array.isArray(cc) ? cc : [cc];
+  // Resend supports bcc; this wrapper simply never passed it through. Used by the repair flow to
+  // copy the store on customer mail without the customer seeing an internal address in the header.
+  if (bcc) payload.bcc = Array.isArray(bcc) ? bcc : [bcc];
 
   const response = await fetch('https://api.resend.com/emails', {
     method: 'POST',

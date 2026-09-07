@@ -6,6 +6,7 @@ const { createPaymentLink } = require('../../integrations/gokwik');
 const {
   sendEmail,
   withStoreCc,
+  STORE_EMAIL,
   buildRepairEstimateHtml,
   buildRepairPaymentConfirmedHtml,
   buildRepairCompleteHtml,
@@ -26,7 +27,11 @@ const {
   // threw at call time, which also skipped the completion tag, timestamp and serial below.
   buildRepairReadyFinalHtml,
 } = require('../../integrations/email/templates');
-const REPAIR_TEST_EMAIL = 'monodeep.dutta@timanti.in'; // revert after testing
+// Test override: when set, EVERY repair email — customer and internal — is redirected here and the
+// store copy is dropped. It was left hardcoded to a personal address after a test round, which meant
+// no customer, no store and no HQ received a single repair email for as long as it stood. Empty is
+// the correct production value; set it only for a deliberate test round, and clear it the same day.
+const REPAIR_TEST_EMAIL = process.env.REPAIR_TEST_EMAIL || '';
 
 // Build the item block for the v2 email templates from the repair draft's line-item
 // properties. These are written by fetchAndCopyOriginalOrderSpecs from the ORIGINAL
@@ -44,7 +49,11 @@ function repairItemFromDraft(draft, freshSpecs) {
     title:    props._item_title || li.title || 'Your jewellery',
     qty:      li.quantity || 1,
     variant:  props._variant_title || '',
-    imageUrl: props._image_url || null
+    imageUrl: props._image_url || null,
+    // Gross weight as received. Printed under the title on the customer's acknowledgement and
+    // estimate so the weight we are holding is on the record from the very first email. Blank when
+    // no original order was referenced — itemRow simply omits the line then.
+    grossWeight: props._gross_wt || ''
   };
 }
 
@@ -63,10 +72,33 @@ const processingDrafts = new Set();
 // While REPAIR_TEST_EMAIL is set the cc is deliberately dropped along with the
 // real recipient — nothing leaves the test inbox. Clearing that constant is what
 // switches BOTH the customer and the store copy on.
+// Two shapes of repair mail, routed differently on purpose.
+//
+// CUSTOMER mail ({ ccStore: true }) — the store is BCC'd, not CC'd. The counter team still sees
+// everything the customer got, but the customer's copy carries no internal address in its headers,
+// so a Reply-All cannot land in the store inbox.
+//
+// INTERNAL mail ({ internal: true }) — addressed TO the store, because the store staff are the ones
+// who set estimates and mark repairs complete; HQ rides in CC for visibility. The subject is
+// prefixed [Internal] so it is unmistakable in a shared inbox. These carry the signed Set-Estimate
+// and Mark-Complete links.
+//
+// While REPAIR_TEST_EMAIL is set, everything collapses to that one address with no copies at all.
 function repairSendEmail(opts) {
-  const { ccStore, ...rest } = opts;
-  if (REPAIR_TEST_EMAIL) return sendEmail({ ...rest, to: REPAIR_TEST_EMAIL, cc: undefined });
-  return sendEmail(ccStore ? { ...rest, cc: withStoreCc(rest.cc) } : rest);
+  const { ccStore, internal, ...rest } = opts;
+  if (REPAIR_TEST_EMAIL) {
+    return sendEmail({ ...rest, to: REPAIR_TEST_EMAIL, cc: undefined, bcc: undefined });
+  }
+  if (internal) {
+    const hqCc = [process.env.HQ_EMAIL, process.env.HQ_CC_EMAIL].filter(Boolean);
+    return sendEmail({
+      ...rest,
+      to:      STORE_EMAIL,
+      cc:      hqCc.length ? hqCc : undefined,
+      subject: /^\[internal\]/i.test(rest.subject || '') ? rest.subject : `[Internal] ${rest.subject}`,
+    });
+  }
+  return sendEmail(ccStore ? { ...rest, bcc: withStoreCc(rest.bcc) } : rest);
 }
 
 // Every repair action link (set-estimate, set-complete, store-approve) is signed with this.
@@ -325,13 +357,12 @@ async function handleRepairPayment(draft, { transactionId, gatewayRef }, getShop
   }
 
   const hqEmail = process.env.HQ_EMAIL;
-  if (hqEmail) {
+  if (STORE_EMAIL) {   // store is the recipient; HQ only rides in CC
     const serverUrl     = process.env.SERVER_URL || 'https://timanti-middleware.fly.dev';
     const completeToken = generateCompleteToken(draft.id);
     const completeUrl   = `${serverUrl}/repairs/set-complete?d=${draft.id}&t=${completeToken}`;
     await repairSendEmail({
-      to:      hqEmail,
-      cc:      withStoreCc(process.env.HQ_CC_EMAIL),   // HQ + store; who acts on the links is an SOP matter
+      internal: true,
       subject: `Payment Received — ${draft.name} — ${customerName}`,
       html:    buildRepairHqCompleteReadyHtml({
         customerName, draftRef: draft.name, amount, completeUrl,
@@ -391,7 +422,7 @@ async function processRepairDraftUpdate(incomingDraft, getShopifyToken, assignRe
     // acknowledgement, the dedup tag, the intake timestamp and the spec copy all used to be
     // skipped along with it, so one Resend hiccup left the draft looking untouched.
     const hqEmail = process.env.HQ_EMAIL;
-    if (!hqEmail) console.warn(`⚠️  HQ_EMAIL not set — no HQ intake email for ${draft.name}`);
+    if (!hqEmail) console.warn(`⚠️  HQ_EMAIL not set — internal intake mail for ${draft.name} goes to the store only`);
     const shopifyToken    = await getShopifyToken();
 
     // ── GATE: the original Timanti order reference is MANDATORY ──────────────
@@ -405,11 +436,10 @@ async function processRepairDraftUpdate(incomingDraft, getShopifyToken, assignRe
     if (!specsCopied) {
       if (!tags.includes('repair-missing-order-ref')) {
         await updateDraftOrderTags(draft.id, [...tags, 'repair-missing-order-ref'], shopifyToken);
-        if (hqEmail) {
+        if (STORE_EMAIL) {   // store is the recipient; HQ only rides in CC
           try {
             await repairSendEmail({
-              to:      hqEmail,
-              cc:      withStoreCc(process.env.HQ_CC_EMAIL),   // HQ + store; who acts on the links is an SOP matter
+              internal: true,
               subject: `Action needed — missing order reference on ${draft.name}`,
               html:    `<div style="font-family:Arial,sans-serif;padding:24px;max-width:520px;">
                 <h2 style="font-size:18px;margin:0 0 12px;">Repair intake is on hold</h2>
@@ -451,12 +481,11 @@ async function processRepairDraftUpdate(incomingDraft, getShopifyToken, assignRe
     const serverUrl       = process.env.SERVER_URL || 'https://timanti-middleware.fly.dev';
     const approveUrl      = `${serverUrl}/repairs/set-estimate?d=${draft.id}&t=${hmacToken}`;
 
-    let hqEmailFailed = !hqEmail;
-    if (hqEmail) {
+    let hqEmailFailed = !STORE_EMAIL;
+    if (STORE_EMAIL) {   // store is the recipient; HQ only rides in CC
       try {
         await repairSendEmail({
-          to:      hqEmail,
-          cc:      withStoreCc(process.env.HQ_CC_EMAIL),   // HQ + store; who acts on the links is an SOP matter
+          internal: true,
           subject: `New Repair Intake — ${draft.name} — ${customerName}`,
           html:    buildRepairIntakeHtml({
             customerName, customerEmail, customerPhone, draftRef: draft.name, itemDesc, notes, approveUrl,
@@ -525,11 +554,10 @@ async function processRepairDraftUpdate(incomingDraft, getShopifyToken, assignRe
       }
     }
 
-    if (hqEmail) {
+    if (STORE_EMAIL) {   // store is the recipient; HQ only rides in CC
       try {
         await repairSendEmail({
-          to:      hqEmail,
-          cc:      withStoreCc(process.env.HQ_CC_EMAIL),   // HQ + store; who acts on the links is an SOP matter
+          internal: true,
           subject: `Complimentary Repair — ${draft.name} — ${customerName}`,
           html:    buildRepairHqCompleteReadyHtml({
             customerName, draftRef: draft.name, amount: null, completeUrl,
@@ -577,11 +605,10 @@ async function processRepairDraftUpdate(incomingDraft, getShopifyToken, assignRe
       }
     }
 
-    if (hqEmail) {
+    if (STORE_EMAIL) {   // store is the recipient; HQ only rides in CC
       try {
         await repairSendEmail({
-          to:      hqEmail,
-          cc:      withStoreCc(process.env.HQ_CC_EMAIL),   // HQ + store; who acts on the links is an SOP matter
+          internal: true,
           subject: `Store Payment Approved — ${draft.name} — ${customerName} — Rs.${amount}`,
           html:    buildRepairHqCompleteReadyHtml({
             customerName, draftRef: draft.name, amount, completeUrl,
@@ -1009,6 +1036,10 @@ function registerRepairRoutes(app, getShopifyToken) {
       const itemDesc     = d.line_items?.[0]?.title || 'Repair service';
       // Pre-fill the final-cost box with the estimate so "nothing changed" is a single click.
       const estimateAmount = Math.round(parseFloat(d.total_price) || 0).toString();
+      // A repair already agreed as free has no cost to revise, so the money box is locked rather
+      // than merely dimmed. (On the ESTIMATE form dimming is right, because a figure quoted then can
+      // still legitimately change by the time the work is done — here it cannot.)
+      const isFreeRepair = /(^|,)\s*(repair-free|free-repair)\s*(,|$)/i.test(d.tags || '');
 
       res.send(`<!DOCTYPE html>
 <html lang="en">
@@ -1063,9 +1094,13 @@ function registerRepairRoutes(app, getShopifyToken) {
         <p class="hint">Leave blank if no tracking needed.</p>
       </div>
       <hr style="border:none; border-top:1px solid #eee; margin:20px 0;">
-      <label for="finalCost">Final Repair Cost <span class="opt-label">(what the repair actually cost)</span></label>
-      <input id="finalCost" name="finalCost" type="text" inputmode="decimal" value="${estimateAmount}" placeholder="e.g. 3500">
-      <p class="hint">Pre-filled with the estimate. Leave as-is if the cost did not change. Enter on the <strong>same basis as the estimate</strong> you sent the customer (inclusive or exclusive of GST — whichever you quoted).</p>
+      <label for="finalCost">Final Repair Cost <span class="opt-label">${isFreeRepair ? '(complimentary repair — no charge)' : '(what the repair actually cost)'}</span></label>
+      <input id="finalCost" name="finalCost" type="text" inputmode="decimal"
+             value="${isFreeRepair ? '0' : estimateAmount}" placeholder="e.g. 3500"
+             ${isFreeRepair ? 'readonly tabindex="-1" style="opacity:0.35; background:#f0f0f0; cursor:not-allowed;"' : ''}>
+      ${isFreeRepair
+        ? `<p class="hint">This repair was marked complimentary, so there is nothing to charge. The field is locked at ₹0.</p>`
+        : `<p class="hint">Pre-filled with the estimate. Leave as-is if the cost did not change. Enter on the <strong>same basis as the estimate</strong> you sent the customer (inclusive or exclusive of GST — whichever you quoted).</p>`}
       <hr style="border:none; border-top:1px solid #eee; margin:20px 0;">
       <label>Post-Repair Specs <span class="opt-label">(optional — written to order metafields; pre-repair specs are unchanged)</span></label>
       <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:8px;">

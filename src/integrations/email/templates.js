@@ -118,7 +118,10 @@ function h3(text) {
 
 // Item row. imageUrl comes from the ORIGINAL order via _image_url on the repair
 // draft's line-item properties; falls back to the Timanti diamond mark.
-function itemRow({ title, qty, variant, imageUrl }) {
+// grossWeight, when supplied, prints directly under the title — the repair emails put the weight of
+// the piece we are holding on the record from the first message. Omitted entirely when absent, so
+// every other caller renders exactly as before.
+function itemRow({ title, qty, variant, imageUrl, grossWeight }) {
   const thumb = imageUrl
     ? `<img src="${imageUrl}" width="60" height="60" alt="" style="width:60px; height:60px; border-radius:4px; display:block; object-fit:cover;">`
     : `<div style="width:60px; height:60px; background:#f8f2ea; border-radius:4px; line-height:60px; text-align:center; font-size:22px; color:#c9a96e;">&#9670;</div>`;
@@ -128,6 +131,7 @@ function itemRow({ title, qty, variant, imageUrl }) {
         <td width="60" valign="top" style="padding:12px 14px 12px 0;">${thumb}</td>
         <td valign="top" style="padding:12px 0; text-align:left;">
           <div style="font-weight:600; color:#111111; font-size:15px;">${esc(title)}</div>
+          ${grossWeight ? `<div style="font-size:12px; color:#888888; margin-top:2px;">Gross weight at receipt: ${esc(grossWeight)} g</div>` : ''}
           ${qty     ? `<div style="font-size:14px; color:#555555; margin-top:1px;">Qty: ${esc(qty)}</div>` : ''}
           ${variant ? `<div style="font-size:13px; color:#888888;">${esc(variant)}</div>` : ''}
         </td>
@@ -253,6 +257,14 @@ function standardFooter() {
           <a href="${SITE_URL}/pages/return-refund-policy" style="color:#fc7d27; font-size:14px;">Return &amp; Refund Policy</a>
           &nbsp;|&nbsp;
           <a href="${SITE_URL}/pages/lifetime-exchange-upgrade" style="color:#fc7d27; font-size:14px;">Lifetime Exchange &amp; Upgrade</a>
+        </td></tr>
+      </table>
+
+      <!-- Auto-generated notice. Lives in the shared footer so every customer-facing email carries
+           it identically; the contact details above are where a reply should go instead. -->
+      <table width="100%" cellpadding="0" cellspacing="0" border="0">
+        <tr><td align="center" style="background:#F6F6F6; padding:0 40px 16px; text-align:center;">
+          <p style="font-size:12px; color:#999999; margin:0;">This is an auto-generated email. Please do not reply.</p>
         </td></tr>
       </table>`;
 }
