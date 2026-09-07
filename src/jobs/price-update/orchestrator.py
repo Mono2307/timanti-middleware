@@ -311,7 +311,24 @@ query($cursor: String) {
 """
 
 
-def verify_prices(token: str, log: logging.Logger, out_dir: Path, run_id: str):
+def _run_variant_ids(preview_csv: Path) -> set:
+    """Numeric variant ids this run set out to write, read from its own preview CSV."""
+    import csv as _csv
+    ids = set()
+    try:
+        with open(preview_csv, newline='', encoding='utf-8') as f:
+            for row in _csv.DictReader(f):
+                raw = (row.get('shopify_variant_id') or '').strip()
+                if raw:
+                    ids.add(raw.rsplit('/', 1)[-1])
+    except Exception as exc:
+        log_msg = f'could not read variant ids from {preview_csv.name}: {exc}'
+        raise RuntimeError(log_msg)
+    return ids
+
+
+def verify_prices(token: str, log: logging.Logger, out_dir: Path, run_id: str,
+                  expected_ids: set = None):
     """Re-read the catalogue and assert the price charged equals price_total.
 
     Phase 2 writes the price and Phase 3 writes the breakup. A run that dies
@@ -368,12 +385,30 @@ def verify_prices(token: str, log: logging.Logger, out_dir: Path, run_id: str):
 
         return out['data']['productVariants']
 
-    bad, seen, cursor = [], 0, None
+    bad, seen, outside, cursor = [], 0, 0, None
     while True:
         page = _q(cursor)
         for n in page['nodes']:
             if (n.get('product') or {}).get('status') == 'ARCHIVED':
                 continue
+            vid = (n.get('id') or '').rsplit('/', 1)[-1]
+
+            # ONLY the variants this run wrote are this run's business.
+            #
+            # This used to judge every live variant in the store, which made it a catalogue
+            # health check wearing a post-import verification's clothes. On 2026-09-07 two new
+            # products (RG000275, BG0217A) were created at 05:37 and 06:07 while the 05:17 run
+            # was still going. Product creation writes the price first and the breakup after,
+            # exactly as the importer does, so 36 of those brand-new variants were sitting in
+            # that window when verification swept past. It held the success mail and reported
+            # 36 contradictions in a run that had done nothing wrong. Every one of them
+            # completed on its own minutes later.
+            #
+            # Anything outside the run is counted and logged, never gated on.
+            if expected_ids is not None and vid not in expected_ids:
+                outside += 1
+                continue
+
             seen += 1
             tot_obj = n.get('tot') or {}
             try:
@@ -383,14 +418,15 @@ def verify_prices(token: str, log: logging.Logger, out_dir: Path, run_id: str):
                 continue
             if abs(tot - price) > 0.01:
                 bad.append({'sku': n.get('sku', ''),
-                            'variant_id': (n.get('id') or '').rsplit('/', 1)[-1],
+                            'variant_id': vid,
                             'price_charged': price, 'price_total_metafield': tot,
                             'gap': round(tot - price, 2)})
         if not page['pageInfo']['hasNextPage']:
             break
         cursor = page['pageInfo']['endCursor']
 
-    log.info(f'Verification — {seen:,} live variants checked, {len(bad)} mismatched')
+    log.info(f'Verification — {seen:,} of this run\'s variants checked, {len(bad)} mismatched'
+             + (f' ({outside:,} live variants skipped: not written by this run)' if outside else ''))
     if not bad:
         return 0, ''
 
@@ -568,7 +604,8 @@ def run(test_gati: str = None, dry_run: bool = False):
         log.info('Verifying prices against stored totals...')
         try:
             mismatches, mismatch_csv = verify_prices(
-                token, log, preview_csv.parent, run_id)
+                token, log, preview_csv.parent, run_id,
+                expected_ids=_run_variant_ids(preview_csv))
         except Exception as exc:
             log.error(f'Verification could not run: {exc}')
             mismatches, mismatch_csv = -1, ''
