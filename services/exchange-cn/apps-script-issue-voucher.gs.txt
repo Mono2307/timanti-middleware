@@ -48,83 +48,10 @@
 
 function doPost(e) {
   var body = JSON.parse(e.postData.contents);
-  if (body.action === 'issue_voucher')   return handleIssueVoucher_(body);
-  if (body.action === 'log_cad_advance') return handleCadAdvanceLog_(body);
+  if (body.action === 'issue_voucher') return handleIssueVoucher_(body);
   return ContentService
     .createTextOutput(JSON.stringify({ ok: false, error: 'unknown action' }))
     .setMimeType(ContentService.MimeType.JSON);
-}
-
-/* ─────────────────────────────────────────────────────────────────────────────
- * CAD ADVANCE LOG
- *
- * The middleware posts one of these on every state change of a design advance:
- *
- *   { action:'log_cad_advance', event:'captured'|'applied'|'redeemed'|'expired'|'deleted'|'refunded',
- *     draft_ref:'#D205', value:5000, customer_name:'A Kumar', expires_at:'2027-09-01',
- *     against:'#1042', draft_id:'1461677883649', logged_at:'2026-09-07T13:00:00.000Z' }
- *
- * This is where STORE STAFF see advances. The Supabase register holds current state and reaches
- * accounts by email once a month; neither is somewhere the counter looks, and Shopify shows one
- * document at a time.
- *
- * APPEND ONLY — one row per event, never an update in place. An advance taken, applied and then
- * redeemed should read as three lines, so staff can see when each thing happened.
- *
- * The tab and its header row are created on first use; nothing to set up by hand.
- * ───────────────────────────────────────────────────────────────────────────── */
-
-var CAD_ADVANCE_LOG = 'CAD Advance Log';
-
-function handleCadAdvanceLog_(body) {
-  var out = function (ok, payload) {
-    return ContentService
-      .createTextOutput(JSON.stringify(Object.assign({ ok: ok }, payload || {})))
-      .setMimeType(ContentService.MimeType.JSON);
-  };
-
-  try {
-    var ss = SpreadsheetApp.getActiveSpreadsheet();
-    var sh = ss.getSheetByName(CAD_ADVANCE_LOG);
-
-    if (!sh) {
-      sh = ss.insertSheet(CAD_ADVANCE_LOG);
-      sh.appendRow(['Logged At (IST)', 'Event', 'Reference', 'Value',
-                    'Customer', 'Expires On', 'Applied / Redeemed Against', 'Draft ID']);
-      sh.getRange(1, 1, 1, 8).setFontWeight('bold').setBackground('#f0f0f0');
-      sh.setFrozenRows(1);
-    }
-
-    // Times arrive as UTC ISO from the server; staff read IST.
-    var when = body.logged_at ? new Date(body.logged_at) : new Date();
-    var whenIst = Utilities.formatDate(when, 'Asia/Kolkata', 'yyyy-MM-dd HH:mm');
-
-    sh.appendRow([
-      whenIst,
-      String(body.event || ''),
-      String(body.draft_ref || ''),
-      (body.value === '' || body.value == null) ? '' : Number(body.value),
-      String(body.customer_name || ''),
-      body.expires_at ? String(body.expires_at).slice(0, 10) : '',
-      String(body.against || ''),
-      String(body.draft_id || '')
-    ]);
-
-    return out(true, { logged: body.event + ' ' + body.draft_ref });
-  } catch (err) {
-    // The middleware ignores the body and only cares that the POST did not error, but returning the
-    // message makes a broken sheet visible in its logs instead of silently losing rows.
-    return out(false, { error: String(err) });
-  }
-}
-
-/** Run once from the editor to prove the tab and the append work, before any real advance exists. */
-function testCadAdvanceLog_() {
-  Logger.log(handleCadAdvanceLog_({
-    event: 'captured', draft_ref: '#TEST-DELETE-ME', value: 5000,
-    customer_name: 'Test row — safe to delete', expires_at: '2027-09-01',
-    logged_at: new Date().toISOString()
-  }).getContent());
 }
 
 function handleIssueVoucher_(body) {
