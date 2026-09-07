@@ -111,6 +111,22 @@ async function expireOverdueAdvances(deps, { dryRun = false } = {}) {
     return { expired: (data || []).length, stamped: 0 };
   }
 
+  // A row with NO expiry can never be swept: every query here filters on expires_at, so it would sit
+  // outstanding for ever, never reach the write-off list and never earn a customer reminder —
+  // silently. That happens when a row is created by the lazy insert in apply()/redeem() rather than
+  // by capture, which is what a hand-edited advance_status on a document produces.
+  //
+  // Not auto-repaired: guessing an expiry would invent a date that decides when someone's money
+  // stops being theirs. Surfaced loudly instead, so it gets a human.
+  try {
+    const { data: noExpiry } = await supabase.from(TABLE)
+      .select('serial_code, value, issued_at')
+      .eq('instrument_type', 'cad_advance').in('status', ['open', 'applied']).is('expires_at', null);
+    for (const r of (noExpiry || [])) {
+      console.error(`[cad-sweep] ${r.serial_code} (Rs${r.value}) has NO expiry date — it can never expire or be reported. Set expires_at to ${r.issued_at ? String(r.issued_at).slice(0, 10) + ' + 365d' : 'the capture date + 365d'} by hand.`);
+    }
+  } catch (e) { console.warn(`[cad-sweep] null-expiry check failed: ${e.message}`); }
+
   const rows = await creditInstruments.expireOverdue(supabase, { instrumentType: 'cad_advance' });
   if (!rows.length) return { expired: 0, stamped: 0 };
 

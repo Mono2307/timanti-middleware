@@ -169,6 +169,34 @@ async function fetchAll(supabase, { from, to, instrumentType } = {}) {
   return data || [];
 }
 
+// Close an instrument into a TERMINAL state that is neither spent nor still owed.
+//
+// 'deleted'  — the draft it lived on was binned. The money was taken and then the document that
+//              recorded it was destroyed, so it is not outstanding and never will be redeemed.
+// 'refunded' — the money went back to the customer.
+//
+// Deliberately NOT 'voided' and NOT back to 'open'. Both of those lose the story: 'open' would put
+// a refunded advance back in the outstanding pile and send its owner a reminder to come and spend
+// money they have already had returned, and 'voided' says nothing about which of the two happened.
+// The row itself is kept either way — accounts need to see that ₹5,000 was taken and what became
+// of it, not find a gap where a record used to be.
+async function closeInstrument(supabase, { instrumentType, serialCode, status, refundMode }) {
+  if (!['deleted', 'refunded'].includes(status)) throw new Error(`closeInstrument: refusing unknown status ${status}`);
+  const now = new Date().toISOString();
+  const patch = { status, updated_at: now };
+  if (status === 'refunded') {
+    patch.refunded_at = now;
+    if (refundMode) patch.refund_mode = refundMode;
+  }
+  // Only ever closes something still live. A row already redeemed is real revenue and must not be
+  // rewritten by a late webhook; one already closed stays as it is.
+  const { data, error } = await supabase.from(TABLE).update(patch)
+    .eq('instrument_type', instrumentType).eq('serial_code', serialCode)
+    .in('status', ['open', 'applied']).select('id, value');
+  if (error) throw new Error(`closeInstrument ${serialCode}: ${error.message}`);
+  return !!(data && data.length);
+}
+
 // Move a row to a new serial_code. Vouchers and exchange notes never need this — their code is
 // minted once and is permanent. A CAD advance has no minted number at all: the row opens under the
 // DRAFT name (the only identifier that exists when the money lands) and is rekeyed to the ORDER name
@@ -227,4 +255,4 @@ function effectiveStatus(row, nowMs) {
   return row.status;
 }
 
-module.exports = { upsertIssued, apply, promoteApplied, revertApplied, reopen, redeem, voidInstrument, getBySerial, listOpenForCustomer, fetchAll, effectiveStatus, rekey, expireOverdue, listExpiringBetween };
+module.exports = { upsertIssued, apply, promoteApplied, revertApplied, reopen, redeem, voidInstrument, getBySerial, listOpenForCustomer, fetchAll, effectiveStatus, rekey, expireOverdue, listExpiringBetween, closeInstrument };

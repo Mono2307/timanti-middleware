@@ -65,7 +65,7 @@ const PO_DEPS = () => ({
 });
 
 function register(app, ctx) {
-  const { handleRecalculatePriceTag, gqlSetDraftLineItems, handleDraftDeletedRefunds,
+  const { handleRecalculatePriceTag, gqlSetDraftLineItems, handleDraftDeletedRefunds, handleAdvanceDraftDeleted,
           handleOrderRefundSync, handleOrderRefundEmail, applyPaymentTagsToOrder } = ctx;
 
 
@@ -119,6 +119,13 @@ app.post('/api/po-webhook', async (req, res) => {
     // having gone back stays true when the document is gone. revertApplied only matches
     // status='applied', so it already cannot reach them; this only records that the draft no longer
     // exists, so a later report can tell "outside the window" from "no longer there".
+    // A CAD advance on a deleted draft is closed as 'deleted' rather than reverted to open: the
+    // money was taken and the document recording it is gone, so it is neither outstanding nor spent.
+    // The register row stays — accounts still need to see what became of the money.
+    if (handleAdvanceDraftDeleted) {
+      handleAdvanceDraftDeleted(String(req.body.id))
+        .catch(e => console.error('[cad-advance] close on draft delete:', e.message));
+    }
     if (handleDraftDeletedRefunds) {
       handleDraftDeletedRefunds(String(req.body.id))
         .catch(e => console.error('[ledger] refund bookkeeping on draft delete:', e.message));

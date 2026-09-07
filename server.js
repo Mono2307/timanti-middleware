@@ -2586,6 +2586,7 @@ async function syncAmountToCollect(draft) {
 // a draft, and Path A has to remove the CAD Advance line.
 const {
   handleAdvanceCapture, handleAdvanceLineRemoval, handleAdvanceRedeem, handleAdvanceConversion,
+  handleAdvanceDraftDeleted, handleAdvanceRefund,
 } = require('./src/modules/adjustments/cad_advance_handlers').createCadAdvanceHandlers({
   axios, storeUrl: process.env.SHOPIFY_STORE_URL, supabase, getShopifyToken,
   updateDraftOrderMetafields, updateOrderMetafields, gqlSetDraftLineItems,
@@ -3067,6 +3068,7 @@ app.post('/api/shopify-draft-updated', async (req, res) => {
     await step('advance-capture',  () => handleAdvanceCapture(draft));       // CAD: stamp advance metafields once a payment lands
     await step('advance-line',     () => handleAdvanceLineRemoval(draft));   // CAD: drop the advance line once a real product joins it (before net-to-collect)
     await step('advance-redeem',   () => handleAdvanceRedeem(draft));        // CAD: apply a referenced advance (Path B), gates + refs
+    await step('advance-refund',   () => handleAdvanceRefund(draft));        // CAD: a fully refunded advance stops being outstanding
     await step('apply-voucher',    () => handleApplyVoucherTag(draft));      // admin action: apply-voucher:<code> → redeem from ledger
     await step('apply-exc',        () => handleApplyExcTag(draft));          // admin action: apply-exc:<number> → redeem exchange note from ledger
     await step('apply-discount',   () => handleApplyDiscountTag(draft));     // admin action: apply-discount:<code>|custom → dia-only pre-tax discount (drops reprice)
@@ -4336,6 +4338,9 @@ const ctx = {
   // the refund ledger row has to survive that — this lets the delete hook mark the document gone
   // without touching the refund itself.
   handleDraftDeletedRefunds,
+  // Same hook, for CAD advances: a deleted draft closes the advance as 'deleted' so it stops
+  // counting as outstanding while the record of the money survives.
+  handleAdvanceDraftDeleted,
   // ...and the orders/* branch, which is the only webhook this app receives for orders. Refunds can
   // be recorded on a converted order as well as a draft, and the panel adds the same trigger tags
   // there, so they have to be consumed on that side too. Bound to the order resource here so the

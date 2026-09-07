@@ -29,6 +29,7 @@
  * a draft. The rest are injected for consistency with the modules either side of this one.
  */
 
+const { config } = require('../../core/config');
 const creditInstruments = require('./credit_instruments');
 const { readInstallments, sumInstallments, installmentLegPatch } = require('../payments/installments');
 const {
@@ -77,6 +78,37 @@ function createCadAdvanceHandlers(deps) {
     } catch (e) {
       console.warn(`[cad-advance] could not read the installment mode enum (${e.message}) — writing the leg without a mode`);
       return false;
+    }
+  }
+
+  // Append a line to the Advance Log on the Exchange Calculator sheet — the same Apps Script the
+  // credit-note log already posts to.
+  //
+  // This is where STORE STAFF see advances. The register lives in Supabase and reaches accounts by
+  // email once a month, but neither is somewhere the counter looks; the exchanges sheet is already
+  // part of their day and needs no new login. Shopify shows them one document at a time, which is
+  // fine mid-transaction and useless for "what is still outstanding".
+  //
+  // Strictly a record: never throws, never blocks the flow, and the sheet being down or the URL
+  // unset costs a log line and nothing else. The register remains the system of truth.
+  async function logAdvanceEvent({ event, ref, value, customer, expiresAt, against, draftId }) {
+    const url = config.appsScript.exchange;
+    if (!url) return;
+    try {
+      await axios.post(url, {
+        action:        'log_cad_advance',
+        source:        'cad-advance',
+        event,                                   // captured | applied | redeemed | expired | deleted | refunded
+        draft_ref:     ref || '',
+        value:         value != null ? value : '',
+        customer_name: customer || '',
+        expires_at:    expiresAt || '',
+        against:       against || '',            // the order it was applied/redeemed against
+        draft_id:      draftId != null ? String(draftId) : '',
+        logged_at:     new Date().toISOString(),
+      }, { headers: { 'Content-Type': 'application/json' }, timeout: 15000 });
+    } catch (e) {
+      console.warn(`[cad-advance] advance log (${event} ${ref}) did not reach the sheet: ${e.message}`);
     }
   }
 
@@ -175,6 +207,8 @@ function createCadAdvanceHandlers(deps) {
           expiresAt:       expires,
         });
         console.log(`[cad-advance] ledger row opened for ${draft.name || draftOrderId} (expires ${expires})`);
+      await logAdvanceEvent({ event: 'captured', ref: draft.name || draftOrderId, value: advanceAmount,
+        customer: [draft.customer?.first_name, draft.customer?.last_name].filter(Boolean).join(' '), expiresAt: expires, draftId: draftOrderId });
       } catch (e) {
         console.error(`[cad-advance] ledger open failed for ${draft.name || draftOrderId}: ${e.message}`);
       }
@@ -235,6 +269,7 @@ function createCadAdvanceHandlers(deps) {
           targetDraftId: draftOrderId, value,
         });
       } catch (e) { console.error(`[cad-advance] ledger apply ${draft.name}: ${e.message}`); }
+      await logAdvanceEvent({ event: 'applied', ref: draft.name, value, draftId: draftOrderId });
     } catch (e) {
       console.error(`[cad-advance] line removal failed for draft ${draft?.id}:`, e.message);
     }
@@ -406,6 +441,7 @@ function createCadAdvanceHandlers(deps) {
 
       await delRef();
       console.log(`[cad-advance] absorbed ${advVal.toFixed(2)} from ${ref} → ${draft.name || draftOrderId} as an installment leg`);
+      await logAdvanceEvent({ event: 'applied', ref: advOrder.name || ref, value: advVal, against: draft.name || draftOrderId, draftId: draftOrderId });
     } catch (e) {
       console.error(`[cad-advance] redeem failed for draft ${draft?.id}:`, e.message);
     }
@@ -504,7 +540,77 @@ function createCadAdvanceHandlers(deps) {
     } catch (e) { console.error(`[cad-advance] conversion redeem ${target}: ${e.message}`); }
   }
 
-  return { handleAdvanceCapture, handleAdvanceLineRemoval, handleAdvanceRedeem, handleAdvanceConversion };
+  // The draft carrying an advance was DELETED. The money was taken and the document recording it is
+  // gone, so the advance is neither outstanding nor spent — it is closed as 'deleted', and the row
+  // stays. Accounts still need to see that Rs5,000 came in and what became of it.
+  //
+  // Hangs off the same draft_orders/delete webhook the voucher revert already uses. There is nothing
+  // on Shopify left to stamp, so the register is the only record — which is precisely why the row
+  // must not be removed.
+  // Found by the DRAFT ID, not the name: Shopify's draft_orders/delete webhook carries only an id,
+  // and by the time it arrives the draft is gone, so there is nothing left to look a name up from.
+  // Capture stores the draft id as source_order_id precisely so this lookup is possible.
+  async function handleAdvanceDraftDeleted(draftOrderId) {
+    try {
+      const { data, error } = await supabase.from('credit_instruments')
+        .select('serial_code, value, status')
+        .eq('instrument_type', 'cad_advance')
+        .eq('source_order_id', String(draftOrderId))
+        .in('status', ['open', 'applied']);
+      if (error) throw new Error(error.message);
+      for (const row of (data || [])) {
+        const closed = await creditInstruments.closeInstrument(supabase, {
+          instrumentType: 'cad_advance', serialCode: row.serial_code, status: 'deleted',
+        });
+        if (closed) {
+          console.log(`[cad-advance] ${row.serial_code}: draft deleted — advance of Rs${row.value} closed as 'deleted', never redeemed`);
+          await logAdvanceEvent({ event: 'deleted', ref: row.serial_code, value: row.value, draftId: draftOrderId });
+        }
+      }
+    } catch (e) {
+      console.error(`[cad-advance] draft-delete close failed for draft ${draftOrderId}: ${e.message}`);
+    }
+  }
+
+  // The advance was REFUNDED. Money back to the customer means it stops being outstanding — left
+  // open it would keep appearing in the register, earn a reminder at 11 months telling the customer
+  // to come and spend money they have already had back, and finally land on the write-off list.
+  //
+  // Only fires on a FULL refund of the advance. A partial refund leaves a live balance, and deciding
+  // what that means is a judgement call, not something to guess at silently — it is logged instead.
+  async function handleAdvanceRefund(draft) {
+    try {
+      const draftOrderId = draft.id.toString();
+      const token = await getShopifyToken();
+      const mf = await readDraftCustom(draftOrderId, token);
+      if (!mf.advance_status) return;
+      if (!['open', 'applied'].includes(mf.advance_status)) return;   // already terminal
+
+      const advance  = parseFloat(mf.advance || 0) || 0;
+      const refunded = parseFloat(mf.amount_refunded || 0) || 0;
+      if (!(advance > 0) || !(refunded > 0)) return;
+
+      if (refunded + 0.5 < advance) {
+        console.log(`[cad-advance] ${draft.name || draftOrderId}: Rs${refunded.toFixed(2)} refunded against an advance of Rs${advance.toFixed(2)} — partial, leaving the advance ${mf.advance_status}. Close it by hand if the balance is not coming back.`);
+        return;
+      }
+
+      await updateDraftOrderMetafields(draftOrderId, { advance_status: 'refunded' });
+      await creditInstruments.closeInstrument(supabase, {
+        instrumentType: 'cad_advance', serialCode: cadLedgerKey(draft.name || draftOrderId),
+        status: 'refunded', refundMode: mf.refund_1_mode || null,
+      });
+      console.log(`[cad-advance] ${draft.name || draftOrderId}: advance Rs${advance.toFixed(2)} refunded — closed, no longer outstanding`);
+      await logAdvanceEvent({ event: 'refunded', ref: draft.name || draftOrderId, value: advance });
+    } catch (e) {
+      console.error(`[cad-advance] refund close failed for draft ${draft?.id}: ${e.message}`);
+    }
+  }
+
+  return {
+    handleAdvanceCapture, handleAdvanceLineRemoval, handleAdvanceRedeem, handleAdvanceConversion,
+    handleAdvanceDraftDeleted, handleAdvanceRefund,
+  };
 }
 
 module.exports = { createCadAdvanceHandlers };

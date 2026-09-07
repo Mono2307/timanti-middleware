@@ -65,11 +65,13 @@ function fakeSupabase(rowsByCall) {
       gte(k, v) { state.filters[`${k}>=`] = v; return chain; },
       lt(k, v) { state.filters[`${k}<`] = v; return chain; },
       in(k, v) { state.filters[`${k} in`] = v; return chain; },
+      is(k, v) { state.filters[`${k} is`] = v; return chain; },
       order() { return chain; },
       maybeSingle() { calls.push(state); return Promise.resolve({ data: rowsByCall.config || null }); },
       then(res) { calls.push(state); return Promise.resolve({ data: rowsByCall[state.table] || [], error: null }).then(res); },
       update(patch) { state.update = patch; return chain; },
       upsert(row) { state.upsert = row; calls.push(state); return Promise.resolve({ error: null }); },
+      insert(row) { state.insert = row; calls.push(state); return Promise.resolve({ error: null }); },
     };
     return chain;
   };
