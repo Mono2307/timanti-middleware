@@ -89,5 +89,9 @@ These trigger money movement and customer email, so a typo must fail closed.
 | `SERVER_URL` / `MIDDLEWARE_BASE_URL` | Public base URL, used to build links inside emails |
 | `TYPEFORM_WEBHOOK_SECRET` | Signature verification |
 | `PRICE_UPDATE_WEBHOOK_SECRET` | Guards the price-update trigger |
+| `ADMIN_API_SECRET` | Operator secret for the serialization maintenance endpoints and the lookbook rebuild |
+| `LOOKBOOK_PASSWORD` | Shared password for the shop-floor catalog lookbook. **Unset means the page returns 503, never that it opens** |
+| `LOOKBOOK_SESSION_SECRET` | HMAC key for the lookbook session cookie. Rotating it signs every device out |
+| `LOOKBOOK_SESSION_DAYS` | How long a signed-in device stays signed in (default 30) |
 | `CATALOGUE_URL`, `STORE_MAP_URL`, `SEQUEL_TRACKING_BASE` | Reference data and tracking |
 | `LOG_LEVEL` | `debug` / `info` (default) / `warn` / `error` |

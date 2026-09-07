@@ -36,6 +36,8 @@ const Module = require('module');
 process.env.SUPABASE_URL         ||= 'https://handler-smoke.invalid';
 process.env.SUPABASE_SERVICE_KEY ||= 'not-a-real-key';
 process.env.SHOPIFY_STORE_URL    ||= 'https://handler-smoke.invalid';
+process.env.LOOKBOOK_PASSWORD       ||= 'smoke-test-password';
+process.env.LOOKBOOK_SESSION_SECRET ||= 'smoke-test-secret';
 
 // ── Stub outbound I/O before anything loads ─────────────────────────────────
 const okResp = { data: {}, status: 200, headers: {} };
@@ -150,7 +152,18 @@ const SKIP = new Set();
 // Just enough to get past the early rejects. Without these most POST handlers return 400/401 on
 // their first line and the scan never reaches the code a refactor would have broken.
 process.env.PRICE_UPDATE_WEBHOOK_SECRET ||= 'smoke-test-secret';
+// The lookbook is the only gated PAGE in the service. With no session every one of its
+// handlers stops at the gate and the scan never reaches the body a refactor would break, so
+// mint a real one here — the same reason trigger-price-update gets a secret above.
+const lbAuth = require('../src/core/auth');
+const lookbookCookie = lbAuth.COOKIE + '=' + lbAuth.issueSession();
 const FIXTURES = {
+  '/lookbook':              { headers: { cookie: lookbookCookie } },
+  '/lookbook/login':        { body: { password: process.env.LOOKBOOK_PASSWORD } },
+  '/lookbook/logout':       { headers: { cookie: lookbookCookie } },
+  '/lookbook/catalog.json': { headers: { cookie: lookbookCookie } },
+  '/lookbook/live':         { headers: { cookie: lookbookCookie }, query: { ids: '1,2' } },
+  '/lookbook/refresh':      { headers: { cookie: lookbookCookie } },
   '/api/trigger-price-update': {
     headers: { 'x-webhook-secret': process.env.PRICE_UPDATE_WEBHOOK_SECRET },
     // A plausible rate; manual mode is deliberately NOT used so the ±10% guard cannot reject it.

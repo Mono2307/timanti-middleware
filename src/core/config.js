@@ -106,6 +106,23 @@ const config = {
     sendDepositEmail:   isTrue(process.env.AUTO_SEND_DEPOSIT_EMAIL),
   },
 
+  // ── Staff catalog lookbook ─────────────────────────────────────────────────
+  lookbook: {
+    /** Shared password for the shop-floor lookbook page. Unset ⇒ the page 503s; it never opens. */
+    password:      process.env.LOOKBOOK_PASSWORD,
+    /** HMAC key for the lookbook session cookie. Rotating it signs every device out. */
+    sessionSecret: process.env.LOOKBOOK_SESSION_SECRET,
+    /** How long a signed-in shop-floor device stays signed in. */
+    sessionDays:   Number(process.env.LOOKBOOK_SESSION_DAYS || 30),
+  },
+
+  /**
+   * Shared operator secret for maintenance endpoints. Read directly from process.env by
+   * serialization/routes.js since before this file existed; surfaced here so new code has one
+   * place to find it and docs/ENVIRONMENT.md can stop omitting it.
+   */
+  adminApiSecret:  process.env.ADMIN_API_SECRET,
+
   // ── Misc integrations ──────────────────────────────────────────────────────
   typeformWebhookSecret:   process.env.TYPEFORM_WEBHOOK_SECRET,
   priceUpdateWebhookSecret:process.env.PRICE_UPDATE_WEBHOOK_SECRET,

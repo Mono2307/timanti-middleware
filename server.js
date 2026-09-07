@@ -4353,6 +4353,11 @@ admin.register(app, ctx);
 require('./src/modules/admin/version').register(app);
 require('./src/modules/admin/metafield-explorer').register(app);
 
+// Staff catalog lookbook. Registered last because it is the only page gated by a password
+// rather than a per-URL secret; nothing else in this file depends on it.
+const lookbook = require('./src/modules/lookbook/routes');
+lookbook.register(app);
+
 // ─────────────────────────────────────────
 // Start
 // ─────────────────────────────────────────
@@ -4411,6 +4416,11 @@ app.listen(PORT, async () => {
     accountsEmail: config.email.accounts,
   });
   await initShopifyToken();
+
+  // Lookbook catalog: serve the stored snapshot immediately, rebuild nightly at 04:00 IST
+  // (after the gold-rate reprice, so the snapshot never carries yesterday's prices).
+  // Started after the token so the first build has one to use.
+  lookbook.start();
   console.log('🔄 Background poller started (30s)');
   setInterval(() => pine.pollActiveTxns(ctx), 30000);
 });

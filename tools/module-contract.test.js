@@ -16,7 +16,7 @@ const t = (name, fn) => { fn(); n++; console.log('  ok  ' + name); };
 // back to reaching for process.env or requiring the bootstrap, and the structure would rot
 // without anything failing. These assertions are the enforcement.
 
-const MODULES = ['reporting', 'serialization', 'procurement', 'admin'];
+const MODULES = ['reporting', 'serialization', 'procurement', 'admin', 'lookbook'];
 
 console.log('every module exposes register(app, ctx)');
 for (const m of MODULES) {
