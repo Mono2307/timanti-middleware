@@ -323,7 +323,8 @@ function onOpen() {
       .addItem('📥  Backfill After-Sales Log (dry run)', 'backfillAfterSalesLog')
       .addItem('📥  Backfill After-Sales Log (WRITE)', 'backfillAfterSalesLogApply')
       .addSeparator()
-      .addItem('📊  Add GST row + diamond cap', 'migrateAddTaxRow'))
+      .addItem('📊  Add GST row + diamond cap', 'migrateAddTaxRow')
+      .addItem('🧪  Test CAD Advance Log', 'testCadAdvanceLog'))
     .addToUi();
 }
 
@@ -3450,8 +3451,14 @@ function handleCadAdvanceLog_(body) {
   }
 }
 
-/** Run once from the editor to prove the tab and the append work, before any real advance exists. */
-function testCadAdvanceLog_() {
+/**
+ * Run once to prove the tab and the append work, before any real advance exists.
+ *
+ * NO trailing underscore, deliberately: Apps Script treats a trailing _ as private, and a private
+ * function cannot be picked from the Run dropdown or wired to a menu item. It was named
+ * testCadAdvanceLog_ and was therefore impossible to run, which is the opposite of its purpose.
+ */
+function testCadAdvanceLog() {
   Logger.log(handleCadAdvanceLog_({
     event: 'captured', draft_ref: '#TEST-DELETE-ME', value: 5000,
     customer_name: 'Test row — safe to delete', expires_at: '2027-09-01',
