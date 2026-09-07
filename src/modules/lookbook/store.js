@@ -20,7 +20,7 @@ const crypto = require('crypto');
 const { supabase } = require('../../core/supabase');
 const { config } = require('../../core/config');
 const { log } = require('../../core/logger');
-const { buildSnapshot } = require('./snapshot');
+const { buildSnapshot, SCHEMA_VERSION } = require('./snapshot');
 
 const CONFIG_KEY = 'lookbook_snapshot';
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -147,8 +147,15 @@ function start() {
   setTimeout(async () => {
     const loaded = await loadFromSupabase();
     const age = ageMs();
-    if (!loaded || age === null || age > DAY_MS) {
-      log.info('lookbook', loaded ? 'stored snapshot is stale, rebuilding' : 'no stored snapshot, building');
+    // A snapshot written by an older build is served (better than a blank page) but rebuilt at
+    // once: the UI derives its filters from this payload, so stale data silently hides new ones.
+    const staleSchema = !!loaded && loaded.schemaVersion !== SCHEMA_VERSION;
+    if (staleSchema) {
+      log.info('lookbook',
+        `stored snapshot is schema v${loaded.schemaVersion || 'none'}, code expects v${SCHEMA_VERSION} - rebuilding now`);
+    }
+    if (!loaded || staleSchema || age === null || age > DAY_MS) {
+      if (!staleSchema) log.info('lookbook', loaded ? 'stored snapshot is stale, rebuilding' : 'no stored snapshot, building');
       kick('boot');
     }
   }, 20 * 1000); // let the Shopify token and Supabase client settle first, as the other sweeps do

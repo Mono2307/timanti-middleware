@@ -360,11 +360,6 @@ ${SHELL_CSS}
     var l = S.live[v.id];
     return l && typeof l.price === 'number' ? l.price : v.price;
   }
-  function stockOf(v) {
-    var l = v && S.live[v.id];
-    if (!l) return '';
-    return l.stock > 0 ? 'In store' : 'Made to order';
-  }
 
   /* -- filtering ---------------------------------------------------------- */
   function matches(it) {
@@ -534,7 +529,6 @@ ${SHELL_CSS}
     out.push('</div><div class="info">');
     out.push('<div class="name">' + esc(it.title) + '</div>');
     out.push('<div class="cost" data-price="' + it.id + '">' + priceHtml(it, v) + '</div>');
-    out.push('<div class="avail" data-stock="' + it.id + '">' + esc(stockOf(v)) + '</div>');
     out.push('<div class="swatches">');
     for (var t = 0; t < it.tones.length; t++) {
       var tone = it.tones[t];
@@ -572,9 +566,7 @@ ${SHELL_CSS}
       for (var i = 0; i < S.filtered.length; i++) {
         var it = S.filtered[i], v = cardVariant(it);
         var pEl = document.querySelector('[data-price="' + it.id + '"]');
-        var sEl = document.querySelector('[data-stock="' + it.id + '"]');
         if (pEl) pEl.innerHTML = priceHtml(it, v);
-        if (sEl) sEl.textContent = stockOf(v);
       }
     });
   }
@@ -655,9 +647,9 @@ ${SHELL_CSS}
     if (it.category) out.push('<div class="eyebrow">' + esc(it.category) + '</div>');
     out.push('<h1>' + esc(it.title) + '</h1>');
     out.push('<div class="price">' + (p > 0 ? money.format(p) : 'Price on request') + '</div>');
-    var st = stockOf(v);
-    out.push('<div class="stock">' + (st ? '<span class="dot"></span>' + esc(st) : '') +
-             (it.draft ? '<span class="flag">Not published</span>' : '') + '</div>');
+    /* Availability is deliberately not shown. Nearly everything here is made to order, so the
+       label carried no information and read as a caveat next to the price in front of a customer. */
+    if (it.draft) out.push('<div class="stock"><span class="flag">Not published</span></div>');
 
     out.push(optHtml('karat', 'Karat', it.karats));
     out.push(optHtml('tone', 'Metal', it.tones));

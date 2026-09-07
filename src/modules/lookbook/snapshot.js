@@ -24,6 +24,17 @@ const { log } = require('../../core/logger');
 // Page sizes are a cost trade-off, not a preference: cost is roughly `first` x per-node cost,
 // against a 1000-point ceiling. These are conservative starting values; gql() logs the real
 // actualQueryCost of the first page of each pass so they can be raised on evidence.
+/**
+ * Bump whenever the snapshot gains or changes a field the UI depends on.
+ *
+ * WHY THIS EXISTS: the filter bar renders only the facets present in the stored snapshot, so
+ * shipping code that adds a facet does nothing until the next scheduled rebuild - new code reading
+ * old data, with no error anywhere. Deploying stone cut and centre stone put exactly that in front
+ * of a customer. A version stamp makes a deploy that changes the shape of the data rebuild on boot
+ * instead of waiting for the clock.
+ */
+const SCHEMA_VERSION = 2;
+
 const PRODUCT_PAGE = 100;
 const VARIANT_PAGE = 100;
 
@@ -424,6 +435,7 @@ async function buildSnapshot() {
   const items = normalized.items;
 
   const snapshot = {
+    schemaVersion: SCHEMA_VERSION,
     builtAt: new Date().toISOString(),
     buildMs: Date.now() - startedAt,
     productCount: items.length,
@@ -441,6 +453,7 @@ async function buildSnapshot() {
 }
 
 module.exports = {
+  SCHEMA_VERSION,
   buildSnapshot, normalize, buildFacets, parseList,
   parseSku, optionsOf, pickOption, toneLabel, grossWeightOf, bandOf, numericId, BANDS,
 };
