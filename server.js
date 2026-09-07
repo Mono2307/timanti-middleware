@@ -2620,6 +2620,7 @@ const CAD_SWEEP_DEPS = () => ({
   completeDraftOrder: (draftId) => completeShopifyOrder(draftId, null),
   sendEmail, withStoreCc,
   buildCadAdvanceDigestHtml: require('./src/integrations/email/templates').buildCadAdvanceDigestHtml,
+  buildCadAdvanceExpiryHtml: require('./src/integrations/email/templates').buildCadAdvanceExpiryHtml,
   accountsEmail: config.email.accounts,
 });
 

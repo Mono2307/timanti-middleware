@@ -14,7 +14,24 @@
 
 const CAD_ADVANCE_MODE = 'CAD Advance';   // installment mode for a Path B absorbed leg (no tender moves)
 const CAD_ADVANCE_DAYS = 365;             // validity, from custom.advance_date (the day payment landed)
-const CAD_STALE_DAYS   = 30;              // an untouched advance-only draft converts after this
+const CAD_STALE_DAYS   = 60;              // an untouched advance-only draft converts after this
+// The customer reminder goes out 11 calendar months after the payment — roughly a month before the
+// advance lapses, which is enough notice to come in and use it. Calendar months, not 335 days, so
+// the mail lands on the same day-of-month the money was taken.
+const CAD_REMINDER_MONTHS = 11;
+
+// Add whole calendar months to a YYYY-MM-DD date, clamping to the end of a short month (31 Mar + 11
+// months → 28/29 Feb, never 3 Mar). Returns YYYY-MM-DD.
+function addMonths(dateStr, months) {
+  const d = new Date(`${String(dateStr).slice(0, 10)}T00:00:00Z`);
+  if (isNaN(d.getTime())) return null;
+  const day = d.getUTCDate();
+  d.setUTCDate(1);
+  d.setUTCMonth(d.getUTCMonth() + months);
+  const lastDay = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();
+  d.setUTCDate(Math.min(day, lastDay));
+  return d.toISOString().slice(0, 10);
+}
 
 function isCadAdvanceLine(li) {
   return /cad advance/i.test(String(li.title || '')) || /^CAD-ADV/i.test(String(li.sku || ''));
@@ -60,7 +77,7 @@ function cadAdvanceLineTotal(doc) {
 function cadLedgerKey(docName) { return String(docName || '').trim(); }
 
 module.exports = {
-  CAD_ADVANCE_MODE, CAD_ADVANCE_DAYS, CAD_STALE_DAYS,
+  CAD_ADVANCE_MODE, CAD_ADVANCE_DAYS, CAD_STALE_DAYS, CAD_REMINDER_MONTHS, addMonths,
   isCadAdvanceLine, isNegativeDiscountLine, hasCadAdvanceLine,
   hasProductLineBesidesCad, isCadAdvanceOnly, cadAdvanceLineTotal, cadLedgerKey,
 };

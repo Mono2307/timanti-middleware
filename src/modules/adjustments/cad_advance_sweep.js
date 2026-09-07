@@ -7,7 +7,7 @@
  * TIME passed has no such trigger, and that is exactly the part accounts care about. Three jobs, one
  * daily loop:
  *
- *   1. CONVERT stale advance-only drafts (30 days). An advance sitting on an open draft is invisible
+ *   1. CONVERT stale advance-only drafts (60 days). An advance sitting on an open draft is invisible
  *      to every report that reads orders, so it converts on its own and becomes a real document.
  *      Its 365-day clock is NOT restarted by this — validity runs from the day the money landed.
  *
@@ -15,8 +15,11 @@
  *      derived state cannot refuse a redemption: the redeem gate reads advance_status off the
  *      Shopify order, so expiry has to be written to both the ledger and the document.
  *
- *   3. DIGEST to accounts, monthly. What crossed one year in the month just ended (treatment must
- *      change) and what crosses in the next 30 days (early warning).
+ *   3. REMIND the customer 11 months after the money was taken, while the advance can still be
+ *      used. The mirror of the voucher expiry mail.
+ *
+ *   4. DIGEST to accounts, monthly. What is due to expire during this month, and the write-off
+ *      list: advances whose year has run out with nothing bought against them.
  *
  * WHY A CONFIG MARKER FOR THE DIGEST
  * The daily loop would re-send the digest every day of the month, and an in-memory guard would
@@ -26,11 +29,14 @@
  *
  * Deps (injected):
  *   { supabase, axios, storeUrl, getShopifyToken, updateOrderMetafields, completeDraftOrder,
- *     sendEmail, withStoreCc, buildCadAdvanceDigestHtml, accountsEmail }
+ *     sendEmail, withStoreCc, buildCadAdvanceDigestHtml, buildCadAdvanceExpiryHtml, accountsEmail }
  */
 
-const { CAD_STALE_DAYS, isCadAdvanceOnly } = require('./cad_advance');
+const { CAD_STALE_DAYS, CAD_REMINDER_MONTHS, addMonths, isCadAdvanceOnly } = require('./cad_advance');
 const creditInstruments = require('./credit_instruments');
+// The customer-email lookup is identical to the voucher reminder's — Shopify customer record first,
+// then the source order's address. Reused rather than re-implemented so the two cannot drift.
+const { resolveCustomerEmail } = require('./voucher_expiry_sweep');
 
 const DAY_MS        = 24 * 60 * 60 * 1000;
 const UPCOMING_DAYS = 30;
@@ -136,7 +142,114 @@ async function expireOverdueAdvances(deps, { dryRun = false } = {}) {
   return { expired: rows.length, stamped };
 }
 
-// ── 3. Monthly digest to accounts ───────────────────────────────────────────────────────────────
+// ── 3. Customer reminder, 11 months after the money was taken ───────────────────────────────────
+//
+// The mirror of the voucher expiry mail: an advance the customer has forgotten is worth a nudge
+// while they can still use it, and a month is enough notice to come in.
+//
+// WHO GETS IT. Anything not yet spent — status 'open' (never committed to a purchase) or 'applied'
+// (sitting on a draft that has not converted). 'redeemed' and 'expired' are excluded: one is already
+// spent, the other is past saving. Note the founder's phrasing was "applied and not redeemed"; in
+// the data a standalone untouched advance is 'open', not 'applied', so both states are included or
+// the common case would get no reminder at all.
+//
+// NOT SENDING TWICE. The voucher sweep leans on a one-day window plus an in-process Set, and accepts
+// that a restart inside that day re-sends. For a customer-facing mail about their money that is not
+// good enough, so the serials reminded are persisted in the config table — no migration needed, and
+// the volume is a handful of rows a year.
+const REMINDED_KEY = 'cad_advance_reminded';
+
+async function readReminded(supabase) {
+  try {
+    const { data } = await supabase.from('config').select('value').eq('key', REMINDED_KEY).maybeSingle();
+    if (!data || !data.value) return [];
+    const v = typeof data.value === 'string' ? JSON.parse(data.value) : data.value;
+    return Array.isArray(v) ? v : [];
+  } catch (err) {
+    // Unreadable marker → treat as "none reminded" would re-send to customers. Refuse instead: a
+    // missed reminder is recoverable next run, a duplicate mail about their money is not.
+    console.error(`[cad-sweep] reminded-marker read failed (${err.message}) — skipping reminders this run`);
+    return null;
+  }
+}
+
+async function remindExpiring(deps, { dryRun = false, now = Date.now() } = {}) {
+  const { supabase, sendEmail, withStoreCc, buildCadAdvanceExpiryHtml, getShopifyToken } = deps;
+  const today = iso(now);
+
+  const alreadyReminded = await readReminded(supabase);
+  if (alreadyReminded === null) return { due: 0, sent: 0, skipped: 0, blocked: true };
+
+  const { data, error } = await supabase.from(TABLE)
+    .select('serial_code, value, customer_id, customer_name, source_order_name, issued_at, expires_at, status')
+    .eq('instrument_type', 'cad_advance').in('status', ['open', 'applied']);
+  if (error) throw new Error(`cad reminder query: ${error.message}`);
+
+  const due = (data || []).filter(r => {
+    if (alreadyReminded.includes(r.serial_code)) return false;
+    const when = addMonths(r.issued_at, CAD_REMINDER_MONTHS);
+    return when && when <= today;          // <= not ===, so a missed day still goes out
+  });
+  if (!due.length) return { due: 0, sent: 0, skipped: 0 };
+
+  const token = deps.token || (getShopifyToken ? await getShopifyToken() : null);
+  const lookup = deps.customerEmailFor || ((row) => resolveCustomerEmail({ ...deps, token }, row));
+  let sent = 0, skipped = 0;
+  const nowSent = [];
+
+  for (const row of due) {
+    let email = null;
+    try { email = await lookup(row); }
+    catch (err) { console.warn(`[cad-sweep] email lookup failed for ${row.serial_code}: ${err.message}`); }
+    if (!email) {
+      // Worth logging loudly: an advance nobody can be reminded about will simply lapse.
+      console.warn(`[cad-sweep] no email for advance ${row.serial_code} (Rs${row.value}) — cannot remind`);
+      skipped++;
+      continue;
+    }
+    const expiryDate = new Date(row.expires_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' });
+    if (dryRun) {
+      console.log(`[cad-sweep] DRY RUN would remind ${row.serial_code} → ${email} (expires ${expiryDate})`);
+      sent++;
+      continue;
+    }
+    try {
+      await sendEmail({
+        to:      email,
+        cc:      withStoreCc ? withStoreCc() : undefined,
+        subject: `Your Timanti design advance expires on ${expiryDate}`,
+        html:    buildCadAdvanceExpiryHtml({
+          advanceValue:  row.value,
+          expiryDate,
+          originalOrder: row.source_order_name || row.serial_code,
+          customerName:  row.customer_name || '',
+        }),
+      });
+      nowSent.push(row.serial_code);
+      sent++;
+      console.log(`[cad-sweep] reminded ${row.serial_code} → ${email} (expires ${expiryDate})`);
+    } catch (err) {
+      // One bad address must not stop the rest of the run, and must not be marked as reminded.
+      console.error(`[cad-sweep] reminder send failed for ${row.serial_code}: ${err.message}`);
+      skipped++;
+    }
+  }
+
+  // Persist only what actually went out. Written once at the end so a crash mid-loop re-sends at
+  // most the tail, never the whole batch.
+  if (nowSent.length) {
+    try {
+      const { error: wErr } = await supabase.from('config')
+        .upsert({ key: REMINDED_KEY, value: JSON.stringify(alreadyReminded.concat(nowSent)) }, { onConflict: 'key' });
+      if (wErr) throw new Error(wErr.message);
+    } catch (err) {
+      console.error(`[cad-sweep] could not persist reminded serials (${err.message}) — these may be re-sent: ${nowSent.join(', ')}`);
+    }
+  }
+  return { due: due.length, sent, skipped };
+}
+
+// ── 4. Monthly digest to accounts ───────────────────────────────────────────────────────────────
 async function readDigestMarker(supabase) {
   try {
     const { data } = await supabase.from('config').select('value').eq('key', DIGEST_KEY).maybeSingle();
@@ -159,53 +272,62 @@ async function writeDigestMarker(supabase, month) {
 async function sendMonthlyDigest(deps, { dryRun = false, force = false, now = Date.now() } = {}) {
   const { supabase, sendEmail, withStoreCc, buildCadAdvanceDigestHtml, accountsEmail } = deps;
 
-  const today            = new Date(now);
-  const firstOfThisMonth = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1));
-  const lastMonthEnd     = new Date(firstOfThisMonth.getTime() - DAY_MS);
-  const lastMonthStart   = new Date(Date.UTC(lastMonthEnd.getUTCFullYear(), lastMonthEnd.getUTCMonth(), 1));
-  const month            = iso(lastMonthStart).slice(0, 7);            // "2026-07"
-  const monthLabel       = lastMonthStart.toLocaleDateString('en-IN', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+  const today = new Date(now);
+  const monthStart = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1));
+  const monthEnd   = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() + 1, 0));
+  const month      = iso(monthStart).slice(0, 7);                       // "2026-09"
+  const monthLabel = monthStart.toLocaleDateString("en-IN", { month: "long", year: "numeric", timeZone: "UTC" });
 
+  // Once per calendar month, and in practice that means the 1st — the daily loop's first run of a
+  // new month finds no marker for it and sends.
+  //
+  // Deliberately NOT "only if today is the 1st". A machine that happens to be down or deploying on
+  // the 1st would then skip the month entirely, and a missed write-off list is worse than one that
+  // arrives on the 2nd. The marker gives "first opportunity each month" instead.
   if (!force) {
     const last = await readDigestMarker(supabase);
     if (last === month) return { sent: false, reason: `already sent for ${month}`, month };
   }
 
-  const { data: crossedRaw, error } = await supabase.from(TABLE)
-    .select('serial_code, value, customer_name, source_order_name, issued_at, expires_at')
-    .eq('instrument_type', 'cad_advance').eq('status', 'expired')
-    .gte('expires_at', iso(lastMonthStart)).lte('expires_at', iso(lastMonthEnd))
-    .order('expires_at', { ascending: true });
-  if (error) throw new Error(`cad digest crossed query: ${error.message}`);
-
-  const upcoming = await creditInstruments.listExpiringBetween(supabase, {
-    instrumentType: 'cad_advance',
-    from: iso(now),
-    to:   iso(now + UPCOMING_DAYS * DAY_MS),
+  // SECTION 1 — due to expire during this calendar month. Still redeemable today, so this is the
+  // window in which accounts can chase or the store can call the customer in.
+  const expiringThisMonth = await creditInstruments.listExpiringBetween(supabase, {
+    instrumentType: "cad_advance",
+    from: iso(monthStart),
+    to:   iso(monthEnd),
   });
 
-  const crossed = crossedRaw || [];
+  // SECTION 2 — the write-off list. Advances whose year has run out with nothing bought against
+  // them: never redeemed, never converted under Path B. Their order numbers are what accounts need
+  // to move the money out of trade advances and close the loop.
+  const { data: writeOffRaw, error } = await supabase.from(TABLE)
+    .select("serial_code, value, customer_name, source_order_name, issued_at, expires_at, status")
+    .eq("instrument_type", "cad_advance").eq("status", "expired")
+    .order("expires_at", { ascending: true });
+  if (error) throw new Error("cad digest write-off query: " + error.message);
+  const writeOff = writeOffRaw || [];
+
   // Silence is deliberate: a month with nothing to report sends nothing. A recurring "no advances
   // this month" email is exactly how a real one comes to be skimmed past.
-  if (!crossed.length && !upcoming.length) {
+  if (!expiringThisMonth.length && !writeOff.length) {
     if (!dryRun) await writeDigestMarker(supabase, month);
-    return { sent: false, reason: 'nothing to report', month };
+    return { sent: false, reason: "nothing to report", month };
   }
 
   if (dryRun) {
-    console.log(`[cad-sweep] DRY RUN digest ${monthLabel}: ${crossed.length} crossed, ${upcoming.length} upcoming → ${accountsEmail}`);
-    return { sent: false, dryRun: true, month, crossed: crossed.length, upcoming: upcoming.length };
+    console.log("[cad-sweep] DRY RUN digest " + monthLabel + ": " + expiringThisMonth.length + " expiring this month, " + writeOff.length + " to write off -> " + accountsEmail);
+    return { sent: false, dryRun: true, month, expiring: expiringThisMonth.length, writeOff: writeOff.length };
   }
 
   await sendEmail({
     to:      accountsEmail,
     cc:      withStoreCc ? withStoreCc() : undefined,
-    subject: `CAD advances — ${monthLabel}: ${crossed.length} crossed one year, ${upcoming.length} due within 30 days`,
-    html:    buildCadAdvanceDigestHtml({ monthLabel, crossed, upcoming }),
+    subject: "CAD advances — " + monthLabel + ": " + expiringThisMonth.length + " expiring this month, " + writeOff.length + " to write off",
+    html:    buildCadAdvanceDigestHtml({ monthLabel, expiring: expiringThisMonth, writeOff }),
   });
   await writeDigestMarker(supabase, month);
-  console.log(`[cad-sweep] digest sent for ${month} → ${accountsEmail} (${crossed.length} crossed, ${upcoming.length} upcoming)`);
-  return { sent: true, month, crossed: crossed.length, upcoming: upcoming.length };
+  console.log("[cad-sweep] digest sent for " + month + " -> " + accountsEmail + " (" + expiringThisMonth.length + " expiring, " + writeOff.length + " write-off)");
+  return { sent: true, month, expiring: expiringThisMonth.length, writeOff: writeOff.length };
 }
 
 // ── Orchestration ───────────────────────────────────────────────────────────────────────────────
@@ -218,6 +340,7 @@ async function runCadAdvanceSweep(deps, opts = {}) {
   const stages = [
     ['stale',  () => convertStaleDrafts(deps, opts)],
     ['expiry', () => expireOverdueAdvances(deps, opts)],
+    ['remind', () => remindExpiring(deps, opts)],
     ['digest', () => sendMonthlyDigest(deps, opts)],
   ];
   for (const [name, fn] of stages) {
@@ -241,6 +364,6 @@ function startCadAdvanceSweep(deps) {
 
 module.exports = {
   runCadAdvanceSweep, startCadAdvanceSweep,
-  convertStaleDrafts, expireOverdueAdvances, sendMonthlyDigest,
+  convertStaleDrafts, expireOverdueAdvances, remindExpiring, sendMonthlyDigest,
   CAD_STALE_DAYS, UPCOMING_DAYS, DIGEST_KEY,
 };

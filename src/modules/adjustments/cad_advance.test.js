@@ -1,9 +1,9 @@
 const assert = require('assert');
 const {
   isCadAdvanceLine, hasCadAdvanceLine, hasProductLineBesidesCad, isCadAdvanceOnly,
-  cadAdvanceLineTotal, cadLedgerKey, CAD_ADVANCE_MODE,
+  cadAdvanceLineTotal, cadLedgerKey, CAD_ADVANCE_MODE, addMonths,
 } = require('./cad_advance');
-const { convertStaleDrafts, expireOverdueAdvances, sendMonthlyDigest } = require('./cad_advance_sweep');
+const { convertStaleDrafts, expireOverdueAdvances, remindExpiring, sendMonthlyDigest } = require('./cad_advance_sweep');
 const { createCadAdvanceHandlers } = require('./cad_advance_handlers');
 
 let n = 0;
@@ -208,27 +208,124 @@ at('dry run reports without expiring anything', async () => {
   assert.deepStrictEqual(stamped, []);
 });
 
+console.log('addMonths — the 11-month reminder date');
+t('adds whole calendar months', () => {
+  assert.strictEqual(addMonths('2026-01-15', 11), '2026-12-15');
+  assert.strictEqual(addMonths('2026-09-01', 11), '2027-08-01');
+});
+t('clamps into a short month rather than spilling into the next', () => {
+  // 31 Mar + 11 months is 28 Feb, never 3 March — a reminder must not overshoot into the month
+  // where the advance has already lapsed.
+  assert.strictEqual(addMonths('2026-03-31', 11), '2027-02-28');
+  assert.strictEqual(addMonths('2028-03-31', 11), '2029-02-28');
+});
+t('survives rubbish input', () => {
+  assert.strictEqual(addMonths('', 11), null);
+  assert.strictEqual(addMonths('not-a-date', 11), null);
+});
+
+heading('remindExpiring — the customer nudge at 11 months');
+at('emails the customer once the 11-month mark is reached', async () => {
+  let sent = null;
+  const res = await remindExpiring({
+    supabase: fakeSupabase({ credit_instruments: [
+      { serial_code: '#1042', value: '5000', customer_name: 'A Kumar', source_order_name: '#1042',
+        issued_at: '2025-10-05', expires_at: '2026-10-05', status: 'open' },
+    ] }),
+    sendEmail: async (m) => { sent = m; },
+    withStoreCc: () => [],
+    buildCadAdvanceExpiryHtml: () => '<i>advance</i>',
+    customerEmailFor: async () => 'customer@example.com',
+  }, { now: Date.UTC(2026, 8, 10) });     // 10 Sep 2026 — past 5 Sep, the 11-month mark
+  assert.strictEqual(res.sent, 1);
+  assert.strictEqual(sent.to, 'customer@example.com');
+  assert.match(sent.subject, /design advance expires/i);
+});
+
+at('stays quiet before the 11-month mark', async () => {
+  let sent = false;
+  const res = await remindExpiring({
+    supabase: fakeSupabase({ credit_instruments: [
+      { serial_code: '#1043', value: '5000', issued_at: '2026-08-01', expires_at: '2027-08-01', status: 'open' },
+    ] }),
+    sendEmail: async () => { sent = true; },
+    withStoreCc: () => [],
+    buildCadAdvanceExpiryHtml: () => '<i></i>',
+    customerEmailFor: async () => 'customer@example.com',
+  }, { now: Date.UTC(2026, 8, 10) });
+  assert.strictEqual(sent, false);
+  assert.strictEqual(res.due, 0);
+});
+
+at('never mails the same advance twice', async () => {
+  let sent = false;
+  const res = await remindExpiring({
+    supabase: fakeSupabase({
+      config: { value: JSON.stringify(['#1042']) },
+      credit_instruments: [
+        { serial_code: '#1042', value: '5000', issued_at: '2025-10-05', expires_at: '2026-10-05', status: 'open' },
+      ] }),
+    sendEmail: async () => { sent = true; },
+    withStoreCc: () => [],
+    buildCadAdvanceExpiryHtml: () => '<i></i>',
+    customerEmailFor: async () => 'customer@example.com',
+  }, { now: Date.UTC(2026, 8, 10) });
+  assert.strictEqual(sent, false);
+  assert.strictEqual(res.due, 0);
+});
+
+at('an advance with no contactable customer is logged, not silently dropped', async () => {
+  const res = await remindExpiring({
+    supabase: fakeSupabase({ credit_instruments: [
+      { serial_code: '#1044', value: '5000', issued_at: '2025-10-05', expires_at: '2026-10-05', status: 'applied' },
+    ] }),
+    sendEmail: async () => { throw new Error('should not send'); },
+    withStoreCc: () => [],
+    buildCadAdvanceExpiryHtml: () => '<i></i>',
+    customerEmailFor: async () => null,
+  }, { now: Date.UTC(2026, 8, 10) });
+  assert.strictEqual(res.sent, 0);
+  assert.strictEqual(res.skipped, 1);
+});
+
 heading('sendMonthlyDigest');
-at('reports the month just ended, not the current one', async () => {
+at('reports THIS month — what is due to expire before the month is out', async () => {
   let sent = null;
   const res = await sendMonthlyDigest({
     supabase: fakeSupabase({ credit_instruments: [
-      { serial_code: '#1042', value: '5000', customer_name: 'A', expires_at: '2026-07-14', issued_at: '2025-07-14' },
+      { serial_code: '#1042', value: '5000', customer_name: 'A', expires_at: '2026-08-14', issued_at: '2025-08-14' },
     ] }),
     sendEmail: async (m) => { sent = m; },
     withStoreCc: () => ['store@x'],
     buildCadAdvanceDigestHtml: ({ monthLabel }) => `<i>${monthLabel}</i>`,
     accountsEmail: 'accounts@x',
-  }, { now: Date.UTC(2026, 7, 3) });      // 3 Aug 2026 → digest covers July
-  assert.strictEqual(res.month, '2026-07');
-  assert.ok(sent && /July 2026/.test(sent.subject), 'subject names the reported month');
+  }, { now: Date.UTC(2026, 7, 1) });      // 1 Aug 2026 → the August window
+  assert.strictEqual(res.month, '2026-08');
+  assert.ok(sent && /August 2026/.test(sent.subject), 'subject names the month being reported');
   assert.strictEqual(sent.to, 'accounts@x');
+});
+
+at('sends on the 1st, and still catches up if the 1st was missed', async () => {
+  // Not gated on the calendar day: a machine down or deploying on the 1st would otherwise skip the
+  // month entirely, and a missed write-off list is worse than one that lands on the 4th.
+  let sent = false;
+  const res = await sendMonthlyDigest({
+    supabase: fakeSupabase({ credit_instruments: [
+      { serial_code: '#1050', value: '2000', expires_at: '2026-08-20', issued_at: '2025-08-20' },
+    ] }),
+    sendEmail: async () => { sent = true; },
+    withStoreCc: () => [],
+    buildCadAdvanceDigestHtml: () => '<i></i>',
+    accountsEmail: 'accounts@x',
+  }, { now: Date.UTC(2026, 7, 4) });      // the 4th, marker unset
+  assert.strictEqual(sent, true);
+  assert.strictEqual(res.month, '2026-08');
 });
 
 at('does not re-send once the marker records the month', async () => {
   let sent = false;
   const res = await sendMonthlyDigest({
-    supabase: fakeSupabase({ config: { value: '2026-07' }, credit_instruments: [] }),
+    supabase: fakeSupabase({ config: { value: '2026-08' }, credit_instruments: [] }),
     sendEmail: async () => { sent = true; },
     withStoreCc: () => [],
     buildCadAdvanceDigestHtml: () => '<i></i>',

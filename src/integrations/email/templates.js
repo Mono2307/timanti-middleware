@@ -630,7 +630,8 @@ function buildDraftRefundHtml({
 // `crossed`  — completed 365 days in the month just ended. Treatment must change now.
 // `upcoming` — complete 365 days in the next 30 days. Early warning.
 // Rows: { serial_code, value, customer_name, source_order_name, issued_at, expires_at }.
-function buildCadAdvanceDigestHtml({ monthLabel, crossed = [], upcoming = [] }) {
+function buildCadAdvanceDigestHtml({ monthLabel, expiring = [], writeOff = [] }) {
+  const crossed = writeOff, upcoming = expiring;   // section bodies below read these names
   const total = (rows) => rows.reduce((s, r) => s + (parseFloat(r.value) || 0), 0);
   const date  = (d) => (d ? new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—');
 
@@ -665,15 +666,41 @@ function buildCadAdvanceDigestHtml({ monthLabel, crossed = [], upcoming = [] }) 
         heading: `CAD advances — ${esc(monthLabel)}`,
         body: 'Design advances are held as trade advances until they are redeemed or their one-year validity runs out. These have reached, or are about to reach, that point.',
       })
-    + block('Crossed one year', crossed,
-        'Validity has lapsed. These are no longer redeemable against a purchase, and their accounting treatment needs to change. They have already been marked expired in the system, so the counter cannot apply them.')
-    + block('Crossing within 30 days', upcoming,
-        'Still redeemable today. If a customer is expected back, this is the window to tell the store.')
+    + block('Expiring this month', upcoming,
+        'Still redeemable today, but their one-year window closes before the month is out. If a customer is expected back, this is the last window to tell the store.')
+    + block('Expired — to write off', crossed,
+        'One year has passed with nothing bought against these. They were never redeemed and never converted under Path B, and the system has already marked them expired so the counter cannot apply them. The reference column is the order number to write off against.')
+    + foot();
+}
+
+// Customer-facing CAD advance reminder — the design-advance twin of the voucher expiry mail, sent
+// 11 months after the money was taken. Deliberately warm and short: the customer is being told they
+// have money on file and roughly a month to use it, not chased.
+function buildCadAdvanceExpiryHtml({ advanceValue, expiryDate, originalOrder, customerName }) {
+  return head()
+    + contentBlock({
+        ref: originalOrder ? `Design Advance — ${originalOrder}` : null,
+        heading: 'Your design advance is still with us',
+        body: `${customerName ? esc(customerName) + ', a' : 'A'} design advance of <strong>${money(advanceValue)}</strong> is held against your name and can be used towards any purchase until <strong>${esc(expiryDate)}</strong>.`,
+        buttonsHtml: button('Browse New Arrivals', CATALOGUE_URL),
+        storeLinkHtml: storeLink('or visit our HSR Layout store', STORE_MAP_URL),
+        timelineHtml: timeline('Mention this email in store and the amount will be adjusted against your purchase. Our consultants can also pick up the design where you left it.'),
+      })
+    + section(
+        h3('Advance details')
+        + summary([
+            { label: 'Reference',      value: originalOrder || '—' },
+            { label: 'Valid until',    value: expiryDate },
+            { label: 'Amount on file', value: money(advanceValue), total: true },
+          ])
+      )
+    + standardFooter()
     + foot();
 }
 
 module.exports = {
   buildCadAdvanceDigestHtml,
+  buildCadAdvanceExpiryHtml,
   buildRepairReceivedHtml,
   buildRepairEstimateV2Html,
   buildRepairConfirmedHtml,
