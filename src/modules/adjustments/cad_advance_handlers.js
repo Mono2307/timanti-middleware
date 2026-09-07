@@ -37,6 +37,33 @@ const {
   hasProductLineBesidesCad, cadAdvanceLineTotal, cadLedgerKey,
 } = require('./cad_advance');
 
+// Single-flight guard, the draft-side twin of _numberingInFlight in serialization/routes.js.
+//
+// ONE staff action produces SEVERAL draft_orders/update deliveries — this middleware writes tags and
+// metafields to the very draft whose webhook it is handling, and each write makes Shopify fire
+// again. Every handler here follows read-check-write ("has this already been captured?"), so when
+// four deliveries arrive together they ALL read the pre-write state, all pass the check, and all
+// act. Observed live on #D208: one capture, four identical rows in the sheet log.
+//
+// Four rows is the harmless end of it. The redeem path would absorb the same advance into four
+// different installment slots and quadruple amount_paid, because installmentLegPatch picks the next
+// FREE slot and each concurrent pass sees the same free one.
+//
+// In-process is sufficient and matches the serialization guard: the app runs a single machine and
+// the race is between concurrent handlers inside one process. If this ever runs multi-instance the
+// lock has to move to the database.
+const _advanceInFlight = new Set();
+
+async function singleFlight(key, label, fn) {
+  if (_advanceInFlight.has(key)) {
+    console.log(`[cad-advance] ${label} already in flight for ${key} — duplicate webhook ignored`);
+    return;
+  }
+  _advanceInFlight.add(key);
+  try { return await fn(); }
+  finally { _advanceInFlight.delete(key); }
+}
+
 function createCadAdvanceHandlers(deps) {
   const {
     axios, storeUrl, supabase, getShopifyToken,
@@ -139,6 +166,7 @@ function createCadAdvanceHandlers(deps) {
   // Also opens the register row in credit_instruments, so an advance is tracked from the moment the
   // money lands — whether or not it is ever redeemed.
   async function handleAdvanceCapture(draft) {
+    return singleFlight(`capture:${draft && draft.id}`, 'capture', async () => {
     try {
       if (!hasCadAdvanceLine(draft)) return;
       const draftOrderId = draft.id.toString();
@@ -215,6 +243,7 @@ function createCadAdvanceHandlers(deps) {
     } catch (e) {
       console.error(`[cad-advance] capture failed for draft ${draft?.id}:`, e.message);
     }
+    });
   }
 
   // CAD Advance LINE REMOVAL (Path A): the customer came back and bought.
@@ -233,6 +262,7 @@ function createCadAdvanceHandlers(deps) {
   // Only fires once the advance has actually been CAPTURED (advance_status set). Removing the line
   // before its payment is recorded would delete the charge while the money is still unaccounted for.
   async function handleAdvanceLineRemoval(draft) {
+    return singleFlight(`line:${draft && draft.id}`, 'line removal', async () => {
     try {
       if (!hasCadAdvanceLine(draft)) return;              // nothing to remove (or already removed)
       if (!hasProductLineBesidesCad(draft)) return;       // still a standalone advance — the line is the bill
@@ -273,6 +303,7 @@ function createCadAdvanceHandlers(deps) {
     } catch (e) {
       console.error(`[cad-advance] line removal failed for draft ${draft?.id}:`, e.message);
     }
+    });
   }
 
   // CAD Advance REDEEM (Path B): staff put the advance order # in intake.advance_ref on a NEW sale draft.
@@ -282,6 +313,7 @@ function createCadAdvanceHandlers(deps) {
   // An expired advance fails the status gate on its own once the sweep has written 'expired'.
   // Transient lookup errors leave the ref in place to retry; never throws into the chain.
   async function handleAdvanceRedeem(draft) {
+    return singleFlight(`redeem:${draft && draft.id}`, 'redeem', async () => {
     try {
       const draftOrderId = draft.id.toString();
       const base = storeUrl;
@@ -445,6 +477,7 @@ function createCadAdvanceHandlers(deps) {
     } catch (e) {
       console.error(`[cad-advance] redeem failed for draft ${draft?.id}:`, e.message);
     }
+    });
   }
 
   // CAD Advance at CONVERSION — the step that finally closes the loop on an advance.
@@ -579,6 +612,7 @@ function createCadAdvanceHandlers(deps) {
   // Only fires on a FULL refund of the advance. A partial refund leaves a live balance, and deciding
   // what that means is a judgement call, not something to guess at silently — it is logged instead.
   async function handleAdvanceRefund(draft) {
+    return singleFlight(`refund:${draft && draft.id}`, 'refund', async () => {
     try {
       const draftOrderId = draft.id.toString();
       const token = await getShopifyToken();
@@ -605,6 +639,7 @@ function createCadAdvanceHandlers(deps) {
     } catch (e) {
       console.error(`[cad-advance] refund close failed for draft ${draft?.id}: ${e.message}`);
     }
+    });
   }
 
   return {

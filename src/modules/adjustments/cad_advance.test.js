@@ -168,6 +168,36 @@ at('leaves a standalone advance draft alone — the CAD line IS the bill there',
   assert.strictEqual(wrote, null);
 });
 
+at('four simultaneous webhooks act ONCE — the #D208 duplicate-log race', async () => {
+  // One staff action produced four draft_orders/update deliveries. Every handler here is
+  // read-check-write, so all four read the pre-write state, all passed the "already done?" check,
+  // and all acted — four identical rows in the sheet log. On the redeem path the same race would
+  // absorb one advance into four installment slots.
+  let calls = 0;
+  const h = handlersWith({
+    gqlSetDraftLineItems: async () => { await new Promise(r => setTimeout(r, 20)); calls++; },
+  });
+  const draft = { id: 208, name: '#D208', line_items: [cad, ring] };
+  await Promise.all([
+    h.handleAdvanceLineRemoval(draft),
+    h.handleAdvanceLineRemoval(draft),
+    h.handleAdvanceLineRemoval(draft),
+    h.handleAdvanceLineRemoval(draft),
+  ]);
+  assert.strictEqual(calls, 1, 'the draft is rewritten once, not once per webhook delivery');
+});
+
+at('the guard releases, so a later genuine call still runs', async () => {
+  // A lock that never cleared would be worse than the duplicates: the FIRST capture would work and
+  // every advance afterwards on that draft would be silently ignored.
+  let calls = 0;
+  const h = handlersWith({ gqlSetDraftLineItems: async () => { calls++; } });
+  const draft = { id: 209, name: '#D209', line_items: [cad, ring] };
+  await h.handleAdvanceLineRemoval(draft);
+  await h.handleAdvanceLineRemoval(draft);
+  assert.strictEqual(calls, 2, 'sequential calls are not blocked by a stale lock');
+});
+
 at('will NOT remove the line before the advance is captured — the money is unrecorded', async () => {
   let wrote = null;
   const h = handlersWith({
