@@ -90,11 +90,14 @@ function repairSendEmail(opts) {
     return sendEmail({ ...rest, to: REPAIR_TEST_EMAIL, cc: undefined, bcc: undefined });
   }
   if (internal) {
-    const hqCc = [process.env.HQ_EMAIL, process.env.HQ_CC_EMAIL].filter(Boolean);
+    // The two HQ addresses are simply SWAPPED: what was the CC becomes the recipient, and the old
+    // recipient rides along. HQ_CC_EMAIL is the store, so this puts the store first — the people who
+    // actually action the Set-Estimate and Mark-Complete links — without anyone having to read a
+    // Fly secret to confirm it. Falls back to the store constant if that secret is unset.
     return sendEmail({
       ...rest,
-      to:      STORE_EMAIL,
-      cc:      hqCc.length ? hqCc : undefined,
+      to:      process.env.HQ_CC_EMAIL || STORE_EMAIL,
+      cc:      process.env.HQ_EMAIL || undefined,
       subject: /^\[internal\]/i.test(rest.subject || '') ? rest.subject : `[Internal] ${rest.subject}`,
     });
   }
