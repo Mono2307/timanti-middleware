@@ -195,7 +195,7 @@ async function sendBatchPoEmail({ draftOrder, po_type, batchDate, batchId, rows 
 
   await sendEmail({
     to:      HQ_EMAIL,
-    cc:      [HQ_CC_EMAIL, 'hsrstore@timanti.in', 'monodeep.dutta@timanti.in'].filter(Boolean),
+    cc:      [HQ_CC_EMAIL, 'hsrstore@timanti.in'].filter(Boolean),
     subject: `New Batch PO — ${draftOrder.name} — ${po_type.toUpperCase()} — ${batchDate}`,
     html
   });

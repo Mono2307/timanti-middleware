@@ -248,7 +248,7 @@ async function sendPoEmail({ draftOrder, poType, sourceOrderName }) {
 
   await sendEmail({
     to:      HQ_EMAIL,
-    cc:      ENABLE_CC ? [HQ_CC_EMAIL, 'hsrstore@timanti.in', 'monodeep.dutta@timanti.in'].filter(Boolean) : undefined,
+    cc:      ENABLE_CC ? [HQ_CC_EMAIL, 'hsrstore@timanti.in'].filter(Boolean) : undefined,
     subject: `${isUrgent ? '🔴 URGENT — ' : ''}New PO — ${draftOrder.name} — ${poType} — ${sourceOrderName}`,
     html
   });
