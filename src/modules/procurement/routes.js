@@ -72,6 +72,32 @@ function register(app, ctx) {
 app.post('/api/po-webhook', async (req, res) => {
   const deps  = PO_DEPS();
   const topic = req.headers['x-shopify-topic'] || '';
+  // The DELETE test comes first, and must stay first. 'draft_orders/delete'.startsWith('draft_orders')
+  // is true, so the generic branch below swallows it — a deleted draft would be pushed to the PO
+  // sheet as though it still existed, and the delete branch further down could never run at all.
+  // That made revertApplied (vouchers) and handleAdvanceDraftDeleted (advances) dead code even once
+  // the topic is subscribed. Found on 2026-09-07 deleting the CAD advance test fixtures: the drafts
+  // went, the register rows stayed.
+  if (topic === 'draft_orders/delete' && req.body?.id) {
+    removeDraftFromSheet(req.body.id)
+      .catch(e => console.error('[SYNC] delete webhook error:', e.message));
+    // A CAD advance on a deleted draft is closed as 'deleted' rather than reverted to open: the
+    // money was taken and the document recording it is gone, so it is neither outstanding nor spent.
+    // The register row stays — accounts still need to see what became of the money.
+    if (handleAdvanceDraftDeleted) {
+      handleAdvanceDraftDeleted(String(req.body.id))
+        .catch(e => console.error('[cad-advance] close on draft delete:', e.message));
+    }
+    // Draft abandoned → free any credit instruments that were only APPLIED to it (never converted).
+    creditInstruments.revertApplied(supabase, { targetDraftId: String(req.body.id) })
+      .then(r => { if (r.length) console.log(`[ledger] draft ${req.body.id} deleted → reverted ${r.join(', ')} to open`); })
+      .catch(e => console.error('[ledger] revert on draft delete:', e.message));
+    if (handleDraftDeletedRefunds) {
+      handleDraftDeletedRefunds(String(req.body.id))
+        .catch(e => console.error('[ledger] refund bookkeeping on draft delete:', e.message));
+    }
+    return res.status(200).send('OK');
+  }
   if (topic.startsWith('draft_orders') && req.body?.id) {
     getShopifyToken()
       .then(token => syncDraftOrderToSheet(req.body, token, deps.shopifyStoreUrl))
@@ -108,29 +134,8 @@ app.post('/api/po-webhook', async (req, res) => {
         .then(token => applyPaymentTagsToOrder(String(req.body.id), token))
         .catch(e => console.error('[payments] order tag recompute on webhook:', e.message));
     }
-  } else if (topic === 'draft_orders/delete' && req.body?.id) {
-    removeDraftFromSheet(req.body.id)
-      .catch(e => console.error('[SYNC] delete webhook error:', e.message));
-    // Draft abandoned → free any credit instruments that were only APPLIED to it (never converted).
-    creditInstruments.revertApplied(supabase, { targetDraftId: String(req.body.id) })
-      .then(r => { if (r.length) console.log(`[ledger] draft ${req.body.id} deleted → reverted ${r.join(', ')} to open`); })
-      .catch(e => console.error('[ledger] revert on draft delete:', e.message));
-    // Refund rows must SURVIVE the delete — a refunded draft is usually deleted, and the money
-    // having gone back stays true when the document is gone. revertApplied only matches
-    // status='applied', so it already cannot reach them; this only records that the draft no longer
-    // exists, so a later report can tell "outside the window" from "no longer there".
-    // A CAD advance on a deleted draft is closed as 'deleted' rather than reverted to open: the
-    // money was taken and the document recording it is gone, so it is neither outstanding nor spent.
-    // The register row stays — accounts still need to see what became of the money.
-    if (handleAdvanceDraftDeleted) {
-      handleAdvanceDraftDeleted(String(req.body.id))
-        .catch(e => console.error('[cad-advance] close on draft delete:', e.message));
-    }
-    if (handleDraftDeletedRefunds) {
-      handleDraftDeletedRefunds(String(req.body.id))
-        .catch(e => console.error('[ledger] refund bookkeeping on draft delete:', e.message));
-    }
   }
+
   return handlePoWebhook(req, res, deps);
 });
 app.get('/api/po-action',   (req, res) => handlePoAction(req, res, PO_DEPS()));
