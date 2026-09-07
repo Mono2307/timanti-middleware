@@ -542,7 +542,7 @@ app.get('/api/test-db', async (req, res) => {
         repairTestOverride: process.env.REPAIR_TEST_EMAIL
           ? `⚠️  ACTIVE — ALL repair mail goes only to ${mask(process.env.REPAIR_TEST_EMAIL)}`
           : 'not set (correct for production)',
-        internalRepairTo:  mask(process.env.HQ_CC_EMAIL || storeEmail),
+        internalRepairTo:  mask(storeEmail),
         internalRepairCc:  mask(process.env.HQ_EMAIL) || 'none',
         customerRepairBcc: mask(storeEmail),
         accountsDigestTo:  mask(config.email.accounts) || 'none',

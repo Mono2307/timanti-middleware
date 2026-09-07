@@ -90,14 +90,19 @@ function repairSendEmail(opts) {
     return sendEmail({ ...rest, to: REPAIR_TEST_EMAIL, cc: undefined, bcc: undefined });
   }
   if (internal) {
-    // The two HQ addresses are simply SWAPPED: what was the CC becomes the recipient, and the old
-    // recipient rides along. HQ_CC_EMAIL is the store, so this puts the store first — the people who
-    // actually action the Set-Estimate and Mark-Complete links — without anyone having to read a
-    // Fly secret to confirm it. Falls back to the store constant if that secret is unset.
+    // The STORE is the recipient — they are the people who action the Set-Estimate and Mark-Complete
+    // links these mails carry. Both HQ addresses ride in CC.
+    //
+    // Addressed from STORE_EMAIL rather than a secret. The earlier version swapped HQ_CC_EMAIL into
+    // the recipient slot on the understanding that it held the store address; /api/test-db showed it
+    // actually resolves to a person, so internal repair mail was going to an individual and the
+    // store was only on the customer BCC. STORE_EMAIL is not set as a secret and defaults to
+    // hsrstore@timanti.in, which is the address that was wanted all along.
+    const hqCc = [process.env.HQ_EMAIL, process.env.HQ_CC_EMAIL].filter(Boolean);
     return sendEmail({
       ...rest,
-      to:      process.env.HQ_CC_EMAIL || STORE_EMAIL,
-      cc:      process.env.HQ_EMAIL || undefined,
+      to:      STORE_EMAIL,
+      cc:      hqCc.length ? hqCc : undefined,
       subject: /^\[internal\]/i.test(rest.subject || '') ? rest.subject : `[Internal] ${rest.subject}`,
     });
   }
