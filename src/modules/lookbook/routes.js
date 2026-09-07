@@ -49,12 +49,15 @@ function register(app) {
     }
 
     res.setHeader('Set-Cookie', auth.loginCookie(req));
-    return res.redirect('/lookbook');
+    // 303, not the default 302. A 302 leaves the POST in session history, so pressing Back on the
+    // lookbook makes the browser offer to resubmit the login form. 303 See Other tells it the
+    // result is a separate GET resource, which is the whole point of POST/Redirect/GET.
+    return res.redirect(303, '/lookbook');
   });
 
   app.post('/lookbook/logout', (req, res) => {
     res.setHeader('Set-Cookie', auth.logoutCookie(req));
-    return res.redirect('/lookbook');
+    return res.redirect(303, '/lookbook');
   });
 
   // ── Data ───────────────────────────────────────────────────────────────────
@@ -81,7 +84,7 @@ function register(app) {
     // shop wifi. Image bytes are untouched - those come from Shopify's CDN, not from here.
     const packed = store.gzipped();
     const accepts = String((req.headers && req.headers['accept-encoding']) || '');
-    if (packed && /gzip/.test(accepts)) {
+    if (packed && accepts.indexOf('gzip') !== -1) {
       res.setHeader('Content-Type', 'application/json; charset=utf-8');
       res.setHeader('Content-Encoding', 'gzip');
       res.setHeader('Vary', 'Accept-Encoding');

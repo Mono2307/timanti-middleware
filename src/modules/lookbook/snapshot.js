@@ -40,6 +40,11 @@ const PRODUCTS_QUERY = `
         gemWeight:  metafield(namespace: "custom", key: "gemstone_weight")     { value }
         gemPcs:     metafield(namespace: "custom", key: "coloured_stone_pcs")  { value }
         makingRate: metafield(namespace: "custom", key: "making_charges_rate") { value }
+        catMf:      metafield(namespace: "custom", key: "category")             { value }
+        subCat:     metafield(namespace: "custom", key: "sub_category")         { value }
+        cstWeight:  metafield(namespace: "custom", key: "cst_weight")           { value }
+        cstCount:   metafield(namespace: "custom", key: "cst_count")            { value }
+        stoneCut:   metafield(namespace: "custom", key: "stone_cut")            { value }
       }
     }
   }`;
@@ -187,7 +192,27 @@ const BANDS = {
           [100000, '₹75k – ₹1L'], [Infinity, '₹1L & Above']],
   weight: [[2, 'Under 2g'], [5, '2-5g'], [10, '5-10g'], [20, '10-20g'], [Infinity, '20g+']],
   carat: [[0.25, 'Under 0.25ct'], [0.5, '0.25-0.5ct'], [1, '0.5-1ct'], [2, '1-2ct'], [Infinity, '2ct+']],
+  // Centre stone is a different conversation from total carat weight - a 1ct solitaire and a 1ct
+  // cluster are not the same piece - so it gets its own scale.
+  cst: [[0.5, 'Under 0.5ct'], [1, '0.5-1ct'], [1.5, '1-1.5ct'], [2, '1.5-2ct'], [3, '2-3ct'], [Infinity, '3ct+']],
 };
+
+/**
+ * custom.stone_cut is a list.single_line_text_field, so Shopify hands it over as a JSON array in a
+ * string: ["Round","Cushion"]. Parsed defensively - a malformed value must not take out the whole
+ * nightly build for the sake of one product.
+ */
+function parseList(mf) {
+  const raw = mf && mf.value;
+  if (!raw) return [];
+  try {
+    const v = JSON.parse(raw);
+    if (Array.isArray(v)) return v.map((x) => String(x).trim()).filter(Boolean);
+    return [String(v).trim()].filter(Boolean);
+  } catch (err) {
+    return String(raw).split(',').map((x) => x.trim()).filter(Boolean);
+  }
+}
 
 function bandOf(value, bands) {
   if (!(value > 0)) return null;
@@ -286,7 +311,14 @@ function normalize(products, variants) {
       handle: p.handle,
       status: p.status,
       draft: p.status === 'DRAFT',
-      category: p.productType || CATEGORY_BY_PREFIX[firstSku.prefix] || 'Uncategorised',
+      // productType is the category of record; custom.category and the SKU prefix are fallbacks
+      // for the handful of products where productType is unset.
+      category: p.productType || (p.catMf && p.catMf.value) || CATEGORY_BY_PREFIX[firstSku.prefix] || 'Uncategorised',
+      subCategory: (p.subCat && p.subCat.value) || null,
+      cstWeight: mfNum(p.cstWeight),
+      cstCount: mfNum(p.cstCount),
+      cstBand: bandOf(mfNum(p.cstWeight), BANDS.cst),
+      stoneCuts: parseList(p.stoneCut),
       vendor: p.vendor || null,
       tags: p.tags || [],
       family: firstSku.family,
@@ -314,11 +346,12 @@ function normalize(products, variants) {
     });
   }
 
-  // A product with no image is unusable in a lookbook -- the whole page is the picture. They are
-  // counted and reported rather than silently dropped, because "why is this piece missing" is a
-  // question staff will ask, and the answer belongs in the payload rather than in a log line.
-  const withMedia = items.filter((i) => i.media.length || i.variants.some((v) => v.image));
-  return { items: withMedia, droppedNoImage: items.length - withMedia.length };
+  // Pieces with no photograph are KEPT and flagged, not dropped. 174 of the live catalog's active
+  // products have no image in Shopify at all; removing them means a staff member searches for one
+  // and it simply is not there, with no explanation. The UI sorts them to the very end instead, so
+  // the lookbook still leads with photography without pretending the rest do not exist.
+  for (const it of items) it.noImage = !(it.media.length || it.variants.some((v) => v.image));
+  return { items, droppedNoImage: items.filter((i) => i.noImage).length };
 }
 
 /**
@@ -343,8 +376,25 @@ function buildFacets(items) {
   const ordered = (values, order) =>
     tally(values).sort((a, b) => order.indexOf(a.value) - order.indexOf(b.value));
 
+  // Sub-category chips carry their parent category. 30 values across 6 categories is unusable as
+  // one flat list, so the UI narrows them once a category is chosen.
+  const subCounts = new Map();
+  for (const i of items) {
+    if (!i.subCategory) continue;
+    const k = JSON.stringify([i.category, i.subCategory]);
+    subCounts.set(k, (subCounts.get(k) || 0) + 1);
+  }
+  const subCategory = [...subCounts.entries()]
+    .map((e) => { const p = JSON.parse(e[0]); return { value: p[1], count: e[1], parent: p[0] }; })
+    .sort((a, b) => b.count - a.count || a.value.localeCompare(b.value));
+
   const facets = {
     category: tally(flat((i) => i.category)),
+    subCategory,
+    stoneCut: tally(flat((i) => i.stoneCuts)),
+    cstBand: ordered(flat((i) => i.cstBand), BANDS.cst.map((b) => b[1])),
+    cstCount: tally(flat((i) => (i.cstCount > 0 ? String(i.cstCount) : null)))
+      .sort((a, b) => Number(a.value) - Number(b.value)),
     karat: tally(flat((i) => i.karats)).sort((a, b) => parseInt(a.value, 10) - parseInt(b.value, 10)),
     tone: tally(flat((i) => i.tones)),
     size: tally(flat((i) => i.sizes)).sort((a, b) => (num(a.value) || 0) - (num(b.value) || 0)),
@@ -391,6 +441,6 @@ async function buildSnapshot() {
 }
 
 module.exports = {
-  buildSnapshot, normalize, buildFacets,
+  buildSnapshot, normalize, buildFacets, parseList,
   parseSku, optionsOf, pickOption, toneLabel, grossWeightOf, bandOf, numericId, BANDS,
 };

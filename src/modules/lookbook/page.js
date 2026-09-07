@@ -129,6 +129,18 @@ ${SHELL_CSS}
   .spacer{flex:1}
   .clear{font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
   .clear:hover{color:var(--accent)}
+  .sortwrap{display:inline-flex;align-items:center;gap:7px;font-size:12.5px;color:var(--muted)}
+  .sortwrap select{border:1px solid var(--line);padding:6px 8px;font:inherit;color:var(--ink);background:var(--bg)}
+  .sortwrap select:focus{outline:none;border-color:var(--accent)}
+  .range{display:flex;align-items:center;gap:8px;margin-top:16px;padding-top:14px;border-top:1px solid var(--line);flex-wrap:wrap}
+  .range label{font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
+  .range input{width:110px;padding:7px 10px;border:1px solid var(--line);font:inherit;font-size:13px;color:var(--ink);background:var(--bg)}
+  .range input:focus{outline:none;border-color:var(--accent)}
+  .range button{padding:7px 14px;border:1px solid var(--ink);font-size:12px;letter-spacing:.06em;text-transform:uppercase}
+  .range button:hover{background:var(--ink);color:#fff}
+  .range .rclear{border-color:var(--line);color:var(--muted)}
+  .nophoto{position:absolute;left:0;bottom:0;right:0;padding:6px 9px;background:rgba(0,0,0,.55);color:#fff;
+           font-size:9.5px;letter-spacing:.11em;text-transform:uppercase;text-align:center}
   .panel{display:none;border-bottom:1px solid var(--line);padding:18px 24px 22px}
   .panel.open{display:block}
   .chips{display:flex;flex-wrap:wrap;gap:8px}
@@ -252,14 +264,20 @@ ${SHELL_CSS}
   'use strict';
 
   var S = { items: [], facets: {}, built: null, hidden: 0, etag: null, sel: {}, q: '',
+            pmin: null, pmax: null, sort: 'featured',
             filtered: [], live: {}, card: {}, open: null, idx: -1, img: 0, axis: {}, staff: false };
 
-  var FACET_LABELS = { karat:'Karat', tone:'Metal', size:'Size', grade:'Diamond grade',
-                       priceBand:'Price', weightBand:'Gold weight', caratBand:'Diamonds' };
+  var FACET_LABELS = { subCategory:'Type', karat:'Karat', tone:'Metal', size:'Size',
+                       stoneCut:'Stone cut', grade:'Diamond grade', priceBand:'Price',
+                       cstBand:'Centre stone', cstCount:'Centre stones',
+                       weightBand:'Gold weight', caratBand:'Total diamonds' };
   /* Category is promoted out of the filter bar and into the nav, the way the storefront does it. */
-  var BAR_ORDER = ['karat','tone','size','grade','priceBand','weightBand','caratBand'];
-  var ITEM_FIELD = { category:'category', karat:'karats', tone:'tones', size:'sizes', grade:'grades',
-                     priceBand:'priceBand', weightBand:'weightBand', caratBand:'caratBand' };
+  var BAR_ORDER = ['subCategory','karat','tone','size','stoneCut','cstBand','cstCount',
+                   'grade','priceBand','weightBand','caratBand'];
+  var ITEM_FIELD = { category:'category', subCategory:'subCategory', karat:'karats', tone:'tones',
+                     size:'sizes', stoneCut:'stoneCuts', grade:'grades', priceBand:'priceBand',
+                     cstBand:'cstBand', cstCount:'cstCount',
+                     weightBand:'weightBand', caratBand:'caratBand' };
   var TONE_HEX = { 'Yellow Gold':'#e3c04a', 'White Gold':'#dcdde0', 'Rose Gold':'#e3b19d' };
 
   var $ = function (id) { return document.getElementById(id); };
@@ -302,7 +320,36 @@ ${SHELL_CSS}
     }
     return cheapest(it);
   }
+  /* The catalog's alt text encodes the metal tone, consistently, on every image:
+       "White Gold-Supernova Statement Solitaires Lab-Grown Diamond Ring_view=3DV"
+     That is the storefront's own convention for showing the right colour for the selected variant,
+     so the lookbook follows it rather than inventing one. Only 64% of variants carry their own
+     image, which is why matching on alt text - not variant.image - is what actually works. */
+  function toneKey(tone) {
+    var t = String(tone || '').toLowerCase();
+    if (t.indexOf('yellow') !== -1) return 'yellow';
+    if (t.indexOf('white') !== -1) return 'white';
+    if (t.indexOf('rose') !== -1 || t.indexOf('pink') !== -1) return 'rose';
+    return null;
+  }
+
+  /* Every image for a product in the selected tone, in Shopify's own media order. */
+  function mediaForTone(it, tone) {
+    var key = toneKey(tone);
+    var all = it.media || [];
+    if (!key) return all.map(function (m) { return m.url; });
+    var hit = [];
+    for (var i = 0; i < all.length; i++) {
+      var a = String(all[i].alt || '').toLowerCase();
+      /* "rose" also has to catch a "Pink Gold-" prefix. */
+      if (a.indexOf(key) === 0 || (key === 'rose' && a.indexOf('pink') === 0)) hit.push(all[i].url);
+    }
+    return hit;
+  }
+
   function imgFor(it, v) {
+    var toned = mediaForTone(it, v && v.toneLabel);
+    if (toned.length) return toned[0];
     if (v && v.image) return v.image;
     if (it.media && it.media.length) return it.media[0].url;
     for (var i = 0; i < it.variants.length; i++) if (it.variants[i].image) return it.variants[i].image;
@@ -326,25 +373,57 @@ ${SHELL_CSS}
                  it.variants.map(function (v) { return v.sku || ''; }).join(' ')).toLowerCase();
       if (hay.indexOf(S.q) === -1) return false;
     }
+    /* An explicit range beats guessing which bucket the customer meant. Overlap, not containment:
+       a piece spanning 40k-60k should surface for someone who asked for "under 50k". */
+    if (S.pmin !== null && !(it.priceTo >= S.pmin)) return false;
+    if (S.pmax !== null && !(it.priceFrom <= S.pmax)) return false;
+
     for (var k in S.sel) {
       var picked = S.sel[k];
       if (!picked || !picked.length) continue;
       var field = it[ITEM_FIELD[k]];
       var vals = Array.isArray(field) ? field : [field];
       var hit = false;
-      for (var i = 0; i < picked.length && !hit; i++) if (vals.indexOf(picked[i]) !== -1) hit = true;
+      for (var i = 0; i < picked.length && !hit; i++) {
+        /* Coerced: cstCount is numeric on the item and a string in the facet chip. */
+        for (var j = 0; j < vals.length && !hit; j++) {
+          if (vals[j] !== null && vals[j] !== undefined && String(vals[j]) === String(picked[i])) hit = true;
+        }
+      }
       if (!hit) return false;
     }
     return true;
   }
-  function activeCount() { var n = 0; for (var k in S.sel) n += (S.sel[k] || []).length; return n; }
+  function activeCount() {
+    var n = 0;
+    for (var k in S.sel) n += (S.sel[k] || []).length;
+    if (S.pmin !== null || S.pmax !== null) n++;
+    return n;
+  }
+  /* Price actually shown, so sorting matches what the customer is reading. */
+  function sortPrice(it) {
+    var v = cardVariant(it);
+    var p = (v && v.priceManaged) ? priceOf(v) : null;
+    return p > 0 ? p : (it.priceFrom > 0 ? it.priceFrom : Infinity);
+  }
 
   function apply() {
     S.filtered = S.items.filter(matches);
+
+    /* Photographed pieces lead, whatever the sort. A lookbook is the picture; an unphotographed
+       piece is still real and still findable, it just belongs at the end rather than removed. */
+    var dir = S.sort === 'asc' ? 1 : (S.sort === 'desc' ? -1 : 0);
+    S.filtered.sort(function (a, b) {
+      if (!!a.noImage !== !!b.noImage) return a.noImage ? 1 : -1;
+      if (!dir) return 0;
+      var pa = sortPrice(a), pb = sortPrice(b);
+      if (pa === pb) return 0;
+      return (pa - pb) * dir;
+    });
     $('count').textContent = S.filtered.length + ' of ' + S.items.length + ' pieces' +
       (S.built ? '  ·  updated ' + new Date(S.built).toLocaleDateString('en-IN', { day:'numeric', month:'short' }) : '') +
       /* Never drop pieces silently - staff will search for one and wonder where it went. */
-      (S.hidden ? '  ·  ' + S.hidden + ' hidden (no photo)' : '');
+      (S.hidden ? '  ·  ' + S.hidden + ' awaiting photography (shown last)' : '');
     renderNav();
     renderBar();
     renderGrid();
@@ -374,18 +453,54 @@ ${SHELL_CSS}
     }
     out.push('<span class="spacer"></span>');
     if (activeCount()) out.push('<button class="clear" id="clearBtn">Clear all</button>');
+    out.push('<span class="sortwrap">Sort' +
+      '<select id="sortSel">' +
+      '<option value="featured"' + (S.sort === 'featured' ? ' selected' : '') + '>Featured</option>' +
+      '<option value="asc"' + (S.sort === 'asc' ? ' selected' : '') + '>Price: low to high</option>' +
+      '<option value="desc"' + (S.sort === 'desc' ? ' selected' : '') + '>Price: high to low</option>' +
+      '</select></span>');
     $('filterbar').innerHTML = out.join('');
 
     var p = $('panel');
     if (!S.open || !S.facets[S.open]) { p.className = 'panel'; p.innerHTML = ''; return; }
-    var list = S.facets[S.open], chips = ['<div class="chips">'];
+    var list = S.facets[S.open];
+
+    /* Sub-type is only meaningful within a category - 30 values across 6 categories is noise. When
+       a category is chosen, show only its own; otherwise merge duplicates across categories. */
+    if (S.open === 'subCategory') {
+      var cat = (S.sel.category || [])[0];
+      if (cat) {
+        list = list.filter(function (x) { return x.parent === cat; });
+      } else {
+        var merged = {};
+        for (var m = 0; m < list.length; m++) {
+          merged[list[m].value] = (merged[list[m].value] || 0) + list[m].count;
+        }
+        list = Object.keys(merged).map(function (v) { return { value: v, count: merged[v] }; })
+          .sort(function (a, b) { return b.count - a.count || a.value.localeCompare(b.value); });
+      }
+    }
+
+    var chips = ['<div class="chips">'];
     for (var j = 0; j < list.length; j++) {
-      var sel = (S.sel[S.open] || []).indexOf(list[j].value) !== -1;
+      var sel = (S.sel[S.open] || []).indexOf(String(list[j].value)) !== -1;
       chips.push('<button class="chip' + (sel ? ' on' : '') + '" data-f="' + esc(S.open) +
                  '" data-v="' + esc(list[j].value) + '">' + esc(list[j].value) +
                  '<span class="n">' + list[j].count + '</span></button>');
     }
     chips.push('</div>');
+
+    if (S.open === 'priceBand') {
+      chips.push('<div class="range">' +
+        '<label for="pmin">From</label><input id="pmin" type="number" inputmode="numeric" min="0" step="1000" placeholder="₹ min" value="' +
+        (S.pmin === null ? '' : S.pmin) + '">' +
+        '<label for="pmax">To</label><input id="pmax" type="number" inputmode="numeric" min="0" step="1000" placeholder="₹ max" value="' +
+        (S.pmax === null ? '' : S.pmax) + '">' +
+        '<button id="pApply">Apply</button>' +
+        (S.pmin !== null || S.pmax !== null ? '<button id="pClear" class="rclear">Clear range</button>' : '') +
+        '</div>');
+    }
+
     p.className = 'panel open';
     p.innerHTML = chips.join('');
   }
@@ -413,8 +528,8 @@ ${SHELL_CSS}
       ? '<img ' + (i < 5 ? '' : 'loading="lazy" ') + 'decoding="async" ' +
         'sizes="(min-width:1000px) 250px, 45vw" ' +
         'srcset="' + px(img, 320) + ' 320w, ' + px(img, 520) + ' 520w, ' + px(img, 800) + ' 800w" ' +
-        'src="' + px(img, 520) + '" alt="">'
-      : '<div class="noimg">&#9671;</div>');
+        'src="' + px(img, 520) + '" alt="' + esc(it.title) + '">'
+      : '<div class="noimg">&#9671;</div><div class="nophoto">Photo coming soon</div>');
     if (it.draft) out.push('<span class="flag">Not published</span>');
     out.push('</div><div class="info">');
     out.push('<div class="name">' + esc(it.title) + '</div>');
@@ -474,6 +589,14 @@ ${SHELL_CSS}
 
   /* -- PDP ----------------------------------------------------------------- */
   function imagesFor(it, v) {
+    /* Selecting Rose Gold should show the rose gold photographs, not every colour the piece comes
+       in. Falls back to the full set when a tone has no dedicated shots, so a piece never goes
+       imageless just because its photography is incomplete. */
+    var toned = mediaForTone(it, v && v.toneLabel);
+    if (toned.length) {
+      if (v && v.image && toned.indexOf(v.image) === -1) toned.unshift(v.image);
+      return toned;
+    }
     var urls = [];
     if (v && v.image) urls.push(v.image);
     for (var i = 0; i < it.media.length; i++) if (urls.indexOf(it.media[i].url) === -1) urls.push(it.media[i].url);
@@ -619,8 +742,18 @@ ${SHELL_CSS}
     apply();
   });
 
+  $('filterbar').addEventListener('change', function (e) {
+    if (e.target.id !== 'sortSel') return;
+    S.sort = e.target.value;
+    apply();
+  });
+
   $('filterbar').addEventListener('click', function (e) {
-    if (e.target.closest('#clearBtn')) { S.sel = {}; S.open = null; apply(); return; }
+    if (e.target.closest('#clearBtn')) {
+      S.sel = {}; S.pmin = null; S.pmax = null; S.open = null;
+      apply();
+      return;
+    }
     var b = e.target.closest('[data-fb]');
     if (!b) return;
     S.open = (S.open === b.dataset.fb) ? null : b.dataset.fb;
@@ -628,6 +761,22 @@ ${SHELL_CSS}
   });
 
   $('panel').addEventListener('click', function (e) {
+    if (e.target.id === 'pApply' || e.target.id === 'pClear') {
+      if (e.target.id === 'pClear') {
+        S.pmin = null; S.pmax = null;
+      } else {
+        var lo = parseFloat(($('pmin') || {}).value);
+        var hi = parseFloat(($('pmax') || {}).value);
+        S.pmin = isFinite(lo) ? lo : null;
+        S.pmax = isFinite(hi) ? hi : null;
+        /* Entered the wrong way round is a slip, not an error - swap rather than return nothing. */
+        if (S.pmin !== null && S.pmax !== null && S.pmin > S.pmax) {
+          var t = S.pmin; S.pmin = S.pmax; S.pmax = t;
+        }
+      }
+      apply();
+      return;
+    }
     var chip = e.target.closest('.chip');
     if (!chip) return;
     var f = chip.dataset.f, v = chip.dataset.v;
@@ -649,6 +798,14 @@ ${SHELL_CSS}
     }
     var card = e.target.closest('.card');
     if (card) openAt(Number(card.dataset.i));
+  });
+
+  $('panel').addEventListener('keydown', function (e) {
+    if (e.key !== 'Enter') return;
+    if (e.target.id !== 'pmin' && e.target.id !== 'pmax') return;
+    e.preventDefault();
+    var btn = $('pApply');
+    if (btn) btn.click();
   });
 
   var qt;

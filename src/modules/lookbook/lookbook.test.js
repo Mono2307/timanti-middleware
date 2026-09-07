@@ -200,15 +200,75 @@ t('draft products are kept and flagged', () => {
   assert.strictEqual(out.items[0].draft, true);
 });
 
-t('a product with no image at all is dropped and counted', () => {
+t('a product with no photograph is kept and flagged, never dropped', () => {
+  // 174 live products have no image in Shopify. Dropping them means staff search for a piece and
+  // it simply is not there; the UI sorts them last instead.
   const out = snap.normalize([product({ media: { nodes: [] } })], [variant()]);
-  assert.strictEqual(out.items.length, 0);
-  assert.strictEqual(out.droppedNoImage, 1);
+  assert.strictEqual(out.items.length, 1, 'the piece must remain findable');
+  assert.strictEqual(out.items[0].noImage, true);
+  assert.strictEqual(out.droppedNoImage, 1, 'still counted so the UI can say how many');
 });
 
-t('a variant image alone is enough to keep the product', () => {
+t('a photographed product is not flagged', () => {
+  assert.strictEqual(snap.normalize([product()], [variant()]).items[0].noImage, false);
+});
+
+t('a variant image alone still counts as photographed', () => {
   const out = snap.normalize([product({ media: { nodes: [] } })], [variant({ image: { url: 'https://cdn/v.jpg' } })]);
   assert.strictEqual(out.items.length, 1);
+  assert.strictEqual(out.items[0].noImage, false);
+  assert.strictEqual(out.droppedNoImage, 0);
+});
+
+console.log('design-level metafields drive the new filters');
+
+t('stone_cut arrives as a JSON list and is parsed to real values', () => {
+  assert.deepStrictEqual(snap.parseList({ value: '["Round","Cushion"]' }), ['Round', 'Cushion']);
+  assert.deepStrictEqual(snap.parseList({ value: '["Round"]' }), ['Round']);
+});
+
+t('a malformed or absent stone_cut cannot break the nightly build', () => {
+  assert.deepStrictEqual(snap.parseList(null), []);
+  assert.deepStrictEqual(snap.parseList({ value: '' }), []);
+  assert.deepStrictEqual(snap.parseList({ value: 'Round, Pear' }), ['Round', 'Pear']);  // not JSON
+  assert.deepStrictEqual(snap.parseList({ value: '[[[' }), ['[[[']);
+});
+
+t('productType is the category of record, sub_category and centre stone come through', () => {
+  const p = product({
+    productType: 'Rings',
+    catMf: { value: 'SomethingElse' },
+    subCat: { value: 'Engagement Rings' },
+    cstWeight: { value: '1.54' },
+    cstCount: { value: '1' },
+    stoneCut: { value: '["Round","Cushion"]' },
+  });
+  const it = snap.normalize([p], [variant()]).items[0];
+  assert.strictEqual(it.category, 'Rings', 'productType wins over custom.category');
+  assert.strictEqual(it.subCategory, 'Engagement Rings');
+  assert.strictEqual(it.cstWeight, 1.54);
+  assert.strictEqual(it.cstCount, 1);
+  assert.strictEqual(it.cstBand, '1.5-2ct');
+  assert.deepStrictEqual(it.stoneCuts, ['Round', 'Cushion']);
+});
+
+t('custom.category is the fallback when productType is unset', () => {
+  const p = product({ productType: null, catMf: { value: 'Bangles' } });
+  assert.strictEqual(snap.normalize([p], [variant()]).items[0].category, 'Bangles');
+});
+
+t('sub-category facet chips carry their parent category', () => {
+  const out = snap.normalize([
+    product({ id: 'gid://shopify/Product/1', productType: 'Rings', subCat: { value: 'Bands' } }),
+    product({ id: 'gid://shopify/Product/2', productType: 'Earrings', subCat: { value: 'Studs' } }),
+  ], [
+    variant({ product: { id: 'gid://shopify/Product/1', status: 'ACTIVE' } }),
+    variant({ id: 'gid://shopify/ProductVariant/9', product: { id: 'gid://shopify/Product/2', status: 'ACTIVE' } }),
+  ]);
+  const f = snap.buildFacets(out.items);
+  const bands = f.subCategory.find((x) => x.value === 'Bands');
+  assert.ok(bands, 'Bands should be a sub-category chip');
+  assert.strictEqual(bands.parent, 'Rings', 'without a parent the UI cannot narrow 30 values to one category');
 });
 
 t('a product with no variants does not crash the walk', () => {
