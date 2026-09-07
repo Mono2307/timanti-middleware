@@ -520,7 +520,34 @@ app.get('/api/test-db', async (req, res) => {
       appsScriptUrl:         process.env.APPS_SCRIPT_URL          ? 'SET' : 'MISSING ⚠️',  // PO Tracker web app
       exchangeAppsScriptUrl: process.env.EXCHANGE_APPS_SCRIPT_URL ? 'SET' : 'MISSING ⚠️',  // Exchange Calculator (CN Log) web app
       serverUrl:           process.env.SERVER_URL            ? 'SET' : 'defaulting to timanti-middleware.fly.dev'
-    }
+    },
+    // WHERE REPAIR MAIL ACTUALLY GOES.
+    //
+    // "SET / MISSING" above cannot answer "why did this land in my personal inbox" — the address is
+    // in a secret nobody can read back, so the only way to settle it is to resolve the routing here
+    // and show it. Masked to the first three characters plus the domain: enough to recognise an
+    // address you already know, not enough to harvest one.
+    //
+    // repairTestOverride is the one that swallows everything: while it is set, every repair email —
+    // customer and internal — goes there alone and every copy is dropped.
+    emailRouting: (() => {
+      const mask = (a) => {
+        if (!a) return null;
+        const [user, domain] = String(a).split('@');
+        if (!domain) return '***';
+        return `${user.slice(0, 3)}***@${domain}`;
+      };
+      const storeEmail = process.env.STORE_EMAIL || 'hsrstore@timanti.in';
+      return {
+        repairTestOverride: process.env.REPAIR_TEST_EMAIL
+          ? `⚠️  ACTIVE — ALL repair mail goes only to ${mask(process.env.REPAIR_TEST_EMAIL)}`
+          : 'not set (correct for production)',
+        internalRepairTo:  mask(process.env.HQ_CC_EMAIL || storeEmail),
+        internalRepairCc:  mask(process.env.HQ_EMAIL) || 'none',
+        customerRepairBcc: mask(storeEmail),
+        accountsDigestTo:  mask(config.email.accounts) || 'none',
+      };
+    })()
   });
 });
 
