@@ -96,6 +96,10 @@ function appPage() {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Lookbook</title>
+<!-- Every product image comes from Shopify's CDN. Opening that connection during HTML parse saves
+     a DNS lookup + TLS handshake before the first tile can even start downloading. -->
+<link rel="preconnect" href="https://cdn.shopify.com" crossorigin>
+<link rel="dns-prefetch" href="https://cdn.shopify.com">
 <style>
 ${SHELL_CSS}
   /* -- masthead ------------------------------------------------------------ */
@@ -247,7 +251,7 @@ ${SHELL_CSS}
 (function () {
   'use strict';
 
-  var S = { items: [], facets: {}, built: null, sel: {}, q: '',
+  var S = { items: [], facets: {}, built: null, hidden: 0, etag: null, sel: {}, q: '',
             filtered: [], live: {}, card: {}, open: null, idx: -1, img: 0, axis: {}, staff: false };
 
   var FACET_LABELS = { karat:'Karat', tone:'Metal', size:'Size', grade:'Diamond grade',
@@ -338,7 +342,9 @@ ${SHELL_CSS}
   function apply() {
     S.filtered = S.items.filter(matches);
     $('count').textContent = S.filtered.length + ' of ' + S.items.length + ' pieces' +
-      (S.built ? '  ·  updated ' + new Date(S.built).toLocaleDateString('en-IN', { day:'numeric', month:'short' }) : '');
+      (S.built ? '  ·  updated ' + new Date(S.built).toLocaleDateString('en-IN', { day:'numeric', month:'short' }) : '') +
+      /* Never drop pieces silently - staff will search for one and wonder where it went. */
+      (S.hidden ? '  ·  ' + S.hidden + ' hidden (no photo)' : '');
     renderNav();
     renderBar();
     renderGrid();
@@ -400,7 +406,15 @@ ${SHELL_CSS}
     var out = [];
     out.push('<div class="card" data-i="' + i + '" role="button" tabindex="0">');
     out.push('<div class="shot">');
-    out.push(img ? '<img loading="lazy" src="' + px(img, 520) + '" alt="">' : '<div class="noimg">&#9671;</div>');
+    // srcset lets the browser pick by real rendered size and DPR - a phone column is ~165px, so
+    // it takes the 320 and skips two thirds of the bytes a fixed 520 would have cost. The first
+    // row loads eagerly; everything below the fold stays lazy.
+    out.push(img
+      ? '<img ' + (i < 5 ? '' : 'loading="lazy" ') + 'decoding="async" ' +
+        'sizes="(min-width:1000px) 250px, 45vw" ' +
+        'srcset="' + px(img, 320) + ' 320w, ' + px(img, 520) + ' 520w, ' + px(img, 800) + ' 800w" ' +
+        'src="' + px(img, 520) + '" alt="">'
+      : '<div class="noimg">&#9671;</div>');
     if (it.draft) out.push('<span class="flag">Not published</span>');
     out.push('</div><div class="info">');
     out.push('<div class="name">' + esc(it.title) + '</div>');
@@ -685,10 +699,46 @@ ${SHELL_CSS}
     else stepImg(dy < 0 ? 1 : -1);
   }, { passive: true });
 
+  /* -- staying fresh --------------------------------------------------------
+     This page gets left open on a counter all day, across a gold-rate reprice and a snapshot
+     rebuild. Without this it would keep showing the prices it happened to fetch at open time.
+     Cheap by design: the conditional request is a 304 unless the snapshot actually changed, and
+     clearing S.live simply lets the normal batched live lookup run again. */
+  var CHECK_MS = 10 * 60 * 1000;
+  var lastCheck = Date.now();
+
+  function revalidate() {
+    lastCheck = Date.now();
+    S.live = {};                       // force live price + stock to be re-read
+    fetch('/lookbook/catalog.json', { headers: S.etag ? { 'If-None-Match': S.etag } : {} })
+      .then(function (r) {
+        if (r.status === 304) { renderGrid(); return null; }   // catalog unchanged; prices refresh
+        var t = r.headers.get('ETag');
+        if (t) S.etag = t;
+        return r.json();
+      })
+      .then(function (snap) {
+        if (!snap) return;
+        S.items = snap.items || [];
+        S.facets = snap.facets || {};
+        S.built = snap.builtAt;
+        S.hidden = snap.droppedNoImage || 0;
+        apply();
+        if (S.idx >= 0) renderPdp();
+      })
+      .catch(function () { /* stay on what is already rendered */ });
+  }
+
+  setInterval(revalidate, CHECK_MS);
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden && Date.now() - lastCheck > CHECK_MS) revalidate();
+  });
+
   /* -- boot ---------------------------------------------------------------- */
   fetch('/lookbook/catalog.json')
     .then(function (r) {
       if (r.status === 401) { location.href = '/lookbook'; throw new Error('signed out'); }
+      S.etag = r.headers.get('ETag');
       return r.json();
     })
     .then(function (snap) {
@@ -696,6 +746,7 @@ ${SHELL_CSS}
       S.items = snap.items || [];
       S.facets = snap.facets || {};
       S.built = snap.builtAt;
+      S.hidden = snap.droppedNoImage || 0;
       if (!S.items.length) {
         $('grid').innerHTML = '<div class="empty">The catalog snapshot is still building.<br>Try again in a minute.</div>';
         return;

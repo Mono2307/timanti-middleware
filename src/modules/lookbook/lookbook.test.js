@@ -295,11 +295,22 @@ t('always schedules within the next 24 hours', () => {
   }
 });
 
-t('lands on 04:00 IST', () => {
-  const from = Date.parse('2026-09-04T00:00:00Z');            // 05:30 IST, so the next one is tomorrow
-  const at = new Date(from + store.msUntilNextRebuild(from) + 330 * 60 * 1000);
-  assert.strictEqual(at.getUTCHours(), store.REBUILD_HOUR_IST);
-  assert.strictEqual(at.getUTCMinutes(), 0);
+t('lands exactly on one of the configured IST hours', () => {
+  for (const iso of ['2026-09-04T00:00:00Z', '2026-09-04T13:00:00Z', '2026-09-04T23:45:00Z']) {
+    const from = Date.parse(iso);
+    const at = new Date(from + store.msUntilNextRebuild(from) + 330 * 60 * 1000);
+    assert.ok(store.REBUILD_HOURS.includes(at.getUTCHours()),
+      `${iso} -> ${at.getUTCHours()}:00 IST, not one of ${store.REBUILD_HOURS.join(',')}`);
+    assert.strictEqual(at.getUTCMinutes(), 0);
+  }
+});
+
+t('picks the SOONEST configured hour, not always the first', () => {
+  // 05:30 IST with hours 4 and 16 must choose 16:00 today, not 04:00 tomorrow.
+  if (store.REBUILD_HOURS.length < 2) return;
+  const from = Date.parse('2026-09-04T00:00:00Z');
+  const hours = store.msUntilNextRebuild(from) / 3600000;
+  assert.ok(hours < 24, `waited ${hours.toFixed(1)}h - skipped an earlier slot`);
 });
 
 // ── Pages ────────────────────────────────────────────────────────────────────

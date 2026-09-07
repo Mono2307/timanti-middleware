@@ -18,6 +18,7 @@
 const zlib = require('zlib');
 const crypto = require('crypto');
 const { supabase } = require('../../core/supabase');
+const { config } = require('../../core/config');
 const { log } = require('../../core/logger');
 const { buildSnapshot } = require('./snapshot');
 
@@ -26,12 +27,20 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const IST_OFFSET_MS = 330 * 60 * 1000;
 
 /**
- * 04:00 IST. The gold-rate reprice runs daily and rewrites every managed variant's price; building
- * the snapshot before it finishes would bake in yesterday's prices for a whole day. Every other
- * periodic job in this service fires relative to BOOT, which is fine for a sweep and wrong here --
- * a redeploy at 15:00 would otherwise pin the nightly catalog build to 15:00 forever.
+ * IST hours at which to rebuild, from config (default 04:00 and 16:00 - after each gold-rate
+ * reprice). Building before the reprice finishes would bake in yesterday's prices for the whole
+ * day. Anchored to the wall clock, not to boot: every other periodic job in this service fires
+ * relative to process start, which is fine for a sweep and wrong here - a redeploy at 15:00 would
+ * otherwise pin the catalog build to 15:00 forever.
  */
-const REBUILD_HOUR_IST = 4;
+const REBUILD_HOURS = String(config.lookbook.rebuildHours || '4')
+  .split(',')
+  .map((h) => Number(String(h).trim()))
+  .filter((h) => Number.isInteger(h) && h >= 0 && h <= 23)
+  .sort((a, b) => a - b);
+if (!REBUILD_HOURS.length) REBUILD_HOURS.push(4);
+/** Kept for callers and tests that want a single representative hour. */
+const REBUILD_HOUR_IST = REBUILD_HOURS[0];
 
 let _snapshot = null;   // the live copy every request is served from
 let _etag = null;
@@ -112,13 +121,17 @@ function refresh() {
   return _building;
 }
 
-/** ms until the next REBUILD_HOUR_IST, computed in IST regardless of the container's clock. */
+/** ms until the soonest configured rebuild hour, computed in IST whatever the container clock is. */
 function msUntilNextRebuild(now = Date.now()) {
   const ist = new Date(now + IST_OFFSET_MS);
-  const nextUtc = Date.UTC(ist.getUTCFullYear(), ist.getUTCMonth(), ist.getUTCDate(), REBUILD_HOUR_IST, 0, 0) - IST_OFFSET_MS;
-  let delay = nextUtc - now;
-  if (delay <= 0) delay += DAY_MS;
-  return delay;
+  let best = Infinity;
+  for (const hour of REBUILD_HOURS) {
+    const at = Date.UTC(ist.getUTCFullYear(), ist.getUTCMonth(), ist.getUTCDate(), hour, 0, 0) - IST_OFFSET_MS;
+    let delay = at - now;
+    if (delay <= 0) delay += DAY_MS;
+    if (delay < best) best = delay;
+  }
+  return best === Infinity ? DAY_MS : best;
 }
 
 /**
@@ -142,7 +155,7 @@ function start() {
 
   const schedule = () => {
     const delay = msUntilNextRebuild();
-    log.info('lookbook', `next catalog rebuild in ${Math.round(delay / 60000)} min (${REBUILD_HOUR_IST}:00 IST)`);
+    log.info('lookbook', `next catalog rebuild in ${Math.round(delay / 60000)} min (rebuild hours IST: ${REBUILD_HOURS.join(', ')})`);
     setTimeout(() => { kick('nightly'); schedule(); }, delay);
   };
   schedule();
@@ -151,4 +164,4 @@ function start() {
 /** Pre-gzipped response body, or null before the first snapshot exists. */
 const gzipped = () => _gzip;
 
-module.exports = { get, etag, gzipped, ageMs, refresh, start, loadFromSupabase, msUntilNextRebuild, CONFIG_KEY, REBUILD_HOUR_IST };
+module.exports = { get, etag, gzipped, ageMs, refresh, start, loadFromSupabase, msUntilNextRebuild, CONFIG_KEY, REBUILD_HOUR_IST, REBUILD_HOURS };

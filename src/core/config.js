@@ -114,6 +114,13 @@ const config = {
     sessionSecret: process.env.LOOKBOOK_SESSION_SECRET,
     /** How long a signed-in shop-floor device stays signed in. */
     sessionDays:   Number(process.env.LOOKBOOK_SESSION_DAYS || 30),
+    /**
+     * IST hours at which the catalog snapshot is rebuilt, comma separated. The gold-rate reprice
+     * runs at 13:00 and 18:00 IST, so these sit an hour after each: building DURING a reprice
+     * would capture half-updated prices, and the breakup metafields exist only in the snapshot,
+     * so a stale build shows a stale component table until the next one.
+     */
+    rebuildHours:  String(process.env.LOOKBOOK_REBUILD_HOURS || '14,19'),
   },
 
   /**
