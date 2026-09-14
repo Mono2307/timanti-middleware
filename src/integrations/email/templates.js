@@ -273,23 +273,33 @@ function standardFooter() {
 // REPAIR SERIES
 // ═════════════════════════════════════════════════════════════════════════════
 
+// A repair can cover several pieces of one order — a customer who brings in two rings from order
+// #1051 gets ONE repair draft, not two — so every repair email renders a LIST of items.
+// `items` is the list; `item` is still accepted so a caller that only ever had one piece keeps
+// working, and a repair with nothing copied from an original order still renders its single row.
+// itemRow itself is untouched: it is shared with the refund email, which is genuinely single-item.
+function repairItemRows({ items, item }) {
+  const list = (Array.isArray(items) ? items : [items]).filter(Boolean);
+  return list.map(itemRow).join('');
+}
+
 // 1 — Jewellery received. Deliberately vague: no customer name, no fault
 // description, no timeline. Nothing here can be contradicted by the estimate.
-function buildRepairReceivedHtml({ draftRef, item }) {
+function buildRepairReceivedHtml({ draftRef, item, items }) {
   return head()
     + contentBlock({
         ref: `Repair ID: ${draftRef}`,
         heading: `We've received your jewellery for repair`,
         body: 'Our team will review your request and send the estimate soon.'
       })
-    + section(h3('Repair summary') + itemRow(item))
+    + section(h3('Repair summary') + repairItemRows({ items, item }))
     + standardFooter()
     + foot();
 }
 
 // 2 — Estimated charges. The "approximate and may vary" line is what licenses
 // the final email to revise the number; do not remove it.
-function buildRepairEstimateV2Html({ draftRef, item, amount, paymentUrl, approveStoreUrl, whatsappUrl }) {
+function buildRepairEstimateV2Html({ draftRef, item, items, amount, paymentUrl, approveStoreUrl, whatsappUrl }) {
   const btns = button(`Approve & Pay Now`, paymentUrl) + button('Approve & Pay at Store', approveStoreUrl, true);
   return head()
     + contentBlock({
@@ -302,7 +312,7 @@ function buildRepairEstimateV2Html({ draftRef, item, amount, paymentUrl, approve
       })
     + section(
         h3('Repair summary')
-        + itemRow(item)
+        + repairItemRows({ items, item })
         + summary([{ label: 'Estimated charges', value: money(amount), total: true }])
       )
     + standardFooter()
@@ -311,7 +321,7 @@ function buildRepairEstimateV2Html({ draftRef, item, amount, paymentUrl, approve
 
 // 3 — Charges confirmed. `paid` decides whether money is already in hand, which
 // is what determines every branch of the final email.
-function buildRepairConfirmedHtml({ draftRef, item, amount, paid }) {
+function buildRepairConfirmedHtml({ draftRef, item, items, amount, paid }) {
   return head()
     + contentBlock({
         ref: `Repair ID: ${draftRef}`,
@@ -325,7 +335,7 @@ function buildRepairConfirmedHtml({ draftRef, item, amount, paid }) {
       })
     + section(
         h3('Repair summary')
-        + itemRow(item)
+        + repairItemRows({ items, item })
         + summary([{ label: paid ? 'Amount received' : 'Estimated charges', value: money(amount), total: true }])
         + note('Please note these charges could be higher or lower depending on the nature of the repair.')
       )
@@ -344,7 +354,7 @@ function buildRepairConfirmedHtml({ draftRef, item, amount, paid }) {
 // render; the shipment reference is only a hyperlink once an AWB exists,
 // otherwise it degrades to plain non-clickable text.
 function buildRepairReadyFinalHtml({
-  draftRef, item, mode,
+  draftRef, item, items, mode,
   estimateAmount, finalAmount, delta,
   refundWalletUrl, refundSourceUrl, payBalanceUrl,
   trackingId, trackingUrl
@@ -411,7 +421,7 @@ function buildRepairReadyFinalHtml({
       })
     + section(
         h3('Repair summary')
-        + itemRow(item)
+        + repairItemRows({ items, item })
         + (rows ? summary(rows) : '')
         + (mode === 'free' ? note('This repair was carried out at no charge. Nothing is due.') : '')
       )

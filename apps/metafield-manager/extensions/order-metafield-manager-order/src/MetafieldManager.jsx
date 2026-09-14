@@ -250,6 +250,15 @@ const FIELD_CONFIG = {
   action_token: { section: "System", label: "Action Token", editable: false, applies: "draft" },
 };
 
+// Which class the document is carrying right now, read off its live tags. Free wins if both are
+// somehow present, because the complimentary email is the one the customer will have believed.
+function repairClassFromTags(tags) {
+  const set = new Set((tags ?? []).map((t) => String(t).trim().toLowerCase()));
+  if (REPAIR_FREE_TAGS.some((t) => set.has(t))) return "free";
+  if (set.has(REPAIR_PAID_TAG)) return "paid";
+  return "";
+}
+
 function resolveContext() {
   const id = shopify.data?.selected?.[0]?.id || "";
   const isOrder = id.includes("/Order/");
@@ -338,6 +347,7 @@ function buildValuesQuery(resourceField) {
     query WorkflowMetafields($id: ID!) {
       ${resourceField}(id: $id) {
         id
+        tags
         metafields(first: 250) { nodes { namespace key value type } }
       }
     }
@@ -378,6 +388,85 @@ const TAGS_REMOVE_MUTATION = `
     tagsRemove(id: $id, tags: $tags) { userErrors { field message } }
   }
 `;
+// -- Repair class ----------------------------------------------------------------------------
+// The repairs workflow is started by exactly ONE tag, and WHICH tag it is decides the class of the
+// job:
+//   repair-intake -> PAID repair. HQ gets the "Set Estimate" link; the customer is acknowledged and
+//                    told an estimate follows within a day or two.
+//   free-repair   -> COMPLIMENTARY repair. No estimate is ever quoted: the customer is told it is
+//                    free and HQ gets the "Mark Complete" link straight away.
+// Hand-typing these is where the mistakes happen -- a typo silently starts nothing, and a document
+// carrying BOTH tags runs the paid intake first and then emails the same customer a complimentary
+// confirmation -- so this panel writes them instead, one class at a time.
+// `repair-free` is the SAME class, set by HQ's estimate form ("this repair is our mistake"). It is
+// recognised here so an HQ decision shows up correctly, but it is never written from here.
+const REPAIR_PAID_TAG = "repair-intake";
+const REPAIR_FREE_TAG = "free-repair";
+const REPAIR_FREE_TAGS = [REPAIR_FREE_TAG, "repair-free"];
+// Written by the middleware once a class has actually been announced. Their presence means emails
+// are already out, which no later tag change can unsend -- so the panel says so plainly rather than
+// implying a switch is free.
+const REPAIR_PAID_DONE_TAG = "repair-hq-notified";
+const REPAIR_FREE_DONE_TAG = "repair-free-notified";
+
+// -- Repair items ------------------------------------------------------------------------------
+// WHICH pieces from the linked order are actually on the counter. A repair draft references exactly
+// one original order, but that order may have carried several pieces and only one of them may be in
+// for repair. The middleware used to copy line_items[0] unconditionally, so on a two-piece order the
+// customer's acknowledgement, estimate and ready emails -- and the repair note -- all showed the
+// wrong photo, title and gross weight, and the only fix was for HQ to retype the SKU by hand on the
+// estimate form.
+//
+// Stored as a JSON array of the ORIGINAL order's line-item ids (numeric, to match what the
+// middleware sees over REST) in custom.repair_items. Ids rather than SKUs: one order can carry the
+// same SKU twice in different variants, and the id is the only thing that separates them.
+const REPAIR_ITEMS_KEY = "repair_items";
+// An empty selection is NOT "the first item" -- it means every piece on the order, which is what the
+// middleware falls back to. Saying so here keeps the panel and the server telling the same story.
+const REPAIR_ITEMS_ALL_NOTE = "all pieces on the order";
+// Specs are copied once, when the repair starts. Changing the selection afterwards has to ask for a
+// re-copy or the old piece stays on the note and in every later email. The middleware strips this
+// tag once it has re-run.
+const REPAIR_ITEMS_RESYNC_TAG = "repair-resync-items";
+
+// Line items of the linked original order, for the picker. Looked up by NAME because a name is what
+// staff type into Linked Repair Order ("#1051") -- the same lookup the middleware does at intake, so
+// a reference the picker cannot resolve is one the intake would hold on too.
+const REPAIR_ORDER_ITEMS_QUERY = `
+  query RepairOrderItems($q: String!) {
+    orders(first: 1, query: $q) {
+      nodes {
+        id
+        name
+        lineItems(first: 50) {
+          nodes { id title sku quantity variantTitle image { url } }
+        }
+      }
+    }
+  }
+`;
+
+// GraphQL hands back gid://shopify/LineItem/123; the middleware reads the same order over REST and
+// sees 123. Store the bare number so the two agree.
+function lineItemNumericId(gid) {
+  const s = String(gid || "");
+  const n = s.slice(s.lastIndexOf("/") + 1);
+  return n || s;
+}
+
+// Parse custom.repair_items. Anything unreadable is treated as "nothing selected" rather than
+// throwing: a malformed value must not take the whole panel down, and the middleware reads it the
+// same forgiving way.
+function parseRepairItems(raw) {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.map((v) => String(v)) : [];
+  } catch {
+    return [];
+  }
+}
+
 // Editing any installment leg must nudge the middleware to re-sum amount_paid and re-derive the
 // balance — the values themselves are staff-entered, but the totals are always server-computed.
 const PAYMENT_TRIGGER_KEYS = [
@@ -456,6 +545,23 @@ export default function MetafieldManager({ surface = "block" } = {}) {
   const [excNote, setExcNote] = useState("");
   const [refundEmailBusy, setRefundEmailBusy] = useState(false);
   const [refundEmailNote, setRefundEmailNote] = useState("");
+  // Repair class selector: the document's live tags (so the panel reports what the workflow actually
+  // sees, not what someone meant to type) plus the staff member's pending choice.
+  const [docTags, setDocTags] = useState([]);
+  const [repairClass, setRepairClass] = useState(""); // "" | "paid" | "free"
+  const [repairBusy, setRepairBusy] = useState(false);
+  const [repairNote, setRepairNote] = useState("");
+  // Which pieces of the linked order are in for repair: what that order actually contains (fetched
+  // when the reference resolves) and which of them staff have ticked.
+  const [repairOrderItems, setRepairOrderItems] = useState([]);
+  const [repairItemsLoading, setRepairItemsLoading] = useState(false);
+  const [repairItemsError, setRepairItemsError] = useState("");
+  const [selectedItemIds, setSelectedItemIds] = useState([]);
+  const [repairItemsBusy, setRepairItemsBusy] = useState(false);
+  const [repairItemsNote, setRepairItemsNote] = useState("");
+  // True once staff have ticked something they haven't saved. Saving any OTHER field bumps
+  // refreshTick, and without this flag that refresh would quietly throw the pending selection away.
+  const repairItemsDirty = useRef(false);
   // Unified adjustments selector + discount inputs.
   const [adjType, setAdjType] = useState(""); // "" | "exchange" | "voucher" | "discount"
   const [discountSubmode, setDiscountSubmode] = useState("code"); // "code" | "custom"
@@ -482,6 +588,7 @@ export default function MetafieldManager({ surface = "block" } = {}) {
       const valuesByKey = {};
       const defsByKey = {};
       const warnings = [];
+      let tagsOnDoc = [];
 
       // Values — best-effort.
       if (ownerId) {
@@ -491,6 +598,7 @@ export default function MetafieldManager({ surface = "block" } = {}) {
           for (const n of res?.data?.[ctx.resourceField]?.metafields?.nodes ?? []) {
             valuesByKey[n.key] = n.value ?? "";
           }
+          tagsOnDoc = (res?.data?.[ctx.resourceField]?.tags ?? []).map((t) => String(t).trim());
         } catch (e) {
           warnings.push(`Couldn't load values: ${e?.message || e}`);
         }
@@ -550,6 +658,14 @@ export default function MetafieldManager({ surface = "block" } = {}) {
       if (!active) return;
       setDefs(defsByKey);
       setValues(valuesByKey);
+      setDocTags(tagsOnDoc);
+      // Reflect the class the document is actually carrying. A live class only ever OVERWRITES a
+      // pending choice when the document has one -- a background refresh (the recompute after a
+      // save) must not wipe a selection staff have made but not applied yet.
+      const liveClass = repairClassFromTags(tagsOnDoc);
+      setRepairClass((prev) => liveClass || prev);
+      // Adopt the saved selection unless staff have an unsaved one in front of them.
+      if (!repairItemsDirty.current) setSelectedItemIds(parseRepairItems(valuesByKey[REPAIR_ITEMS_KEY]));
       setLineRows(lineRowsInit);
       // On a post-save refresh the user may have started typing again — keep those in-progress edits and
       // don't clobber them; adopt fresh server values as the new baseline for everything else.
@@ -571,6 +687,42 @@ export default function MetafieldManager({ surface = "block" } = {}) {
       active = false;
     };
   }, [ownerId, refreshTick]);
+
+  // Pull the linked order's line items so the picker has something to show. Keyed on the reference
+  // as staff have it RIGHT NOW (a pending edit included) -- typing an order number and seeing its
+  // pieces appear is the whole point; waiting for a save would make the control feel broken.
+  const repairRef = (edits.repair_order_reference ?? values.repair_order_reference ?? "").trim();
+  useEffect(() => {
+    if (ctx.scope !== "draft" || !repairRef) { setRepairOrderItems([]); setRepairItemsError(""); return; }
+    let active = true;
+    setRepairItemsLoading(true);
+    setRepairItemsError("");
+    (async () => {
+      try {
+        // name: matches "#1051" and "1051" alike; quoted so the # is not read as a comment.
+        const res = await shopify.query(REPAIR_ORDER_ITEMS_QUERY, {
+          variables: { q: `name:"${repairRef.replace(/"/g, "")}"` },
+        });
+        if (!active) return;
+        const errs = (res?.errors ?? []).map((e) => e.message);
+        if (errs.length) throw new Error(errs.join("; "));
+        const nodes = res?.data?.orders?.nodes?.[0]?.lineItems?.nodes ?? [];
+        setRepairOrderItems(nodes.map((n) => ({
+          id: lineItemNumericId(n.id),
+          title: n.title || "",
+          sku: n.sku || "",
+          quantity: n.quantity || 1,
+          variantTitle: n.variantTitle || "",
+          imageUrl: n.image?.url || "",
+        })));
+      } catch (e) {
+        if (active) setRepairItemsError(`Couldn't read ${repairRef}: ${e?.message || e}`);
+      } finally {
+        if (active) setRepairItemsLoading(false);
+      }
+    })();
+    return () => { active = false; };
+  }, [ctx.scope, repairRef, refreshTick]);
 
   function setField(key, value) {
     editsRef.current = { ...editsRef.current, [key]: value };
@@ -777,6 +929,84 @@ export default function MetafieldManager({ surface = "block" } = {}) {
       setDiscountNote(`Couldn't apply: ${e?.message || e}`);
     } finally {
       setDiscountBusy(false);
+    }
+  }
+
+  // Start (or correct) a repair by writing its class tag. The middleware watches the draft for
+  // exactly these tags; everything downstream -- which emails go out, whether an estimate is ever
+  // quoted, and whether the finished job takes a TS or an FS serial -- follows from this one choice.
+  //
+  // The losing tag is removed BEFORE the new one is added, and that order is the whole point: a
+  // document that briefly carries both fires the paid intake flow on the very next webhook, which is
+  // exactly the mistake this control exists to prevent. Removing first leaves the draft with no
+  // class tag for a moment, which triggers nothing.
+  async function applyRepairClass() {
+    if (!ownerId || !repairClass) return;
+    setRepairBusy(true);
+    setRepairNote("");
+    try {
+      const present = new Set(docTags.map((t) => t.toLowerCase()));
+      const add = repairClass === "free" ? [REPAIR_FREE_TAG] : [REPAIR_PAID_TAG];
+      const drop = (repairClass === "free" ? [REPAIR_PAID_TAG] : REPAIR_FREE_TAGS).filter((t) => present.has(t));
+      if (drop.length) {
+        const res = await shopify.query(TAGS_REMOVE_MUTATION, { variables: { id: ownerId, tags: drop } });
+        const errs = collectErrors(res, "tagsRemove");
+        if (errs.length) throw new Error(errs.join("; "));
+      }
+      const res = await shopify.query(TAGS_ADD_MUTATION, { variables: { id: ownerId, tags: add } });
+      const errs = collectErrors(res, "tagsAdd");
+      if (errs.length) throw new Error(errs.join("; "));
+      setRepairNote(repairClass === "free"
+        ? `Tagged ${REPAIR_FREE_TAG}. The customer is being emailed a complimentary-repair confirmation and HQ gets the "Mark Complete" link -- this takes a few seconds.`
+        : `Tagged ${REPAIR_PAID_TAG}. HQ is being emailed the "Set Estimate" link and the customer an acknowledgement -- this takes a few seconds.`);
+      setTimeout(() => setRefreshTick((t) => t + 1), 3000);
+    } catch (e) {
+      setRepairNote(`Couldn't set the repair type: ${e?.message || e}`);
+    } finally {
+      setRepairBusy(false);
+    }
+  }
+
+  // Save the picked pieces. The selection is a metafield, and a metafield save fires no webhook, so
+  // the resync tag goes on in the same breath -- otherwise a correction made after intake would sit
+  // in the metafield while the note and the emails kept showing the piece copied on day one.
+  async function applyRepairItems() {
+    if (!ownerId) return;
+    setRepairItemsBusy(true);
+    setRepairItemsNote("");
+    try {
+      const def = defs[REPAIR_ITEMS_KEY] || { namespace: "custom", type: "json" };
+      const picked = repairOrderItems.filter((li) => selectedItemIds.includes(li.id));
+      if (picked.length && picked.length < repairOrderItems.length) {
+        const res = await shopify.query(SET_MUTATION, {
+          variables: { metafields: [{ ownerId, namespace: def.namespace, key: REPAIR_ITEMS_KEY,
+                                      type: def.type, value: JSON.stringify(picked.map((li) => li.id)) }] },
+        });
+        const errs = collectErrors(res, "metafieldsSet");
+        if (errs.length) throw new Error(errs.join("; "));
+      } else {
+        // Everything ticked (or nothing) means the same thing -- no narrowing -- so clear the
+        // metafield rather than storing a list that has to be re-checked against the order every
+        // time it is read.
+        const res = await shopify.query(DELETE_MUTATION, {
+          variables: { metafields: [{ ownerId, namespace: def.namespace, key: REPAIR_ITEMS_KEY }] },
+        });
+        // Deleting something that was never set is not an error worth surfacing.
+        const errs = collectErrors(res, "metafieldsDelete").filter((m) => !/not found|does not exist/i.test(m));
+        if (errs.length) throw new Error(errs.join("; "));
+      }
+      try {
+        await shopify.query(TAGS_ADD_MUTATION, { variables: { id: ownerId, tags: [REPAIR_ITEMS_RESYNC_TAG] } });
+      } catch { /* non-blocking: the selection is saved either way */ }
+      repairItemsDirty.current = false;
+      setRepairItemsNote(picked.length && picked.length < repairOrderItems.length
+        ? `Saved ${picked.length} of ${repairOrderItems.length} pieces. The repair note and the customer emails are being rebuilt around them -- this takes a few seconds.`
+        : `Saved: ${REPAIR_ITEMS_ALL_NOTE}. Every piece on the linked order will appear on the note and in the customer emails.`);
+      setTimeout(() => setRefreshTick((t) => t + 1), 3000);
+    } catch (e) {
+      setRepairItemsNote(`Couldn't save the pieces: ${e?.message || e}`);
+    } finally {
+      setRepairItemsBusy(false);
     }
   }
 
@@ -1046,6 +1276,186 @@ export default function MetafieldManager({ surface = "block" } = {}) {
     );
   };
 
+  // Repair type -- the single control that starts a repair, sitting under the Repair fields because
+  // it is the first thing staff do to a repair draft and the last thing they should be typing by
+  // hand. It writes the class tag; the middleware does everything else.
+  const renderRepairClass = () => {
+    // Repairs run off the DRAFT webhook only, so on a converted order the tag would sit there
+    // unprocessed forever with no feedback. Say so rather than offering a button that does nothing.
+    if (ctx.scope !== "draft") {
+      return (
+        <s-section heading="Repair Type">
+          <s-text tone="subdued">
+            A repair is started on the draft order -- that is the only document the repairs workflow
+            watches. Set the type there, before the draft is converted.
+          </s-text>
+        </s-section>
+      );
+    }
+
+    const tagSet = new Set(docTags.map((t) => t.toLowerCase()));
+    const current = repairClassFromTags(docTags);
+    // Emails already sent for this class. A tag change from here cannot unsend them, so the panel
+    // has to say what the customer has ALREADY been told before staff switch anything.
+    const announced = (current === "free" && tagSet.has(REPAIR_FREE_DONE_TAG))
+                   || (current === "paid" && tagSet.has(REPAIR_PAID_DONE_TAG));
+    // The paid flow is gated server-side on custom.repair_order_reference: without it the intake is
+    // HELD, no customer email goes out, and HQ gets an "action needed" mail instead. Staff can see
+    // that here, in the same panel that has the field, instead of finding out by email.
+    const missingRef = !(values.repair_order_reference || "").trim() && !(edits.repair_order_reference || "").trim();
+
+    const currentLabel = current === "free"
+      ? "Free / complimentary repair"
+      : current === "paid"
+        ? "Paid repair (estimate flow)"
+        : "Not started -- no repair tag on this draft yet";
+    const changed = repairClass && repairClass !== current;
+
+    return (
+      <s-section heading="Repair Type">
+        <s-stack direction="block" gap="base">
+          <s-text tone="subdued">
+            Pick the type and press the button -- it adds the tag that starts the workflow, so nobody
+            has to type one. A paid repair emails HQ the "Set Estimate" link and acknowledges the
+            customer; a free repair tells the customer there is no charge and sends HQ the "Mark
+            Complete" link with no estimate. Only one type can be set at a time.
+          </s-text>
+          <s-text>{`Current: ${currentLabel}`}</s-text>
+          <s-select
+            label="Repair type"
+            value={repairClass}
+            disabled={repairBusy ? "" : undefined}
+            onChange={(e) => {
+              // The host hands back the option LABEL for the blank entry, so anything that isn't one
+              // of the two real values is treated as "nothing picked".
+              const v = e.target.value ?? "";
+              setRepairClass(v === "paid" || v === "free" ? v : "");
+            }}
+          >
+            <s-option value="">Select a repair type...</s-option>
+            <s-option value="paid">Paid repair -- send an estimate</s-option>
+            <s-option value="free">Free repair -- no charge</s-option>
+          </s-select>
+          {repairClass === "paid" && missingRef ? (
+            <s-text tone="caution">
+              No Linked Repair Order yet. The intake will be held until you fill it in below and save
+              -- nothing is sent to the customer before then, because every repair email shows the
+              original piece copied from that order.
+            </s-text>
+          ) : null}
+          {announced && changed ? (
+            <s-text tone="caution">
+              {current === "free"
+                ? "This customer has already been told the repair is complimentary. Switching to paid does not unsend that -- call them."
+                : "This customer has already been acknowledged for a paid repair and HQ holds the estimate link. Switching to free does not unsend that."}
+            </s-text>
+          ) : null}
+          <s-button
+            variant="primary"
+            onClick={applyRepairClass}
+            loading={repairBusy ? "" : undefined}
+            disabled={!changed || repairBusy ? "" : undefined}
+          >
+            {current ? "Change repair type" : "Start repair"}
+          </s-button>
+          {repairNote ? <s-text>{repairNote}</s-text> : null}
+        </s-stack>
+      </s-section>
+    );
+  };
+
+  // Which pieces are in for repair. Sits directly under the repair-type control because the two are
+  // one decision in the staff member's head: what kind of repair, and on which piece.
+  const renderRepairItems = () => {
+    // Same reason as the repair-type control: the reference, the specs copy and the repairs webhook
+    // all live on the draft. renderRepairClass already says so on an order, so say nothing here
+    // rather than stack a second grey box under it.
+    if (ctx.scope !== "draft") return null;
+
+    if (!repairRef) {
+      return (
+        <s-section heading="Pieces in for Repair">
+          <s-text tone="subdued">
+            Fill in Linked Repair Order above and save -- the pieces on that order will be listed here
+            to pick from.
+          </s-text>
+        </s-section>
+      );
+    }
+
+    const allSelected = !selectedItemIds.length || selectedItemIds.length === repairOrderItems.length;
+    // A selection that no longer matches the order -- the reference was edited to point somewhere
+    // else -- is worth saying out loud, because until it is re-saved the middleware falls back to
+    // every piece.
+    const stale = selectedItemIds.filter((id) => !repairOrderItems.some((li) => li.id === id));
+
+    return (
+      <s-section heading="Pieces in for Repair">
+        <s-stack direction="block" gap="base">
+          <s-text tone="subdued">
+            Tick only the pieces actually on the counter. Everything downstream follows this -- the
+            photo, name and gross weight on the customer's emails, the line on the repair note, and
+            the Item ID on the invoice. Leave them all ticked if the whole order came in.
+          </s-text>
+          {repairItemsError ? (
+            <s-text tone="critical">{repairItemsError}</s-text>
+          ) : repairItemsLoading ? (
+            <s-text tone="subdued">{`Loading the pieces on ${repairRef}...`}</s-text>
+          ) : !repairOrderItems.length ? (
+            <s-text tone="caution">
+              {`No pieces found on ${repairRef}. Check the order number -- the repair intake is held until it resolves.`}
+            </s-text>
+          ) : (
+            <s-stack direction="block" gap="small-300">
+              {repairOrderItems.map((li) => {
+                // Everything the counter needs to tell two pieces of one order apart, on one line.
+                const bits = [li.sku, li.variantTitle].filter(Boolean).join(" / ");
+                const label = `${li.title}${bits ? ` -- ${bits}` : ""}${li.quantity > 1 ? ` (qty ${li.quantity})` : ""}`;
+                const on = allSelected || selectedItemIds.includes(li.id);
+                return (
+                  <s-checkbox
+                    key={li.id}
+                    label={label}
+                    checked={on ? "" : undefined}
+                    disabled={repairItemsBusy ? "" : undefined}
+                    onChange={(e) => {
+                      const want = !!e.target.checked;
+                      // The stored list is always explicit. "Nothing selected" renders as everything
+                      // ticked, so the first untick has to start from the full list rather than from
+                      // an empty one -- otherwise unticking one piece would silently select it.
+                      const base = selectedItemIds.length ? selectedItemIds : repairOrderItems.map((x) => x.id);
+                      repairItemsDirty.current = true;
+                      setSelectedItemIds(want ? [...new Set([...base, li.id])] : base.filter((x) => x !== li.id));
+                    }}
+                  />
+                );
+              })}
+            </s-stack>
+          )}
+          {stale.length ? (
+            <s-text tone="caution">
+              {`${stale.length} previously picked piece(s) are not on ${repairRef} any more. Re-pick and save, or every piece on the order will be used.`}
+            </s-text>
+          ) : null}
+          {repairOrderItems.length > 1 && allSelected ? (
+            <s-text tone="caution">
+              {`All ${repairOrderItems.length} pieces are selected. The customer will be emailed about every one of them.`}
+            </s-text>
+          ) : null}
+          <s-button
+            variant="secondary"
+            onClick={applyRepairItems}
+            loading={repairItemsBusy ? "" : undefined}
+            disabled={repairItemsBusy || repairItemsLoading || !repairOrderItems.length ? "" : undefined}
+          >
+            Save pieces
+          </s-button>
+          {repairItemsNote ? <s-text>{repairItemsNote}</s-text> : null}
+        </s-stack>
+      </s-section>
+    );
+  };
+
   // Credit instruments go on DRAFTS ONLY. A converted order has a final invoice and a settled GST
   // position; deducting a voucher afterwards would put the printed invoice and the system out of
   // step. The server enforces this too — the apply-* tag handlers run only on the draft webhook, so
@@ -1129,6 +1539,17 @@ export default function MetafieldManager({ surface = "block" } = {}) {
       if (section.title === "Pricing") {
         const lp = renderLinePricing();
         if (lp) return [block, <s-stack key="line-pricing" direction="block">{lp}</s-stack>];
+      }
+      // Same idea for the repair class selector: it belongs with the repair fields (the Linked
+      // Repair Order it depends on is one of them), not floating at the top of the panel.
+      if (section.title === "Repair") {
+        const rc = renderRepairClass();
+        const ri = renderRepairItems();
+        const extras = [
+          rc ? <s-stack key="repair-class" direction="block">{rc}</s-stack> : null,
+          ri ? <s-stack key="repair-items" direction="block">{ri}</s-stack> : null,
+        ].filter(Boolean);
+        if (extras.length) return [block, ...extras];
       }
       return [block];
     });

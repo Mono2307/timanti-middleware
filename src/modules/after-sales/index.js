@@ -40,21 +40,37 @@ const REPAIR_TEST_EMAIL = process.env.REPAIR_TEST_EMAIL || '';
 // `freshSpecs` is what fetchAndCopyOriginalOrderSpecs just wrote. Prefer it: the
 // in-memory draft was read BEFORE that write, so its properties are stale on the
 // intake pass. Falls back to the draft's own properties on later triggers.
-function repairItemFromDraft(draft, freshSpecs) {
+// A repair can cover SEVERAL pieces of one order, so each spec property holds a list, joined with
+// SPEC_SEP. One piece serialises with no separator at all, which is exactly what was written before
+// multi-piece repairs existed — so old drafts, and Liquid's `split`, read identically.
+const SPEC_SEP = '~||~';
+const splitSpec = v => String(v ?? '').split(SPEC_SEP);
+
+function repairItemsFromDraft(draft, freshSpecs) {
   const li    = draft.line_items?.[0] || {};
   const props = {};
   for (const p of (li.properties || [])) props[p.name] = p.value;
   Object.assign(props, freshSpecs || {});
-  return {
-    title:    props._item_title || li.title || 'Your jewellery',
-    qty:      li.quantity || 1,
-    variant:  props._variant_title || '',
-    imageUrl: props._image_url || null,
+
+  const titles = splitSpec(props._item_title);
+  const variants = splitSpec(props._variant_title);
+  const images = splitSpec(props._image_url);
+  const weights = splitSpec(props._gross_wt);
+  // Drive the row count off the titles — the one field always written for every copied piece. The
+  // others are best-effort per piece (a variant or an image can be missing), so they are indexed
+  // into rather than zipped, and a short list simply leaves that row's line blank.
+  return titles.map((title, i) => ({
+    title: (title || '').trim() || li.title || 'Your jewellery',
+    // The draft carries ONE custom "repair" line whose quantity describes the job, not any one
+    // piece, so it is only meaningful when the job is a single piece.
+    qty: titles.length === 1 ? (li.quantity || 1) : 1,
+    variant: (variants[i] || '').trim(),
+    imageUrl: (images[i] || '').trim() || null,
     // Gross weight as received. Printed under the title on the customer's acknowledgement and
     // estimate so the weight we are holding is on the record from the very first email. Blank when
     // no original order was referenced — itemRow simply omits the line then.
-    grossWeight: props._gross_wt || ''
-  };
+    grossWeight: (weights[i] || '').trim()
+  }));
 }
 
 // In-process lock — prevents burst of secondary webhooks (from our own API calls) re-triggering emails
@@ -298,6 +314,105 @@ async function reconcileRepairDraft(draft, tags, token) {
   }
 }
 
+// The properties every repair document reads its "as received" specs from. Each one now holds a
+// SPEC_SEP-joined list, one entry per piece in for repair.
+const SPEC_KEYS = ['_gross_wt', '_net_wt', '_diamond_cts', '_diamond_pcs', '_gemstone_cts', '_item_title', '_sku', '_variant_title', '_image_url'];
+
+// Which line items of the original order staff picked, from custom.repair_items. Written by the
+// admin panel as a JSON array of the original order's numeric line-item ids. Anything unreadable
+// reads as "nothing picked", which the caller treats as every piece — the same forgiving parse the
+// panel does, so the two never disagree about what a malformed value means.
+function parseRepairItemIds(metafields) {
+  const mf = (metafields || []).find(m => m.namespace === 'custom' && m.key === 'repair_items');
+  if (!mf?.value) return [];
+  try {
+    const parsed = JSON.parse(mf.value);
+    return Array.isArray(parsed) ? parsed.map(String) : [];
+  } catch {
+    console.warn(`parseRepairItemIds: custom.repair_items is not JSON (${String(mf.value).slice(0, 60)}) — using every piece`);
+    return [];
+  }
+}
+
+// Everything worth knowing about ONE piece of the original order, resolved in the order the data is
+// most likely to be right: the line item's own properties first (what was actually sold), then the
+// variant and product metafields, then the product image. Best effort throughout — a piece that
+// resolves nothing simply contributes empty slots to the lists.
+async function specsForOrderLineItem(origItem, orderRef, token) {
+  const specs = {};
+  for (const p of (origItem.properties || [])) {
+    if (SPEC_KEYS.includes(p.name)) specs[p.name] = p.value;
+  }
+  // Always copy item identity fields from the original line item
+  if (origItem.title)         specs['_item_title']    = origItem.title;
+  if (origItem.sku)           specs['_sku']           = origItem.sku;
+  if (origItem.variant_title) specs['_variant_title'] = origItem.variant_title;
+
+  // Fetch variant metafields for weights if not found in properties
+  if ((!specs._gross_wt || !specs._net_wt) && origItem.variant_id) {
+    try {
+      const { data: vmf } = await axios.get(
+        `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/variants/${origItem.variant_id}/metafields.json`,
+        { headers: shopifyHeaders(token), timeout: 10000 }
+      );
+      for (const m of (vmf.metafields || [])) {
+        if (m.namespace !== 'custom') continue;
+        if ((m.key === 'total_metal_weight_g' || m.key === 'gross_weight_g') && !specs._gross_wt) specs._gross_wt = m.value;
+        if (m.key === 'net_metal_weight_g' && !specs._net_wt) specs._net_wt = m.value;
+      }
+    } catch (err) {
+      // One piece's lookup failing must not lose the pieces already resolved — before the loop
+      // existed this threw straight out of the copy and the whole intake was held.
+      console.warn(`specsForOrderLineItem: variant lookup failed for ${orderRef}/${origItem.id}:`, err.message);
+    }
+  }
+
+  // Fetch product metafields for diamond specs if not found
+  if ((!specs._diamond_cts || !specs._diamond_pcs) && origItem.product_id) {
+    try {
+      const { data: pmf } = await axios.get(
+        `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/products/${origItem.product_id}/metafields.json`,
+        { headers: shopifyHeaders(token), timeout: 10000 }
+      );
+      for (const m of (pmf.metafields || [])) {
+        if (m.namespace !== 'custom') continue;
+        if (m.key === 'totaldiamondweight' && !specs._diamond_cts) specs._diamond_cts = m.value;
+        if (m.key === 'totaldiamondcount'  && !specs._diamond_pcs) specs._diamond_pcs = m.value;
+      }
+    } catch (err) {
+      console.warn(`specsForOrderLineItem: product metafield lookup failed for ${orderRef}/${origItem.id}:`, err.message);
+    }
+  }
+
+  // Product image for the item table. Line-item properties are text-only, so we
+  // resolve the image URL once here rather than making the email builder call
+  // Shopify at send time. Best effort — a missing image falls back to the mark.
+  if (!specs._image_url && origItem.product_id) {
+    try {
+      const { data: prod } = await axios.get(
+        `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/products/${origItem.product_id}.json?fields=id,image,images,variants`,
+        { headers: shopifyHeaders(token), timeout: 10000 }
+      );
+      let img = null;
+      if (origItem.variant_id) {
+        const v = (prod.product?.variants || []).find(x => String(x.id) === String(origItem.variant_id));
+        if (v?.image_id) img = (prod.product?.images || []).find(i => String(i.id) === String(v.image_id))?.src || null;
+      }
+      if (!img) img = prod.product?.image?.src || (prod.product?.images || [])[0]?.src || null;
+      if (img) specs._image_url = img;
+    } catch (err) {
+      console.warn(`fetchAndCopyOriginalOrderSpecs: image lookup failed for ${orderRef}:`, err.message);
+    }
+  }
+
+  // A value containing the separator would silently split into two pieces on the way out. Strip it
+  // rather than corrupt the list — no real title, SKU or URL contains "~||~".
+  for (const k of Object.keys(specs)) {
+    specs[k] = String(specs[k] ?? '').split(SPEC_SEP).join(' ').trim();
+  }
+  return specs;
+}
+
 // Fetch original order by name ref stored in custom.repair_order_reference,
 // then copy weight/diamond specs onto the repair draft's first line item properties.
 async function fetchAndCopyOriginalOrderSpecs(draft, token) {
@@ -317,65 +432,37 @@ async function fetchAndCopyOriginalOrderSpecs(draft, token) {
     const origOrder = ordersData.orders?.[0];
     if (!origOrder) { console.warn(`fetchAndCopyOriginalOrderSpecs: order ${orderRef} not found`); return false; }
 
-    const origItem = origOrder.line_items?.[0];
-    if (!origItem) return false;
+    // WHICH pieces of that order are actually in for repair. Staff pick them in the admin panel,
+    // which stores the chosen line-item ids in custom.repair_items.
+    //
+    // An empty or unreadable selection means EVERY piece on the order — not the first one. Taking
+    // line_items[0] was the old behaviour and it was silently wrong: a customer who brought in the
+    // second of two pieces got the first one's photo, name and gross weight on every email and on
+    // the repair note, and nothing anywhere said so.
+    const wanted = parseRepairItemIds(mfData.metafields);
+    const allItems = origOrder.line_items || [];
+    let origItems = wanted.length
+      ? allItems.filter(li => wanted.includes(String(li.id)))
+      : allItems;
+    if (!origItems.length) {
+      // The selection points at lines this order no longer has — the reference was re-pointed after
+      // the pieces were picked. Every piece is the safe reading: it is what an unset selection
+      // means, and it never invents a piece the customer did not bring in.
+      if (wanted.length) console.warn(`fetchAndCopyOriginalOrderSpecs: none of the selected pieces are on ${orderRef} — using all ${allItems.length}`);
+      origItems = allItems;
+    }
+    if (!origItems.length) return false;
 
-    // Start with specs already in original line item properties
+    const perItem = [];
+    for (const origItem of origItems) perItem.push(await specsForOrderLineItem(origItem, orderRef, token));
+
+    // Collapse the per-piece specs into the delimited lists the draft actually carries. Every key
+    // present on ANY piece becomes a list of the same length, so the reader can zip them back by
+    // index — a piece with no image contributes an empty slot rather than shifting the rest.
     const specs = {};
-    const SPEC_KEYS = ['_gross_wt', '_net_wt', '_diamond_cts', '_diamond_pcs', '_gemstone_cts', '_item_title', '_sku', '_variant_title', '_image_url'];
-    for (const p of (origItem.properties || [])) {
-      if (SPEC_KEYS.includes(p.name)) specs[p.name] = p.value;
-    }
-    // Always copy item identity fields from the original line item
-    if (origItem.title)         specs['_item_title']    = origItem.title;
-    if (origItem.sku)           specs['_sku']           = origItem.sku;
-    if (origItem.variant_title) specs['_variant_title'] = origItem.variant_title;
-
-    // Fetch variant metafields for weights if not found in properties
-    if ((!specs._gross_wt || !specs._net_wt) && origItem.variant_id) {
-      const { data: vmf } = await axios.get(
-        `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/variants/${origItem.variant_id}/metafields.json`,
-        { headers: shopifyHeaders(token), timeout: 10000 }
-      );
-      for (const m of (vmf.metafields || [])) {
-        if (m.namespace !== 'custom') continue;
-        if ((m.key === 'total_metal_weight_g' || m.key === 'gross_weight_g') && !specs._gross_wt) specs._gross_wt = m.value;
-        if (m.key === 'net_metal_weight_g' && !specs._net_wt) specs._net_wt = m.value;
-      }
-    }
-
-    // Fetch product metafields for diamond specs if not found
-    if ((!specs._diamond_cts || !specs._diamond_pcs) && origItem.product_id) {
-      const { data: pmf } = await axios.get(
-        `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/products/${origItem.product_id}/metafields.json`,
-        { headers: shopifyHeaders(token), timeout: 10000 }
-      );
-      for (const m of (pmf.metafields || [])) {
-        if (m.namespace !== 'custom') continue;
-        if (m.key === 'totaldiamondweight' && !specs._diamond_cts) specs._diamond_cts = m.value;
-        if (m.key === 'totaldiamondcount'  && !specs._diamond_pcs) specs._diamond_pcs = m.value;
-      }
-    }
-
-    // Product image for the item table. Line-item properties are text-only, so we
-    // resolve the image URL once here rather than making the email builder call
-    // Shopify at send time. Best effort — a missing image falls back to the mark.
-    if (!specs._image_url && origItem.product_id) {
-      try {
-        const { data: prod } = await axios.get(
-          `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/products/${origItem.product_id}.json?fields=id,image,images,variants`,
-          { headers: shopifyHeaders(token), timeout: 10000 }
-        );
-        let img = null;
-        if (origItem.variant_id) {
-          const v = (prod.product?.variants || []).find(x => String(x.id) === String(origItem.variant_id));
-          if (v?.image_id) img = (prod.product?.images || []).find(i => String(i.id) === String(v.image_id))?.src || null;
-        }
-        if (!img) img = prod.product?.image?.src || (prod.product?.images || [])[0]?.src || null;
-        if (img) specs._image_url = img;
-      } catch (err) {
-        console.warn(`fetchAndCopyOriginalOrderSpecs: image lookup failed for ${orderRef}:`, err.message);
-      }
+    for (const key of SPEC_KEYS) {
+      if (!perItem.some(s => s[key])) continue;
+      specs[key] = perItem.map(s => s[key] || '').join(SPEC_SEP);
     }
 
     if (Object.keys(specs).length === 0) { console.log(`fetchAndCopyOriginalOrderSpecs: no specs found on ${orderRef}`); return false; }
@@ -383,7 +470,7 @@ async function fetchAndCopyOriginalOrderSpecs(draft, token) {
     // Write specs to repair draft line item properties (preserve any already set)
     if (!draft.line_items?.[0]) return false;
     await mergeLineItemProps(draft, specs, token);
-    console.log(`✅ Copied ${Object.keys(specs).length} spec(s) from ${orderRef} → ${draft.name}: ${Object.keys(specs).join(', ')}`);
+    console.log(`✅ Copied ${Object.keys(specs).length} spec(s) for ${origItems.length} piece(s) from ${orderRef} → ${draft.name}: ${Object.keys(specs).join(', ')}`);
     // Return the specs themselves, not just a flag: the caller's in-memory draft was
     // read before this write, so it needs these values to render the item table.
     return specs;
@@ -457,7 +544,7 @@ async function handleRepairPayment(draft, { transactionId, gatewayRef }, getShop
       subject: `Your repair charges have been confirmed`,
       html:    buildRepairConfirmedHtml({
         draftRef: draft.name,
-        item:     repairItemFromDraft(draft),
+        items:    repairItemsFromDraft(draft),
         amount:   Math.round(parseFloat(amount) || 0),
         paid:     true          // money is in hand — this is the GoKwik path
       })
@@ -527,6 +614,40 @@ async function processRepairDraftUpdate(incomingDraft, getShopifyToken, assignRe
   // it the reconcile below would read metafields for every sale in the store.
   if (tags.some(t => /^(repair-|free-repair$)/.test(t))) {
     draft = await reconcileRepairDraft(draft, tags, await getShopifyToken());
+  }
+
+  // ── Trigger: the pieces in for repair were changed in the admin panel ──────
+  //
+  // Saving custom.repair_items fires no webhook of its own, so the panel adds this tag to ask for a
+  // re-copy. It has to FORCE one: reconcileRepairDraft only copies when the draft has no item at
+  // all, which after intake it always does — so without this branch a correction would be stored
+  // and then ignored, and the note and every later email would keep the piece copied on day one.
+  //
+  // Strip the tag whatever happens. Leaving it on would re-copy on every subsequent draft save, and
+  // a failure that keeps retrying itself forever is worse than one that shows up in the log once.
+  if (tags.includes('repair-resync-items')) {
+    const token = await getShopifyToken();
+    try {
+      const specs = await fetchAndCopyOriginalOrderSpecs(draft, token);
+      console.log(specs
+        ? `✅ Repair pieces re-copied for ${draft.name}`
+        : `⚠️  Repair pieces resync found nothing to copy for ${draft.name}`);
+    } catch (err) {
+      console.error(`❌ Repair pieces resync failed for ${draft.name}:`, err.message);
+    }
+    tags = tags.filter(t => t !== 'repair-resync-items');
+    await updateDraftOrderTags(draft.id, tags, token);
+    // Re-read: the copy above rewrote the line-item properties, and every trigger below renders its
+    // item table from them.
+    try {
+      const { data } = await axios.get(
+        `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draft.id}.json`,
+        { headers: shopifyHeaders(token), timeout: 10000 }
+      );
+      draft = data.draft_order || draft;
+    } catch (err) {
+      console.warn(`repair resync: re-fetch failed for ${draft.name}:`, err.message);
+    }
   }
 
   // ── Trigger 0: intake → HQ notification + customer acknowledgement ────────
@@ -618,7 +739,7 @@ async function processRepairDraftUpdate(incomingDraft, getShopifyToken, assignRe
           to:      customerEmail,
           ccStore: true,
           subject: `We've received your jewellery for repair`,
-          html:    buildRepairReceivedHtml({ draftRef: draft.name, item: repairItemFromDraft(draft, specsCopied) })
+          html:    buildRepairReceivedHtml({ draftRef: draft.name, items: repairItemsFromDraft(draft, specsCopied) })
         });
       } catch (err) {
         console.error(`❌ Intake ack email failed for ${draft.name}:`, err.message);
@@ -709,7 +830,7 @@ async function processRepairDraftUpdate(incomingDraft, getShopifyToken, assignRe
           subject: `Your repair charges have been confirmed`,
           html:    buildRepairConfirmedHtml({
             draftRef: draft.name,
-            item:     repairItemFromDraft(draft),
+            items:    repairItemsFromDraft(draft),
             amount:   Math.round(parseFloat(amount) || 0),
             paid:     false     // approved only — collected at the counter
           })
@@ -776,7 +897,7 @@ async function processRepairDraftUpdate(incomingDraft, getShopifyToken, assignRe
         subject: `Your estimated repair charges`,
         html:    buildRepairEstimateV2Html({
           draftRef:        draft.name,
-          item:            repairItemFromDraft(draft),
+          items:           repairItemsFromDraft(draft),
           amount:          Math.round(amount),
           paymentUrl:      shortUrl,
           approveStoreUrl,
@@ -895,7 +1016,7 @@ async function processRepairDraftUpdate(incomingDraft, getShopifyToken, assignRe
         subject: `Your jewellery is repaired and ready for collection`,
         html:    buildRepairReadyFinalHtml({
           draftRef:       draft.name,
-          item:           repairItemFromDraft(draft),
+          items:          repairItemsFromDraft(draft),
           mode:           readyFinalMode,
           estimateAmount: Math.round(paidAmount > 0 ? paidAmount : effectiveFinal),
           finalAmount:    Math.round(effectiveFinal),
@@ -1664,4 +1785,9 @@ h2{margin:0 0 12px;font-size:20px;}p{color:#555;font-size:14px;line-height:1.6;}
   });
 }
 
-module.exports = { registerRepairRoutes, handleRepairPayment, handleRepairDraftUpdate };
+module.exports = {
+  registerRepairRoutes, handleRepairPayment, handleRepairDraftUpdate,
+  // Exported for repair_items.test.js only. These two are the whole multi-piece contract: what a
+  // selection means, and how the delimited spec lists unpack back into rows. Both are pure.
+  parseRepairItemIds, repairItemsFromDraft, SPEC_SEP,
+};
