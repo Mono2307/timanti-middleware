@@ -3987,6 +3987,10 @@ app.post('/api/exc-redeem', async (req, res) => {
     const draft = data.draft_order;
     if (!draft) return res.status(404).json({ success: false, error: `draft ${newDraftId} not found` });
 
+    // Set when this apply displaced another note off the draft, so the caller can log the swap
+    // instead of silently showing one note where two were raised.
+    let displacedCode = null;
+
     // 2. Idempotency: bail if the exchange-note metafield is already set (Apps Script retry-safe).
     // Code-AWARE idempotency. Testing exchange_note_value alone was blind to WHICH note is on the
     // draft: sending EXC-B to a draft already holding EXC-A returned success, so the caller logged
@@ -4005,6 +4009,7 @@ app.post('/api/exc-redeem', async (req, res) => {
         try {
           await stripInstrumentFromDraft(newDraftId, 'exchange_note', token);
           await creditInstruments.reopen(supabase, { instrumentType: 'exchange_note', serialCode: appliedExcTag });
+          displacedCode = appliedExcTag;
           console.log(`[exc-redeem] swapped ${appliedExcTag} → ${excNumber} on draft ${newDraftId}; ${appliedExcTag} reopened`);
         } catch (e) {
           console.error(`[exc-redeem] swap-out ${appliedExcTag}:`, e.message);
@@ -4050,7 +4055,7 @@ app.post('/api/exc-redeem', async (req, res) => {
         instrumentType: 'exchange_note', serialCode: excNumber, targetDraftId: newDraftId, value: Math.abs(value),
       });
     } catch (e) { console.error('[ledger] exc-redeem:', e.message); }
-    return res.json({ success: true, draftId: newDraftId, excNumber, deducted: Math.abs(value).toFixed(2) });
+    return res.json({ success: true, draftId: newDraftId, excNumber, deducted: Math.abs(value).toFixed(2), displaced: displacedCode });
   } catch (err) {
     console.error('exc-redeem error:', err.message);
     return res.status(500).json({ success: false, error: err.message });
@@ -4150,6 +4155,10 @@ app.post('/api/voucher-redeem', async (req, res) => {
     const draft = data.draft_order;
     if (!draft) return res.status(404).json({ success: false, error: `draft ${newDraftId} not found` });
 
+    // Set when this apply displaced another voucher off the draft, so the caller can log the swap
+    // instead of silently showing one voucher where two were raised.
+    let displacedCode = null;
+
     // Idempotency, code-AWARE — mirrors the guard in handleApplyVoucherTag. A blind `voucher_value > 0`
     // test is blind to WHICH voucher sits on the draft: re-posting a DIFFERENT code returned success
     // while the metafield still held the first voucher's value, so the draft claimed a voucher it had
@@ -4167,8 +4176,28 @@ app.post('/api/voucher-redeem', async (req, res) => {
       if (!appliedCode || appliedCode.toUpperCase() === String(vchNumber).trim().toUpperCase()) {
         return res.json({ success: true, alreadyApplied: true, draftId: newDraftId, vchNumber });
       }
-      return res.status(409).json({ success: false,
-        error: `draft ${draft.name || newDraftId} already has voucher ${appliedCode} applied — remove that one first` });
+      // LATEST-ONE-WINS, the same rule /api/exc-redeem applies to exchange notes. This used to 409
+      // and tell staff to "remove that one first", which is the asymmetry that let a draft end up
+      // holding two instruments: an exchange note landing on an occupied draft swapped cleanly,
+      // a voucher was refused, and the refusal happened AFTER the serial had already been minted at
+      // /api/serial/allocate — so the number was burnt on a document that never applied. That is
+      // what VCH27-KAHSR-0002 is: issued, serial spent, never deducted.
+      //
+      // Release the incumbent and continue. The strip clears its metafields, tags and net, and
+      // reopen() puts it back to 'open' so it is spendable again rather than stranded as 'applied'
+      // on a draft it is no longer on.
+      try {
+        await stripInstrumentFromDraft(newDraftId, 'voucher', token);
+        await creditInstruments.reopen(supabase, { instrumentType: 'voucher', serialCode: appliedCode });
+        displacedCode = appliedCode;
+        console.log(`[voucher-redeem] swapped ${appliedCode} → ${vchNumber} on draft ${newDraftId}; ${appliedCode} reopened`);
+      } catch (e) {
+        // Only refuse if the release FAILED — proceeding would leave the draft holding one voucher's
+        // value under another's code.
+        console.error(`[voucher-redeem] swap-out ${appliedCode}:`, e.message);
+        return res.status(409).json({ success: false, draftId: newDraftId,
+          error: `draft holds ${appliedCode} and it could not be released — ${vchNumber} not applied` });
+      }
     }
 
     // Validity + single-use gate against the ledger. If the voucher was recorded at issue, enforce it's
@@ -4236,7 +4265,8 @@ app.post('/api/voucher-redeem', async (req, res) => {
         console.log(`[voucher-redeem] deleted online price rule ${inst.price_rule_id} for ${vchNumber}`);
       } catch (e) { console.error('[voucher-redeem] price-rule delete:', e.message); }
     }
-    return res.json({ success: true, draftId: newDraftId, vchNumber, deducted: Math.abs(value).toFixed(2), onlineCodeKilled });
+    return res.json({ success: true, draftId: newDraftId, vchNumber, deducted: Math.abs(value).toFixed(2),
+                      onlineCodeKilled, displaced: displacedCode });
   } catch (err) {
     console.error('voucher-redeem error:', err.message);
     return res.status(500).json({ success: false, error: err.message });
