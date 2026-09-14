@@ -2310,7 +2310,12 @@ async function applyPaymentTagsToOrder(orderId, token) {
 
   // Persist the derived balance + status on the order so re-downloads/reporting read them.
   // The legs.length arm keeps a document publishable even when nothing sums to a status yet.
-  if (isFull || isPartial || isUnpaid || legs.length) {
+  //
+  // `settled` gates only the PAYMENT figures. amount_pending is the balance and is always well defined,
+  // so it is written outside the gate — see the twin in applyPaymentTagsToDraftOrder for the failure
+  // that change fixes. The two functions must stay identical here.
+  const settled = isFull || isPartial || isUnpaid || legs.length > 0;
+  {
     const patch = Object.assign({}, legacyFold.patch);
     // amount_paid is DERIVED from the legs. The admin panel writes legs but never the total (it is
     // read-only there), and a leg edited by hand changes the sum this figure must follow — so
@@ -2323,6 +2328,12 @@ async function applyPaymentTagsToOrder(orderId, token) {
     }
     const curPending = mf('amount_pending');
     if (curPending === null || Math.abs(parseFloat(curPending) - amountPending) >= 0.5) patch.amount_pending = amountPending.toFixed(2);
+    if (!settled) {
+      if (isFinalized) patch.is_finalized = 'false';
+      if (paymentStatus !== null && paymentStatus !== 'None') patch.payment_status = 'None';
+      if (Object.keys(patch).length) await updateOrderMetafields(orderId, patch, token);
+      return false;   // no payment tags on an unpaid document — same as before
+    }
     const wantStatus = isUnpaid ? 'None' : (isFull ? 'Full' : 'Partial');  // choice-list: Partial|Full|None
     // is_finalized drives is_fully_paid on the tax invoice, so it must track the balance BOTH ways —
     // a top-up or a refund that reopens a balance has to clear it, or the invoice keeps printing
@@ -2334,7 +2345,6 @@ async function applyPaymentTagsToOrder(orderId, token) {
     if (paymentStatus !== wantStatus) patch.payment_status = wantStatus;
     if (Object.keys(patch).length) await updateOrderMetafields(orderId, patch, token);
   }
-  if (!isFull && !isPartial && !isUnpaid && !legs.length) return false;
 
   const existingTags = (order.tags || '').split(',').map(t => t.trim()).filter(Boolean);
   const cleanedTags  = existingTags.filter(t =>
@@ -2468,7 +2478,19 @@ async function applyPaymentTagsToDraftOrder(draftOrderId, token) {
   // Persist the derived balance + status so the invoice/collection surfaces read them (not just tags).
   // Metafield writes don't fire the draft webhook → no loop.
   // The legs.length arm keeps a document publishable even when nothing sums to a status yet.
-  if (isFull || isPartial || isUnpaid || legs.length) {
+  //
+  // `settled` gates only the figures that describe a PAYMENT — amount_paid, payment_status,
+  // is_finalized. amount_pending is NOT one of them: it is the balance, net-to-collect minus what has
+  // been settled, and it is well defined on a document nobody has paid a rupee against (it is the whole
+  // price). It used to sit inside this gate, and with nothing paid every arm is false — st.isUnpaid is
+  // true at netPaid 0, which forces isFull and isPartial false, and `isUnpaid` below is further ANDed
+  // with amountPaid > 0. So the reprice moved the price, syncAmountToCollect moved
+  // amount_to_be_collected, and amount_pending was simply never recomputed: blank on a draft that had
+  // never been paid, and frozen at the old figure on one whose legs were later blanked out to correct a
+  // mis-keyed payment. No later webhook healed it, because every later pass failed the same gate. Every
+  // invoice and receipt template prints this field as Balance Due, so the stale number was customer-facing.
+  const settled = isFull || isPartial || isUnpaid || legs.length > 0;
+  {
     const patch = Object.assign({}, legacyFold.patch);
     // amount_paid is DERIVED from the legs. The admin panel writes legs but never the total (it is
     // read-only there), and a leg edited by hand changes the sum this figure must follow — so
@@ -2481,6 +2503,16 @@ async function applyPaymentTagsToDraftOrder(draftOrderId, token) {
     }
     const curPending = mf('amount_pending');
     if (curPending === null || Math.abs(parseFloat(curPending) - amountPending) >= 0.5) patch.amount_pending = amountPending.toFixed(2);
+    // Nothing is settled on this document. Any payment_status / is_finalized left on it describes money
+    // that is no longer recorded here (every leg blanked, say) and has to be cleared with the balance —
+    // is_finalized in particular drives "fully paid" on the tax invoice. Nothing is STAMPED on a
+    // document that never carried these, hence the change guards rather than a blanket write.
+    if (!settled) {
+      if (isFinalized) patch.is_finalized = 'false';
+      if (paymentStatus !== null && paymentStatus !== 'None') patch.payment_status = 'None';
+      if (Object.keys(patch).length) await updateDraftOrderMetafields(draftOrderId, patch);
+      return false;   // no payment tags on an unpaid document — same as before
+    }
     const wantStatus = isUnpaid ? 'None' : (isFull ? 'Full' : 'Partial');  // choice-list: Partial|Full|None
     // is_finalized drives is_fully_paid on the tax invoice (mto-invoice-template.liquid), so it must
     // track the balance in BOTH directions — otherwise a draft that reopens a balance (top-up, price
@@ -2496,7 +2528,6 @@ async function applyPaymentTagsToDraftOrder(draftOrderId, token) {
     if (paymentStatus !== wantStatus) patch.payment_status = wantStatus;
     if (Object.keys(patch).length) await updateDraftOrderMetafields(draftOrderId, patch);
   }
-  if (!isFull && !isPartial && !isUnpaid && !legs.length) return false;
 
   const existingTags = (draft.tags || '').split(',').map(t => t.trim()).filter(Boolean);
   const cleanedTags  = existingTags.filter(t =>
