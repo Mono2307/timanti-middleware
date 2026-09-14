@@ -101,6 +101,7 @@ function repairSendEmail(opts) {
     const hqCc = [process.env.HQ_EMAIL, process.env.HQ_CC_EMAIL].filter(Boolean);
     return sendEmail({
       ...rest,
+      internal: true,   // staff-only mail: the oversight copy rides in a visible Cc, not Bcc
       to:      STORE_EMAIL,
       cc:      hqCc.length ? hqCc : undefined,
       subject: /^\[internal\]/i.test(rest.subject || '') ? rest.subject : `[Internal] ${rest.subject}`,
@@ -187,6 +188,116 @@ async function writeDraftOrderMetafields(draftOrderId, fields, token, namespace 
   }
 }
 
+// Merge properties into the repair draft's FIRST line item, leaving the rest of the draft alone.
+//
+// Line-item properties — not metafields — are the channel every repair document reads its specs
+// from. Order Printer has been seen rendering draft-order metafields as empty at print time, and
+// a property is part of the line item itself, so it is there whenever the line is. `price` is
+// optional and only passed when a caller genuinely means to change it; omitting it leaves the
+// existing price untouched.
+async function mergeLineItemProps(draft, props, token, price) {
+  const firstItem = draft.line_items?.[0];
+  if (!firstItem || Object.keys(props).length === 0 && price === undefined) return false;
+  const incoming = Object.keys(props);
+  const kept     = (firstItem.properties || []).filter(p => !incoming.includes(p.name));
+  const merged   = [...kept, ...Object.entries(props).map(([name, value]) => ({ name, value: String(value) }))];
+  await axios.put(
+    `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draft.id}.json`,
+    { draft_order: { id: draft.id, line_items: [
+      { id: firstItem.id, title: firstItem.title, quantity: firstItem.quantity,
+        price: price === undefined ? firstItem.price : price, properties: merged },
+      ...draft.line_items.slice(1).map(li => ({ id: li.id }))
+    ]}},
+    { headers: shopifyHeaders(token), timeout: 10000 }
+  );
+  return true;
+}
+
+// Repairs one repair draft's data before any trigger looks at it. Idempotent by construction —
+// every branch is guarded by "is it already right?" — so it can run on every webhook and will
+// PUT nothing once the draft is in order.
+//
+// It exists because the spec copy used to happen exactly once, inside whichever trigger fired
+// first. Staff routinely tag a draft `free-repair` and fill in custom.repair_order_reference a
+// few minutes (or days) later, and the trigger's own dedupe tag then stopped it ever running
+// again — so the draft kept the raw "Repair-RG00020" line, with no item, no weights and no image,
+// on every document and every email for the rest of its life. Draft #D214 is exactly that.
+async function reconcileRepairDraft(draft, tags, token) {
+  try {
+    const firstItem = draft.line_items?.[0];
+    if (!firstItem) return draft;
+
+    const props = {};
+    for (const p of (firstItem.properties || [])) props[p.name] = p.value;
+    let changed = false;
+
+    // (a) The item was never copied across — try again now the reference may exist.
+    if (!props._item_title) {
+      const specs = await fetchAndCopyOriginalOrderSpecs(draft, token);
+      if (specs) { Object.assign(props, specs); changed = true; }
+    }
+
+    // (b) Mirror the weights that live in metafields onto the line item.
+    //
+    //     Pre-repair comes from custom.repair_intake_gross_weight — the weight staff record at the
+    //     counter with the customer watching, and the only pre-repair weight that exists at all for
+    //     a piece whose variant carries no weight metafields. Reading only the catalogue weight is
+    //     why the "Before repair" row printed blank on every repair note.
+    //
+    //     Post-repair comes from the custom.* fields the Mark Complete form writes. Those are
+    //     mirrored at the point of entry too, but doing it here as well means a draft completed
+    //     before that existed picks the values up the next time it is saved, instead of needing
+    //     Mark Complete run again.
+    const { data: mfData } = await axios.get(
+      `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draft.id}/metafields.json`,
+      { headers: shopifyHeaders(token), timeout: 10000 }
+    );
+    const mf = {};
+    for (const m of (mfData.metafields || [])) {
+      if (m.namespace === 'custom' && m.value !== null && m.value !== '') mf[m.key] = String(m.value).trim();
+    }
+    const mirrors = {
+      _intake_gross_wt: mf.repair_intake_gross_weight,
+      _post_gross_wt:   mf.gross_weight_g,
+      _post_net_wt:     mf.net_metal_weight_g,
+      _post_dia_cts:    mf.totaldiamondweight,
+      _post_gem_cts:    mf.gemstone_weight,
+    };
+    let mirrorChanged = false;
+    for (const [name, value] of Object.entries(mirrors)) {
+      if (value && props[name] !== value) { props[name] = value; mirrorChanged = true; }
+    }
+    if (mirrorChanged) {
+      // The whole set, not just the changed keys: the draft was read before step (a)'s write, so a
+      // delta merge would hand Shopify a property list that no longer has the item specs in it.
+      await mergeLineItemProps(draft, props, token);
+      changed = true;
+    }
+
+    // (c) A complimentary repair must cost nothing. The estimate form forces 0 on its own free
+    //     path, but a draft tagged free-repair by hand in the admin keeps whatever price was on
+    //     it — #D214 sat at Rs.1.00 — and that figure then flows into the note's totals, the
+    //     amount due and the customer's email.
+    const isFree = tags.includes('repair-free') || tags.includes('free-repair');
+    if (isFree && parseFloat(firstItem.price) > 0) {
+      await mergeLineItemProps(draft, props, token, '0.00');
+      console.log(`✅ Free repair ${draft.name}: price Rs.${firstItem.price} zeroed`);
+      changed = true;
+    }
+
+    if (!changed) return draft;
+    const { data } = await axios.get(
+      `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draft.id}.json`,
+      { headers: shopifyHeaders(token), timeout: 10000 }
+    );
+    return data.draft_order || draft;
+  } catch (err) {
+    // Never fatal: a reconcile failure must not stop the trigger below it from emailing anyone.
+    console.warn(`⚠️  reconcileRepairDraft failed for ${draft.name}: ${err.message}`);
+    return draft;
+  }
+}
+
 // Fetch original order by name ref stored in custom.repair_order_reference,
 // then copy weight/diamond specs onto the repair draft's first line item properties.
 async function fetchAndCopyOriginalOrderSpecs(draft, token) {
@@ -270,19 +381,8 @@ async function fetchAndCopyOriginalOrderSpecs(draft, token) {
     if (Object.keys(specs).length === 0) { console.log(`fetchAndCopyOriginalOrderSpecs: no specs found on ${orderRef}`); return false; }
 
     // Write specs to repair draft line item properties (preserve any already set)
-    const firstItem = draft.line_items?.[0];
-    if (!firstItem) return false;
-    const existingProps = (firstItem.properties || []).filter(p => !SPEC_KEYS.includes(p.name));
-    const newProps = [...existingProps, ...Object.entries(specs).map(([name, value]) => ({ name, value }))];
-
-    await axios.put(
-      `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draft.id}.json`,
-      { draft_order: { id: draft.id, line_items: [
-        { id: firstItem.id, title: firstItem.title, quantity: firstItem.quantity, price: firstItem.price, properties: newProps },
-        ...draft.line_items.slice(1).map(li => ({ id: li.id }))
-      ]}},
-      { headers: shopifyHeaders(token), timeout: 10000 }
-    );
+    if (!draft.line_items?.[0]) return false;
+    await mergeLineItemProps(draft, specs, token);
     console.log(`✅ Copied ${Object.keys(specs).length} spec(s) from ${orderRef} → ${draft.name}: ${Object.keys(specs).join(', ')}`);
     // Return the specs themselves, not just a flag: the caller's in-memory draft was
     // read before this write, so it needs these values to render the item table.
@@ -422,6 +522,12 @@ async function processRepairDraftUpdate(incomingDraft, getShopifyToken, assignRe
   }
 
   let tags = (draft.tags || '').split(',').map(t => t.trim()).filter(Boolean);
+
+  // Every draft update in the shop reaches this function, so the repair gate comes first: without
+  // it the reconcile below would read metafields for every sale in the store.
+  if (tags.some(t => /^(repair-|free-repair$)/.test(t))) {
+    draft = await reconcileRepairDraft(draft, tags, await getShopifyToken());
+  }
 
   // ── Trigger 0: intake → HQ notification + customer acknowledgement ────────
   if (tags.includes('repair-intake') && !tags.includes('repair-hq-notified')) {
@@ -839,6 +945,9 @@ function registerRepairRoutes(app, getShopifyToken) {
       const customerPhone = d.billing_address?.phone || d.phone || '';
       const itemDesc      = d.line_items?.[0]?.title || 'Repair service';
       const notes         = d.note || '';
+      // A draft already tagged complimentary opens with the box ticked and the money field locked,
+      // so the form cannot be used to put a price back on a repair that was agreed as free.
+      const alreadyFree   = /(^|,)s*(repair-free|free-repair)s*(,|$)/i.test(d.tags || '');
 
       res.send(`<!DOCTYPE html>
 <html lang="en">
@@ -866,6 +975,8 @@ function registerRepairRoutes(app, getShopifyToken) {
     button { margin-top: 20px; width: 100%; background: #000; color: #fff; border: none; border-radius: 6px; padding: 14px; font-size: 15px; font-weight: 500; cursor: pointer; }
     button:hover { background: #222; }
     .notes-box { background: #f9f9f9; border-left: 3px solid #fc7d27; padding: 10px 14px; font-size: 13px; color: #444; margin-bottom: 0; white-space: pre-wrap; }
+    .hint { font-size: 12px; color: #999; margin-top: 6px; }
+    .opt-label { font-size: 12px; color: #999; font-weight: 400; }
   </style>
 </head>
 <body>
@@ -883,12 +994,14 @@ function registerRepairRoutes(app, getShopifyToken) {
     <form method="POST" action="/repairs/set-estimate">
       <input type="hidden" name="draftId" value="${draftId}">
       <input type="hidden" name="token" value="${hmacToken}">
-      <div id="amountWrap">
+      <div id="amountWrap"${alreadyFree ? ' style="opacity:0.35;"' : ''}>
         <label for="amount">Estimate Amount (₹)</label>
-        <div class="prefix-input">
+        <div class="prefix-input"${alreadyFree ? ' style="background:#f0f0f0;"' : ''} id="amountBox">
           <span>₹</span>
-          <input id="amount" name="amount" type="text" inputmode="decimal" placeholder="e.g. 1500" required>
+          <input id="amount" name="amount" type="text" inputmode="decimal" placeholder="e.g. 1500"
+                 ${alreadyFree ? 'value="0" readonly tabindex="-1" style="background:#f0f0f0; cursor:not-allowed;"' : 'required'}>
         </div>
+        <p class="hint" id="freeHint"${alreadyFree ? '' : ' style="display:none;"'}>Complimentary repair — there is nothing to charge, so the amount is locked at ₹0.</p>
       </div>
       <div style="margin-top:16px;">
         <label for="skuId">SKU / Design ID <span class="opt-label">(optional — appears on repair note)</span></label>
@@ -896,7 +1009,7 @@ function registerRepairRoutes(app, getShopifyToken) {
       </div>
       <div style="margin-top:16px; padding:12px 16px; background:#fff3cd; border-radius:6px; border:1px solid #ffc107;">
         <label style="display:flex; align-items:center; gap:10px; cursor:pointer; font-size:13px; font-weight:500; margin:0;">
-          <input type="checkbox" name="free" value="true" id="freeCheck" onchange="toggleFree(this)" style="width:16px; height:16px; cursor:pointer;">
+          <input type="checkbox" name="free" value="true" id="freeCheck" onchange="toggleFree(this)"${alreadyFree ? ' checked' : ''} style="width:16px; height:16px; cursor:pointer;">
           This repair is our mistake — mark as free (no charge to customer)
         </label>
       </div>
@@ -905,11 +1018,21 @@ function registerRepairRoutes(app, getShopifyToken) {
     <script>
     function toggleFree(cb) {
       var wrap = document.getElementById('amountWrap');
+      var box = document.getElementById('amountBox');
       var input = document.getElementById('amount');
+      var hint = document.getElementById('freeHint');
       var btn = document.querySelector('button[type="submit"]');
       wrap.style.opacity = cb.checked ? '0.35' : '1';
+      box.style.background = cb.checked ? '#f0f0f0' : '';
+      // readonly, not just dimmed: a dimmed box still takes typing, and the figure typed into it
+      // was reaching the draft as a real price on a repair the store had just marked free.
+      input.readOnly = cb.checked;
+      input.tabIndex = cb.checked ? -1 : 0;
+      input.style.background = cb.checked ? '#f0f0f0' : '';
+      input.style.cursor = cb.checked ? 'not-allowed' : '';
       input.required = !cb.checked;
-      if (cb.checked) input.value = '';
+      input.value = cb.checked ? '0' : '';
+      hint.style.display = cb.checked ? '' : 'none';
       btn.textContent = cb.checked ? 'Mark as Free & Notify Customer' : 'Send Estimate to Customer';
     }
     </script>
@@ -1189,6 +1312,19 @@ function registerRepairRoutes(app, getShopifyToken) {
       if (postGemCts?.trim())  postSpecs.gemstone_weight    = postGemCts.trim();
       if (Object.keys(postSpecs).length > 0) {
         await writeDraftOrderMetafields(draft.id, postSpecs, shopifyToken, 'custom');
+        // Mirror onto the line item as well. The repair note reads the metafield first and falls
+        // back to these; Order Printer has been seen rendering draft-order metafields as empty at
+        // print time, and a property is part of the line itself so it prints whenever the line does.
+        const postProps = {};
+        if (postSpecs.gross_weight_g)     postProps._post_gross_wt = postSpecs.gross_weight_g;
+        if (postSpecs.net_metal_weight_g) postProps._post_net_wt   = postSpecs.net_metal_weight_g;
+        if (postSpecs.totaldiamondweight) postProps._post_dia_cts  = postSpecs.totaldiamondweight;
+        if (postSpecs.gemstone_weight)    postProps._post_gem_cts  = postSpecs.gemstone_weight;
+        try {
+          await mergeLineItemProps(draft, postProps, shopifyToken);
+        } catch (err) {
+          console.warn(`⚠️  post-spec property mirror failed for ${draft.name}: ${err.message}`);
+        }
       }
 
       const newTags    = currentTags.filter(t => t !== 'repair-complete').concat(['repair-complete']);
