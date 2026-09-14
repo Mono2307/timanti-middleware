@@ -1457,6 +1457,34 @@ function resolveLineDiscount(entries, { diamond = 0, making = 0, grossIncl = 0 }
   return { total, diaPortion, mkPortion, totalPortion };
 }
 
+// The rupee BREAKUP of a line's discount, split by the component it landed on.
+//
+// 'Diamond (After Discount)' / 'Making (After Discount)' state the RESULT; these state the CUT. Staff
+// at the counter could previously only reach "what did the customer save?" by subtracting two props in
+// their head, per component — exactly the arithmetic nobody does reliably in front of a customer. Same
+// numbers, stated forward.
+//
+// 'Discount on Total' covers a whole-line / native cut (a Shopify collection or order discount captured
+// as a "total" per-line entry), which by definition lands on neither component. It is written only when
+// such a cut exists, so the ordinary case shows exactly the two component props — but where it does
+// exist the breakup still adds up and staff are never left holding an unexplained remainder:
+//
+//   Discount on Diamond + Discount on Making + Discount on Total === Discount Applied
+//
+// A line with no discount carries none of these props. That is why the NAMES are stripped at every call
+// site (DISCOUNT_SPLIT_PROPS) before the values are pushed: remove a discount and the old breakup has to
+// go with it, or the line goes on advertising a saving that no longer exists.
+const DISCOUNT_SPLIT_PROPS = new Set(['Discount on Diamond', 'Discount on Making', 'Discount on Total']);
+
+function discountSplitProps({ dia = 0, mk = 0, tot = 0 } = {}) {
+  const out = [];
+  // Half a paisa — below this a "discount" is float dust off the proration, not a saving worth printing.
+  if (dia > 0.005) out.push({ name: 'Discount on Diamond', value: `Rs${dia.toFixed(2)}` });
+  if (mk  > 0.005) out.push({ name: 'Discount on Making',  value: `Rs${mk.toFixed(2)}` });
+  if (tot > 0.005) out.push({ name: 'Discount on Total',   value: `Rs${tot.toFixed(2)}` });
+  return out;
+}
+
 // Read the stored discount intent off the draft's custom metafields. Falls back to the legacy
 // frozen-rupee field (discount_applied with no rate) so drafts discounted before the rate migration
 // still resolve — treated as a pre-tax flat amount, which is what that field always meant for custom.
@@ -1707,7 +1735,7 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
       const unitPrice   = r2(itemFinal / (item.quantity || 1));
       // Strip financial fields; also strip Gold for this item when we have new gold data to replace it
       const thisItemRecalc = itemRecalc[idx];
-      const FINANCIAL   = new Set(['Taxable Value', 'GST', 'Gross Value', 'Discount Applied', 'Diamond (After Discount)', 'Making (After Discount)', '_gold_rate', ...(thisItemRecalc ? ['Gold', 'Making', 'Gemstone'] : [])]);
+      const FINANCIAL   = new Set(['Taxable Value', 'GST', 'Gross Value', 'Discount Applied', 'Diamond (After Discount)', 'Making (After Discount)', '_gold_rate', ...DISCOUNT_SPLIT_PROPS, ...(thisItemRecalc ? ['Gold', 'Making', 'Gemstone'] : [])]);
       const filteredProps = h.properties.filter(p => !FINANCIAL.has(p.name));
       if (thisItemRecalc) {
         filteredProps.push({ name: 'Gold',   value: `Rs${thisItemRecalc.newGold.toFixed(2)}` });
@@ -1725,6 +1753,8 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
         { name: 'Diamond (After Discount)', value: `Rs${diaAfterDisc.toFixed(2)}` },
         { name: 'Making (After Discount)',  value: `Rs${mkAfterDisc.toFixed(2)}` },
       );
+      // The same cut stated forward, so staff read the saving instead of subtracting for it.
+      filteredProps.push(...discountSplitProps({ dia: r2(df.dia), mk: r2(df.mk), tot: r2(df.tot) }));
       const idxRate = goldRateForIdx(idx);
       const effectiveRate = idxRate ? String(idxRate) : ((item.properties || []).find(p => p.name === '_gold_rate')?.value || h.properties.find(p => p.name === '_gold_rate')?.value || '');
       if (effectiveRate) filteredProps.push({ name: '_gold_rate', value: effectiveRate });
@@ -2013,8 +2043,14 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
     };
     if (bootstrapGoldRate || goldRateOverridden) repricedProps['_gold_rate'] = goldRate.toString();
 
-    const updatedProperties = (item.properties || []).filter(p => !(p.name in repricedProps));
+    // The split props are stripped by NAME, not by presence in repricedProps: an undiscounted line
+    // writes none of them, so leaving the strip to repricedProps alone would let last run's breakup
+    // survive a discount being removed.
+    const updatedProperties = (item.properties || [])
+      .filter(p => !(p.name in repricedProps) && !DISCOUNT_SPLIT_PROPS.has(p.name));
     for (const [name, value] of Object.entries(repricedProps)) updatedProperties.push({ name, value });
+    // The same cut stated forward, so staff read the saving instead of subtracting for it.
+    updatedProperties.push(...discountSplitProps({ dia: df.dia, mk: df.mk, tot: df.tot }));
 
     repricedMap.set(item.id, { id: item.id, variant_id: item.variant_id || undefined, quantity: item.quantity, price: (newFinalValue / (item.quantity || 1)).toFixed(2), properties: updatedProperties });
     allJewelData.push(jewel_data);
@@ -2125,7 +2161,11 @@ async function handleWeightedDocReprice(draft) {
       const taxableValue = finalValue / 1.03;
       const gst          = taxableValue * 0.03;
 
-      const OVERWRITE = new Set(['Gross Value', 'Taxable Value', 'GST', 'Discount Applied']);
+      // The split props are stripped, never rewritten: this reprice prorates a NATIVE order-level
+      // discount across the weighted basis, so its cut is not attributable to diamond or making at all.
+      // Carrying the source draft's breakup onto a memo/transfer would state a component saving this
+      // document did not give.
+      const OVERWRITE = new Set(['Gross Value', 'Taxable Value', 'GST', 'Discount Applied', ...DISCOUNT_SPLIT_PROPS]);
       const updatedProps = (item.properties || []).filter(p => !OVERWRITE.has(p.name));
       updatedProps.push(
         { name: 'Gross Value',      value: `Rs${basis.toFixed(2)}` },
@@ -3160,7 +3200,9 @@ app.post('/api/set-line-prices', async (req, res) => {
     return res.status(400).json({ success: false, error: 'draftOrderId and lineItems[] required' });
   }
 
-  const FINANCIAL_PROPS = new Set(['Gross Value', 'Discount Applied', 'Taxable Value', 'GST']);
+  // A manual override writes 'Discount Applied: Rs0' — the discount breakup has to go with it, or the
+  // line prints a saving against a price that was typed in by hand.
+  const FINANCIAL_PROPS = new Set(['Gross Value', 'Discount Applied', 'Taxable Value', 'GST', ...DISCOUNT_SPLIT_PROPS]);
 
   try {
     const token = await getShopifyToken();
