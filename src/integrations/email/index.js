@@ -22,6 +22,18 @@ const supabase = createClient(
 // Override per-environment with the STORE_EMAIL secret.
 const STORE_EMAIL = process.env.STORE_EMAIL || 'hsrstore@timanti.in';
 
+// Oversight copy on EVERY send — customer-facing and internal alike, every module, no exceptions.
+// Hard-coded rather than read from an env var on purpose: the point of it is that it cannot go
+// missing in a Fly secret shuffle the way HQ_EMAIL and HQ_CC_EMAIL can. Change it here, nowhere else.
+const ALWAYS_CC = 'monodeep.dutta@timanti.in';
+
+// Which header it rides in is decided per message, not per caller: a visible Cc when every
+// recipient is already a Timanti address, a Bcc the moment one of them is not. Same reason the
+// store inbox is Bcc'd on customer repair mail — a customer hitting Reply All must not be able to
+// pull an internal address into the thread. Callers that know better can force it with
+// { internal: true }.
+const INTERNAL_DOMAIN = '@timanti.in';
+
 // Merge the store address into any cc the caller already set, de-duplicated.
 function withStoreCc(cc) {
   const list = Array.isArray(cc) ? cc.slice() : (cc ? [cc] : []);
@@ -29,12 +41,25 @@ function withStoreCc(cc) {
   return list;
 }
 
-async function sendEmail({ to, subject, html, cc, bcc }) {
+const asList = (v) => (Array.isArray(v) ? v.filter(Boolean) : v ? [v] : []);
+
+async function sendEmail({ to, subject, html, cc, bcc, internal }) {
   const payload = { from: 'Timanti <hello@timanti.in>', to, subject, html };
-  if (cc) payload.cc = Array.isArray(cc) ? cc : [cc];
+  const ccList  = asList(cc);
+  const bccList = asList(bcc);
+  // Resend rejects the whole message if one address appears twice across to/cc/bcc, so the
+  // oversight copy is added only where it is not already a recipient.
+  const already = [...asList(to), ...bccList, ...ccList].map(a => String(a).toLowerCase());
+  if (!already.includes(ALWAYS_CC)) {
+    const recipients = asList(to);
+    const allInternal = internal === true || (recipients.length > 0 &&
+      recipients.every(a => String(a).toLowerCase().endsWith(INTERNAL_DOMAIN)));
+    if (allInternal) ccList.push(ALWAYS_CC); else bccList.push(ALWAYS_CC);
+  }
+  if (ccList.length)  payload.cc  = ccList;
   // Resend supports bcc; this wrapper simply never passed it through. Used by the repair flow to
   // copy the store on customer mail without the customer seeing an internal address in the header.
-  if (bcc) payload.bcc = Array.isArray(bcc) ? bcc : [bcc];
+  if (bccList.length) payload.bcc = bccList;
 
   const response = await fetch('https://api.resend.com/emails', {
     method: 'POST',
@@ -1113,4 +1138,4 @@ function buildRepairStoreApprovedCustomerHtml({ customerName, draftRef, amount }
 </html>`;
 }
 
-module.exports = { sendEmail, sendDepositEmail, buildDepositEmailHtml, buildRepairEstimateHtml, buildRepairPaymentConfirmedHtml, buildRepairCompleteHtml, buildCreditNoteHtml, buildExchangeNoteHtml, buildRepairIntakeHtml, buildRepairAcknowledgementHtml, buildRepairFreeHtml, buildRepairHqCompleteReadyHtml, buildRepairStoreApprovedCustomerHtml, STORE_EMAIL, withStoreCc };
+module.exports = { sendEmail, sendDepositEmail, buildDepositEmailHtml, buildRepairEstimateHtml, buildRepairPaymentConfirmedHtml, buildRepairCompleteHtml, buildCreditNoteHtml, buildExchangeNoteHtml, buildRepairIntakeHtml, buildRepairAcknowledgementHtml, buildRepairFreeHtml, buildRepairHqCompleteReadyHtml, buildRepairStoreApprovedCustomerHtml, STORE_EMAIL, ALWAYS_CC, withStoreCc };
