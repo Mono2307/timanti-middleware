@@ -27,7 +27,7 @@ const {
   // threw at call time, which also skipped the completion tag, timestamp and serial below.
   buildRepairReadyFinalHtml,
 } = require('../../integrations/email/templates');
-const { verifySessionToken } = require('./session_token');
+const { verifySessionToken, peekClaims } = require('./session_token');
 
 // Public identifier of the Metafield Manager app (it ships in shopify.app.*.toml), used as the
 // expected `aud` on a session token. Overridable by env so a second install does not need a code
@@ -1070,7 +1070,14 @@ function registerRepairRoutes(app, getShopifyToken) {
         // Whichever of these actually signed the token wins. SHOPIFY_CLIENT_SECRET is tried
         // because the extension may have been created under the same app as the
         // client-credentials one already configured here -- if so, nothing new needs setting.
-        clientSecrets: [process.env.MFM_CLIENT_SECRET, process.env.SHOPIFY_CLIENT_SECRET],
+        // MFM_CLIENT_SECRET may hold SEVERAL comma-separated secrets. An app can carry more than
+        // one valid secret at a time, and the Dev Dashboard and `app env show` have been seen
+        // reporting DIFFERENT ones for the same app -- so rather than guess which one signs the
+        // token, set them all and let the matching one win.
+        clientSecrets: [
+          ...String(process.env.MFM_CLIENT_SECRET || '').split(',').map(function (x) { return x.trim(); }),
+          process.env.SHOPIFY_CLIENT_SECRET,
+        ],
         shopDomain:   process.env.SHOPIFY_STORE_URL,
       });
     } catch (e) {
@@ -1081,10 +1088,19 @@ function registerRepairRoutes(app, getShopifyToken) {
       // The reason is echoed deliberately. It names no secret, and it is the difference between
       // "this deployment is missing a setting" and "the app was built with a different secret" --
       // which otherwise takes a log dig to tell apart, with staff staring at a blank picker.
+      // On a signature failure, say WHICH app minted the token. Without it, 'bad signature' is
+      // indistinguishable between 'wrong secret for our app' and 'a token from a different app',
+      // and the two need opposite fixes. Claims only -- no secret is derivable from these.
+      const claims = /signature/.test(e.message)
+        ? peekClaims(String(req.headers.authorization || '').replace(/^Bearer /, '').trim())
+        : null;
+      if (claims) console.warn(`[repair-items] token alg=${claims.alg} aud=${claims.aud} dest=${claims.dest}`);
       return res.status(notConfigured ? 503 : 401).json({
         error: notConfigured
           ? 'order lookup is not configured on this deployment (no app secret set)'
-          : `this admin session was not accepted (${e.message})`,
+          : `this admin session was not accepted (${e.message})`
+            + (claims ? ` [alg ${claims.alg}, app ${claims.aud}]` : ''),
+        ...(claims ? { token: claims } : {}),
       });
     }
 

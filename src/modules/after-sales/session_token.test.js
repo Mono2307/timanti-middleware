@@ -1,6 +1,6 @@
 const assert = require('assert');
 const crypto = require('crypto');
-const { verifySessionToken } = require('./session_token');
+const { verifySessionToken, peekClaims } = require('./session_token');
 
 let n = 0;
 const t = (name, fn) => { fn(); n++; console.log('  ok  ' + name); };
@@ -110,5 +110,23 @@ console.log('an unconfigured deployment fails closed');
 // The whole point: no secret must mean "refuse", never "skip the check".
 t('no client secret refuses even a well-formed token', () =>
   rejects(mint(), opts({ clientSecret: '' }), 'not configured'));
+
+console.log('peekClaims — diagnosis without trusting the token');
+// It must read a token it would REFUSE: that is the only situation it exists for.
+t('reads alg and aud off a badly signed token', () => {
+  const bad = mint({ secret: 'not-the-secret' });
+  rejects(bad, opts(), 'bad signature');
+  const c = peekClaims(bad);
+  assert.strictEqual(c.alg, 'HS256');
+  assert.strictEqual(c.aud, CLIENT_ID);
+  assert.strictEqual(c.dest, 'auracarat.myshopify.com');
+});
+t('names a DIFFERENT app when the token came from one', () =>
+  assert.strictEqual(peekClaims(mint({ payload: { aud: 'another-app-id' } })).aud, 'another-app-id'));
+t('returns null on junk rather than throwing', () => {
+  assert.strictEqual(peekClaims(''), null);
+  assert.strictEqual(peekClaims('a.b'), null);
+  assert.strictEqual(peekClaims(undefined), null);
+});
 
 console.log(`\n${n} assertions passed`);

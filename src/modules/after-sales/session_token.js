@@ -111,4 +111,26 @@ function verifySessionToken(token, { clientId, clientSecret, clientSecrets, shop
   return payload;
 }
 
-module.exports = { verifySessionToken, SessionTokenError, normalizeHost };
+/**
+ * Decode a token WITHOUT verifying it, for diagnostics only.
+ *
+ * 'bad signature' says nothing about WHY, and the two causes need opposite fixes: a token minted
+ * by another app (wrong `aud`) versus the right app with the wrong secret configured. These
+ * claims settle it and none of them is a secret -- a client id ships in the app TOML and the shop
+ * domain is public. Never use this to make an access decision.
+ */
+function peekClaims(token) {
+  const parts = String(token || '').split('.');
+  if (parts.length !== 3) return null;
+  const header  = decodeJson(parts[0]);
+  const payload = decodeJson(parts[1]);
+  if (!header && !payload) return null;
+  return {
+    alg:  header?.alg,
+    aud:  payload?.aud,
+    dest: payload?.dest,
+    iss:  payload?.iss,
+  };
+}
+
+module.exports = { verifySessionToken, SessionTokenError, normalizeHost, peekClaims };
