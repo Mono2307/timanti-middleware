@@ -429,30 +429,14 @@ const REPAIR_ITEMS_ALL_NOTE = "all pieces on the order";
 // tag once it has re-run.
 const REPAIR_ITEMS_RESYNC_TAG = "repair-resync-items";
 
-// Line items of the linked original order, for the picker. Looked up by NAME because a name is what
-// staff type into Linked Repair Order ("#1051") -- the same lookup the middleware does at intake, so
-// a reference the picker cannot resolve is one the intake would hold on too.
-const REPAIR_ORDER_ITEMS_QUERY = `
-  query RepairOrderItems($q: String!) {
-    orders(first: 1, query: $q) {
-      nodes {
-        id
-        name
-        lineItems(first: 50) {
-          nodes { id title sku quantity variantTitle image { url } }
-        }
-      }
-    }
-  }
-`;
-
-// GraphQL hands back gid://shopify/LineItem/123; the middleware reads the same order over REST and
-// sees 123. Store the bare number so the two agree.
-function lineItemNumericId(gid) {
-  const s = String(gid || "");
-  const n = s.slice(s.lastIndexOf("/") + 1);
-  return n || s;
-}
+// Where the linked order's line items come from. NOT the Admin API from this extension: this app
+// holds read_orders, which Shopify scopes to the last 60 days, and an order outside that window is
+// not an error -- it is simply missing from the result. A repair is nearly always intake on an
+// older piece, so the picker reported "No pieces found" for every genuine case and appeared to
+// work only when the order being tested happened to be recent. The middleware's own token carries
+// read_all_orders, so it reaches an order from any year.
+// Server side: src/modules/after-sales/index.js, GET /api/repairs/order-items.
+const MIDDLEWARE_BASE_URL = "https://timanti-middleware.fly.dev";
 
 // Parse custom.repair_items. Anything unreadable is treated as "nothing selected" rather than
 // throwing: a malformed value must not take the whole panel down, and the middleware reads it the
@@ -699,21 +683,24 @@ export default function MetafieldManager({ surface = "block" } = {}) {
     setRepairItemsError("");
     (async () => {
       try {
-        // name: matches "#1051" and "1051" alike; quoted so the # is not read as a comment.
-        const res = await shopify.query(REPAIR_ORDER_ITEMS_QUERY, {
-          variables: { q: `name:"${repairRef.replace(/"/g, "")}"` },
-        });
+        // Authenticated with a Shopify session token so this stays a staff-only lookup -- the
+        // endpoint can read any order on the store by number.
+        const idToken = await shopify.auth.idToken();
+        if (!idToken) throw new Error("this admin session could not be verified");
+        const res = await fetch(
+          `${MIDDLEWARE_BASE_URL}/api/repairs/order-items?ref=${encodeURIComponent(repairRef)}`,
+          { headers: { Authorization: `Bearer ${idToken}` } },
+        );
         if (!active) return;
-        const errs = (res?.errors ?? []).map((e) => e.message);
-        if (errs.length) throw new Error(errs.join("; "));
-        const nodes = res?.data?.orders?.nodes?.[0]?.lineItems?.nodes ?? [];
-        setRepairOrderItems(nodes.map((n) => ({
-          id: lineItemNumericId(n.id),
-          title: n.title || "",
-          sku: n.sku || "",
-          quantity: n.quantity || 1,
-          variantTitle: n.variantTitle || "",
-          imageUrl: n.image?.url || "",
+        const body = await res.json().catch(() => null);
+        if (!res.ok) throw new Error(body?.error || `the lookup failed (HTTP ${res.status})`);
+        setRepairOrderItems((body?.items ?? []).map((li) => ({
+          // Already the bare numeric id the middleware and custom.repair_items both use.
+          id: String(li.id),
+          title: li.title || "",
+          sku: li.sku || "",
+          quantity: li.quantity || 1,
+          variantTitle: li.variantTitle || "",
         })));
       } catch (e) {
         if (active) setRepairItemsError(`Couldn't read ${repairRef}: ${e?.message || e}`);

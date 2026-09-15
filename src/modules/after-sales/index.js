@@ -27,6 +27,12 @@ const {
   // threw at call time, which also skipped the completion tag, timestamp and serial below.
   buildRepairReadyFinalHtml,
 } = require('../../integrations/email/templates');
+const { verifySessionToken } = require('./session_token');
+
+// Public identifier of the Metafield Manager app (it ships in shopify.app.*.toml), used as the
+// expected `aud` on a session token. Overridable by env so a second install does not need a code
+// change; the SECRET half is env-only and has no default, so the route fails closed without it.
+const MFM_CLIENT_ID = '3c0a0f5a2127842e19391c5b20ec49a0';
 // Test override: when set, EVERY repair email — customer and internal — is redirected here and the
 // store copy is dropped. It was left hardcoded to a personal address after a test round, which meant
 // no customer, no store and no HQ received a single repair email for as long as it stood. Empty is
@@ -1047,6 +1053,75 @@ async function processRepairDraftUpdate(incomingDraft, getShopifyToken, assignRe
 }
 
 function registerRepairRoutes(app, getShopifyToken) {
+
+  // ── Line items on the linked repair order ──────────────────────────────────
+  // WHY THIS LOOKUP LIVES HERE AND NOT IN THE EXTENSION
+  // The picker used to call the Admin API straight from the browser. The Metafield Manager app
+  // holds `read_orders`, which Shopify scopes to the last 60 days, and an order outside that
+  // window is not an error — it is simply absent from the result. A repair is almost always
+  // intake on an older piece, so the picker said "No pieces found" for every genuine case and
+  // appeared to work only because the orders being tested happened to be recent. This service's
+  // token carries `read_all_orders`, so the same lookup done here resolves an order from any year.
+  app.get('/api/repairs/order-items', async (req, res) => {
+    try {
+      const authHeader = String(req.headers.authorization || '');
+      verifySessionToken(authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '', {
+        clientId:     process.env.MFM_CLIENT_ID || MFM_CLIENT_ID,
+        // Whichever of these actually signed the token wins. SHOPIFY_CLIENT_SECRET is tried
+        // because the extension may have been created under the same app as the
+        // client-credentials one already configured here -- if so, nothing new needs setting.
+        clientSecrets: [process.env.MFM_CLIENT_SECRET, process.env.SHOPIFY_CLIENT_SECRET],
+        shopDomain:   process.env.SHOPIFY_STORE_URL,
+      });
+    } catch (e) {
+      // An unset secret is a deployment fault, not a caller fault. 503 so it reads as "this is
+      // not configured here" rather than sending staff hunting for a permissions problem.
+      const notConfigured = e.message === 'not configured';
+      console.warn(`[repair-items] auth refused: ${e.message}`);
+      // The reason is echoed deliberately. It names no secret, and it is the difference between
+      // "this deployment is missing a setting" and "the app was built with a different secret" --
+      // which otherwise takes a log dig to tell apart, with staff staring at a blank picker.
+      return res.status(notConfigured ? 503 : 401).json({
+        error: notConfigured
+          ? 'order lookup is not configured on this deployment (no app secret set)'
+          : `this admin session was not accepted (${e.message})`,
+      });
+    }
+
+    const ref = String(req.query.ref || '').trim();
+    if (!ref) return res.status(400).json({ error: 'Pass ?ref=<order number>.' });
+
+    try {
+      const token = await getShopifyToken();
+      // The same call the repair note itself makes: name= matches with or without the leading #,
+      // and status=any is what reaches a fulfilled or archived order — which every piece coming
+      // back for repair is.
+      const { data } = await axios.get(
+        `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/orders.json?name=${encodeURIComponent(ref)}&status=any&limit=1`,
+        { headers: shopifyHeaders(token), timeout: 10000 }
+      );
+      const order = data.orders?.[0];
+      // Not an error: a reference that resolves to nothing is a mistyped order number, and the
+      // picker says so in its own words.
+      if (!order) return res.json({ order: null, items: [] });
+
+      return res.json({
+        order: order.name,
+        items: (order.line_items || []).map(li => ({
+          // Bare numeric id. custom.repair_items stores these, and every other read of this order
+          // in this module goes over REST and sees the same number — GraphQL's gid would not match.
+          id:           String(li.id),
+          title:        li.title || '',
+          sku:          li.sku || '',
+          quantity:     li.quantity || 1,
+          variantTitle: li.variant_title || '',
+        })),
+      });
+    } catch (e) {
+      console.error(`[repair-items] ${ref}: ${e.message}`);
+      return res.status(502).json({ error: `Couldn't read ${ref} from Shopify.` });
+    }
+  });
 
   // ── Estimate approval form ─────────────────────────────────────────────────
   app.get('/repairs/set-estimate', async (req, res) => {

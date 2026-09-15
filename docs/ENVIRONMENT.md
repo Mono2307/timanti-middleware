@@ -26,6 +26,8 @@ failure surface deep inside a request.
 | `SHOPIFY_CLIENT_SECRET` | |
 | `SHOPIFY_ACCESS_TOKEN` | **Fallback only.** Live token comes from Supabase — see `core/shopify.js` |
 | `SHOPIFY_WEBHOOK_SECRET` | HMAC verification on inbound webhooks |
+| `MFM_CLIENT_SECRET` | **Only if needed.** Verifies the session token on `/api/repairs/order-items`. `SHOPIFY_CLIENT_SECRET` is tried first, so set this only when the extension was built under a different app — the picker says `not accepted (bad signature)` when that is the case |
+| `MFM_CLIENT_ID` | Optional. Defaults to the app id in `shopify.app.timanti-metafield-manager-new.toml`; set only if the extension is reinstalled under a new app |
 
 ## Payments
 
