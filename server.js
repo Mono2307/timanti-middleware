@@ -2400,7 +2400,7 @@ async function applyPaymentTagsToOrder(orderId, token) {
 
 // Mirrors applyPaymentTagsToOrder exactly but writes to a draft order.
 // Same logic: 1-rupee rounding tolerance, both pmode tags for installment-complete, total: tag.
-async function applyPaymentTagsToDraftOrder(draftOrderId, token) {
+async function applyPaymentTagsToDraftOrder(draftOrderId, token, { netOverride = null } = {}) {
   const headers = { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' };
 
   const [{ data: draftData }, { data: mfData }] = await Promise.all([
@@ -2444,7 +2444,14 @@ async function applyPaymentTagsToDraftOrder(draftOrderId, token) {
   // Balance reconciles against the NET-to-collect (total − post-tax adjustments, frozen by
   // syncAmountToCollect), never the gross total. amount_pending is DERIVED here (staff set what was
   // paid, not what's pending). Fallback to gross when the net field is absent (legacy/online).
-  const netRaw  = parseFloat(mf('amount_to_be_collected'));
+  //
+  // netOverride is the net syncAmountToCollect has just WRITTEN, handed straight across instead of read
+  // back. That read-back is the failure this closes: the balance derives in a pass AFTER the net moves, so
+  // a metafield GET answering with the pre-write value derives it against the OLD net — and the >= 0.5
+  // change guard below then makes the correction a no-op, so the stale figure looks settled and no later
+  // pass heals it. #D218: a 10% diamond discount moved the net to 266,986.29 while amount_pending stayed
+  // 274,124.19, exactly the pre-discount net. That field prints as Balance Due on the invoice.
+  const netRaw  = Number.isFinite(netOverride) ? netOverride : parseFloat(mf('amount_to_be_collected'));
   const netBase = Number.isFinite(netRaw) && netRaw >= 0 ? netRaw : totalPrice;
   // Refunds are a PARALLEL dimension to the legs, never a negative leg (readInstallments drops
   // values <= 0, and the four slots belong to payments). amount_paid above stays GROSS collected and
@@ -2669,6 +2676,30 @@ async function syncAmountToCollect(draft) {
   if (Object.keys(patch).length === 0) return; // nothing changed → skip (no-op guard)
   await updateDraftOrderMetafields(draftOrderId, patch);
   console.log(`Draft ${draftOrderId}: amount_to_be_collected = ${net.toFixed(2)} (total ${total} − adjustments)`);
+
+  // The balance moves WITH the net, in the same pass.
+  //
+  // amount_pending used to be left entirely to the `payment-sync` step that runs after this one in the
+  // draft-updated chain (and to /api/reprice, which calls the two in order). That step is unconditional,
+  // but it is a SEPARATE pass: it re-reads amount_to_be_collected, so it is exposed to the read-after-write
+  // described in applyPaymentTagsToDraftOrder, and anything throwing inside it is swallowed by the chain's
+  // per-step try/catch. Either way the net moved and the balance did not — and that is a customer-facing
+  // number, left stating the pre-adjustment figure.
+  //
+  // Deriving it here, off the number just computed, removes the read entirely and leaves the later step as
+  // a second, independent chance rather than the only one. Both are change-guarded, so the step running
+  // again a moment later writes nothing.
+  //
+  // Guarded on the net having actually CHANGED: an edit that only auto-filled old_gold_value must not drag
+  // a balance recompute behind it. Never throws into the webhook chain — a failed balance write must not
+  // cost the net write that already succeeded.
+  if (patch.amount_to_be_collected !== undefined) {
+    try {
+      await applyPaymentTagsToDraftOrder(draftOrderId, token, { netOverride: net });
+    } catch (err) {
+      console.error(`Draft ${draftOrderId}: balance recompute after net change failed: ${err.message}`);
+    }
+  }
 }
 
 // CAD advance line-item predicates + constants live in the shared module: the serial minter and the

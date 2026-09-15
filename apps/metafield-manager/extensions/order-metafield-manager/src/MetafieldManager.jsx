@@ -476,10 +476,14 @@ const REPRICE_TRIGGER_KEYS = [
   "jewelcode_net_weight",
   "jewelcode_diamond_carats",
 ];
+// A DISCOUNT is a sales adjustment like any other: it moves what there is to collect, so it has to ask
+// for the balance recompute exactly as an exchange note or an old-gold value does. Leaving it out is what
+// let #D218 reprice to a net of 266,986.29 while the balance went on printing the pre-discount 274,124.19.
 const RECOMPUTE_TRIGGER_KEYS = [
   ...PAYMENT_TRIGGER_KEYS,
   "old_gold_weight", "old_gold_purity", "old_gold_value",
   "exchange_note_value", "voucher_value", "advance", "advance_ref",
+  "line_discounts", "discount_applied", "discount_rate", "discount_mode", "discount_kind", "discount_code",
 ];
 // Editing a refund leg needs its own nudge: `sync-refund` writes the refund into the after-sales
 // ledger and re-sums amount_refunded. It is deliberately NOT part of RECOMPUTE_TRIGGER_KEYS — the
@@ -1035,7 +1039,10 @@ export default function MetafieldManager({ surface = "block" } = {}) {
       const errs = collectErrors(res, "metafieldsSet");
       if (errs.length) throw new Error(errs.join("; "));
       try {
-        await shopify.query(TAGS_ADD_MUTATION, { variables: { id: ownerId, tags: ["reprice"] } });
+        // Both tags, deliberately. `reprice` recomputes the LINE (price, GST, Discount Applied);
+        // `sync-payment` recomputes what there is to COLLECT and the balance behind it. A discount
+        // moves both, and asking only for the first is what left #D218 advertising a stale balance.
+        await shopify.query(TAGS_ADD_MUTATION, { variables: { id: ownerId, tags: ["reprice", "sync-payment"] } });
       } catch { /* non-blocking */ }
       setLineNote("Applying per-line discounts… saved and reprice triggered. Line prices, GST and the balance refresh in a few seconds.");
       setTimeout(() => setRefreshTick((t) => t + 1), 3000);
