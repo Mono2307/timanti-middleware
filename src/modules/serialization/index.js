@@ -39,10 +39,13 @@ const DEFAULT_REGISTRY = {
   free_service:     { scope: 'store',  start: 1, pad: 5, fy: true,  code: 'FS{FY}-{CODE}-{SEQ}', display: 'FS{FY}-{CODE}-{SEQ}' },
   // B2B tax invoice == inter-store transfer == sale (one doc type, one counter). AURA-KAHSR-0001.
   b2b:              { scope: 'store',  start: 1, pad: 4, fy: false, code: 'AURA-{CODE}-{SEQ}',   display: 'AURA-{CODE}-{SEQ}' },
-  // Delivery challan (was memo). Origin only in the serial; destination lives in custom.delivery_code.
+  // Delivery challan. Origin only in the serial; destination lives in custom.delivery_code.
+  // THE live document-movement type: minted by the make-memo-custom tag, which also charges the
+  // line items at full GOLD + MAKING and 50% of DIAMOND. DC-KAHSR-0001.
   delivery_challan: { scope: 'store',  start: 1, pad: 4, fy: false, code: 'DC-{CODE}-{SEQ}',     display: 'DC-{CODE}-{SEQ}' },
-  // Custom-priced memo (make-memo-custom) — line items charged on full GOLD + MAKING and 50% of DIAMOND.
-  // Own per-store counter, no FY reset, origin-only in the serial. MEMO-KAHSR-0001.
+  // RETIRED 2026-09-15 — the custom memo became the delivery challan and took the DC- series with
+  // it, so nothing mints this any more. Never issued a number outside testing. Kept as a reserved
+  // name so the key cannot be silently reused for something else.
   memo_custom:      { scope: 'store',  start: 1, pad: 4, fy: false, code: 'MEMO-{CODE}-{SEQ}',   display: 'MEMO-{CODE}-{SEQ}' },
   po:               { scope: 'store',  start: 1, pad: 5, fy: false, code: 'PO-{CODE}-{SEQ}',     display: 'PO-{CODE}-{SEQ}' },
   // Adjustments — per-store now, reset per FY. EXC27-KAHSR-0001 / VCH27-KAHSR-0001.

@@ -220,7 +220,7 @@ async function assignDocSerial(draft, docType, removeTag = null) {
   }
 }
 
-// Retires a delivery_challan/b2b serial when staff tag the draft cancel-challan / cancel-transfer.
+// Retires a delivery_challan serial when staff tag the draft cancel-memo-custom.
 // Number is marked cancelled in the ledger and never reused (GST-clean audit).
 async function cancelDocSerial(draft, docType, removeTag = null) {
   try {
@@ -233,20 +233,25 @@ async function cancelDocSerial(draft, docType, removeTag = null) {
 }
 
 // Detects draft-document trigger tags and mints/retires the matching serial.
-//   make-challan     → delivery_challan (DC-…),  retire on cancel-challan
-//   make-transfer    → b2b (AURA-… ; B2B tax invoice == inter-store transfer == sale), retire on cancel-transfer
-//   make-memo-custom → memo_custom (MEMO-… ; gold + making + 50% diamond custom memo), retire on cancel-memo-custom
+//   make-memo-custom → delivery_challan (DC-{CODE}-{SEQ}), retire on cancel-memo-custom
+//
+// ONE tag raises the delivery challan, and it both prices and numbers the document:
+// handleWeightedDocReprice charges gold 100% + making 100% + diamond 50%, and the number drawn
+// here is the DC- series — the challan's own numbering convention (founder directive 2026-09-15).
+//
+// make-challan (which minted DC- but never repriced — the reason it looked broken on the floor)
+// and make-transfer (b2b / AURA-…) were RETIRED the same day as redundant. Neither they nor the
+// memo_custom MEMO- series had issued a number outside testing, so nothing historical depends on
+// any of it; memo_custom and b2b are now dead doc types kept only so the registry stays readable.
+// The destination store still comes from custom.delivery_code, which the metafield panel already
+// labels as challan-only.
+//
 // (PO is no longer minted here — it mints at HQ acknowledge in handlePoAction.)
-// Pricing for make-memo-custom and make-transfer is applied separately by handleWeightedDocReprice (runs earlier in the webhook).
 async function handleDocumentSerialTags(draft) {
   if (!SERIAL_MEMO_TRANSFER) return;
   const tags = (draft.tags || '').split(',').map(t => t.trim().toLowerCase());
-  if (tags.includes('make-challan'))          await assignDocSerial(draft, 'delivery_challan', 'make-challan');
-  else if (tags.includes('make-transfer'))    await assignDocSerial(draft, 'b2b', 'make-transfer');
-  else if (tags.includes('make-memo-custom')) await assignDocSerial(draft, 'memo_custom', 'make-memo-custom');
-  else if (tags.includes('cancel-challan'))   await cancelDocSerial(draft, 'delivery_challan', 'cancel-challan');
-  else if (tags.includes('cancel-transfer'))  await cancelDocSerial(draft, 'b2b', 'cancel-transfer');
-  else if (tags.includes('cancel-memo-custom')) await cancelDocSerial(draft, 'memo_custom', 'cancel-memo-custom');
+  if (tags.includes('make-memo-custom'))        await assignDocSerial(draft, 'delivery_challan', 'make-memo-custom');
+  else if (tags.includes('cancel-memo-custom')) await cancelDocSerial(draft, 'delivery_challan', 'cancel-memo-custom');
 }
 
 // Net-to-collect base for a draft = total − ALL post-tax adjustments (exchange/voucher/old-gold/advance),
@@ -2087,43 +2092,34 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
   }
 }
 
-// Weighted document reprice for make-memo-custom and make-transfer. Reprices each product line to a
-// weighted sum of its components — gold×G% + diamond×D% + making×M% — and overwrites the Gross Value /
+// Weighted document reprice for make-memo-custom. Reprices each product line to a
+// weighted sum of its components — gold 100% + diamond 50% + making 100% — and overwrites the Gross Value /
 // Taxable Value / GST / Discount Applied props and the Shopify line price, so the printed document
 // (which sums Gross Value) and the order total both reflect it, with no template math change. Reads the
 // existing Gold / Diamond / Making props, falling back to the variant metafields custom.price_breakup_gold
 // / _diamond / _making (per-unit × qty). No jewelcode net-weight metafields required. Percentages:
 //   make-memo-custom → gold 100%, diamond 50%, making 100% (full metal + labour, half the stone value).
-//   make-transfer    → per-draft custom.transfer_pct_gold / _dia / _making (each ≥0, in %, default 100).
 // The Gold / Diamond / Making breakdown props are left intact for reference; only the totals change. The
-// trigger tag is stripped in the same GraphQL write (loop prevention); the MEMO-/AURA- serial is minted
+// trigger tag is stripped in the same GraphQL write (loop prevention); the DC- serial is minted
 // separately by handleDocumentSerialTags. Gated on SERIAL_MEMO_TRANSFER so pricing + serial toggle together.
+//
+// make-transfer and its per-draft custom.transfer_pct_gold / _dia / _making overrides were retired on
+// 2026-09-15 along with the b2b series — see handleDocumentSerialTags. The percentages are fixed again,
+// so this is a memo-only engine; restoring a variable split means restoring the metafield read below.
 async function handleWeightedDocReprice(draft) {
   if (!SERIAL_MEMO_TRANSFER) return;
   const tags  = (draft.tags || '').split(',').map(t => t.trim());
   const lower = tags.map(t => t.toLowerCase());
-  const isMemo     = lower.includes('make-memo-custom');
-  const isTransfer = lower.includes('make-transfer');
-  if (!isMemo && !isTransfer) return;
-  const triggerTag = isMemo ? 'make-memo-custom' : 'make-transfer';
+  if (!lower.includes('make-memo-custom')) return;
+  const triggerTag = 'make-memo-custom';
 
   try {
     const draftOrderId = draft.id;
     const token = await getShopifyToken();
     const rs = (v) => parseFloat(String(v || '0').replace('Rs', '').replace(/,/g, '').trim()) || 0;
 
-    // Component weights (fractions). memo = full gold+making, half diamond; transfer = per-draft % overrides (default 100).
-    let pctGold = 1, pctDia = isMemo ? 0.5 : 1, pctMaking = 1;
-    if (isTransfer) {
-      const { data: mfData } = await axios.get(
-        `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}/metafields.json`,
-        { headers: { 'X-Shopify-Access-Token': token }, timeout: 10000 }
-      );
-      const mf = {};
-      for (const m of (mfData.metafields || [])) if (m.namespace === 'custom') mf[m.key] = m.value;
-      const pctOf = (key) => { const v = parseFloat(mf[key]); return (isFinite(v) && v >= 0) ? v / 100 : 1; };
-      pctGold = pctOf('transfer_pct_gold'); pctDia = pctOf('transfer_pct_dia'); pctMaking = pctOf('transfer_pct_making');
-    }
+    // Component weights (fractions): full gold + making, half the stone value.
+    const pctGold = 1, pctDia = 0.5, pctMaking = 1;
 
     // Product lines only — skip EXC trade-in lines and negative discount lines; everything else is
     // re-sent verbatim below.
