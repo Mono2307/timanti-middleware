@@ -27,6 +27,8 @@
  *   GET+POST /api/serial/counter            read/set a counter
  *   GET+POST /api/serial/set-state          force a counter's state
  *   GET+POST /api/serial/ledger-backfill    rebuild ledger rows from stamped documents
+ *   POST /api/serial/manual-mint          number a hand-raised challan / B2B invoice (Google Sheet)
+ *   POST /api/serial/manual-void          retire a hand-raised number
  *
  * The recovery endpoints are exposed on GET as well as POST on purpose: they are operated by a
  * human pasting a URL into a browser, not by a client. They are destructive — read the handler
@@ -289,26 +291,44 @@ app.post('/api/serial/order-serial', async (req, res) => {
 // path for them. A cancelled/refunded order keeps its number (like an invoice number); any reversal
 // is handled by a separate credit note. Only PO / memo / transfer / credit_note can be voided.
 
-// Read-only peek at the current value of a counter (never allocates).
+// Read-only peek at a counter — what the next number WOULD be, without drawing it.
+//
+// Answers with the PRINTED serial (DC-KAHSR-0007), not just the raw sequence, because the manual
+// document sheets poll this on open and must never re-implement the registry's templates: the day
+// the sheet's idea of the format drifts from the server's is the day two documents disagree about
+// what number they are.
+//
+// Advisory only. The number here is not reserved — /api/serial/manual-mint decides what a document
+// actually holds, and the sheet prints what the mint returns.
 app.get('/api/serial/peek', async (req, res) => {
   try {
-    const { docType, state } = req.query;
+    const p = req.query || {};
+    const docType = p.docType;
     if (!docType) return res.status(400).json({ success: false, error: 'docType required' });
-    const registry = await serialization.getRegistry(SERIAL_DEPS());
-    const reg = registry[docType];
-    if (!reg) return res.status(400).json({ success: false, error: `unknown docType: ${docType}` });
-    const stateCode = reg.scope === 'global' ? 'ALL' : (state ? String(state).toUpperCase() : null);
-    if (reg.scope === 'state' && !stateCode) return res.status(400).json({ success: false, error: 'state required' });
-    const { data } = await supabase
-      .from('serial_counters').select('current_value, updated_at')
-      .eq('doc_type', docType).eq('state_code', stateCode).maybeSingle();
+    const pv = await serialization.previewSerial(SERIAL_DEPS(), {
+      docType,
+      stateCode:    p.state || p.storeCode || p.stateCode || null,
+      deliveryCode: p.deliveryCode || null,
+    });
     return res.json({
-      success: true, docType, stateCode,
-      current_value: data ? Number(data.current_value) : null,
-      next_value: data ? Number(data.current_value) + 1 : reg.start,
-      updated_at: data?.updated_at || null,
+      success: true,
+      docType:       pv.docType,
+      stateCode:     pv.stateCode,
+      counterKey:    pv.counterKey,   // FY-folded key actually queried, e.g. 27|KA-HSR
+      current_value: pv.current_value,
+      next_value:    pv.next_seq,     // kept under the old name — tools/health.js reads this
+      next_seq:      pv.next_seq,
+      next_code:     pv.next_code,
+      next_display:  pv.next_display,
+      updated_at:    pv.updated_at,
     });
   } catch (err) {
+    // An unknown doc type or a missing store code is the caller's mistake, not a server fault —
+    // and a store-scoped type with no store code used to return current_value: null forever
+    // instead of saying so.
+    if (/unknown docType|store code required/.test(err.message)) {
+      return res.status(400).json({ success: false, error: err.message });
+    }
     console.error('[serial] peek failed:', err.message);
     return res.status(500).json({ success: false, error: err.message });
   }
@@ -701,6 +721,154 @@ async function runSerialLedgerBackfill(req, res) {
 }
 app.get('/api/serial/ledger-backfill', requireAdmin, runSerialLedgerBackfill);
 app.post('/api/serial/ledger-backfill', requireAdmin, runSerialLedgerBackfill);
+
+// ─── Manual documents (hand-raised challans and B2B invoices) ─────────────────
+//
+// Not every document is born in Shopify. A delivery challan gets written at the counter; a B2B
+// invoice gets typed straight into a Google Sheet. Those numbers must come from the SAME counter
+// Shopify draws from — two books that both claim to be "the challan series" is precisely how a GST
+// series ends up with a duplicate number, and no amount of care at the counter prevents it.
+//
+// So the sheet does not compute numbers. It asks /api/serial/peek what is next (advisory), and when
+// staff commit, it calls /api/serial/manual-mint, which advances the counter and writes a
+// serial_ledger row. Both halves matter: the counter move is what makes Shopify's next mint skip
+// past this number, and the ledger row is what makes the drift sweep see it as accounted for. A
+// number that lived only in a spreadsheet would be indistinguishable from the two invoice numbers
+// destroyed on 2026-08-29 — a gap with nothing behind it. See RCA_INVOICE_COUNTER_2026-08-29.md.
+
+// Only documents genuinely raised by hand. A spreadsheet must never be able to draw a B2C tax
+// invoice number (customer_order / customer_service / free_service): those mint from Shopify at
+// conversion and nowhere else, and a second issuer would put the whole series in doubt.
+const MANUAL_DOC_TYPES = new Set(['delivery_challan', 'b2b']);
+
+// Guard for the two endpoints a Google Sheet calls directly.
+//
+// Deliberately NOT ADMIN_API_SECRET. That secret also opens /api/serial/clear, /api/serial/counter
+// and the backfills; this one lives in the Script Properties of a spreadsheet every store staffer
+// can open, so it must unlock these two routes and nothing else. ADMIN_API_SECRET is accepted as
+// well, so an operator can curl these without provisioning a second credential.
+//
+// FAILS CLOSED, for the same reason requireAdmin does: these move a GST series.
+function requireSheet(req, res, next) {
+  const expected = process.env.SHEET_API_SECRET;
+  const admin    = process.env.ADMIN_API_SECRET;
+  if (!expected && !admin) {
+    console.error(`[serial] SHEET_API_SECRET is not set — refusing ${req.method} ${req.path}`);
+    return res.status(503).json({
+      success: false,
+      error: 'SHEET_API_SECRET is not configured on this deployment. Set it as a Fly secret and put the same value in the sheet Script Properties; this endpoint stays closed until you do.',
+    });
+  }
+  const given = req.headers['x-sheet-secret'] || (req.body || {}).secret || (req.query || {}).secret;
+  if (!given || (given !== expected && given !== admin)) {
+    console.warn(`[serial] rejected ${req.method} ${req.path} — bad or missing sheet secret`);
+    return res.status(401).json({ success: false, error: 'Unauthorized' });
+  }
+  return next();
+}
+
+// The ledger key for a hand-raised document. Namespaced so a manual reference can never collide
+// with a Shopify order or draft id in serial_ledger.resource_id.
+const manualResourceId = (docType, reference) => `manual:${docType}:${reference}`;
+
+// POST /api/serial/manual-mint — draw a number for a hand-raised document.
+// Body: { docType, storeCode, reference, label?, deliveryCode? }
+//
+//   reference  a caller-generated idempotency key, ONE per physical document. Send it twice and the
+//              same number comes back, so a timed-out request or a double-clicked menu item cannot
+//              burn one. The sheet persists the reference BEFORE it calls — that ordering is the
+//              whole reason a retry is safe.
+//   label      free text recorded on the ledger row (party name, form number), so the ledger can be
+//              read back later by a human rather than by resource id.
+app.post('/api/serial/manual-mint', requireSheet, async (req, res) => {
+  try {
+    const b         = req.body || {};
+    const docType   = String(b.docType || '').trim();
+    const storeCode = String(b.storeCode || b.stateCode || '').toUpperCase().trim();
+    const reference = String(b.reference || '').trim();
+
+    if (!MANUAL_DOC_TYPES.has(docType)) {
+      return res.status(400).json({ success: false, error: `docType must be one of: ${[...MANUAL_DOC_TYPES].join(', ')}` });
+    }
+    if (!storeCode) return res.status(400).json({ success: false, error: 'storeCode required (e.g. KA-HSR)' });
+    if (!reference) {
+      return res.status(400).json({ success: false, error: 'reference required — a unique key for this document, so a retry cannot draw a second number' });
+    }
+
+    const r = await serialization.mintSerial(SERIAL_DEPS(), {
+      docType, storeCode,
+      deliveryCode: b.deliveryCode || null,
+      resourceType: 'manual',
+      resourceId:   manualResourceId(docType, reference),
+      resourceName: b.label ? String(b.label).slice(0, 200) : null,
+    });
+
+    // minted === false means this reference already held a number — a retry, not a second document.
+    const held = r.minted === false;
+    console.log(`[serial] manual ${docType} ${storeCode} → ${r.serial_code}${held ? ' (already held by this reference, returned as-is)' : ''}`);
+    return res.json({
+      success: true,
+      already_held: held,
+      doc_type:     docType,
+      store_code:   r.store_code,
+      serial_no:    r.seq,
+      serial_code:  r.serial_code,
+      reference,
+    });
+  } catch (err) {
+    console.error('[serial] manual-mint failed:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST /api/serial/manual-void — retire a hand-raised number (spoiled form, cancelled challan).
+// Body: { docType, reference? | serialCode? }
+//
+// The number is NOT handed back to the counter. A cancelled serial stays cancelled, and the drift
+// sweep counts it as accounted for — a gap WITH an explanation is what makes the series defensible
+// to an auditor. Reprinting a voided number onto a different document is not.
+app.post('/api/serial/manual-void', requireSheet, async (req, res) => {
+  try {
+    const b       = req.body || {};
+    const docType = String(b.docType || '').trim();
+    if (!MANUAL_DOC_TYPES.has(docType)) {
+      return res.status(400).json({ success: false, error: `docType must be one of: ${[...MANUAL_DOC_TYPES].join(', ')}` });
+    }
+    const reference  = String(b.reference || '').trim();
+    const serialCode = String(b.serialCode || '').trim();
+    if (!reference && !serialCode) {
+      return res.status(400).json({ success: false, error: 'reference or serialCode required' });
+    }
+
+    // Confirm the row is a MANUAL one before touching it. Without this check a sheet could void the
+    // challan number belonging to a live Shopify draft just by typing its code into the void prompt.
+    const lookup = reference
+      ? { column: 'resource_id', value: manualResourceId(docType, reference) }
+      : { column: 'serial_code', value: serialCode };
+    const { data: row } = await supabase.from('serial_ledger')
+      .select('id, serial_code, seq, resource_type, status')
+      .eq('doc_type', docType).eq(lookup.column, lookup.value).maybeSingle();
+
+    if (!row) return res.status(404).json({ success: false, error: `no ${docType} serial found for ${reference || serialCode}` });
+    if (row.resource_type !== 'manual') {
+      return res.status(409).json({
+        success: false,
+        error: `${row.serial_code} belongs to a Shopify document, not a hand-raised one — void it from the document itself, not from the sheet`,
+      });
+    }
+    if (row.status === 'cancelled') {
+      return res.json({ success: true, already_cancelled: true, serial_code: row.serial_code, serial_no: row.seq });
+    }
+
+    const r = await serialization.cancelSerial(SERIAL_DEPS(),
+      reference ? { docType, resourceId: manualResourceId(docType, reference) } : { docType, serialCode });
+    console.log(`[serial] manual ${docType} void → ${r.serial_code}`);
+    return res.json({ success: true, serial_code: r.serial_code, serial_no: r.seq, status: r.status, cancelled_at: r.cancelled_at });
+  } catch (err) {
+    console.error('[serial] manual-void failed:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
 
 }
 

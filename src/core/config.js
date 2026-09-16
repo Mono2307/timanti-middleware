@@ -130,6 +130,17 @@ const config = {
    */
   adminApiSecret:  process.env.ADMIN_API_SECRET,
 
+  /**
+   * Narrow secret for the two endpoints a Google Sheet calls directly (/api/serial/manual-mint and
+   * /api/serial/manual-void, which number hand-raised challans and B2B invoices).
+   *
+   * Separate from adminApiSecret ON PURPOSE: this value has to sit in the Script Properties of a
+   * spreadsheet every store staffer can open, and the admin secret also unlocks /api/serial/clear
+   * and /api/serial/counter. Leaking this one costs a challan number; leaking that one costs the
+   * GST series.
+   */
+  sheetApiSecret:  process.env.SHEET_API_SECRET,
+
   // ── Misc integrations ──────────────────────────────────────────────────────
   typeformWebhookSecret:   process.env.TYPEFORM_WEBHOOK_SECRET,
   priceUpdateWebhookSecret:process.env.PRICE_UPDATE_WEBHOOK_SECRET,

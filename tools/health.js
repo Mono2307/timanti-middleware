@@ -28,7 +28,10 @@ const CHECKS = [
   { path: '/api/recon-ledger?view=summary',                     why: 'credit-instrument ledger' },
   { path: '/api/serial-report?docType=customer_order',          why: 'document numbering' },
   { path: '/api/price-update-diag',                             why: 'gold-rate job files present in the image' },
-  { path: '/api/serial/peek?docType=customer_order',            why: 'next serial readable (does not consume it)' },
+  // The store code is required: customer_order is per-store and per-FY, so without it this asked
+  // for a counter that does not exist and passed on a 200 full of nulls. With it, the line actually
+  // reports the next invoice number.
+  { path: '/api/serial/peek?docType=customer_order&state=KA-HSR', why: 'next serial readable (does not consume it)' },
   // Returns 409 while any counter disagrees with its ledger, so this line fails loudly rather than
   // quietly reporting a number nobody cross-checked. A FAIL here means an invoice number was issued
   // with no document behind it — see RCA_INVOICE_COUNTER_2026-08-29.md.

@@ -92,6 +92,7 @@ These trigger money movement and customer email, so a typo must fail closed.
 | `TYPEFORM_WEBHOOK_SECRET` | Signature verification |
 | `PRICE_UPDATE_WEBHOOK_SECRET` | Guards the price-update trigger |
 | `ADMIN_API_SECRET` | Operator secret for the serialization maintenance endpoints and the lookbook rebuild |
+| `SHEET_API_SECRET` | Secret for `/api/serial/manual-mint` and `/api/serial/manual-void`, which number hand-raised delivery challans and B2B invoices from the Google Sheet. Deliberately **not** `ADMIN_API_SECRET` — this one lives in a spreadsheet staff can open. **Unset means both endpoints return 503, never that they open** |
 | `LOOKBOOK_PASSWORD` | Shared password for the shop-floor catalog lookbook. **Unset means the page returns 503, never that it opens** |
 | `LOOKBOOK_SESSION_SECRET` | HMAC key for the lookbook session cookie. Rotating it signs every device out |
 | `LOOKBOOK_SESSION_DAYS` | How long a signed-in device stays signed in (default 30) |

@@ -124,6 +124,33 @@ function format(template, { code, seq, delivery, fy, pad }) {
     .replace('{SEQ}', padSeq(seq, pad));
 }
 
+// The counter key for a doc type + store code. FY-scoped types fold the FY-end in, so the sequence
+// resets each financial year and the same {FY} is printed in the serial.
+//
+// Every caller that reads or writes serial_counters must derive its key HERE. /api/serial/peek used
+// to build the key itself, which meant it looked up 'KA-HSR' for a counter stored as '27|KA-HSR' and
+// reported "no counter yet" forever for every FY-scoped doc type.
+function counterKeyFor(reg, code) {
+  const fy = reg.fy ? fyEnd() : '';
+  return { fy, counterKey: reg.fy ? `${fy}|${code}` : code };
+}
+
+// Renders a sequence number into its printed serial. Shared by the allocator and the preview, so
+// what staff are shown before minting and what the document ends up carrying cannot disagree.
+//
+// For global sequences the {CODE} token is dropped from the templates. The store code is printed
+// WITHOUT its hyphen (KA-HSR → KAHSR) — the full hyphenated code still drives the counter key.
+function renderSerial(reg, { code, seq, deliveryCode, isGlobal, fy }) {
+  const tplCode  = (isGlobal ? '' : code).replace(/-/g, '');
+  const delivery = (deriveStateCode(deliveryCode) || '').replace(/-/g, '');
+  const tidy = (s) => s.replace('/-', '-').replace('--', '-').replace(/[-/]$/, '').trim();
+  const fmtArgs = { seq, delivery, fy, pad: reg.pad };
+  return {
+    code:    tidy(format(reg.code,    { ...fmtArgs, code: tplCode })),
+    display: tidy(format(reg.display, { ...fmtArgs, code: tplCode })),
+  };
+}
+
 // ─── State resolution ─────────────────────────────────────────────────────────
 
 async function resolveStateFromLocation(deps, shopifyLocationId) {
@@ -169,10 +196,7 @@ async function allocateSerial(deps, { docType, stateCode, deliveryCode }) {
   const code = isGlobal ? GLOBAL : deriveStateCode(stateCode);
   if (!isGlobal && !code) throw new Error(`store code required for docType ${docType}`);
 
-  // FY-scoped types fold the FY-end into the counter key (and the ledger store_code) so the
-  // sequence resets each financial year; the same {FY} is printed in the serial.
-  const fy = reg.fy ? fyEnd() : '';
-  const counterKey = reg.fy ? `${fy}|${code}` : code;
+  const { fy, counterKey } = counterKeyFor(reg, code);
 
   const { data, error } = await deps.supabase.rpc('allocate_serial', {
     p_doc_type: docType, p_state_code: counterKey, p_start: reg.start,
@@ -180,19 +204,57 @@ async function allocateSerial(deps, { docType, stateCode, deliveryCode }) {
   if (error) throw new Error(`allocate_serial RPC failed: ${error.message}`);
   const seq = Number(data);
 
-  // For global sequences the {CODE} token is dropped from the templates. The store code is printed
-  // WITHOUT its hyphen (KA-HSR → KAHSR) — the full hyphenated code still drives the counter key above.
-  const tplCode  = (isGlobal ? '' : code).replace(/-/g, '');
-  const delivery = (deriveStateCode(deliveryCode) || '').replace(/-/g, '');
-  const tidy = (s) => s.replace('/-', '-').replace('--', '-').replace(/[-/]$/, '').trim();
-  const fmtArgs = { seq, delivery, fy, pad: reg.pad };
   return {
     seq,
     stateCode: code,       // bare store code for the staff-facing custom.state_code metafield
     counterKey,            // FY-folded key — used as the ledger store_code (unique per FY)
     fy,
-    code:    tidy(format(reg.code,    { ...fmtArgs, code: tplCode })),
-    display: tidy(format(reg.display, { ...fmtArgs, code: tplCode })),
+    ...renderSerial(reg, { code, seq, deliveryCode, isGlobal, fy }),
+  };
+}
+
+// ─── Preview (the read-only twin of allocateSerial) ─────────────────────────────
+
+// What the NEXT number would be, without drawing it. Shares counterKeyFor and renderSerial with the
+// allocator above, so a preview cannot disagree with what a mint would actually produce.
+//
+// This is what the manual-document sheets show staff: one counter is the truth for both
+// Shopify-minted and hand-written documents, so nobody has to guess what the next challan number is.
+//
+// A preview is ADVISORY. Between reading it and minting, another document can take that number —
+// only mintSerial decides what a document actually holds, and the caller must print what the mint
+// returns, not what the preview promised.
+async function previewSerial(deps, { docType, stateCode, deliveryCode }) {
+  const registry = await getRegistry(deps);
+  const reg = registry[docType];
+  if (!reg) throw new Error(`unknown docType: ${docType}`);
+
+  const isGlobal = reg.scope === 'global';
+  const code = isGlobal ? GLOBAL : deriveStateCode(stateCode);
+  if (!isGlobal && !code) throw new Error(`store code required for docType ${docType}`);
+
+  const { fy, counterKey } = counterKeyFor(reg, code);
+
+  const { data } = await deps.supabase
+    .from('serial_counters').select('current_value, updated_at')
+    .eq('doc_type', docType).eq('state_code', counterKey).maybeSingle();
+
+  // No counter row yet → nothing has ever been issued for this store, so the next number is the
+  // registry's start value, not start+1.
+  const current = data ? Number(data.current_value) : null;
+  const nextSeq = current == null ? reg.start : current + 1;
+  const next    = renderSerial(reg, { code, seq: nextSeq, deliveryCode, isGlobal, fy });
+
+  return {
+    docType,
+    stateCode: code,
+    counterKey,
+    fy,
+    current_value: current,
+    next_seq:      nextSeq,
+    next_code:     next.code,
+    next_display:  next.display,
+    updated_at:    data?.updated_at || null,
   };
 }
 
@@ -365,7 +427,7 @@ async function mintSerial(deps, { docType, storeCode, deliveryCode, resourceType
       const reg = registry[docType];
       const isGlobal = reg && reg.scope === 'global';
       const code = isGlobal ? GLOBAL : deriveStateCode(storeCode);
-      const expectedKey = reg && reg.fy ? `${fyEnd()}|${code}` : code;
+      const expectedKey = reg ? counterKeyFor(reg, code).counterKey : code;
 
       // Same store AND still active → true idempotency: the number is stable across every draft edit.
       if (existing.status === 'active' && existing.store_code === expectedKey) {
@@ -497,13 +559,16 @@ async function computeSerialDrift(deps) {
 // cancelSerial: retire a number (status=cancelled). Never reused — GST-clean.
 // Identify the row by resourceId (the usual path) OR by seq (credit notes, whose customer-facing
 // CNTM-YYYY-NNNN number shares only the seq with the ledger's serial_code).
-async function cancelSerial(deps, { docType, resourceId, seq }) {
+async function cancelSerial(deps, { docType, resourceId, seq, serialCode }) {
   let q = deps.supabase.from('serial_ledger')
     .update({ status: 'cancelled', cancelled_at: new Date().toISOString() })
     .eq('doc_type', docType);
   if (resourceId != null)   q = q.eq('resource_id', String(resourceId));
+  // serial_code carries the store code inside it (DC-KAHSR-0007), so it identifies one row across
+  // the whole doc type — unlike seq, which repeats per store.
+  else if (serialCode)      q = q.eq('serial_code', String(serialCode));
   else if (seq != null)     q = q.eq('seq', Number(seq));
-  else throw new Error('cancelSerial requires resourceId or seq');
+  else throw new Error('cancelSerial requires resourceId, serialCode or seq');
   const { data } = await q.select().maybeSingle();
   return data;
 }
@@ -513,6 +578,7 @@ module.exports = {
   SERIAL_KEYS,
   getRegistry,
   allocateSerial,
+  previewSerial,
   computeSerialDrift,
   fyEnd,
   resolveState,
