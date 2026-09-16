@@ -20,6 +20,7 @@ const { createPaymentLink: createGokwikLink, cancelPaymentLink: cancelGokwikLink
 const { sendSMS } = require('./src/integrations/sms');
 const { registerRepairRoutes, handleRepairPayment, handleRepairDraftUpdate } = require('./src/modules/after-sales');
 const serialization = require('./src/modules/serialization');
+const { preTaxBase } = require('./src/modules/pricing/reprice_base');
 const creditInstruments = require('./src/modules/adjustments/credit_instruments');
 const { handleTypeformWebhook } = require('./src/integrations/typeform');
 // Pine Labs card terminals — push, poll, cancel, callbacks. Lifted out of this file wholesale.
@@ -1627,7 +1628,11 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
           // with no weights and no gold-rate change, and the line must still reprice. When only making
           // moved, gold is held at its locked value rather than re-derived.
           const mkOverride  = makingForIdx(idx);
-          if (!rateForItem && mkOverride == null) return null;
+          // NO early return on "neither override was supplied". This used to be the branch selector, and
+          // it selected on the wrong question: not "can this line be rebuilt?" but "did staff touch the
+          // gold rate or labour in THIS edit?". A discount-only edit supplies neither, so every line fell
+          // through to a base derived from its own current price — already discounted — and each reprice
+          // cut it again. Rebuild unconditionally; gold holds at its locked value when no rate was given.
           const vMf    = hydratedBase[idx].varMf || {};
           const iProps = {};
           for (const p of (item.properties || [])) iProps[p.name] = p.value;
@@ -1653,7 +1658,10 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
           else if (varGoldPbp > 0 && varRate > 0)       netWt = varGoldPbp / varRate;
           else if (lockedGold > 0 && effectiveRate > 0) netWt = lockedGold / effectiveRate;
 
-          if (netWt <= 0 && rateForItem) return null;
+          // A rate we cannot honour — no weight from any of the four sources above — no longer abandons
+          // the rebuild. It just means gold holds at its locked value while diamond, making and gemstone
+          // still come from the components below.
+          const canUseRate = !!rateForItem && netWt > 0;
 
           const diaVal = parseFloat((iProps['Diamond'] || '').replace('Rs', '').trim()) || parseFloat(vMf.price_breakup_diamond || 0) * item.quantity;
           // custom.making wins; else whatever the line already carries; else the variant spec. Held flat
@@ -1670,20 +1678,28 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
                       || 0;
 
           // Gold: recompute only when a rate was given; otherwise hold the locked value.
-          const newGold = rateForItem ? r2(netWt * rateForItem) : r2(lockedGold);
+          const newGold = canUseRate ? r2(netWt * rateForItem) : r2(lockedGold);
           if (!(newGold > 0)) return null;
           // newMaking is carried out so the Making PROP is rewritten to whatever fed the price math
           // (custom.making override, else the held value). Without this the no-weights branch moved
           // Taxable/Gross/price to the new labour but left the stale Making prop behind.
-          return { newPreTaxGross: r2(newGold + diaVal + mkgVal + gemVal), newGold, newMaking: mkgVal, newGemstone: gemVal };
+          // makingExplicit distinguishes "labour is genuinely zero, staff said so" from "this line never
+          // carried a labour figure". Every line reaches this rebuild now, so without it a piece with no
+          // Making prop would be handed one reading Rs0.00 — a new line on the invoice, from a reprice that
+          // was only ever asked to apply a discount.
+          return { newPreTaxGross: r2(newGold + diaVal + mkgVal + gemVal), newGold, newMaking: mkgVal, newGemstone: gemVal, makingExplicit: mkOverride != null };
         });
     const anyGoldRecalc = itemRecalc.some(r => r !== null);
 
-    // Pre-tax gross per item: use recalculated value when available, else back-calculate from current price
-    // (items missing _gold_rate keep their existing price; items with it get repriced)
-    const preTaxArr = productItems.map((item, i) =>
-      itemRecalc[i] !== null ? itemRecalc[i].newPreTaxGross : r2(parseFloat(item.price) * item.quantity / 1.03)
-    );
+    // Pre-tax gross per item, and always the PRE-DISCOUNT figure. The rule and the reason it exists are
+    // in src/modules/pricing/reprice_base.js: components first, the recorded Gross Value second, and the
+    // line's own price only for a line the engine has never touched. Deriving it from the current price
+    // is what let a discount be subtracted from a base it had already been subtracted from.
+    const preTaxSrc = productItems.map((item, i) => preTaxBase(item, itemRecalc[i]));
+    const preTaxArr = preTaxSrc.map(x => x.base);
+    preTaxSrc.forEach((x, i) => {
+      if (x.source === 'price') console.warn(`Draft ${draftOrderId}: line ${i + 1} has neither components nor a recorded Gross Value — priced off its current price`);
+    });
     const preTaxGrossTotal = preTaxArr.reduce((s, v) => s + v, 0);
 
     // A discount does NOT depend on weights — it must resolve here exactly as it does in the weights
@@ -1744,7 +1760,8 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
       const filteredProps = h.properties.filter(p => !FINANCIAL.has(p.name));
       if (thisItemRecalc) {
         filteredProps.push({ name: 'Gold',   value: `Rs${thisItemRecalc.newGold.toFixed(2)}` });
-        filteredProps.push({ name: 'Making', value: `Rs${thisItemRecalc.newMaking.toFixed(2)}` });
+        // Same rule as Gemstone below: a zero is written only when staff actually set one.
+        if (thisItemRecalc.newMaking > 0 || thisItemRecalc.makingExplicit) filteredProps.push({ name: 'Making', value: `Rs${thisItemRecalc.newMaking.toFixed(2)}` });
         if (thisItemRecalc.newGemstone > 0) filteredProps.push({ name: 'Gemstone', value: `Rs${thisItemRecalc.newGemstone.toFixed(2)}` });
       }
       // Post-discount component values (display only); only the target-matched portion reduces each.
