@@ -1,0 +1,119 @@
+==================== CONSOLIDATION LOG Wed Jul  8 05:53:07 UTC 2026 ====================
+--- current remote refs (restore reference) ---
+8550fb846a31330ca85502c3103e450b573b75b2	refs/heads/feat/serialization
+ecc56c03d9542404441461c443cabff7cf6cca81	refs/heads/flyio-new-files
+67ff10e73bdada484b938db30f1e0df375225a11	refs/heads/main
+--- creating LOCAL backup tags ---
+  tag backup/main-preconsolidate -> 67ff10e
+  tag backup/feat-serialization-local -> a4ccd3e
+  tag backup/feat-serialization-remote
+  tag backup/claude-relaxed-morse -> 560b5d6
+  tag backup/flyio-new-files
+  tag backup/consolidated-main -> 92f977c (the new state)
+--- pushing ALL backup tags to origin (durable restore points) ---
+To https://github.com/Mono2307/timanti-middleware
+ * [new tag]         backup/main-preconsolidate -> backup/main-preconsolidate
+ * [new tag]         backup/feat-serialization-local -> backup/feat-serialization-local
+ * [new tag]         backup/feat-serialization-remote -> backup/feat-serialization-remote
+ * [new tag]         backup/claude-relaxed-morse -> backup/claude-relaxed-morse
+ * [new tag]         backup/flyio-new-files -> backup/flyio-new-files
+ * [new tag]         backup/consolidated-main -> backup/consolidated-main
+--- backup tags now on origin ---
+560b5d64a8edec712dca0e38c626b16007c219cc	refs/tags/backup/claude-relaxed-morse
+92f977ca7ad4a0f6dd7daedaa9ced84ed2c6775d	refs/tags/backup/consolidated-main
+a4ccd3ef2df397ac54cef11c98b56bc0b13181d6	refs/tags/backup/feat-serialization-local
+8550fb846a31330ca85502c3103e450b573b75b2	refs/tags/backup/feat-serialization-remote
+ecc56c03d9542404441461c443cabff7cf6cca81	refs/tags/backup/flyio-new-files
+67ff10e73bdada484b938db30f1e0df375225a11	refs/tags/backup/main-preconsolidate
+--- Stage 2: verify FF then push consolidate/main -> origin/main ---
+  FF-safe: 67ff10e is ancestor of 92f977c (no history rewrite)
+To https://github.com/Mono2307/timanti-middleware
+   67ff10e..92f977c  consolidate/main -> main
+--- confirm origin/main now = 92f977c ---
+92f977ca7ad4a0f6dd7daedaa9ced84ed2c6775d	refs/heads/main
+--- Stage 3: delete dead branches (backed up as backup/* tags) ---
+[local] feat/serialization:
+Deleted branch feat/serialization (was a4ccd3e).
+[local] claude/relaxed-morse:
+Deleted branch claude/relaxed-morse-243aba (was 560b5d6).
+[remote] feat/serialization:
+To https://github.com/Mono2307/timanti-middleware
+ - [deleted]         feat/serialization
+[remote] flyio-new-files:
+To https://github.com/Mono2307/timanti-middleware
+ - [deleted]         flyio-new-files
+
+--- remaining LOCAL branches ---
++ consolidate/main
+* feat/metafield-manager-extension
++ main
+--- remaining REMOTE branches ---
+refs/heads/feat/metafield-manager-extension
+refs/heads/main
+--- worktrees ---
+C:/Users/monod/OneDrive/Desktop/Claude Projects/timanti-middleware                                           aa27b6f [feat/metafield-manager-extension]
+C:/Users/Monodeep/OneDrive/Desktop/Claude Projects/timanti-middleware/.claude/worktrees/relaxed-morse-243aba 560b5d6 (detached HEAD) prunable
+C:/Users/Monodeep/timanti-main-wt                                                                            67ff10e [main] prunable
+C:/wt-consol                                                                                                 92f977c [consolidate/main]
+
+--- other main worktree status (is it safe to fast-forward?) ---
+fatal: cannot change to 'C:/Users/Monodeep/timanti-main-wt': No such file or directory
+  main there is at: fatal: cannot change to 'C:/Users/Monodeep/timanti-main-wt': No such file or directory
+  origin/main is at: 92f977c
+--- prune stale/ghost worktrees (dirs already gone) ---
+Removing worktrees/relaxed-morse-243aba: gitdir file points to non-existent location
+Removing worktrees/serial-deploy-wt: gitdir file does not exist
+Removing worktrees/swt: gitdir file does not exist
+Removing worktrees/timanti-main-wt: gitdir file points to non-existent location
+--- now sync LOCAL main -> origin/main (92f977c) ---
+branch 'main' set up to track 'origin/main'.
+  local main -> 92f977c
+--- remove scratch worktree + delete scratch branch (commit preserved as origin/main + backup tag) ---
+error: failed to delete '.git/worktrees/wt-consol': Permission denied
+Deleted branch consolidate/main (was 92f977c).
+
+--- FINAL worktrees ---
+C:/Users/monod/OneDrive/Desktop/Claude Projects/timanti-middleware aa27b6f [feat/metafield-manager-extension]
+--- FINAL local branches ---
+* feat/metafield-manager-extension
+  main
+--- FINAL remote branches ---
+refs/heads/feat/metafield-manager-extension
+refs/heads/main
+--- stash present? ---
+stash@{0}: On feat/metafield-manager-extension: WIP-preconsolidate-2026-07-07
+--- restore WIP onto feat/metafield-manager-extension working tree ---
+	metafield_governance.csv
+	price_update/__pycache__/
+	raw_shopify_metafields.json
+	services/cad adjustment pricing/
+	services/exchange-cn/CEO_TEST_REPORT.md
+	services/exchange-cn/EXCHANGE_ADJUSTMENT_CONTEXT.md
+	services/exchange-cn/EXC_METAFIELD_E2E_PLAN.md
+	services/exchange-cn/MASTER_E2E_TEST_PLAN.md
+	services/exchange-cn/RECON_LEDGER_AND_VOUCHER_PLAN.md
+	services/exchange-cn/backfill-ledger.gs.txt
+	services/serialization/SERIALIZATION_FOR_FOUNDER.md
+	services/serialization/SERIALIZATION_MIGRATION_PLAN.md
+	services/serialization/SESSION_PICKUP_2026-06-26.md
+	services/serialization/TESTING_E2E.md
+	services/serialization/migrate_reset.sql
+	templates/SESSION_CONTEXT_INVOICE_VOUCHER.md
+	templates/voucher.liquid
+
+no changes added to commit (use "git add" and/or "git commit -a")
+Dropped refs/stash@{0} (b6c76a511219e84aad09777092b25ad8be994629)
+
+--- retry prune of locked scratch worktree admin dir (best effort) ---
+Removing worktrees/wt-consol: gitdir file does not exist
+error: failed to delete '.git/worktrees/wt-consol': Permission denied
+--- WIP restored? (should show your modified tracked files back) ---
+ cad adjustment pricing/PRD.md                      |  66 ----
+ metafield-manager/extensions/app-home/package.json |   2 +-
+ services/exchange-cn/apps-script.js                | 201 +++++++---
+ services/repairs/repair-note.liquid                |   6 +-
+ services/reporting/apps-script.js                  |   2 +-
+ templates/mto-invoice-template.liquid              |  51 +--
+ templates/proforma-invoice.liquid                  |  49 +--
+ templates/tax-invoice.liquid                       | 405 ++++++++++-----------
+ 10 files changed, 501 insertions(+), 415 deletions(-)

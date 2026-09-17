@@ -236,8 +236,16 @@ const FIELD_CONFIG = {
   mto_comment: { section: "Procurement", label: "Manufacturing Note", editable: true, applies: "draft" },
 
   state_code: { section: "System", label: "Store / State Code", editable: true, applies: "both" },
+  // Consigning the challan to the customer instead of to a store. Yes/No rather than a boolean:
+  // REST returns a real boolean metafield as a JSON boolean, so the string compare everything
+  // else here does would read false forever.
+  ship_outside_codes: { section: "System", label: "Ship Outside Codes", editable: true, applies: "draft" },
   // Draft-only, and only read when a delivery challan is raised off the draft via make-memo-custom.
-  delivery_code: { section: "System", label: "Delivery / Store Code (delivery challan)", editable: true, applies: "draft" },
+  // Greyed out, not hidden, once Ship Outside Codes is Yes: a code already typed stays visible so
+  // staff can see what the document is NOT using, and flipping back restores it untouched.
+  delivery_code: { section: "System", label: "Delivery / Store Code (delivery challan)", editable: true, applies: "draft",
+    disabledWhen: (edits) => String(edits.ship_outside_codes || "").toLowerCase() === "yes",
+    disabledNote: "not used — shipping outside codes" },
   invoice_date: { section: "System", label: "Invoice Date", editable: true, applies: "both" },
   is_finalized: { section: "System", label: "Finalized", editable: false, applies: "both" },
   order_name: { section: "System", label: "Linked Order Name", editable: false, applies: "draft" },
@@ -295,6 +303,8 @@ function buildSections(scope) {
     label: FIELD_CONFIG[key].label,
     editable: FIELD_CONFIG[key].editable,
     required: true,
+    disabledWhen: FIELD_CONFIG[key].disabledWhen,
+    disabledNote: FIELD_CONFIG[key].disabledNote,
   }));
 
   // Everything else stays in its topical section (required + identity keys are
@@ -305,7 +315,11 @@ function buildSections(scope) {
     const cfg = FIELD_CONFIG[key];
     // `required` here is display only (the asterisk) — it marks a compulsory field that must stay
     // with its neighbours rather than being promoted into the Required Inputs section.
-    (bySection[cfg.section] ||= []).push({ key, label: cfg.label, editable: cfg.editable, required: cfg.required });
+    // disabledWhen/disabledNote must be carried through: this function rebuilds a NEW object per
+    // field rather than passing the config along, so anything not named here is silently dropped
+    // and a cross-field rule goes quiet with nothing failing. That shipped once already.
+    (bySection[cfg.section] ||= []).push({ key, label: cfg.label, editable: cfg.editable, required: cfg.required,
+      disabledWhen: cfg.disabledWhen, disabledNote: cfg.disabledNote });
   }
   const topical = SECTION_ORDER.filter((title) => bySection[title]?.length).map((title) => ({
     title,
@@ -388,6 +402,23 @@ const TAGS_REMOVE_MUTATION = `
     tagsRemove(id: $id, tags: $tags) { userErrors { field message } }
   }
 `;
+// The ✕ on the "Voucher Applied" / "Exchange Note Applied" rows. One trigger tag per instrument.
+// The middleware clears the code AND value metafields, strips the vch-*/exc-* linkage tags, re-derives
+// the balance and frees the instrument in the ledger (back to 'open' — available and re-addable), then
+// strips the trigger. It never voids the serial: taking a credit off a draft means it went on the
+// wrong document, not that it should cease to exist. That distinction is why this is a trigger tag and
+// not a metafield edit — the panel must never leave the draft and the ledger telling different stories.
+const REMOVE_TAG = { voucher: "remove-voucher", exchange: "remove-exc" };
+const REMOVE_LABEL = { voucher: "voucher", exchange: "exchange note" };
+// Which read-only "…Applied" row carries the cross, and what it removes. The PAIRED value key is what
+// decides whether there is anything to remove at all.
+const REMOVABLE_CODE_FIELD = { voucher_code: "voucher", exchange_note_code: "exchange" };
+const PAIRED_VALUE_KEY = { voucher_code: "voucher_value", exchange_note_code: "exchange_note_value" };
+// Shown in place of the code when a draft carries the deduction but no code: a legacy apply (from
+// before the *_code metafields existed, when the code lived only in a vch-num / exc-num tag) or a
+// manual override typed into the value field. Both still need a way off the document.
+const NO_CODE_LABEL = "code not recorded";
+
 // -- Repair class ----------------------------------------------------------------------------
 // The repairs workflow is started by exactly ONE tag, and WHICH tag it is decides the class of the
 // job:
@@ -531,6 +562,9 @@ export default function MetafieldManager({ surface = "block" } = {}) {
   const [excCode, setExcCode] = useState("");
   const [excBusy, setExcBusy] = useState(false);
   const [excNote, setExcNote] = useState("");
+  // The ✕ on an applied instrument. One at a time: "" | "voucher" | "exchange".
+  const [removeBusy, setRemoveBusy] = useState("");
+  const [removeNote, setRemoveNote] = useState("");
   const [refundEmailBusy, setRefundEmailBusy] = useState(false);
   const [refundEmailNote, setRefundEmailNote] = useState("");
   // Repair class selector: the document's live tags (so the panel reports what the workflow actually
@@ -891,6 +925,30 @@ export default function MetafieldManager({ surface = "block" } = {}) {
     }
   }
 
+  // Take an applied voucher / exchange note back off the document. Same shape as applyVoucher: the
+  // panel only drops a tag, and the middleware owns the metafields, the balance and the ledger row —
+  // so the draft and the ledger can never end up disagreeing about who is holding the credit.
+  //
+  // This FREES the instrument (back to unused, re-addable elsewhere); it never cancels it. A credit
+  // that must never exist again is voided from the exchange/voucher tooling, not from here.
+  async function removeInstrument(kind) {
+    const tag = REMOVE_TAG[kind];
+    if (!ownerId || !tag) return;
+    setRemoveBusy(kind);
+    setRemoveNote("");
+    try {
+      const res = await shopify.query(TAGS_ADD_MUTATION, { variables: { id: ownerId, tags: [tag] } });
+      const errs = collectErrors(res, "tagsAdd");
+      if (errs.length) throw new Error(errs.join("; "));
+      setRemoveNote(`Removing the ${REMOVE_LABEL[kind]}… it comes off this order and goes back to unused in a few seconds, and the balance goes up by its value.`);
+      setTimeout(() => setRefreshTick((t) => t + 1), 3000);
+    } catch (e) {
+      setRemoveNote(`Couldn't remove: ${e?.message || e}`);
+    } finally {
+      setRemoveBusy("");
+    }
+  }
+
   // Apply a pre-tax, diamond-only discount: staff pick a real Shopify code or a custom %/₹. We drop an
   // `apply-discount:<code>` or `apply-discount:custom:<v>:<pct|flat>` tag; the middleware resolves the
   // amount against the diamond value, writes custom.discount_applied, and reprices dia-only pre-tax.
@@ -1211,11 +1269,6 @@ export default function MetafieldManager({ surface = "block" } = {}) {
     return (
       <s-section heading="Per-Line Discounts">
         <s-stack direction="block" gap="base">
-          <s-text tone="subdued">
-            Stack discounts on Diamond, Making, or the whole product — % is of that component, ₹ is a
-            flat amount. Each discount is capped at what it targets; all fold into one pre-tax "Discount
-            on Taxable". Applying reprices every line. Labour is set above, under Pricing.
-          </s-text>
           {lineRows.map((row, i) => (
             <s-stack key={row.id || i} direction="block" gap="small-500">
               <s-text>{`— ${row.title} —`}</s-text>
@@ -1308,12 +1361,6 @@ export default function MetafieldManager({ surface = "block" } = {}) {
     return (
       <s-section heading="Repair Type">
         <s-stack direction="block" gap="base">
-          <s-text tone="subdued">
-            Pick the type and press the button -- it adds the tag that starts the workflow, so nobody
-            has to type one. A paid repair emails HQ the "Set Estimate" link and acknowledges the
-            customer; a free repair tells the customer there is no charge and sends HQ the "Mark
-            Complete" link with no estimate. Only one type can be set at a time.
-          </s-text>
           <s-text>{`Current: ${currentLabel}`}</s-text>
           <s-select
             label="Repair type"
@@ -1520,11 +1567,30 @@ export default function MetafieldManager({ surface = "block" } = {}) {
       const block = (
         <s-section key={section.title} heading={section.title}>
           <s-stack direction="block" gap="base">
-            {section.fields.map((field) =>
-              field.editable
-                ? renderEditable(field, defs[field.key]?.type || "", defs[field.key]?.choices, edits[field.key] ?? "", setField, saving)
-                : renderReadOnly(field, values[field.key] ?? ""),
-            )}
+            {section.fields.map((field) => {
+              if (!field.editable) {
+                // "Voucher Applied" / "Exchange Note Applied" carry a ✕ once the document actually
+                // holds one. Gated on the paired VALUE as well as the code, so a legacy or manually
+                // overridden deduction — which has a value but no code — can still be taken off.
+                const kind = REMOVABLE_CODE_FIELD[field.key];
+                const code = String(values[field.key] ?? "").trim();
+                const amount = Math.abs(parseFloat(values[PAIRED_VALUE_KEY[field.key]] ?? "0")) || 0;
+                if (kind && creditsAllowed && (code || amount > 0)) {
+                  return renderRemovableCode(field, code || NO_CODE_LABEL,
+                    () => removeInstrument(kind), removeBusy === kind, saving || !!removeBusy);
+                }
+                return renderReadOnly(field, values[field.key] ?? "");
+              }
+              // A field can be switched off by ANOTHER field on the same draft. Keyed on `edits`,
+              // not saved values, so the control greys the moment staff pick Yes rather than after
+              // a save -- the same reason the repair picker reads a pending reference.
+              const off = field.disabledWhen ? field.disabledWhen(edits) : false;
+              const shown = off && field.disabledNote
+                ? { ...field, label: `${field.label} — ${field.disabledNote}` }
+                : field;
+              return renderEditable(shown, defs[field.key]?.type || "", defs[field.key]?.choices, edits[field.key] ?? "", setField, saving, off);
+            })}
+            {section.title === "Adjustments" && removeNote ? <s-text>{removeNote}</s-text> : null}
           </s-stack>
         </s-section>
       );
@@ -1617,8 +1683,32 @@ function renderReadOnly(field, value) {
   );
 }
 
-function renderEditable(field, type, choices, value, setField, saving) {
-  const disabled = saving ? "" : undefined;
+// renderReadOnly with a ✕ beside the value. Used for the applied voucher / exchange note: the code
+// itself stays read-only — it is written by the server and editing it would make the draft claim an
+// instrument it does not hold — but removing the whole adjustment is a staff decision.
+function renderRemovableCode(field, value, onRemove, busy, disabled) {
+  return (
+    <s-stack key={field.key} direction="block" gap="small-500">
+      <s-text>{field.label}</s-text>
+      <s-stack direction="inline" gap="small-500" alignItems="center">
+        <s-text tone="subdued">{value}</s-text>
+        <s-button
+          variant="tertiary"
+          tone="critical"
+          accessibilityLabel={`Remove ${value}`}
+          onClick={onRemove}
+          loading={busy ? "" : undefined}
+          disabled={disabled ? "" : undefined}
+        >
+          ✕
+        </s-button>
+      </s-stack>
+    </s-stack>
+  );
+}
+
+function renderEditable(field, type, choices, value, setField, saving, forcedOff) {
+  const disabled = saving || forcedOff ? "" : undefined;
   // The blank dropdown entry is <s-option value="">—</s-option>, but the host hands back the
   // OPTION LABEL rather than its empty value — so clearing a choice field yielded the literal
   // "—". That is not empty, so save() WROTE it instead of deleting the metafield, and Shopify

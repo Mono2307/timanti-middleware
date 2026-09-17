@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+  <title>Your Timanti return is confirmed — {{ order_name }}</title>
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+  <meta name="viewport" content="width=device-width">
+  <link rel="stylesheet" type="text/css" href="/assets/notifications/styles.css">
+  <style>
+    body, p, td, span, .order-list__item-title, .order-list__item-variant,
+    .customer-info__item, .subtotal-line__title, .subtotal-line__value,
+    .disclaimer__subtext, .footer__cell {
+      font-family: 'Muli', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      font-weight: 300;
+    }
+    h1, h2, h3, h4, h5, h6, .shop-name__text {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      font-weight: 500;
+      letter-spacing: 0.3px;
+    }
+    .button__cell { background: #000000; border-radius: 4px; }
+    .button__text { color: #ffffff !important; text-decoration: none; font-weight: 500; }
+    a, a:hover, a:active, a:visited { color: #fc7d27; text-decoration: none; }
+    .timanti-info-box {
+      background: #F6F6F6;
+      border-left: 4px solid #fc7d27;
+      padding: 20px;
+      margin: 20px auto;
+      text-align: center;
+      max-width: 600px;
+    }
+    .timanti-info-box h4 { margin: 0 0 12px 0; font-weight: 600; color: #000000; }
+    .timanti-info-box p { color: #000000; }
+    .timanti-info-box strong { color: #000000; font-weight: 600; }
+    .timanti-support-section {
+      background: #ffffff;
+      border: 1px solid #e6d8cc;
+      border-radius: 8px;
+      padding: 20px;
+      margin: 20px 0;
+      text-align: center;
+    }
+    .timanti-support-item { display: inline-block; margin: 10px 20px; }
+    .timanti-support-item a { color: #000000 !important; }
+    .timanti-promises {
+      background: #F6F6F6;
+      padding: 20px;
+      border-radius: 8px;
+      margin: 20px 0;
+      text-align: center;
+    }
+    .timanti-promise-item { display: inline-block; margin: 10px 15px; text-align: center; vertical-align: top; }
+    .timanti-promise-item img { width: 50px; height: 50px; display: block; margin: 0 auto 8px; }
+    .timanti-promise-item span { display: block; font-size: 13px; color: #000000; }
+    .shop-name__cell { text-align: center; }
+    .actions__cell { text-align: center; }
+    .footer-contact-link { color: #000000 !important; }
+    .refund-amount-box {
+      background: #000000;
+      color: #ffffff;
+      border-radius: 6px;
+      padding: 18px 24px;
+      margin: 20px auto;
+      max-width: 320px;
+      text-align: center;
+    }
+    .refund-amount-box p { color: #aaaaaa; font-size: 13px; margin-bottom: 6px; }
+    .refund-amount-box .amount { color: #fc7d27; font-size: 28px; font-weight: 600; }
+    .refund-amount-box .method { color: #cccccc; font-size: 12px; margin-top: 6px; }
+  </style>
+</head>
+
+  <body>
+    <table class="body">
+      <tr>
+        <td>
+
+          <!-- Header / Logo -->
+          <table class="header row">
+            <tr>
+              <td class="header__cell">
+                <center>
+                  <table class="container">
+                    <tr>
+                      <td>
+                        <table class="row">
+                          <tr>
+                            <td class="shop-name__cell" colspan="2" style="text-align: center;">
+                              {%- if shop.email_logo_url %}
+                                <img src="https://cdn.shopify.com/s/files/1/0775/8322/0993/files/WhatsApp_Image_2026-04-23_at_10.42.47_AM.jpg?v=1777029219" alt="Timanti" width="360" style="margin: 0 auto;">
+                              {%- else %}
+                                <h1 class="shop-name__text"><a href="{{ shop.url }}">{{ shop.name }}</a></h1>
+                              {%- endif %}
+                            </td>
+                          </tr>
+                        </table>
+                      </td>
+                    </tr>
+                  </table>
+                </center>
+              </td>
+            </tr>
+          </table>
+
+          <!-- Hero message -->
+          <table class="row content">
+            <tr>
+              <td class="content__cell">
+                <center>
+                  <table class="container">
+                    <tr>
+                      <td style="text-align: center;">
+                        <p style="font-size: 14px; color: #999; margin-bottom: 5px;">Order {{ order_name }}</p>
+                        <h2>Your return is confirmed</h2>
+                        <p>Hi <strong>{{ customer.first_name }}</strong>, we've received your return and your refund is on its way.</p>
+
+                        <!-- Refund amount callout -->
+                        <div class="refund-amount-box">
+                          <p>Refund amount</p>
+                          <div class="amount">{{ total_refund_amount | money }}</div>
+                          {% for transaction in refund_transactions %}
+                            {% if transaction.status == 'success' %}
+                              <div class="method">
+                                {% if transaction.payment_details.credit_card_company %}
+                                  {{ transaction.payment_details.credit_card_company }} ending {{ transaction.payment_details.credit_card_last_four_digits }}
+                                {% else %}
+                                  {{ transaction.gateway_display_name }}
+                                {% endif %}
+                              </div>
+                            {% endif %}
+                          {% endfor %}
+                        </div>
+
+                        <div class="timanti-info-box">
+                          <h4>Refund Timeline</h4>
+                          <p><strong>UPI / Net Banking:</strong> 3–5 business days</p>
+                          <p><strong>Credit / Debit Card:</strong> 5–7 business days</p>
+                          <p><strong>EMI / Wallet:</strong> 7–10 business days</p>
+                          <p style="margin-top: 10px; font-size: 13px; color: #666;">Timelines depend on your bank. If you have questions, reply to this email or WhatsApp us.</p>
+                        </div>
+
+                        {% if order_status_url %}
+                          <table class="row actions" style="width: 100%;">
+                            <tr><td class="empty-line">&nbsp;</td></tr>
+                            <tr>
+                              <td class="actions__cell" style="text-align: center; padding-bottom: 15px;">
+                                <center>
+                                  <table class="button main-action-cell" align="center" style="margin: 0 auto; float: none !important;">
+                                    <tr>
+                                      <td class="button__cell"><a href="{{ order_status_url }}" class="button__text">View order details</a></td>
+                                    </tr>
+                                  </table>
+                                </center>
+                              </td>
+                            </tr>
+                            {% if shop.url %}
+                              <tr>
+                                <td class="actions__cell" style="text-align: center;">
+                                  <center>
+                                    <table class="link secondary-action-cell" align="center" style="margin: 0 auto; float: none !important;">
+                                      <tr>
+                                        <td class="link__cell">or <a href="{{ shop.url }}">Continue shopping</a></td>
+                                      </tr>
+                                    </table>
+                                  </center>
+                                </td>
+                              </tr>
+                            {% endif %}
+                          </table>
+                        {% endif %}
+
+                      </td>
+                    </tr>
+                  </table>
+                </center>
+              </td>
+            </tr>
+          </table>
+
+          <!-- Returned items -->
+          {% if refund_line_items.size > 0 %}
+            <table class="row section">
+              <tr>
+                <td class="section__cell">
+                  <center>
+                    <table class="container">
+                      <tr>
+                        <td><h3>Items returned</h3></td>
+                      </tr>
+                    </table>
+                    <table class="container">
+                      <tr>
+                        <td>
+                          {% for line in refund_line_items %}
+                            <table class="row">
+                              <tr class="order-list__item">
+                                <td class="order-list__item__cell">
+                                  <table style="width: 100%;">
+                                    <tr>
+                                      <td class="order-list__image-cell" style="width: 70px; min-width: 70px; vertical-align: top;">
+                                        {% if line.line_item.image %}
+                                          <img src="{{ line.line_item | img_url: 'compact_cropped' }}" align="left" width="60" height="60" class="order-list__product-image" style="border-radius: 4px;"/>
+                                        {% endif %}
+                                      </td>
+                                      <td class="order-list__product-description-cell" style="vertical-align: top;">
+                                        <span class="order-list__item-title"><strong>{{ line.line_item.title }}</strong></span><br/>
+                                        <span class="order-list__item-title">Qty returned: {{ line.quantity }}</span><br/>
+                                        {% if line.line_item.variant.title != 'Default Title' %}
+                                          <span class="order-list__item-variant" style="color: #777;">{{ line.line_item.variant.title }}</span>
+                                        {% endif %}
+                                      </td>
+                                      <td class="order-list__price-cell" style="vertical-align: top; text-align: right; white-space: nowrap;">
+                                        <p class="order-list__item-price">{{ line.subtotal | money }}</p>
+                                      </td>
+                                    </tr>
+                                  </table>
+                                </td>
+                              </tr>
+                            </table>
+                          {% endfor %}
+
+                          <table class="row subtotal-lines">
+                            <tr>
+                              <td class="subtotal-spacer"></td>
+                              <td>
+                                <table class="row subtotal-table">
+                                  {% if subtotal_refund_amount > 0 %}
+                                    <tr class="subtotal-line">
+                                      <td class="subtotal-line__title"><p><span>Subtotal</span></p></td>
+                                      <td class="subtotal-line__value"><strong>{{ subtotal_refund_amount | money }}</strong></td>
+                                    </tr>
+                                  {% endif %}
+                                  {% if shipping_refund_amount > 0 %}
+                                    <tr class="subtotal-line">
+                                      <td class="subtotal-line__title"><p><span>Shipping refund</span></p></td>
+                                      <td class="subtotal-line__value"><strong>{{ shipping_refund_amount | money }}</strong></td>
+                                    </tr>
+                                  {% endif %}
+                                </table>
+                                <table class="row subtotal-table subtotal-table--total">
+                                  <tr class="subtotal-line">
+                                    <td class="subtotal-line__title"><p><span>Total refund</span></p></td>
+                                    <td class="subtotal-line__value"><strong>{{ total_refund_amount | money_with_currency }}</strong></td>
+                                  </tr>
+                                </table>
+                              </td>
+                            </tr>
+                          </table>
+
+                          <div class="timanti-promises">
+                            <div class="timanti-promise-item">
+                              <img src="https://cdn.shopify.com/s/files/1/0775/8322/0993/files/icon1_10925c66-b900-4920-a93c-49753bce74cf.png?v=1770206196" alt="BIS Hallmarked">
+                              <span>BIS Hallmarked<br>Gold</span>
+                            </div>
+                            <div class="timanti-promise-item">
+                              <img src="https://cdn.shopify.com/s/files/1/0775/8322/0993/files/icon6.png" alt="IGI Certified">
+                              <span>IGI Certified<br>Diamonds</span>
+                            </div>
+                            <div class="timanti-promise-item">
+                              <img src="https://cdn.shopify.com/s/files/1/0775/8322/0993/files/icon2_1d5faa97-53c3-44c7-9b2a-04ca57696e11.png?v=1770206090" alt="Lifetime Exchange">
+                              <span>Lifetime<br>Exchange</span>
+                            </div>
+                          </div>
+
+                        </td>
+                      </tr>
+                    </table>
+                  </center>
+                </td>
+              </tr>
+            </table>
+          {% endif %}
+
+          <!-- Support -->
+          <table class="row section">
+            <tr>
+              <td class="section__cell">
+                <center>
+                  <table class="container">
+                    <tr>
+                      <td>
+                        <div class="timanti-support-section">
+                          <h3>Need Help?</h3>
+                          <p style="color: #666; margin-bottom: 15px;">Our team is here to assist you</p>
+                          <div class="timanti-support-item">
+                            <strong>📞💬 Phone/WhatsApp</strong><br>
+                            <a href="tel:+917738868305" class="footer-contact-link">+91-7738868305</a>
+                          </div>
+                          <div class="timanti-support-item">
+                            <strong>✉️ Email</strong><br>
+                            <a href="mailto:hello@timanti.in" class="footer-contact-link">hello@timanti.in</a>
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                  </table>
+                </center>
+              </td>
+            </tr>
+          </table>
+
+          <!-- Footer -->
+          <table class="row footer">
+            <tr>
+              <td class="footer__cell">
+                <center>
+                  <table class="container">
+                    <tr>
+                      <td style="text-align: center;">
+                        <p class="disclaimer__subtext" style="font-size: 11px; color: #aaa;">
+                          Questions? Reply to this email or contact us at
+                          <a href="mailto:hello@timanti.in" class="footer-contact-link" style="font-size: 11px;">hello@timanti.in</a> or
+                          <a href="tel:+917738868305" class="footer-contact-link" style="font-size: 11px;">+91-7738868305</a>
+                        </p>
+                        <p class="disclaimer__subtext" style="font-size: 11px; color: #aaa; margin-top: 8px;">
+                          <strong style="font-size: 11px;">Returns &amp; Buyback:</strong> We offer hassle-free returns within 7 days and lifetime buyback on all jewelry.
+                        </p>
+                        <p class="disclaimer__subtext" style="font-size: 11px; margin-top: 8px;">
+                          <a href="https://timanti.in/pages/return-refund-policy" style="font-size: 11px;">Return &amp; Refund Policy</a> |
+                          <a href="https://timanti.in/pages/exchange-and-buyback" style="font-size: 11px;">Exchange &amp; Buyback</a> |
+                          <a href="https://timanti.in/pages/shipping" style="font-size: 11px;">Shipping</a> |
+                          <a href="https://timanti.in/pages/track-your-order" style="font-size: 11px;">Track Your Order</a>
+                        </p>
+                      </td>
+                    </tr>
+                  </table>
+                </center>
+              </td>
+            </tr>
+          </table>
+
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>

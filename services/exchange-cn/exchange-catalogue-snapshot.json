@@ -1,0 +1,11 @@
+{
+  "_comment": "Live variant metafields for the #1068+ band, read 2026-09-17 from auracarat.myshopify.com. These are TODAY's catalogue figures — custom.price_breakup_diamond drives the Deduction diamond leg and custom.gold_rate drives the gold leg. Re-snapshot after a reprice; exchange-band-test.js asserts the sheet's gold leg against price_breakup_gold, so a stale snapshot shows up as a failure rather than a silent pass.",
+  "_snapshot_date": "2026-09-17",
+  "50202732757249": { "order": "#1073", "line": 0, "dia": 12400.0,  "gold": 24853.96, "rate": 11614.0 },
+  "48578124710145": { "order": "#1072", "line": 0, "dia": 230000.0, "gold": 35586.08, "rate": 9032.0  },
+  "50238447550721": { "order": "#1071", "line": 0, "dia": 9600.0,   "gold": 13963.47, "rate": 9032.0  },
+  "50171201028353": { "order": "#1070", "line": 0, "dia": null,     "gold": 37513.22, "rate": 11614.0 },
+  "50162239602945": { "order": "#1069", "line": 0, "dia": 301500.0, "gold": 63296.30, "rate": 11614.0 },
+  "49930472915201": { "order": "#1068", "line": 0, "dia": 8400.0,   "gold": 29127.91, "rate": 11614.0 },
+  "48646458835201": { "order": "#1068", "line": 1, "dia": 0.0,      "gold": 21834.32, "rate": 11614.0 }
+}

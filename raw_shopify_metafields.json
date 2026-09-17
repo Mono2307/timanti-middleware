@@ -1,0 +1,4080 @@
+{
+  "store": "auracarat.myshopify.com",
+  "api_version": "2024-10",
+  "orders": [
+    {
+      "id": "gid://shopify/Order/6739474317569",
+      "name": "#1001",
+      "createdAt": "2026-01-01T08:41:19Z",
+      "metafields": []
+    },
+    {
+      "id": "gid://shopify/Order/6742113026305",
+      "name": "#1002",
+      "createdAt": "2026-01-02T08:40:16Z",
+      "metafields": []
+    },
+    {
+      "id": "gid://shopify/Order/6742116827393",
+      "name": "#1003",
+      "createdAt": "2026-01-02T08:41:55Z",
+      "metafields": []
+    },
+    {
+      "id": "gid://shopify/Order/6742122332417",
+      "name": "#1004",
+      "createdAt": "2026-01-02T08:44:08Z",
+      "metafields": []
+    },
+    {
+      "id": "gid://shopify/Order/6807326195969",
+      "name": "#1005",
+      "createdAt": "2026-02-02T12:22:23Z",
+      "metafields": []
+    },
+    {
+      "id": "gid://shopify/Order/6809706561793",
+      "name": "#1006",
+      "createdAt": "2026-02-03T09:55:47Z",
+      "metafields": []
+    },
+    {
+      "id": "gid://shopify/Order/6816535675137",
+      "name": "#1007",
+      "createdAt": "2026-02-06T15:45:45Z",
+      "metafields": []
+    },
+    {
+      "id": "gid://shopify/Order/6840607932673",
+      "name": "#1008",
+      "createdAt": "2026-02-19T09:40:29Z",
+      "metafields": [
+        {
+          "id": "gid://shopify/Metafield/43028915945729",
+          "namespace": "timanti",
+          "key": "cn_number",
+          "value": "CNTM-2026-0005",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43028916437249",
+          "namespace": "timanti",
+          "key": "cn_value",
+          "value": "24028.62",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43028916666625",
+          "namespace": "timanti",
+          "key": "cn_expiry",
+          "value": "31-08-2026",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43028916764929",
+          "namespace": "timanti",
+          "key": "cn_issued_date",
+          "value": "02-06-2026",
+          "type": "single_line_text_field"
+        }
+      ]
+    },
+    {
+      "id": "gid://shopify/Order/6841432047873",
+      "name": "#1009",
+      "createdAt": "2026-02-19T20:08:04Z",
+      "metafields": [
+        {
+          "id": "gid://shopify/Metafield/42784669335809",
+          "namespace": "timanti",
+          "key": "cn_number",
+          "value": "CNTM-2026-0003",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42784669368577",
+          "namespace": "timanti",
+          "key": "cn_value",
+          "value": "5980.00",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42785093615873",
+          "namespace": "timanti",
+          "key": "cn_expiry",
+          "value": "17-08-2026",
+          "type": "single_line_text_field"
+        }
+      ]
+    },
+    {
+      "id": "gid://shopify/Order/6865070948609",
+      "name": "#1010",
+      "createdAt": "2026-02-24T12:40:16Z",
+      "metafields": [
+        {
+          "id": "gid://shopify/Metafield/43418932117761",
+          "namespace": "custom",
+          "key": "exchange_note_value",
+          "value": "13736.96",
+          "type": "number_decimal"
+        }
+      ]
+    },
+    {
+      "id": "gid://shopify/Order/6866693521665",
+      "name": "#1011",
+      "createdAt": "2026-02-25T10:05:18Z",
+      "metafields": []
+    },
+    {
+      "id": "gid://shopify/Order/6868708262145",
+      "name": "#1012",
+      "createdAt": "2026-02-26T12:58:52Z",
+      "metafields": []
+    },
+    {
+      "id": "gid://shopify/Order/6870943465729",
+      "name": "#1013",
+      "createdAt": "2026-02-27T14:53:19Z",
+      "metafields": []
+    },
+    {
+      "id": "gid://shopify/Order/6912792658177",
+      "name": "#1014",
+      "createdAt": "2026-03-23T10:41:26Z",
+      "metafields": []
+    },
+    {
+      "id": "gid://shopify/Order/6913032814849",
+      "name": "#1015",
+      "createdAt": "2026-03-23T14:23:48Z",
+      "metafields": [
+        {
+          "id": "gid://shopify/Metafield/42497240400129",
+          "namespace": "custom",
+          "key": "old_gold_value",
+          "value": "31000.0",
+          "type": "number_decimal"
+        },
+        {
+          "id": "gid://shopify/Metafield/42497241153793",
+          "namespace": "custom",
+          "key": "old_gold_weight",
+          "value": "3.2",
+          "type": "number_decimal"
+        }
+      ]
+    },
+    {
+      "id": "gid://shopify/Order/6919365198081",
+      "name": "#1016",
+      "createdAt": "2026-03-26T17:35:23Z",
+      "metafields": []
+    },
+    {
+      "id": "gid://shopify/Order/6919419527425",
+      "name": "#1017",
+      "createdAt": "2026-03-26T18:06:21Z",
+      "metafields": []
+    },
+    {
+      "id": "gid://shopify/Order/6920495497473",
+      "name": "#1018",
+      "createdAt": "2026-03-27T10:19:18Z",
+      "metafields": [
+        {
+          "id": "gid://shopify/Metafield/42744351817985",
+          "namespace": "custom",
+          "key": "order_type",
+          "value": "mto",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42744352407809",
+          "namespace": "custom",
+          "key": "channel",
+          "value": "Offline",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42744354799873",
+          "namespace": "custom",
+          "key": "payment_status",
+          "value": "Full",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42744355258625",
+          "namespace": "custom",
+          "key": "payment_mode_advance",
+          "value": "upi",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42744356274433",
+          "namespace": "custom",
+          "key": "amount_paid",
+          "value": "500.0",
+          "type": "number_decimal"
+        },
+        {
+          "id": "gid://shopify/Metafield/42744356372737",
+          "namespace": "custom",
+          "key": "amount_pending",
+          "value": "0.0",
+          "type": "number_decimal"
+        },
+        {
+          "id": "gid://shopify/Metafield/42744357421313",
+          "namespace": "custom",
+          "key": "payment_mode_final",
+          "value": "card",
+          "type": "single_line_text_field"
+        }
+      ]
+    },
+    {
+      "id": "gid://shopify/Order/6920504803585",
+      "name": "#1019",
+      "createdAt": "2026-03-27T10:31:45Z",
+      "metafields": []
+    },
+    {
+      "id": "gid://shopify/Order/6920514404609",
+      "name": "#1020",
+      "createdAt": "2026-03-27T10:44:48Z",
+      "metafields": []
+    },
+    {
+      "id": "gid://shopify/Order/6925898252545",
+      "name": "#1021",
+      "createdAt": "2026-03-30T07:51:09Z",
+      "metafields": []
+    },
+    {
+      "id": "gid://shopify/Order/6928358146305",
+      "name": "#1022",
+      "createdAt": "2026-03-31T14:53:26Z",
+      "metafields": []
+    },
+    {
+      "id": "gid://shopify/Order/6928495378689",
+      "name": "#1023",
+      "createdAt": "2026-03-31T15:42:57Z",
+      "metafields": [
+        {
+          "id": "gid://shopify/Metafield/41600569606401",
+          "namespace": "timanti",
+          "key": "jewelcode",
+          "value": "{\"jewelcode\":\"00165\",\"gross_wt_grams\":2.24,\"net_wt_grams\":2.04,\"diamond_wt_carats\":1,\"diamond_pcs\":9,\"metal\":\"18kt W\",\"category\":\"RINGS\"}",
+          "type": "json"
+        }
+      ]
+    },
+    {
+      "id": "gid://shopify/Order/6930295914753",
+      "name": "#1024",
+      "createdAt": "2026-04-01T15:13:59Z",
+      "metafields": []
+    },
+    {
+      "id": "gid://shopify/Order/6930664358145",
+      "name": "#1025",
+      "createdAt": "2026-04-01T18:49:27Z",
+      "metafields": []
+    },
+    {
+      "id": "gid://shopify/Order/6930666848513",
+      "name": "#1026",
+      "createdAt": "2026-04-01T18:51:21Z",
+      "metafields": []
+    },
+    {
+      "id": "gid://shopify/Order/6931436404993",
+      "name": "#1027",
+      "createdAt": "2026-04-02T06:20:45Z",
+      "metafields": []
+    },
+    {
+      "id": "gid://shopify/Order/6931447218433",
+      "name": "#1028",
+      "createdAt": "2026-04-02T06:35:25Z",
+      "metafields": []
+    },
+    {
+      "id": "gid://shopify/Order/6931515146497",
+      "name": "#1029",
+      "createdAt": "2026-04-02T07:37:19Z",
+      "metafields": []
+    },
+    {
+      "id": "gid://shopify/Order/6938587791617",
+      "name": "#1030",
+      "createdAt": "2026-04-06T08:40:59Z",
+      "metafields": []
+    },
+    {
+      "id": "gid://shopify/Order/6945629962497",
+      "name": "#1031",
+      "createdAt": "2026-04-10T10:53:15Z",
+      "metafields": [
+        {
+          "id": "gid://shopify/Metafield/43322429112577",
+          "namespace": "custom",
+          "key": "state_code",
+          "value": "KA-TEST",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43322429178113",
+          "namespace": "custom",
+          "key": "document_type",
+          "value": "customer_order",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43322429210881",
+          "namespace": "custom",
+          "key": "serial_no",
+          "value": "1001",
+          "type": "number_integer"
+        },
+        {
+          "id": "gid://shopify/Metafield/43322429243649",
+          "namespace": "custom",
+          "key": "serial_code",
+          "value": "TMNT-KA-TEST-1001",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43322429276417",
+          "namespace": "custom",
+          "key": "serial_display",
+          "value": "TMNT-KA-TEST-1001",
+          "type": "single_line_text_field"
+        }
+      ]
+    },
+    {
+      "id": "gid://shopify/Order/6951270220033",
+      "name": "#1032",
+      "createdAt": "2026-04-13T15:59:47Z",
+      "metafields": []
+    },
+    {
+      "id": "gid://shopify/Order/6951283851521",
+      "name": "#1033",
+      "createdAt": "2026-04-13T16:08:18Z",
+      "metafields": []
+    },
+    {
+      "id": "gid://shopify/Order/6951316259073",
+      "name": "#1034",
+      "createdAt": "2026-04-13T16:29:30Z",
+      "metafields": [
+        {
+          "id": "gid://shopify/Metafield/42718650073345",
+          "namespace": "custom",
+          "key": "order_type",
+          "value": "mto",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42718650532097",
+          "namespace": "custom",
+          "key": "channel",
+          "value": "Offline",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42718651777281",
+          "namespace": "custom",
+          "key": "payment_status",
+          "value": "Partial",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42718652301569",
+          "namespace": "custom",
+          "key": "payment_mode_advance",
+          "value": "cash",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42718653546753",
+          "namespace": "custom",
+          "key": "amount_paid",
+          "value": "135000.0",
+          "type": "number_decimal"
+        },
+        {
+          "id": "gid://shopify/Metafield/42718658232577",
+          "namespace": "custom",
+          "key": "amount_pending",
+          "value": "141083.0",
+          "type": "number_decimal"
+        }
+      ]
+    },
+    {
+      "id": "gid://shopify/Order/6956903596289",
+      "name": "#1035",
+      "createdAt": "2026-04-16T15:15:45Z",
+      "metafields": []
+    },
+    {
+      "id": "gid://shopify/Order/6962339741953",
+      "name": "#1036",
+      "createdAt": "2026-04-19T14:01:36Z",
+      "metafields": []
+    },
+    {
+      "id": "gid://shopify/Order/6962375459073",
+      "name": "#1037",
+      "createdAt": "2026-04-19T14:25:10Z",
+      "metafields": [
+        {
+          "id": "gid://shopify/Metafield/42215933378817",
+          "namespace": "custom",
+          "key": "po_replenishment_variants",
+          "value": "[\"gid://shopify/ProductVariant/48120221958401\"]",
+          "type": "list.variant_reference"
+        }
+      ]
+    },
+    {
+      "id": "gid://shopify/Order/6962426872065",
+      "name": "#1038",
+      "createdAt": "2026-04-19T14:59:37Z",
+      "metafields": [
+        {
+          "id": "gid://shopify/Metafield/42680086364417",
+          "namespace": "custom",
+          "key": "channel",
+          "value": "Offline",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680086397185",
+          "namespace": "custom",
+          "key": "order_type",
+          "value": "in-stock",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680086429953",
+          "namespace": "custom",
+          "key": "payment_status",
+          "value": "Full",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680086724865",
+          "namespace": "custom",
+          "key": "payment_mode_final",
+          "value": "card",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680086757633",
+          "namespace": "custom",
+          "key": "amount_pending",
+          "value": "0.0",
+          "type": "number_decimal"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680087118081",
+          "namespace": "custom",
+          "key": "amount_paid",
+          "value": "82915.0",
+          "type": "number_decimal"
+        },
+        {
+          "id": "gid://shopify/Metafield/43254403662081",
+          "namespace": "custom",
+          "key": "is_finalized",
+          "value": "true",
+          "type": "boolean"
+        },
+        {
+          "id": "gid://shopify/Metafield/43255037198593",
+          "namespace": "custom",
+          "key": "document_type",
+          "value": "customer_order",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43255037231361",
+          "namespace": "custom",
+          "key": "serial_no",
+          "value": "1001",
+          "type": "number_integer"
+        },
+        {
+          "id": "gid://shopify/Metafield/43255037296897",
+          "namespace": "custom",
+          "key": "serial_code",
+          "value": "TMNT-KA-HSR-1001",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43255037329665",
+          "namespace": "custom",
+          "key": "serial_display",
+          "value": "TMNT-KA-HSR-1001",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43415711318273",
+          "namespace": "custom",
+          "key": "state_code",
+          "value": "KA-HSR",
+          "type": "single_line_text_field"
+        }
+      ]
+    },
+    {
+      "id": "gid://shopify/Order/6964725022977",
+      "name": "#1039",
+      "createdAt": "2026-04-20T20:47:08Z",
+      "metafields": [
+        {
+          "id": "gid://shopify/Metafield/42680089575681",
+          "namespace": "custom",
+          "key": "order_type",
+          "value": "in-stock",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680090034433",
+          "namespace": "custom",
+          "key": "channel",
+          "value": "Offline",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680090067201",
+          "namespace": "custom",
+          "key": "payment_status",
+          "value": "Full",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680091607297",
+          "namespace": "custom",
+          "key": "amount_paid",
+          "value": "65000.0",
+          "type": "number_decimal"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680091902209",
+          "namespace": "custom",
+          "key": "amount_pending",
+          "value": "0.0",
+          "type": "number_decimal"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680091934977",
+          "namespace": "custom",
+          "key": "payment_mode_final",
+          "value": "gokwik_link",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680092066049",
+          "namespace": "custom",
+          "key": "is_finalized",
+          "value": "true",
+          "type": "boolean"
+        },
+        {
+          "id": "gid://shopify/Metafield/42760131543297",
+          "namespace": "custom",
+          "key": "po_replenishment_variants",
+          "value": "[\"gid://shopify/ProductVariant/48183457022209\"]",
+          "type": "list.variant_reference"
+        },
+        {
+          "id": "gid://shopify/Metafield/43255037690113",
+          "namespace": "custom",
+          "key": "document_type",
+          "value": "customer_order",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43255037755649",
+          "namespace": "custom",
+          "key": "serial_no",
+          "value": "1002",
+          "type": "number_integer"
+        },
+        {
+          "id": "gid://shopify/Metafield/43255037788417",
+          "namespace": "custom",
+          "key": "serial_code",
+          "value": "TMNT-KA-HSR-1002",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43255037821185",
+          "namespace": "custom",
+          "key": "serial_display",
+          "value": "TMNT-KA-HSR-1002",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43415711678721",
+          "namespace": "custom",
+          "key": "state_code",
+          "value": "KA-HSR",
+          "type": "single_line_text_field"
+        }
+      ]
+    },
+    {
+      "id": "gid://shopify/Order/6964736327937",
+      "name": "#1040",
+      "createdAt": "2026-04-20T20:55:36Z",
+      "metafields": [
+        {
+          "id": "gid://shopify/Metafield/42680094490881",
+          "namespace": "custom",
+          "key": "order_type",
+          "value": "in-stock",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680095211777",
+          "namespace": "custom",
+          "key": "channel",
+          "value": "Offline",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680095277313",
+          "namespace": "custom",
+          "key": "payment_status",
+          "value": "Full",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680095441153",
+          "namespace": "custom",
+          "key": "amount_paid",
+          "value": "82109.0",
+          "type": "number_decimal"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680095768833",
+          "namespace": "custom",
+          "key": "amount_pending",
+          "value": "0.0",
+          "type": "number_decimal"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680095998209",
+          "namespace": "custom",
+          "key": "payment_mode_final",
+          "value": "card",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680096424193",
+          "namespace": "custom",
+          "key": "is_finalized",
+          "value": "true",
+          "type": "boolean"
+        },
+        {
+          "id": "gid://shopify/Metafield/42760127578369",
+          "namespace": "custom",
+          "key": "po_replenishment_variants",
+          "value": "[\"gid://shopify/ProductVariant/48578171601153\"]",
+          "type": "list.variant_reference"
+        },
+        {
+          "id": "gid://shopify/Metafield/43255037919489",
+          "namespace": "custom",
+          "key": "document_type",
+          "value": "customer_order",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43255037952257",
+          "namespace": "custom",
+          "key": "serial_no",
+          "value": "1003",
+          "type": "number_integer"
+        },
+        {
+          "id": "gid://shopify/Metafield/43255038083329",
+          "namespace": "custom",
+          "key": "serial_code",
+          "value": "TMNT-KA-HSR-1003",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43255038148865",
+          "namespace": "custom",
+          "key": "serial_display",
+          "value": "TMNT-KA-HSR-1003",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43415711777025",
+          "namespace": "custom",
+          "key": "state_code",
+          "value": "KA-HSR",
+          "type": "single_line_text_field"
+        }
+      ]
+    },
+    {
+      "id": "gid://shopify/Order/6964752449793",
+      "name": "#1041",
+      "createdAt": "2026-04-20T21:07:10Z",
+      "metafields": [
+        {
+          "id": "gid://shopify/Metafield/42680098193665",
+          "namespace": "custom",
+          "key": "order_type",
+          "value": "mto",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680098226433",
+          "namespace": "custom",
+          "key": "channel",
+          "value": "Offline",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680099340545",
+          "namespace": "custom",
+          "key": "payment_status",
+          "value": "Full",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680111726849",
+          "namespace": "custom",
+          "key": "amount_paid",
+          "value": "117884.0",
+          "type": "number_decimal"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680111759617",
+          "namespace": "custom",
+          "key": "amount_pending",
+          "value": "0.0",
+          "type": "number_decimal"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680111792385",
+          "namespace": "custom",
+          "key": "payment_mode_final",
+          "value": "gokwik_link",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680111825153",
+          "namespace": "custom",
+          "key": "is_finalized",
+          "value": "true",
+          "type": "boolean"
+        },
+        {
+          "id": "gid://shopify/Metafield/43255039262977",
+          "namespace": "custom",
+          "key": "document_type",
+          "value": "customer_order",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43255039328513",
+          "namespace": "custom",
+          "key": "serial_no",
+          "value": "1004",
+          "type": "number_integer"
+        },
+        {
+          "id": "gid://shopify/Metafield/43255039361281",
+          "namespace": "custom",
+          "key": "serial_code",
+          "value": "TMNT-KA-HSR-1004",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43255039426817",
+          "namespace": "custom",
+          "key": "serial_display",
+          "value": "TMNT-KA-HSR-1004",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43415711973633",
+          "namespace": "custom",
+          "key": "state_code",
+          "value": "KA-HSR",
+          "type": "single_line_text_field"
+        }
+      ]
+    },
+    {
+      "id": "gid://shopify/Order/6965896806657",
+      "name": "#1042",
+      "createdAt": "2026-04-21T14:10:05Z",
+      "metafields": [
+        {
+          "id": "gid://shopify/Metafield/42216462450945",
+          "namespace": "custom",
+          "key": "po_mto_variants",
+          "value": "[]",
+          "type": "list.variant_reference"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680112513281",
+          "namespace": "custom",
+          "key": "order_type",
+          "value": "in-stock",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680112546049",
+          "namespace": "custom",
+          "key": "channel",
+          "value": "Offline",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680112775425",
+          "namespace": "custom",
+          "key": "payment_status",
+          "value": "Full",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680113135873",
+          "namespace": "custom",
+          "key": "amount_paid",
+          "value": "30000.0",
+          "type": "number_decimal"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680113266945",
+          "namespace": "custom",
+          "key": "amount_pending",
+          "value": "0.0",
+          "type": "number_decimal"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680113365249",
+          "namespace": "custom",
+          "key": "payment_mode_final",
+          "value": "card",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42760120631553",
+          "namespace": "custom",
+          "key": "po_replenishment_variants",
+          "value": "[\"gid://shopify/ProductVariant/48056766300417\"]",
+          "type": "list.variant_reference"
+        },
+        {
+          "id": "gid://shopify/Metafield/43255039852801",
+          "namespace": "custom",
+          "key": "document_type",
+          "value": "customer_order",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43255039918337",
+          "namespace": "custom",
+          "key": "serial_no",
+          "value": "1005",
+          "type": "number_integer"
+        },
+        {
+          "id": "gid://shopify/Metafield/43255040016641",
+          "namespace": "custom",
+          "key": "serial_code",
+          "value": "TMNT-KA-HSR-1005",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43255040213249",
+          "namespace": "custom",
+          "key": "serial_display",
+          "value": "TMNT-KA-HSR-1005",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43415712235777",
+          "namespace": "custom",
+          "key": "state_code",
+          "value": "KA-HSR",
+          "type": "single_line_text_field"
+        }
+      ]
+    },
+    {
+      "id": "gid://shopify/Order/6965902246145",
+      "name": "#1043",
+      "createdAt": "2026-04-21T14:14:12Z",
+      "metafields": [
+        {
+          "id": "gid://shopify/Metafield/42680113529089",
+          "namespace": "custom",
+          "key": "order_type",
+          "value": "in-stock",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680113561857",
+          "namespace": "custom",
+          "key": "channel",
+          "value": "Offline",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680113594625",
+          "namespace": "custom",
+          "key": "payment_status",
+          "value": "Full",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680114282753",
+          "namespace": "custom",
+          "key": "amount_paid",
+          "value": "16995.0",
+          "type": "number_decimal"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680114315521",
+          "namespace": "custom",
+          "key": "amount_pending",
+          "value": "0.0",
+          "type": "number_decimal"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680114381057",
+          "namespace": "custom",
+          "key": "payment_mode_final",
+          "value": "card",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680114446593",
+          "namespace": "custom",
+          "key": "is_finalized",
+          "value": "true",
+          "type": "boolean"
+        },
+        {
+          "id": "gid://shopify/Metafield/43255040901377",
+          "namespace": "custom",
+          "key": "document_type",
+          "value": "customer_order",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43255040966913",
+          "namespace": "custom",
+          "key": "serial_no",
+          "value": "1006",
+          "type": "number_integer"
+        },
+        {
+          "id": "gid://shopify/Metafield/43255041032449",
+          "namespace": "custom",
+          "key": "serial_code",
+          "value": "TMNT-KA-HSR-1006",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43255041097985",
+          "namespace": "custom",
+          "key": "serial_display",
+          "value": "TMNT-KA-HSR-1006",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43415712628993",
+          "namespace": "custom",
+          "key": "state_code",
+          "value": "KA-HSR",
+          "type": "single_line_text_field"
+        }
+      ]
+    },
+    {
+      "id": "gid://shopify/Order/6965908668673",
+      "name": "#1044",
+      "createdAt": "2026-04-21T14:19:33Z",
+      "metafields": [
+        {
+          "id": "gid://shopify/Metafield/42680114839809",
+          "namespace": "custom",
+          "key": "order_type",
+          "value": "in-stock",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680114872577",
+          "namespace": "custom",
+          "key": "channel",
+          "value": "Offline",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680115134721",
+          "namespace": "custom",
+          "key": "payment_status",
+          "value": "Full",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680115167489",
+          "namespace": "custom",
+          "key": "amount_paid",
+          "value": "25000.0",
+          "type": "number_decimal"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680115200257",
+          "namespace": "custom",
+          "key": "amount_pending",
+          "value": "0.0",
+          "type": "number_decimal"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680115495169",
+          "namespace": "custom",
+          "key": "payment_mode_final",
+          "value": "upi",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680115527937",
+          "namespace": "custom",
+          "key": "is_finalized",
+          "value": "true",
+          "type": "boolean"
+        },
+        {
+          "id": "gid://shopify/Metafield/42760078754049",
+          "namespace": "custom",
+          "key": "po_replenishment_variants",
+          "value": "[\"gid://shopify/ProductVariant/48578102657281\"]",
+          "type": "list.variant_reference"
+        },
+        {
+          "id": "gid://shopify/Metafield/43255041229057",
+          "namespace": "custom",
+          "key": "document_type",
+          "value": "customer_order",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43255041294593",
+          "namespace": "custom",
+          "key": "serial_no",
+          "value": "1007",
+          "type": "number_integer"
+        },
+        {
+          "id": "gid://shopify/Metafield/43255041491201",
+          "namespace": "custom",
+          "key": "serial_code",
+          "value": "TMNT-KA-HSR-1007",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43255041523969",
+          "namespace": "custom",
+          "key": "serial_display",
+          "value": "TMNT-KA-HSR-1007",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43415712989441",
+          "namespace": "custom",
+          "key": "state_code",
+          "value": "KA-HSR",
+          "type": "single_line_text_field"
+        }
+      ]
+    },
+    {
+      "id": "gid://shopify/Order/6965943435521",
+      "name": "#1045",
+      "createdAt": "2026-04-21T14:37:14Z",
+      "metafields": [
+        {
+          "id": "gid://shopify/Metafield/42680117657857",
+          "namespace": "custom",
+          "key": "order_type",
+          "value": "in-stock",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680117723393",
+          "namespace": "custom",
+          "key": "channel",
+          "value": "Offline",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680117756161",
+          "namespace": "custom",
+          "key": "payment_status",
+          "value": "Full",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680118870273",
+          "namespace": "custom",
+          "key": "amount_paid",
+          "value": "40500.0",
+          "type": "number_decimal"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680118935809",
+          "namespace": "custom",
+          "key": "amount_pending",
+          "value": "0.0",
+          "type": "number_decimal"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680119394561",
+          "namespace": "custom",
+          "key": "payment_mode_final",
+          "value": "card",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680119886081",
+          "namespace": "custom",
+          "key": "is_finalized",
+          "value": "true",
+          "type": "boolean"
+        },
+        {
+          "id": "gid://shopify/Metafield/43255041622273",
+          "namespace": "custom",
+          "key": "document_type",
+          "value": "customer_order",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43255041687809",
+          "namespace": "custom",
+          "key": "serial_no",
+          "value": "1008",
+          "type": "number_integer"
+        },
+        {
+          "id": "gid://shopify/Metafield/43255041720577",
+          "namespace": "custom",
+          "key": "serial_code",
+          "value": "TMNT-KA-HSR-1008",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43255041753345",
+          "namespace": "custom",
+          "key": "serial_display",
+          "value": "TMNT-KA-HSR-1008",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43415713710337",
+          "namespace": "custom",
+          "key": "state_code",
+          "value": "KA-HSR",
+          "type": "single_line_text_field"
+        }
+      ]
+    },
+    {
+      "id": "gid://shopify/Order/6965956051201",
+      "name": "#1046",
+      "createdAt": "2026-04-21T14:40:54Z",
+      "metafields": [
+        {
+          "id": "gid://shopify/Metafield/42680120279297",
+          "namespace": "custom",
+          "key": "order_type",
+          "value": "in-stock",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680120377601",
+          "namespace": "custom",
+          "key": "channel",
+          "value": "Offline",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680120705281",
+          "namespace": "custom",
+          "key": "payment_status",
+          "value": "Full",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680120869121",
+          "namespace": "custom",
+          "key": "amount_paid",
+          "value": "16500.0",
+          "type": "number_decimal"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680120901889",
+          "namespace": "custom",
+          "key": "amount_pending",
+          "value": "0.0",
+          "type": "number_decimal"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680121000193",
+          "namespace": "custom",
+          "key": "payment_mode_final",
+          "value": "card",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680121164033",
+          "namespace": "custom",
+          "key": "is_finalized",
+          "value": "true",
+          "type": "boolean"
+        },
+        {
+          "id": "gid://shopify/Metafield/43255041884417",
+          "namespace": "custom",
+          "key": "document_type",
+          "value": "customer_order",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43255041949953",
+          "namespace": "custom",
+          "key": "serial_no",
+          "value": "1009",
+          "type": "number_integer"
+        },
+        {
+          "id": "gid://shopify/Metafield/43255042048257",
+          "namespace": "custom",
+          "key": "serial_code",
+          "value": "TMNT-KA-HSR-1009",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43255042081025",
+          "namespace": "custom",
+          "key": "serial_display",
+          "value": "TMNT-KA-HSR-1009",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43415714758913",
+          "namespace": "custom",
+          "key": "state_code",
+          "value": "KA-HSR",
+          "type": "single_line_text_field"
+        }
+      ]
+    },
+    {
+      "id": "gid://shopify/Order/6965975154945",
+      "name": "#1047",
+      "createdAt": "2026-04-21T14:50:31Z",
+      "metafields": [
+        {
+          "id": "gid://shopify/Metafield/42680122343681",
+          "namespace": "custom",
+          "key": "order_type",
+          "value": "in-stock",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680122376449",
+          "namespace": "custom",
+          "key": "channel",
+          "value": "Offline",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680122540289",
+          "namespace": "custom",
+          "key": "payment_status",
+          "value": "Full",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680122999041",
+          "namespace": "custom",
+          "key": "amount_paid",
+          "value": "18000.0",
+          "type": "number_decimal"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680123031809",
+          "namespace": "custom",
+          "key": "amount_pending",
+          "value": "0.0",
+          "type": "number_decimal"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680123097345",
+          "namespace": "custom",
+          "key": "payment_mode_final",
+          "value": "card",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680123261185",
+          "namespace": "custom",
+          "key": "is_finalized",
+          "value": "true",
+          "type": "boolean"
+        },
+        {
+          "id": "gid://shopify/Metafield/42760112636161",
+          "namespace": "custom",
+          "key": "po_replenishment_variants",
+          "value": "[\"gid://shopify/ProductVariant/48578221801729\"]",
+          "type": "list.variant_reference"
+        },
+        {
+          "id": "gid://shopify/Metafield/43255042441473",
+          "namespace": "custom",
+          "key": "document_type",
+          "value": "customer_order",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43255042507009",
+          "namespace": "custom",
+          "key": "serial_no",
+          "value": "1010",
+          "type": "number_integer"
+        },
+        {
+          "id": "gid://shopify/Metafield/43255042638081",
+          "namespace": "custom",
+          "key": "serial_code",
+          "value": "TMNT-KA-HSR-1010",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43255042670849",
+          "namespace": "custom",
+          "key": "serial_display",
+          "value": "TMNT-KA-HSR-1010",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43415715217665",
+          "namespace": "custom",
+          "key": "state_code",
+          "value": "KA-HSR",
+          "type": "single_line_text_field"
+        }
+      ]
+    },
+    {
+      "id": "gid://shopify/Order/6965987475713",
+      "name": "#1048",
+      "createdAt": "2026-04-21T14:59:55Z",
+      "metafields": [
+        {
+          "id": "gid://shopify/Metafield/42680123457793",
+          "namespace": "custom",
+          "key": "order_type",
+          "value": "in-stock",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680123490561",
+          "namespace": "custom",
+          "key": "channel",
+          "value": "Offline",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680124047617",
+          "namespace": "custom",
+          "key": "payment_status",
+          "value": "Full",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680124178689",
+          "namespace": "custom",
+          "key": "amount_paid",
+          "value": "12500.0",
+          "type": "number_decimal"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680124211457",
+          "namespace": "custom",
+          "key": "amount_pending",
+          "value": "0.0",
+          "type": "number_decimal"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680124670209",
+          "namespace": "custom",
+          "key": "payment_mode_final",
+          "value": "upi",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680125194497",
+          "namespace": "custom",
+          "key": "is_finalized",
+          "value": "true",
+          "type": "boolean"
+        },
+        {
+          "id": "gid://shopify/Metafield/43255043031297",
+          "namespace": "custom",
+          "key": "document_type",
+          "value": "customer_order",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43255043129601",
+          "namespace": "custom",
+          "key": "serial_no",
+          "value": "1011",
+          "type": "number_integer"
+        },
+        {
+          "id": "gid://shopify/Metafield/43255043162369",
+          "namespace": "custom",
+          "key": "serial_code",
+          "value": "TMNT-KA-HSR-1011",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43255043195137",
+          "namespace": "custom",
+          "key": "serial_display",
+          "value": "TMNT-KA-HSR-1011",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43415715971329",
+          "namespace": "custom",
+          "key": "state_code",
+          "value": "KA-HSR",
+          "type": "single_line_text_field"
+        }
+      ]
+    },
+    {
+      "id": "gid://shopify/Order/6971243954433",
+      "name": "#1049",
+      "createdAt": "2026-04-24T07:00:17Z",
+      "metafields": [
+        {
+          "id": "gid://shopify/Metafield/42680131879169",
+          "namespace": "custom",
+          "key": "order_type",
+          "value": "in-stock",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680131944705",
+          "namespace": "custom",
+          "key": "channel",
+          "value": "Offline",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680132010241",
+          "namespace": "custom",
+          "key": "payment_status",
+          "value": "Full",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680132075777",
+          "namespace": "custom",
+          "key": "payment_mode_advance",
+          "value": "card",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680132108545",
+          "namespace": "custom",
+          "key": "amount_paid",
+          "value": "78589.0",
+          "type": "number_decimal"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680132305153",
+          "namespace": "custom",
+          "key": "amount_pending",
+          "value": "0.0",
+          "type": "number_decimal"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680132370689",
+          "namespace": "custom",
+          "key": "payment_mode_final",
+          "value": "gokwik_link",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680132403457",
+          "namespace": "custom",
+          "key": "is_finalized",
+          "value": "true",
+          "type": "boolean"
+        },
+        {
+          "id": "gid://shopify/Metafield/43255043391745",
+          "namespace": "custom",
+          "key": "document_type",
+          "value": "customer_order",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43255043457281",
+          "namespace": "custom",
+          "key": "serial_no",
+          "value": "1012",
+          "type": "number_integer"
+        },
+        {
+          "id": "gid://shopify/Metafield/43255043490049",
+          "namespace": "custom",
+          "key": "serial_code",
+          "value": "TMNT-KA-HSR-1012",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43255043621121",
+          "namespace": "custom",
+          "key": "serial_display",
+          "value": "TMNT-KA-HSR-1012",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43415717282049",
+          "namespace": "custom",
+          "key": "state_code",
+          "value": "KA-HSR",
+          "type": "single_line_text_field"
+        }
+      ]
+    },
+    {
+      "id": "gid://shopify/Order/6974617878785",
+      "name": "#1050",
+      "createdAt": "2026-04-25T15:06:42Z",
+      "metafields": [
+        {
+          "id": "gid://shopify/Metafield/42255501558017",
+          "namespace": "custom",
+          "key": "mto_comments",
+          "value": "0",
+          "type": "multi_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680143741185",
+          "namespace": "custom",
+          "key": "order_type",
+          "value": "mto",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680143806721",
+          "namespace": "custom",
+          "key": "channel",
+          "value": "Offline",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680143872257",
+          "namespace": "custom",
+          "key": "payment_status",
+          "value": "Partial",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680144003329",
+          "namespace": "custom",
+          "key": "payment_mode_advance",
+          "value": "upi",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680144920833",
+          "namespace": "custom",
+          "key": "amount_paid",
+          "value": "58866.0",
+          "type": "number_decimal"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680144986369",
+          "namespace": "custom",
+          "key": "amount_pending",
+          "value": "0.0",
+          "type": "number_decimal"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680145150209",
+          "namespace": "custom",
+          "key": "is_finalized",
+          "value": "false",
+          "type": "boolean"
+        },
+        {
+          "id": "gid://shopify/Metafield/43255044505857",
+          "namespace": "custom",
+          "key": "document_type",
+          "value": "customer_order",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43255044538625",
+          "namespace": "custom",
+          "key": "serial_no",
+          "value": "1013",
+          "type": "number_integer"
+        },
+        {
+          "id": "gid://shopify/Metafield/43255044604161",
+          "namespace": "custom",
+          "key": "serial_code",
+          "value": "TMNT-KA-HSR-1013",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43255044636929",
+          "namespace": "custom",
+          "key": "serial_display",
+          "value": "TMNT-KA-HSR-1013",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43415718134017",
+          "namespace": "custom",
+          "key": "state_code",
+          "value": "KA-HSR",
+          "type": "single_line_text_field"
+        }
+      ]
+    },
+    {
+      "id": "gid://shopify/Order/7003480064257",
+      "name": "#1051",
+      "createdAt": "2026-05-11T06:26:13Z",
+      "metafields": [
+        {
+          "id": "gid://shopify/Metafield/43255045521665",
+          "namespace": "custom",
+          "key": "document_type",
+          "value": "customer_order",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43255045587201",
+          "namespace": "custom",
+          "key": "serial_no",
+          "value": "1014",
+          "type": "number_integer"
+        },
+        {
+          "id": "gid://shopify/Metafield/43255045619969",
+          "namespace": "custom",
+          "key": "serial_code",
+          "value": "TMNT-KA-HSR-1014",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43255045685505",
+          "namespace": "custom",
+          "key": "serial_display",
+          "value": "TMNT-KA-HSR-1014",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43415718560001",
+          "namespace": "custom",
+          "key": "state_code",
+          "value": "KA-HSR",
+          "type": "single_line_text_field"
+        }
+      ]
+    },
+    {
+      "id": "gid://shopify/Order/7003583840513",
+      "name": "#1052",
+      "createdAt": "2026-05-11T08:16:38Z",
+      "metafields": [
+        {
+          "id": "gid://shopify/Metafield/42680579358977",
+          "namespace": "custom",
+          "key": "old_gold_weight",
+          "value": "31.84",
+          "type": "number_decimal"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680579391745",
+          "namespace": "custom",
+          "key": "old_gold_value",
+          "value": "413920.0",
+          "type": "number_decimal"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680579424513",
+          "namespace": "custom",
+          "key": "channel",
+          "value": "Offline",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680579490049",
+          "namespace": "custom",
+          "key": "order_type",
+          "value": "in-stock",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680579522817",
+          "namespace": "custom",
+          "key": "payment_status",
+          "value": "Full",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680579555585",
+          "namespace": "custom",
+          "key": "amount_paid",
+          "value": "132630.0",
+          "type": "number_decimal"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680579588353",
+          "namespace": "custom",
+          "key": "amount_pending",
+          "value": "0.0",
+          "type": "number_decimal"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680579948801",
+          "namespace": "custom",
+          "key": "payment_mode_final",
+          "value": "card",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680580014337",
+          "namespace": "custom",
+          "key": "jewelcode_gemstone_weight",
+          "value": "0/0",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680580047105",
+          "namespace": "custom",
+          "key": "jewelcode_net_weight",
+          "value": "17.736/13.25",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680580309249",
+          "namespace": "custom",
+          "key": "jewelcode_diamond_carats",
+          "value": "2.82/1.78",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680580374785",
+          "namespace": "custom",
+          "key": "jewelcode_gross_weight",
+          "value": "18.30/13.62",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680580440321",
+          "namespace": "custom",
+          "key": "invoice_date",
+          "value": "04-05-2026",
+          "type": "single_line_text_field"
+        }
+      ]
+    },
+    {
+      "id": "gid://shopify/Order/7003584004353",
+      "name": "#1053",
+      "createdAt": "2026-05-11T08:16:44Z",
+      "metafields": [
+        {
+          "id": "gid://shopify/Metafield/42680580505857",
+          "namespace": "custom",
+          "key": "channel",
+          "value": "Offline",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680580538625",
+          "namespace": "custom",
+          "key": "order_type",
+          "value": "mto",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680580571393",
+          "namespace": "custom",
+          "key": "payment_status",
+          "value": "Partial",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680580636929",
+          "namespace": "custom",
+          "key": "amount_paid",
+          "value": "185706.0",
+          "type": "number_decimal"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680580669697",
+          "namespace": "custom",
+          "key": "amount_pending",
+          "value": "0.0",
+          "type": "number_decimal"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680580768001",
+          "namespace": "custom",
+          "key": "payment_mode_advance",
+          "value": "gokwik_link",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680580800769",
+          "namespace": "custom",
+          "key": "is_finalized",
+          "value": "true",
+          "type": "boolean"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680580866305",
+          "namespace": "custom",
+          "key": "payment_mode_final",
+          "value": "card",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680580899073",
+          "namespace": "custom",
+          "key": "jewelcode_gross_weight",
+          "value": "2.54/3.0",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680580931841",
+          "namespace": "custom",
+          "key": "jewelcode_gemstone_weight",
+          "value": "0/0",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680580964609",
+          "namespace": "custom",
+          "key": "jewelcode_net_weight",
+          "value": "2.18/2.72",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680581030145",
+          "namespace": "custom",
+          "key": "jewelcode_diamond_carats",
+          "value": "1.79/1.38",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680581062913",
+          "namespace": "custom",
+          "key": "invoice_date",
+          "value": "10-05-2026",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43255046734081",
+          "namespace": "custom",
+          "key": "document_type",
+          "value": "customer_order",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43255046799617",
+          "namespace": "custom",
+          "key": "serial_no",
+          "value": "1015",
+          "type": "number_integer"
+        },
+        {
+          "id": "gid://shopify/Metafield/43255046865153",
+          "namespace": "custom",
+          "key": "serial_code",
+          "value": "TMNT-KA-HSR-1015",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43255046930689",
+          "namespace": "custom",
+          "key": "serial_display",
+          "value": "TMNT-KA-HSR-1015",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43415718723841",
+          "namespace": "custom",
+          "key": "state_code",
+          "value": "KA-HSR",
+          "type": "single_line_text_field"
+        }
+      ]
+    },
+    {
+      "id": "gid://shopify/Order/7034759250177",
+      "name": "#1054",
+      "createdAt": "2026-05-24T12:00:10Z",
+      "metafields": [
+        {
+          "id": "gid://shopify/Metafield/42857796239617",
+          "namespace": "custom",
+          "key": "payment_status",
+          "value": "Full",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42857796305153",
+          "namespace": "custom",
+          "key": "amount_paid",
+          "value": "20914.0",
+          "type": "number_decimal"
+        },
+        {
+          "id": "gid://shopify/Metafield/42857796337921",
+          "namespace": "custom",
+          "key": "amount_pending",
+          "value": "0.0",
+          "type": "number_decimal"
+        },
+        {
+          "id": "gid://shopify/Metafield/42857796370689",
+          "namespace": "custom",
+          "key": "payment_mode_advance",
+          "value": "gokwik_link",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42857796403457",
+          "namespace": "custom",
+          "key": "channel",
+          "value": "Offline",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42857796468993",
+          "namespace": "custom",
+          "key": "order_type",
+          "value": "mto",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42857796698369",
+          "namespace": "custom",
+          "key": "payment_mode_final",
+          "value": "gokwik_link",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42857796731137",
+          "namespace": "custom",
+          "key": "jewelcode_gross_weight",
+          "value": "1.550",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42857797026049",
+          "namespace": "custom",
+          "key": "jewelcode_net_weight",
+          "value": "1.550",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42857797386497",
+          "namespace": "custom",
+          "key": "invoice_date",
+          "value": "24-05-2026",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42857797452033",
+          "namespace": "custom",
+          "key": "gold_rate_date",
+          "value": "2026-05-01",
+          "type": "date"
+        },
+        {
+          "id": "gid://shopify/Metafield/42857797484801",
+          "namespace": "custom",
+          "key": "gold_rate",
+          "value": "11600.0",
+          "type": "number_decimal"
+        },
+        {
+          "id": "gid://shopify/Metafield/42857797583105",
+          "namespace": "custom",
+          "key": "jewelcode_diamond_carats",
+          "value": "0",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42857797615873",
+          "namespace": "custom",
+          "key": "jewelcode_gemstone_weight",
+          "value": "0",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43255047520513",
+          "namespace": "custom",
+          "key": "document_type",
+          "value": "customer_order",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43255047553281",
+          "namespace": "custom",
+          "key": "serial_no",
+          "value": "1016",
+          "type": "number_integer"
+        },
+        {
+          "id": "gid://shopify/Metafield/43255047618817",
+          "namespace": "custom",
+          "key": "serial_code",
+          "value": "TMNT-KA-HSR-1016",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43255047651585",
+          "namespace": "custom",
+          "key": "serial_display",
+          "value": "TMNT-KA-HSR-1016",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43415719280897",
+          "namespace": "custom",
+          "key": "state_code",
+          "value": "KA-HSR",
+          "type": "single_line_text_field"
+        }
+      ]
+    },
+    {
+      "id": "gid://shopify/Order/7043586490625",
+      "name": "#1055",
+      "createdAt": "2026-05-28T14:52:54Z",
+      "metafields": [
+        {
+          "id": "gid://shopify/Metafield/42965653684481",
+          "namespace": "custom",
+          "key": "gold_rate_date",
+          "value": "2026-05-21",
+          "type": "date"
+        },
+        {
+          "id": "gid://shopify/Metafield/42965653979393",
+          "namespace": "custom",
+          "key": "gold_rate",
+          "value": "14985.93",
+          "type": "number_decimal"
+        },
+        {
+          "id": "gid://shopify/Metafield/42965654012161",
+          "namespace": "custom",
+          "key": "channel",
+          "value": "Offline",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42965654044929",
+          "namespace": "custom",
+          "key": "order_type",
+          "value": "in-stock",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42965654077697",
+          "namespace": "custom",
+          "key": "payment_status",
+          "value": "Full",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42965654110465",
+          "namespace": "custom",
+          "key": "amount_paid",
+          "value": "165295.0",
+          "type": "number_decimal"
+        },
+        {
+          "id": "gid://shopify/Metafield/42965654307073",
+          "namespace": "custom",
+          "key": "amount_pending",
+          "value": "0.0",
+          "type": "number_decimal"
+        },
+        {
+          "id": "gid://shopify/Metafield/42965654339841",
+          "namespace": "custom",
+          "key": "payment_mode_final",
+          "value": "bank transfer",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43255047782657",
+          "namespace": "custom",
+          "key": "document_type",
+          "value": "customer_order",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43255047815425",
+          "namespace": "custom",
+          "key": "serial_no",
+          "value": "1017",
+          "type": "number_integer"
+        },
+        {
+          "id": "gid://shopify/Metafield/43255047880961",
+          "namespace": "custom",
+          "key": "serial_code",
+          "value": "TMNT-KA-HSR-1017",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43255047913729",
+          "namespace": "custom",
+          "key": "serial_display",
+          "value": "TMNT-KA-HSR-1017",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43415720001793",
+          "namespace": "custom",
+          "key": "state_code",
+          "value": "KA-HSR",
+          "type": "single_line_text_field"
+        }
+      ]
+    },
+    {
+      "id": "gid://shopify/Order/7050335879425",
+      "name": "#1056",
+      "createdAt": "2026-06-01T10:16:04Z",
+      "metafields": [
+        {
+          "id": "gid://shopify/Metafield/43021530104065",
+          "namespace": "custom",
+          "key": "channel",
+          "value": "Offline",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43021530235137",
+          "namespace": "custom",
+          "key": "order_type",
+          "value": "in-stock",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43021530431745",
+          "namespace": "custom",
+          "key": "payment_status",
+          "value": "Full",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43021530857729",
+          "namespace": "custom",
+          "key": "amount_paid",
+          "value": "85000.0",
+          "type": "number_decimal"
+        },
+        {
+          "id": "gid://shopify/Metafield/43021530956033",
+          "namespace": "custom",
+          "key": "payment_mode_final",
+          "value": "cash",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43255048634625",
+          "namespace": "custom",
+          "key": "document_type",
+          "value": "customer_order",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43255048700161",
+          "namespace": "custom",
+          "key": "serial_no",
+          "value": "1018",
+          "type": "number_integer"
+        },
+        {
+          "id": "gid://shopify/Metafield/43255048732929",
+          "namespace": "custom",
+          "key": "serial_code",
+          "value": "TMNT-KA-HSR-1018",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43255048929537",
+          "namespace": "custom",
+          "key": "serial_display",
+          "value": "TMNT-KA-HSR-1018",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43415720820993",
+          "namespace": "custom",
+          "key": "state_code",
+          "value": "KA-HSR",
+          "type": "single_line_text_field"
+        }
+      ]
+    },
+    {
+      "id": "gid://shopify/Order/7114954309889",
+      "name": "#1057",
+      "createdAt": "2026-06-17T13:07:27Z",
+      "metafields": [
+        {
+          "id": "gid://shopify/Metafield/43433721266433",
+          "namespace": "custom",
+          "key": "channel",
+          "value": "Offline",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43433721299201",
+          "namespace": "custom",
+          "key": "order_type",
+          "value": "in-stock",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43433721364737",
+          "namespace": "custom",
+          "key": "payment_status",
+          "value": "Full",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43433721397505",
+          "namespace": "custom",
+          "key": "old_gold_weight",
+          "value": "31.84",
+          "type": "number_decimal"
+        },
+        {
+          "id": "gid://shopify/Metafield/43433721430273",
+          "namespace": "custom",
+          "key": "old_gold_value",
+          "value": "413920.0",
+          "type": "number_decimal"
+        },
+        {
+          "id": "gid://shopify/Metafield/43433721495809",
+          "namespace": "custom",
+          "key": "gold_rate",
+          "value": "11545,11545,8979",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43433721528577",
+          "namespace": "custom",
+          "key": "amount_paid",
+          "value": "116005.0",
+          "type": "number_decimal"
+        },
+        {
+          "id": "gid://shopify/Metafield/43433721594113",
+          "namespace": "custom",
+          "key": "amount_pending",
+          "value": "0.0",
+          "type": "number_decimal"
+        }
+      ]
+    },
+    {
+      "id": "gid://shopify/Order/7115041407233",
+      "name": "#1058",
+      "createdAt": "2026-06-17T13:15:25Z",
+      "metafields": [
+        {
+          "id": "gid://shopify/Metafield/43433765667073",
+          "namespace": "custom",
+          "key": "invoice_date",
+          "value": "16-06-2026",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43433765699841",
+          "namespace": "custom",
+          "key": "gold_rate",
+          "value": "11600.30",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43433765732609",
+          "namespace": "custom",
+          "key": "amount_paid",
+          "value": "97868.0",
+          "type": "number_decimal"
+        },
+        {
+          "id": "gid://shopify/Metafield/43433765765377",
+          "namespace": "custom",
+          "key": "amount_pending",
+          "value": "0.0",
+          "type": "number_decimal"
+        },
+        {
+          "id": "gid://shopify/Metafield/43433765798145",
+          "namespace": "custom",
+          "key": "payment_mode_final",
+          "value": "gokwik_link",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43433765863681",
+          "namespace": "custom",
+          "key": "channel",
+          "value": "Offline",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43433765896449",
+          "namespace": "custom",
+          "key": "order_type",
+          "value": "in-stock",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43433765961985",
+          "namespace": "custom",
+          "key": "payment_status",
+          "value": "Full",
+          "type": "single_line_text_field"
+        }
+      ]
+    },
+    {
+      "id": "gid://shopify/Order/7115926634753",
+      "name": "#1059",
+      "createdAt": "2026-06-17T14:43:08Z",
+      "metafields": [
+        {
+          "id": "gid://shopify/Metafield/43434852745473",
+          "namespace": "custom",
+          "key": "channel",
+          "value": "Offline",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43434853662977",
+          "namespace": "custom",
+          "key": "order_type",
+          "value": "mto",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43434853695745",
+          "namespace": "custom",
+          "key": "payment_status",
+          "value": "Partial",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43434853728513",
+          "namespace": "custom",
+          "key": "amount_paid",
+          "value": "72000.0",
+          "type": "number_decimal"
+        },
+        {
+          "id": "gid://shopify/Metafield/43434853957889",
+          "namespace": "custom",
+          "key": "amount_pending",
+          "value": "32548.0",
+          "type": "number_decimal"
+        },
+        {
+          "id": "gid://shopify/Metafield/43434853990657",
+          "namespace": "custom",
+          "key": "payment_mode_advance",
+          "value": "card",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43434854842625",
+          "namespace": "custom",
+          "key": "gold_rate",
+          "value": "11800",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43434855661825",
+          "namespace": "custom",
+          "key": "invoice_date",
+          "value": "17-06-2026",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43434855727361",
+          "namespace": "custom",
+          "key": "payment_mode_final",
+          "value": "card",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43434855760129",
+          "namespace": "custom",
+          "key": "amount_to_be_collected",
+          "value": "104548",
+          "type": "number_integer"
+        }
+      ]
+    }
+  ],
+  "draft_orders": [
+    {
+      "id": "gid://shopify/DraftOrder/1333262090497",
+      "name": "#D1",
+      "createdAt": "2026-02-24T08:45:48Z",
+      "metafields": [
+        {
+          "id": "gid://shopify/Metafield/43418931790081",
+          "namespace": "custom",
+          "key": "exchange_note_value",
+          "value": "13736.96",
+          "type": "number_decimal"
+        }
+      ]
+    },
+    {
+      "id": "gid://shopify/DraftOrder/1334004941057",
+      "name": "#D2",
+      "createdAt": "2026-02-25T09:02:33Z",
+      "metafields": []
+    },
+    {
+      "id": "gid://shopify/DraftOrder/1335032021249",
+      "name": "#D5",
+      "createdAt": "2026-02-26T12:47:48Z",
+      "metafields": []
+    },
+    {
+      "id": "gid://shopify/DraftOrder/1335050961153",
+      "name": "#D7",
+      "createdAt": "2026-02-26T13:17:16Z",
+      "metafields": []
+    },
+    {
+      "id": "gid://shopify/DraftOrder/1336090722561",
+      "name": "#D9",
+      "createdAt": "2026-02-27T12:44:17Z",
+      "metafields": []
+    },
+    {
+      "id": "gid://shopify/DraftOrder/1348899766529",
+      "name": "#D13",
+      "createdAt": "2026-03-23T10:29:57Z",
+      "metafields": []
+    },
+    {
+      "id": "gid://shopify/DraftOrder/1348915790081",
+      "name": "#D14",
+      "createdAt": "2026-03-23T11:49:18Z",
+      "metafields": []
+    },
+    {
+      "id": "gid://shopify/DraftOrder/1348924408065",
+      "name": "#D15",
+      "createdAt": "2026-03-23T12:19:07Z",
+      "metafields": []
+    },
+    {
+      "id": "gid://shopify/DraftOrder/1348925653249",
+      "name": "#D16",
+      "createdAt": "2026-03-23T12:22:43Z",
+      "metafields": []
+    },
+    {
+      "id": "gid://shopify/DraftOrder/1348971430145",
+      "name": "#D17",
+      "createdAt": "2026-03-23T14:22:08Z",
+      "metafields": []
+    },
+    {
+      "id": "gid://shopify/DraftOrder/1349468455169",
+      "name": "#D19",
+      "createdAt": "2026-03-24T13:40:39Z",
+      "metafields": []
+    },
+    {
+      "id": "gid://shopify/DraftOrder/1350926401793",
+      "name": "#D24",
+      "createdAt": "2026-03-27T09:56:15Z",
+      "metafields": []
+    },
+    {
+      "id": "gid://shopify/DraftOrder/1350926467329",
+      "name": "#D25",
+      "createdAt": "2026-03-27T09:57:36Z",
+      "metafields": []
+    },
+    {
+      "id": "gid://shopify/DraftOrder/1350929449217",
+      "name": "#D27",
+      "createdAt": "2026-03-27T10:16:59Z",
+      "metafields": []
+    },
+    {
+      "id": "gid://shopify/DraftOrder/1350931185921",
+      "name": "#D28",
+      "createdAt": "2026-03-27T10:29:33Z",
+      "metafields": []
+    },
+    {
+      "id": "gid://shopify/DraftOrder/1350932496641",
+      "name": "#D29",
+      "createdAt": "2026-03-27T10:37:38Z",
+      "metafields": []
+    },
+    {
+      "id": "gid://shopify/DraftOrder/1352321696001",
+      "name": "#D31",
+      "createdAt": "2026-03-30T07:34:41Z",
+      "metafields": []
+    },
+    {
+      "id": "gid://shopify/DraftOrder/1352955461889",
+      "name": "#D32",
+      "createdAt": "2026-03-31T15:42:52Z",
+      "metafields": []
+    },
+    {
+      "id": "gid://shopify/DraftOrder/1355500945665",
+      "name": "#D33",
+      "createdAt": "2026-04-06T08:38:18Z",
+      "metafields": []
+    },
+    {
+      "id": "gid://shopify/DraftOrder/1359057977601",
+      "name": "#D34",
+      "createdAt": "2026-04-13T14:59:43Z",
+      "metafields": []
+    },
+    {
+      "id": "gid://shopify/DraftOrder/1359065219329",
+      "name": "#D35",
+      "createdAt": "2026-04-13T15:14:01Z",
+      "metafields": []
+    },
+    {
+      "id": "gid://shopify/DraftOrder/1359071314177",
+      "name": "#D37",
+      "createdAt": "2026-04-13T15:27:36Z",
+      "metafields": []
+    },
+    {
+      "id": "gid://shopify/DraftOrder/1359073804545",
+      "name": "#D38",
+      "createdAt": "2026-04-13T15:33:23Z",
+      "metafields": []
+    },
+    {
+      "id": "gid://shopify/DraftOrder/1359083241729",
+      "name": "#D39",
+      "createdAt": "2026-04-13T15:54:58Z",
+      "metafields": []
+    },
+    {
+      "id": "gid://shopify/DraftOrder/1359095038209",
+      "name": "#D40",
+      "createdAt": "2026-04-13T16:24:43Z",
+      "metafields": []
+    },
+    {
+      "id": "gid://shopify/DraftOrder/1360686088449",
+      "name": "#D41",
+      "createdAt": "2026-04-16T10:16:04Z",
+      "metafields": []
+    },
+    {
+      "id": "gid://shopify/DraftOrder/1360769712385",
+      "name": "#D45",
+      "createdAt": "2026-04-16T14:22:45Z",
+      "metafields": []
+    },
+    {
+      "id": "gid://shopify/DraftOrder/1362268586241",
+      "name": "#D48",
+      "createdAt": "2026-04-19T09:39:53Z",
+      "metafields": []
+    },
+    {
+      "id": "gid://shopify/DraftOrder/1362276712705",
+      "name": "#D49",
+      "createdAt": "2026-04-19T10:35:15Z",
+      "metafields": []
+    },
+    {
+      "id": "gid://shopify/DraftOrder/1362294669569",
+      "name": "#D50",
+      "createdAt": "2026-04-19T12:17:46Z",
+      "metafields": []
+    },
+    {
+      "id": "gid://shopify/DraftOrder/1362295718145",
+      "name": "#D51",
+      "createdAt": "2026-04-19T12:22:47Z",
+      "metafields": []
+    },
+    {
+      "id": "gid://shopify/DraftOrder/1362304270593",
+      "name": "#D52",
+      "createdAt": "2026-04-19T12:54:53Z",
+      "metafields": []
+    },
+    {
+      "id": "gid://shopify/DraftOrder/1362310758657",
+      "name": "#D53",
+      "createdAt": "2026-04-19T13:14:09Z",
+      "metafields": []
+    },
+    {
+      "id": "gid://shopify/DraftOrder/1362323144961",
+      "name": "#D54",
+      "createdAt": "2026-04-19T13:54:13Z",
+      "metafields": []
+    },
+    {
+      "id": "gid://shopify/DraftOrder/1362361483521",
+      "name": "#D58",
+      "createdAt": "2026-04-19T15:35:32Z",
+      "metafields": []
+    },
+    {
+      "id": "gid://shopify/DraftOrder/1362736021761",
+      "name": "#D59",
+      "createdAt": "2026-04-20T12:42:10Z",
+      "metafields": []
+    },
+    {
+      "id": "gid://shopify/DraftOrder/1364510441729",
+      "name": "#D70",
+      "createdAt": "2026-04-23T11:27:28Z",
+      "metafields": []
+    },
+    {
+      "id": "gid://shopify/DraftOrder/1365166719233",
+      "name": "#D72",
+      "createdAt": "2026-04-24T10:52:01Z",
+      "metafields": [
+        {
+          "id": "gid://shopify/Metafield/42670749614337",
+          "namespace": "custom",
+          "key": "channel",
+          "value": "Offline",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42670749647105",
+          "namespace": "custom",
+          "key": "order_type",
+          "value": "mto",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42670749679873",
+          "namespace": "custom",
+          "key": "payment_status",
+          "value": "Partial",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42670749712641",
+          "namespace": "custom",
+          "key": "amount_paid",
+          "value": "185706.0",
+          "type": "number_decimal"
+        },
+        {
+          "id": "gid://shopify/Metafield/42670749745409",
+          "namespace": "custom",
+          "key": "amount_pending",
+          "value": "0.0",
+          "type": "number_decimal"
+        },
+        {
+          "id": "gid://shopify/Metafield/42670749778177",
+          "namespace": "custom",
+          "key": "payment_mode_advance",
+          "value": "gokwik_link",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42670749810945",
+          "namespace": "custom",
+          "key": "is_finalized",
+          "value": "true",
+          "type": "boolean"
+        },
+        {
+          "id": "gid://shopify/Metafield/42671362310401",
+          "namespace": "custom",
+          "key": "payment_mode_final",
+          "value": "card",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42672008757505",
+          "namespace": "custom",
+          "key": "jewelcode_gross_weight",
+          "value": "2.54/3.0",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42672008790273",
+          "namespace": "custom",
+          "key": "jewelcode_gemstone_weight",
+          "value": "0/0",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42672008823041",
+          "namespace": "custom",
+          "key": "jewelcode_net_weight",
+          "value": "2.18/2.72",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42672008855809",
+          "namespace": "custom",
+          "key": "jewelcode_diamond_carats",
+          "value": "1.79/1.38",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680453431553",
+          "namespace": "custom",
+          "key": "invoice_date",
+          "value": "10-05-2026",
+          "type": "single_line_text_field"
+        }
+      ]
+    },
+    {
+      "id": "gid://shopify/DraftOrder/1365718597889",
+      "name": "#D73",
+      "createdAt": "2026-04-25T14:51:34Z",
+      "metafields": []
+    },
+    {
+      "id": "gid://shopify/DraftOrder/1368407572737",
+      "name": "#D83",
+      "createdAt": "2026-05-01T08:43:52Z",
+      "metafields": [
+        {
+          "id": "gid://shopify/Metafield/42508298125569",
+          "namespace": "custom",
+          "key": "payment_status",
+          "value": "Full",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42508298158337",
+          "namespace": "custom",
+          "key": "amount_paid",
+          "value": "20914.0",
+          "type": "number_decimal"
+        },
+        {
+          "id": "gid://shopify/Metafield/42508298191105",
+          "namespace": "custom",
+          "key": "amount_pending",
+          "value": "0.0",
+          "type": "number_decimal"
+        },
+        {
+          "id": "gid://shopify/Metafield/42508298223873",
+          "namespace": "custom",
+          "key": "payment_mode_advance",
+          "value": "gokwik_link",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680340906241",
+          "namespace": "custom",
+          "key": "channel",
+          "value": "Offline",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680340939009",
+          "namespace": "custom",
+          "key": "order_type",
+          "value": "mto",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42855173095681",
+          "namespace": "custom",
+          "key": "payment_mode_final",
+          "value": "gokwik_link",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42855173128449",
+          "namespace": "custom",
+          "key": "jewelcode_gross_weight",
+          "value": "1.550",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42855173161217",
+          "namespace": "custom",
+          "key": "jewelcode_net_weight",
+          "value": "1.550",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42855177912577",
+          "namespace": "custom",
+          "key": "invoice_date",
+          "value": "24-05-2026",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42855177945345",
+          "namespace": "custom",
+          "key": "gold_rate_date",
+          "value": "2026-05-01",
+          "type": "date"
+        },
+        {
+          "id": "gid://shopify/Metafield/42855177978113",
+          "namespace": "custom",
+          "key": "gold_rate",
+          "value": "11600.0",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42855222771969",
+          "namespace": "custom",
+          "key": "jewelcode_diamond_carats",
+          "value": "0",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42855222804737",
+          "namespace": "custom",
+          "key": "jewelcode_gemstone_weight",
+          "value": "0",
+          "type": "single_line_text_field"
+        }
+      ]
+    },
+    {
+      "id": "gid://shopify/DraftOrder/1370190446849",
+      "name": "#D85",
+      "createdAt": "2026-05-05T07:23:17Z",
+      "metafields": [
+        {
+          "id": "gid://shopify/Metafield/42534380601601",
+          "namespace": "custom",
+          "key": "old_gold_weight",
+          "value": "31.84",
+          "type": "number_decimal"
+        },
+        {
+          "id": "gid://shopify/Metafield/42534380634369",
+          "namespace": "custom",
+          "key": "old_gold_value",
+          "value": "413920.0",
+          "type": "number_decimal"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680346673409",
+          "namespace": "custom",
+          "key": "channel",
+          "value": "Offline",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680346706177",
+          "namespace": "custom",
+          "key": "order_type",
+          "value": "in-stock",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680346738945",
+          "namespace": "custom",
+          "key": "payment_status",
+          "value": "Full",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680346771713",
+          "namespace": "custom",
+          "key": "amount_paid",
+          "value": "132630.0",
+          "type": "number_decimal"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680346804481",
+          "namespace": "custom",
+          "key": "amount_pending",
+          "value": "0.0",
+          "type": "number_decimal"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680346837249",
+          "namespace": "custom",
+          "key": "payment_mode_final",
+          "value": "card",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680544592129",
+          "namespace": "custom",
+          "key": "jewelcode_gemstone_weight",
+          "value": "0/0",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680544624897",
+          "namespace": "custom",
+          "key": "jewelcode_net_weight",
+          "value": "17.736/13.25",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680544657665",
+          "namespace": "custom",
+          "key": "jewelcode_diamond_carats",
+          "value": "2.82/1.78",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680544690433",
+          "namespace": "custom",
+          "key": "jewelcode_gross_weight",
+          "value": "18.30/13.62",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680557338881",
+          "namespace": "custom",
+          "key": "invoice_date",
+          "value": "04-05-2026",
+          "type": "single_line_text_field"
+        }
+      ]
+    },
+    {
+      "id": "gid://shopify/DraftOrder/1371630305537",
+      "name": "#D90",
+      "createdAt": "2026-05-08T07:25:17Z",
+      "metafields": [
+        {
+          "id": "gid://shopify/Metafield/42617534382337",
+          "namespace": "custom",
+          "key": "channel",
+          "value": "Offline",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42617534415105",
+          "namespace": "custom",
+          "key": "order_type",
+          "value": "in-stock",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42617534447873",
+          "namespace": "custom",
+          "key": "payment_status",
+          "value": "Full",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42617534480641",
+          "namespace": "custom",
+          "key": "amount_paid",
+          "value": "87550.0",
+          "type": "number_decimal"
+        },
+        {
+          "id": "gid://shopify/Metafield/42617534513409",
+          "namespace": "custom",
+          "key": "amount_pending",
+          "value": "0.0",
+          "type": "number_decimal"
+        },
+        {
+          "id": "gid://shopify/Metafield/42617534546177",
+          "namespace": "custom",
+          "key": "payment_mode_final",
+          "value": "gokwik_link",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42617534578945",
+          "namespace": "custom",
+          "key": "is_finalized",
+          "value": "true",
+          "type": "boolean"
+        },
+        {
+          "id": "gid://shopify/Metafield/42617534611713",
+          "namespace": "custom",
+          "key": "jewelcode_net_weight",
+          "value": "1.535",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42617551520001",
+          "namespace": "timanti",
+          "key": "jewelcode",
+          "value": "{\"jewel_code\":\"\",\"gross_wt\":1.959,\"net_wt\":1.535,\"diamond_cts\":2.12,\"diamond_pcs\":2,\"metal\":\"18K\",\"category\":\"Relic Earrings\",\"gold_rate_locked\":12037.62,\"weight_delta_pct\":2.23,\"repriced\":true}",
+          "type": "json"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680211931393",
+          "namespace": "custom",
+          "key": "jewelcode_gross_weight",
+          "value": "1.959",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680211964161",
+          "namespace": "custom",
+          "key": "jewelcode_gemstone_weight",
+          "value": "0",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42680211996929",
+          "namespace": "custom",
+          "key": "jewelcode_diamond_carats",
+          "value": "2.12",
+          "type": "single_line_text_field"
+        }
+      ]
+    },
+    {
+      "id": "gid://shopify/DraftOrder/1378864398593",
+      "name": "#D114",
+      "createdAt": "2026-05-22T13:09:19Z",
+      "metafields": [
+        {
+          "id": "gid://shopify/Metafield/42832312533249",
+          "namespace": "custom",
+          "key": "gold_rate_date",
+          "value": "2026-05-21",
+          "type": "date"
+        },
+        {
+          "id": "gid://shopify/Metafield/42832312566017",
+          "namespace": "custom",
+          "key": "gold_rate",
+          "value": "14985.93",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42872455725313",
+          "namespace": "custom",
+          "key": "channel",
+          "value": "Offline",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42872455758081",
+          "namespace": "custom",
+          "key": "order_type",
+          "value": "mto",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42872481480961",
+          "namespace": "custom",
+          "key": "payment_status",
+          "value": "Full",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42872481513729",
+          "namespace": "custom",
+          "key": "amount_paid",
+          "value": "165295.0",
+          "type": "number_decimal"
+        },
+        {
+          "id": "gid://shopify/Metafield/42872481546497",
+          "namespace": "custom",
+          "key": "amount_pending",
+          "value": "0.0",
+          "type": "number_decimal"
+        },
+        {
+          "id": "gid://shopify/Metafield/42965647982849",
+          "namespace": "custom",
+          "key": "payment_mode_final",
+          "value": "bank transfer",
+          "type": "single_line_text_field"
+        }
+      ]
+    },
+    {
+      "id": "gid://shopify/DraftOrder/1378932982017",
+      "name": "#D115",
+      "createdAt": "2026-05-22T15:19:33Z",
+      "metafields": [
+        {
+          "id": "gid://shopify/Metafield/42834087051521",
+          "namespace": "custom",
+          "key": "channel",
+          "value": "Offline",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42834087084289",
+          "namespace": "custom",
+          "key": "order_type",
+          "value": "mto",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42834087117057",
+          "namespace": "custom",
+          "key": "payment_status",
+          "value": "Partial",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42834087149825",
+          "namespace": "custom",
+          "key": "amount_paid",
+          "value": "55000.0",
+          "type": "number_decimal"
+        },
+        {
+          "id": "gid://shopify/Metafield/42834087182593",
+          "namespace": "custom",
+          "key": "payment_mode_advance",
+          "value": "gokwik_link",
+          "type": "single_line_text_field"
+        }
+      ]
+    },
+    {
+      "id": "gid://shopify/DraftOrder/1383106248961",
+      "name": "#D134",
+      "createdAt": "2026-05-30T13:14:55Z",
+      "metafields": [
+        {
+          "id": "gid://shopify/Metafield/42999616569601",
+          "namespace": "custom",
+          "key": "channel",
+          "value": "Offline",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42999616602369",
+          "namespace": "custom",
+          "key": "order_type",
+          "value": "mto",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42999616635137",
+          "namespace": "custom",
+          "key": "payment_status",
+          "value": "Partial",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/42999616667905",
+          "namespace": "custom",
+          "key": "amount_paid",
+          "value": "72000.0",
+          "type": "number_decimal"
+        },
+        {
+          "id": "gid://shopify/Metafield/43433008627969",
+          "namespace": "custom",
+          "key": "amount_pending",
+          "value": "32548.0",
+          "type": "number_decimal"
+        },
+        {
+          "id": "gid://shopify/Metafield/43433008660737",
+          "namespace": "custom",
+          "key": "payment_mode_advance",
+          "value": "card",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43433031303425",
+          "namespace": "custom",
+          "key": "gold_rate",
+          "value": "11800",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43433055355137",
+          "namespace": "custom",
+          "key": "invoice_date",
+          "value": "17-06-2026",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43434828464385",
+          "namespace": "custom",
+          "key": "payment_mode_final",
+          "value": "card",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43434828497153",
+          "namespace": "custom",
+          "key": "amount_to_be_collected",
+          "value": "104548",
+          "type": "number_integer"
+        }
+      ]
+    },
+    {
+      "id": "gid://shopify/DraftOrder/1383958544641",
+      "name": "#D135",
+      "createdAt": "2026-06-01T09:47:54Z",
+      "metafields": [
+        {
+          "id": "gid://shopify/Metafield/43021124108545",
+          "namespace": "custom",
+          "key": "channel",
+          "value": "Offline",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43021124141313",
+          "namespace": "custom",
+          "key": "order_type",
+          "value": "in-stock",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43021124174081",
+          "namespace": "custom",
+          "key": "payment_status",
+          "value": "Full",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43021124206849",
+          "namespace": "custom",
+          "key": "amount_paid",
+          "value": "85000.0",
+          "type": "number_decimal"
+        },
+        {
+          "id": "gid://shopify/Metafield/43021124239617",
+          "namespace": "custom",
+          "key": "payment_mode_final",
+          "value": "cash",
+          "type": "single_line_text_field"
+        }
+      ]
+    },
+    {
+      "id": "gid://shopify/DraftOrder/1385063383297",
+      "name": "#D139",
+      "createdAt": "2026-06-03T12:18:01Z",
+      "metafields": [
+        {
+          "id": "gid://shopify/Metafield/43060469760257",
+          "namespace": "custom",
+          "key": "repair_order_reference",
+          "value": "1008",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43060471628033",
+          "namespace": "timanti",
+          "key": "repair_intake_at",
+          "value": "2026-06-03T12:18:08.455Z",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43062053372161",
+          "namespace": "timanti",
+          "key": "sku_id",
+          "value": "PD00004|P|14|VVSVS|H|NA|0.21|NA",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43062065856769",
+          "namespace": "timanti",
+          "key": "repair_estimate_sent_at",
+          "value": "2026-06-03T12:30:45.006Z",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43062170386689",
+          "namespace": "timanti",
+          "key": "repair_store_pickup",
+          "value": "true",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43062170550529",
+          "namespace": "custom",
+          "key": "gross_wt",
+          "value": "1.52",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43062170616065",
+          "namespace": "custom",
+          "key": "net_wt",
+          "value": "1.50",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43062170681601",
+          "namespace": "custom",
+          "key": "diamond_cts",
+          "value": "0.20",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43062177923329",
+          "namespace": "timanti",
+          "key": "repair_completed_at",
+          "value": "2026-06-03T12:31:59.407Z",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43322611728641",
+          "namespace": "custom",
+          "key": "state_code",
+          "value": "KA-TEST",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43322651705601",
+          "namespace": "custom",
+          "key": "delivery_code",
+          "value": "MH-TEST",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43322698072321",
+          "namespace": "custom",
+          "key": "document_type",
+          "value": "transfer",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43322698137857",
+          "namespace": "custom",
+          "key": "serial_no",
+          "value": "1",
+          "type": "number_integer"
+        },
+        {
+          "id": "gid://shopify/Metafield/43322698170625",
+          "namespace": "custom",
+          "key": "serial_code",
+          "value": "TRANSFER-KA-TEST/MH-TEST-1",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43322698268929",
+          "namespace": "custom",
+          "key": "serial_display",
+          "value": "TRANSFER-KA-TEST/MH-TEST-1",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43419165851905",
+          "namespace": "custom",
+          "key": "exchange_note_value",
+          "value": "13736.96",
+          "type": "number_decimal"
+        }
+      ]
+    },
+    {
+      "id": "gid://shopify/DraftOrder/1386439278849",
+      "name": "#D140",
+      "createdAt": "2026-06-06T07:16:49Z",
+      "metafields": [
+        {
+          "id": "gid://shopify/Metafield/43253505491201",
+          "namespace": "custom",
+          "key": "serial_state",
+          "value": "KA",
+          "type": "single_line_text_field"
+        }
+      ]
+    },
+    {
+      "id": "gid://shopify/DraftOrder/1387277189377",
+      "name": "#D141",
+      "createdAt": "2026-06-08T07:05:33Z",
+      "metafields": [
+        {
+          "id": "gid://shopify/Metafield/43224010981633",
+          "namespace": "custom",
+          "key": "jewelcode_net_weight",
+          "value": "4.38/6.86",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43224011014401",
+          "namespace": "custom",
+          "key": "jewelcode_gross_weight",
+          "value": "4.38/7.18",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43224011079937",
+          "namespace": "custom",
+          "key": "jewelcode_diamond_carats",
+          "value": "0/1.58",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43224011112705",
+          "namespace": "custom",
+          "key": "jewelcode_gemstone_weight",
+          "value": "0/0",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43224023302401",
+          "namespace": "custom",
+          "key": "channel",
+          "value": "Offline",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43224023335169",
+          "namespace": "custom",
+          "key": "order_type",
+          "value": "mto",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43224023367937",
+          "namespace": "custom",
+          "key": "payment_status",
+          "value": "Full",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43224023400705",
+          "namespace": "custom",
+          "key": "amount_paid",
+          "value": "186834.79",
+          "type": "number_decimal"
+        },
+        {
+          "id": "gid://shopify/Metafield/43224023433473",
+          "namespace": "custom",
+          "key": "amount_pending",
+          "value": "0.0",
+          "type": "number_decimal"
+        }
+      ]
+    },
+    {
+      "id": "gid://shopify/DraftOrder/1387900207361",
+      "name": "#D142",
+      "createdAt": "2026-06-09T14:36:51Z",
+      "metafields": [
+        {
+          "id": "gid://shopify/Metafield/43241931735297",
+          "namespace": "custom",
+          "key": "amount_paid",
+          "value": "5000.0",
+          "type": "number_decimal"
+        },
+        {
+          "id": "gid://shopify/Metafield/43241931768065",
+          "namespace": "custom",
+          "key": "payment_mode_advance",
+          "value": "gokwik_link",
+          "type": "single_line_text_field"
+        }
+      ]
+    },
+    {
+      "id": "gid://shopify/DraftOrder/1388345557249",
+      "name": "#D143",
+      "createdAt": "2026-06-10T12:27:01Z",
+      "metafields": [
+        {
+          "id": "gid://shopify/Metafield/43254448587009",
+          "namespace": "custom",
+          "key": "repair_order_reference",
+          "value": "1009",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43254449963265",
+          "namespace": "timanti",
+          "key": "repair_intake_at",
+          "value": "2026-06-12T11:01:39.811Z",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43322477183233",
+          "namespace": "custom",
+          "key": "state_code",
+          "value": "KA-TEST",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43322605863169",
+          "namespace": "timanti",
+          "key": "repair_completed_at",
+          "value": "2026-06-12T10:57:58.971Z",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43322605895937",
+          "namespace": "custom",
+          "key": "document_type",
+          "value": "repair",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43322605928705",
+          "namespace": "custom",
+          "key": "serial_no",
+          "value": "1",
+          "type": "number_integer"
+        },
+        {
+          "id": "gid://shopify/Metafield/43322605961473",
+          "namespace": "custom",
+          "key": "serial_code",
+          "value": "REP-KA-TEST-1",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43322605994241",
+          "namespace": "custom",
+          "key": "serial_display",
+          "value": "REP-KA-TEST-1",
+          "type": "single_line_text_field"
+        }
+      ]
+    },
+    {
+      "id": "gid://shopify/DraftOrder/1389356220673",
+      "name": "#D144",
+      "createdAt": "2026-06-12T10:19:49Z",
+      "metafields": [
+        {
+          "id": "gid://shopify/Metafield/43322443366657",
+          "namespace": "custom",
+          "key": "po_type",
+          "value": "in-stock",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43322443399425",
+          "namespace": "custom",
+          "key": "po_status",
+          "value": "pending",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43322443432193",
+          "namespace": "custom",
+          "key": "batch_id",
+          "value": "in-stock-2026-06-12-1781259588677",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43322443464961",
+          "namespace": "custom",
+          "key": "batch_date",
+          "value": "2026-06-12",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43322443497729",
+          "namespace": "custom",
+          "key": "action_token",
+          "value": "76d780e610e1a39853ed792f8dd326faf7818d7a8ebf7f6c8e9fe7c907887fb7",
+          "type": "single_line_text_field"
+        }
+      ]
+    },
+    {
+      "id": "gid://shopify/DraftOrder/1389366116609",
+      "name": "#D145",
+      "createdAt": "2026-06-12T11:03:10Z",
+      "metafields": [
+        {
+          "id": "gid://shopify/Metafield/43322628866305",
+          "namespace": "custom",
+          "key": "po_type",
+          "value": "mto",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43322628899073",
+          "namespace": "custom",
+          "key": "po_status",
+          "value": "pending",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43322628931841",
+          "namespace": "custom",
+          "key": "batch_id",
+          "value": "mto-2026-06-12-1781262190040",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43322628964609",
+          "namespace": "custom",
+          "key": "batch_date",
+          "value": "2026-06-12",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43322628997377",
+          "namespace": "custom",
+          "key": "action_token",
+          "value": "e5bd7b8dc2a2d80870a00e23852f84d6d48574423a29b7d7cc4ee9444a723542",
+          "type": "single_line_text_field"
+        }
+      ]
+    },
+    {
+      "id": "gid://shopify/DraftOrder/1402436288769",
+      "name": "#D146",
+      "createdAt": "2026-06-14T10:34:01Z",
+      "metafields": [
+        {
+          "id": "gid://shopify/Metafield/43378227314945",
+          "namespace": "custom",
+          "key": "order_type",
+          "value": "in-stock",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43378227347713",
+          "namespace": "custom",
+          "key": "payment_status",
+          "value": "Partial",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43378227380481",
+          "namespace": "custom",
+          "key": "amount_paid",
+          "value": "10000.0",
+          "type": "number_decimal"
+        },
+        {
+          "id": "gid://shopify/Metafield/43378227413249",
+          "namespace": "custom",
+          "key": "payment_mode_advance",
+          "value": "upi",
+          "type": "single_line_text_field"
+        }
+      ]
+    },
+    {
+      "id": "gid://shopify/DraftOrder/1417865232641",
+      "name": "#D147",
+      "createdAt": "2026-06-16T10:04:39Z",
+      "metafields": [
+        {
+          "id": "gid://shopify/Metafield/43416328143105",
+          "namespace": "custom",
+          "key": "po_type",
+          "value": "merchandising",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43416328175873",
+          "namespace": "custom",
+          "key": "po_status",
+          "value": "pending",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43416328208641",
+          "namespace": "custom",
+          "key": "batch_id",
+          "value": "merchandising-2026-06-16-1781604279165",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43416328241409",
+          "namespace": "custom",
+          "key": "batch_date",
+          "value": "2026-06-16",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43416328274177",
+          "namespace": "custom",
+          "key": "action_token",
+          "value": "0cde118188c2306d52befc201c1c5b1456fca1246ebc42fde79f4b373b794f9a",
+          "type": "single_line_text_field"
+        }
+      ]
+    },
+    {
+      "id": "gid://shopify/DraftOrder/1417866117377",
+      "name": "#D148",
+      "createdAt": "2026-06-16T10:04:45Z",
+      "metafields": [
+        {
+          "id": "gid://shopify/Metafield/43416328929537",
+          "namespace": "custom",
+          "key": "po_type",
+          "value": "merchandising",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43416328962305",
+          "namespace": "custom",
+          "key": "po_status",
+          "value": "pending",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43416328995073",
+          "namespace": "custom",
+          "key": "batch_id",
+          "value": "merchandising-2026-06-16-1781604284661",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43416329027841",
+          "namespace": "custom",
+          "key": "batch_date",
+          "value": "2026-06-16",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43416329060609",
+          "namespace": "custom",
+          "key": "action_token",
+          "value": "890a5a1c83ce35ecb23878b0c4f4f1423e121be37acf51bb0cb3e0689e2917b2",
+          "type": "single_line_text_field"
+        }
+      ]
+    },
+    {
+      "id": "gid://shopify/DraftOrder/1418045980929",
+      "name": "#D149",
+      "createdAt": "2026-06-16T10:25:46Z",
+      "metafields": [
+        {
+          "id": "gid://shopify/Metafield/43416449581313",
+          "namespace": "custom",
+          "key": "po_type",
+          "value": "merchandising",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43416449614081",
+          "namespace": "custom",
+          "key": "po_status",
+          "value": "acknowledged",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43416449646849",
+          "namespace": "custom",
+          "key": "batch_id",
+          "value": "merchandising-2026-06-16-1781605545591",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43416449679617",
+          "namespace": "custom",
+          "key": "batch_date",
+          "value": "2026-06-16",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43416449712385",
+          "namespace": "custom",
+          "key": "action_token",
+          "value": "415e930a8e74bbf1176bd803c00e9160bd37597a6981855784eaeae07fa9aca4",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43416452169985",
+          "namespace": "custom",
+          "key": "document_type",
+          "value": "po",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43416452202753",
+          "namespace": "custom",
+          "key": "serial_no",
+          "value": "1",
+          "type": "number_integer"
+        },
+        {
+          "id": "gid://shopify/Metafield/43416452268289",
+          "namespace": "custom",
+          "key": "serial_code",
+          "value": "PO-KA-HSR-1",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43416452333825",
+          "namespace": "custom",
+          "key": "serial_display",
+          "value": "PO-KA-HSR-1",
+          "type": "single_line_text_field"
+        }
+      ]
+    },
+    {
+      "id": "gid://shopify/DraftOrder/1418046931201",
+      "name": "#D150",
+      "createdAt": "2026-06-16T10:25:52Z",
+      "metafields": [
+        {
+          "id": "gid://shopify/Metafield/43416450105601",
+          "namespace": "custom",
+          "key": "po_type",
+          "value": "merchandising",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43416450138369",
+          "namespace": "custom",
+          "key": "po_status",
+          "value": "acknowledged",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43416450171137",
+          "namespace": "custom",
+          "key": "batch_id",
+          "value": "merchandising-2026-06-16-1781605551652",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43416450203905",
+          "namespace": "custom",
+          "key": "batch_date",
+          "value": "2026-06-16",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43416450236673",
+          "namespace": "custom",
+          "key": "action_token",
+          "value": "29d1fba20118ad3ac64a0b3bcce12439e238b2933f1a7063532c03cb303f9859",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43416476549377",
+          "namespace": "custom",
+          "key": "document_type",
+          "value": "po",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43416476582145",
+          "namespace": "custom",
+          "key": "serial_no",
+          "value": "1",
+          "type": "number_integer"
+        },
+        {
+          "id": "gid://shopify/Metafield/43416476614913",
+          "namespace": "custom",
+          "key": "serial_code",
+          "value": "PO-KA-TEST-1",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43416476680449",
+          "namespace": "custom",
+          "key": "serial_display",
+          "value": "PO-KA-TEST-1",
+          "type": "single_line_text_field"
+        }
+      ]
+    },
+    {
+      "id": "gid://shopify/DraftOrder/1419170578689",
+      "name": "#D151",
+      "createdAt": "2026-06-16T12:52:19Z",
+      "metafields": [
+        {
+          "id": "gid://shopify/Metafield/43417330155777",
+          "namespace": "custom",
+          "key": "channel",
+          "value": "Offline",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43417330188545",
+          "namespace": "custom",
+          "key": "order_type",
+          "value": "in-stock",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43417330221313",
+          "namespace": "custom",
+          "key": "payment_status",
+          "value": "Full",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43417330254081",
+          "namespace": "custom",
+          "key": "old_gold_weight",
+          "value": "31.84",
+          "type": "number_decimal"
+        },
+        {
+          "id": "gid://shopify/Metafield/43417330286849",
+          "namespace": "custom",
+          "key": "old_gold_value",
+          "value": "413920.0",
+          "type": "number_decimal"
+        },
+        {
+          "id": "gid://shopify/Metafield/43419288568065",
+          "namespace": "custom",
+          "key": "gold_rate",
+          "value": "11545,11545,8979",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43419325366529",
+          "namespace": "custom",
+          "key": "amount_paid",
+          "value": "116005.0",
+          "type": "number_decimal"
+        },
+        {
+          "id": "gid://shopify/Metafield/43419325399297",
+          "namespace": "custom",
+          "key": "amount_pending",
+          "value": "0.0",
+          "type": "number_decimal"
+        }
+      ]
+    },
+    {
+      "id": "gid://shopify/DraftOrder/1423276867841",
+      "name": "#D152",
+      "createdAt": "2026-06-17T11:55:13Z",
+      "metafields": [
+        {
+          "id": "gid://shopify/Metafield/43433108472065",
+          "namespace": "custom",
+          "key": "invoice_date",
+          "value": "16-06-2026",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43433108504833",
+          "namespace": "custom",
+          "key": "gold_rate",
+          "value": "11600.30",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43433108537601",
+          "namespace": "custom",
+          "key": "amount_paid",
+          "value": "97868.0",
+          "type": "number_decimal"
+        },
+        {
+          "id": "gid://shopify/Metafield/43433108570369",
+          "namespace": "custom",
+          "key": "amount_pending",
+          "value": "0.0",
+          "type": "number_decimal"
+        },
+        {
+          "id": "gid://shopify/Metafield/43433108603137",
+          "namespace": "custom",
+          "key": "payment_mode_final",
+          "value": "gokwik_link",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43433108635905",
+          "namespace": "custom",
+          "key": "channel",
+          "value": "Offline",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43433108668673",
+          "namespace": "custom",
+          "key": "order_type",
+          "value": "in-stock",
+          "type": "single_line_text_field"
+        },
+        {
+          "id": "gid://shopify/Metafield/43433108701441",
+          "namespace": "custom",
+          "key": "payment_status",
+          "value": "Full",
+          "type": "single_line_text_field"
+        }
+      ]
+    }
+  ]
+}

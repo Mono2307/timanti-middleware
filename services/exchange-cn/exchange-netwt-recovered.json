@@ -1,0 +1,10 @@
+{
+  "_comment": "Net weights recovered from variant metafields for order lines that never recorded _net_wt. wt = custom.price_breakup_gold / custom.gold_rate, both read from the variant on 2026-09-17. Regenerate if the catalogue is repriced — the ratio is rate-independent, so it should not move.",
+  "48578107965697": { "order": "#1063", "netWt": 1.184 },
+  "48658652692737": { "order": "#1056", "netWt": 1.567 },
+  "48578221801729": { "order": "#1047", "netWt": 1.020 },
+  "48578219835649": { "order": "#1045", "netWt": 2.494 },
+  "48578102657281": { "order": "#1044", "netWt": null, "note": "variant carries no price_breakup metafields — unrecoverable" },
+  "48056766300417": { "order": "#1042", "netWt": 1.722 },
+  "48183457022209": { "order": "#1039", "netWt": 3.187 }
+}

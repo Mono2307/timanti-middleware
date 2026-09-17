@@ -1,0 +1,772 @@
+{% comment %}
+  pricing-estimate.liquid — derived from order-confirmation-receipt.liquid.
+
+  The ONLY structural change is the item table: instead of one row per piece with
+  weights and taxable columns, each piece opens into its price components —
+  gold, diamonds, coloured stones, making — each with the weight it was priced
+  on and the rate it was quoted at. Everything else (masthead, addresses,
+  post-tax adjustments, amount in words, terms) is the order confirmation's,
+  unchanged. It carries NO payment or balance rows: this document quotes a
+  price, it does not track what has been paid against it.
+
+  This is a QUOTE, shared with the customer for approval before they commit. It
+  is not a tax document: no HSN, no GST breakup, no place of supply.
+
+  ── Where the numbers come from ──────────────────────────────────────────────
+  Every figure is a LINE ITEM PROPERTY, falling back to the variant or product
+  metafield behind it. That matters for Order Printer: line item properties
+  travel on the line item itself, so unlike order metafields they are always
+  readable at print time.
+
+  Four rates are STORED, not derived — the middleware writes each one only when
+  that rate genuinely produced the value:
+    _gold_rate      per gram, locked on the line at reprice
+    _making_rate    per gram, falling back to product custom.making_charges_rate.
+                    Blank when a flat custom.making override set the labour, so
+                    no rate is shown that was never quoted.
+    _gemstone_rate  per carat, from product custom.gemstone_price
+  Only the diamond per-carat rate is derived (Diamond / _diamond_cts), and it is
+  suppressed when quantity > 1, because money properties are line totals while
+  carat properties are per piece.
+
+  Gemstone became a first-class component on 2026-09-04 (server.js). A draft
+  created before that deploy carries no Gemstone property until it is edited or
+  repriced — the variant metafield fallback below covers it either way.
+
+  NOTE: keep angle brackets out of these comments. Order Printer validates the
+  template as HTML and reads them as unknown tags, rejecting the paste.
+{% endcomment %}
+<style>
+  @page { size: A4; margin: 0.5cm; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  @media print {
+    body { padding: 5px !important; margin: 0; }
+    .container { page-break-inside: avoid !important; }
+    a { display: none !important; visibility: hidden !important; }
+  }
+  body { font-family: Arial, sans-serif; font-size: 8px; line-height: 1.2; padding: 10px; }
+  .container { max-width: 800px; margin: 0 auto; border: 2px solid #000; padding: 0; }
+  .header-text { text-align: right; padding: 3px 8px; font-size: 7px; font-style: italic; border-bottom: 1px solid #000; }
+  .title-header { text-align: center; padding: 7px 10px; border-bottom: 2px solid #000; min-height: 60px; display: flex; flex-direction: column; justify-content: center; align-items: center; }
+  .logo { max-width: 120px; height: auto; margin-bottom: 4px; }
+  .title-center h1 { font-size: 14px; font-weight: bold; margin: 0; }
+  .company-invoice-grid { display: grid; grid-template-columns: 1.5fr 1fr; border-bottom: 2px solid #000; }
+  .company-section { padding: 5px 8px; border-right: 2px solid #000; font-size: 7px; line-height: 1.35; }
+  .company-section strong { font-size: 7.5px; }
+  .invoice-details-grid { display: grid; grid-template-rows: repeat(3, 1fr); }
+  .invoice-detail-row { display: grid; grid-template-columns: 1fr 1fr 1fr; border-bottom: 1px solid #000; }
+  .invoice-detail-row:last-child { border-bottom: none; }
+  .invoice-detail-cell { padding: 4px 6px; font-size: 7px; border-right: 1px solid #000; }
+  .invoice-detail-cell:last-child { border-right: none; }
+  .invoice-detail-cell strong { display: block; font-size: 7px; font-weight: bold; margin-bottom: 1px; }
+  .addresses-section { display: grid; grid-template-columns: 1fr 1fr; border-bottom: 2px solid #000; }
+  .address-block { padding: 5px 8px; font-size: 7px; line-height: 1.3; }
+  .address-block:first-child { border-right: 2px solid #000; }
+  .address-block strong { display: block; margin-bottom: 1px; font-size: 7px; }
+  .address-field { margin-bottom: 2px; }
+  table { width: 100%; border-collapse: collapse; }
+  .items-table { font-size: 7px; }
+  .items-table th { background-color: #f0f0f0; padding: 3px 4px; text-align: left; font-weight: bold; border: 1px solid #000; font-size: 7px; line-height: 1.2; }
+  .items-table td { padding: 3px 4px; border: 1px solid #000; vertical-align: top; }
+  .items-table .text-right { text-align: right; }
+  .items-table .text-center { text-align: center; }
+  {% comment %}── Breakdown rows. The piece header separates one item from the next; component
+  rows are indented under it so the eye reads them as parts of that piece. ──{% endcomment %}
+  .piece-row td { background-color: #f7f7f7; font-weight: bold; font-size: 7.5px; }
+  .piece-row .piece-sub { font-weight: normal; font-size: 6.5px; color: #555; }
+  .component-row .component-label { padding-left: 14px; }
+  .component-row .qualifier { color: #666; font-size: 6.5px; font-style: italic; }
+  .discount-row td { color: #7a1f1f; }
+  .item-total-row td { font-weight: bold; background-color: #efefef; font-size: 7.5px; }
+  .totals-row td { font-weight: normal; padding: 3px 4px; font-size: 7px; }
+  .total-row td { font-weight: bold; font-size: 8px; background-color: #f9f9f9; }
+  .tbd { color: #999; font-style: italic; }
+  .amount-words { padding: 4px 8px; font-size: 7px; font-weight: bold; border-top: 2px solid #000; display: flex; justify-content: space-between; }
+  .footer-section { display: grid; grid-template-columns: 1fr 1fr; border-top: 2px solid #000; font-size: 6.5px; line-height: 1.25; }
+  .footer-left { padding: 6px 8px; border-right: 2px solid #000; }
+  .footer-right { padding: 6px 8px; }
+  .footer-left h3, .footer-right h3 { font-size: 7px; margin-bottom: 3px; font-weight: bold; }
+  .footer-left p, .footer-right p { margin-bottom: 2px; }
+  .watermark { position: relative; }
+  .watermark-image { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); opacity: 0.08; width: 200px; height: auto; z-index: 0; pointer-events: none; }
+</style>
+
+
+{% comment %}══ Gold rate, and the day it was locked ════════════════════════════════════════
+Scanned up here rather than in the footer: an estimate is only as good as the rate it
+quotes, so the rate and its date belong at the top beside the validity window. Same
+18kt/14kt cross-derivation the other documents use.
+──{% endcomment %}
+{% assign rate_18k = "" %}
+{% assign rate_14k = "" %}
+{% assign gold_updated = "" %}
+{% for line_item in order.line_items %}
+  {% assign sku_parts = line_item.variant.sku | split: "|" %}
+  {% assign karat = sku_parts[2] | strip %}
+  {% assign locked_rate = "" %}
+  {% assign locked_ts   = "" %}
+  {% for p in line_item.properties %}
+    {% if p.first == "_gold_rate"       %}{% assign locked_rate = p.last %}{% endif %}
+    {% if p.first == "_gold_updated_at" %}{% assign locked_ts   = p.last %}{% endif %}
+  {% endfor %}
+  {% if karat == "18" and rate_18k == "" and locked_rate != "" %}{% assign rate_18k = locked_rate %}{% if locked_ts != "" %}{% assign gold_updated = locked_ts %}{% endif %}{% endif %}
+  {% if karat == "14" and rate_14k == "" and locked_rate != "" %}{% assign rate_14k = locked_rate %}{% if gold_updated == "" and locked_ts != "" %}{% assign gold_updated = locked_ts %}{% endif %}{% endif %}
+{% endfor %}
+{% if rate_18k == "" and rate_14k != "" %}{% assign rate_18k = rate_14k | plus: 0 | times: 0.771 | divided_by: 0.604 | round: 2 %}{% endif %}
+{% if rate_14k == "" and rate_18k != "" %}{% assign rate_14k = rate_18k | plus: 0 | times: 0.604 | divided_by: 0.771 | round: 2 %}{% endif %}
+
+<div class="container">
+
+  <div class="header-text">Pricing Estimate — not a tax invoice</div>
+
+  <div class="title-header">
+    <img src="https://cdn.shopify.com/s/files/1/0775/8322/0993/files/Timanti_Logo_Black.jpg?v=1766506323" alt="Timanti Logo" class="logo">
+    <div class="title-center"><h1>Pricing Estimate</h1></div>
+  </div>
+
+  <div class="company-invoice-grid">
+    <div class="company-section">
+      <strong>AURACARAT PRIVATE LIMITED</strong><br>
+      <strong>Address:</strong> C207 Crystal Plaza, New Link Road, Andheri (W), Mumbai – 400053 Maharashtra<br>
+      <strong>Store Address:</strong> 17th Cross, 19th Main Rd, HSR Layout Sec 2, Opp. Gnan Srishti School, Bengaluru – 560102<br>
+      <strong>Tel:</strong> +91-7710938305 &nbsp;|&nbsp; <strong>Email:</strong> hello@timanti.in &nbsp;|&nbsp; <strong>Website:</strong> www.timanti.in<br>
+      <strong>GSTIN</strong> – 29ABBCA3309B1Z7 &nbsp;|&nbsp; <strong>PAN</strong> – ABBCA3309B
+    </div>
+
+    <div class="invoice-details-grid">
+      <div class="invoice-detail-row">
+        <div class="invoice-detail-cell">
+          <strong>Estimate No.</strong>{{ order.name }}
+        </div>
+        <div class="invoice-detail-cell">
+          <strong>Estimate Date</strong>{{ order.created_at | date: "%d/%m/%Y" }}
+        </div>
+        <div class="invoice-detail-cell">
+          {% comment %}Seven days from the estimate, because the gold rate below moves daily.{% endcomment %}
+          <strong>Valid Until</strong>{{ order.created_at | date: "%s" | plus: 604800 | date: "%d/%m/%Y" }}
+        </div>
+      </div>
+      <div class="invoice-detail-row">
+        <div class="invoice-detail-cell">
+          <strong>Gold Rate 18kt</strong>{% if rate_18k != "" %}₹{{ rate_18k }} /g{% else %}<span class="tbd">—</span>{% endif %}
+        </div>
+        <div class="invoice-detail-cell">
+          <strong>Gold Rate 14kt</strong>{% if rate_14k != "" %}₹{{ rate_14k }} /g{% else %}<span class="tbd">—</span>{% endif %}
+        </div>
+        <div class="invoice-detail-cell">
+          <strong>Rate As Of</strong>{% if gold_updated != "" %}{% assign ist_ts = gold_updated | date: "%s" | plus: 19800 %}{{ ist_ts | date: "%d %b %Y" }}{% else %}{{ order.created_at | date: "%d %b %Y" }}{% endif %}
+        </div>
+      </div>
+      <div class="invoice-detail-row">
+        <div class="invoice-detail-cell" style="grid-column: 1 / -1; font-size: 6px; word-break: break-all;">
+          <strong>SKU Code</strong>
+          {% for line_item in order.line_items %}{{ line_item.sku }}{% unless forloop.last %}<br>{% endunless %}{% endfor %}
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="addresses-section">
+    <div class="address-block">
+      <strong>Prepared For:</strong>
+      {% assign ba = order.billing_address %}
+      {% if ba %}
+        <div class="address-field"><strong>Customer Name:</strong> {{ ba.first_name | upcase }} {{ ba.last_name | upcase }}</div>
+        <div class="address-field"><strong>Address:</strong> {{ ba.address1 }}{% if ba.address2 %}, {{ ba.address2 }}{% endif %}, {{ ba.city }}, {{ ba.province }}{% if ba.zip %} – {{ ba.zip }}{% endif %}, {{ ba.country }}</div>
+        <div class="address-field"><strong>Mobile:</strong> {{ ba.phone }}</div>
+        <div class="address-field"><strong>Email:</strong> {{ order.email }}</div>
+      {% endif %}
+    </div>
+    <div class="address-block">
+      <strong>Delivery To:</strong>
+      {% assign sa = order.shipping_address %}
+      {% if sa %}
+        <div class="address-field"><strong>Customer Name:</strong> {{ sa.first_name | upcase }} {{ sa.last_name | upcase }}</div>
+        <div class="address-field"><strong>Address:</strong> {{ sa.address1 }}{% if sa.address2 %}, {{ sa.address2 }}{% endif %}, {{ sa.city }}, {{ sa.province }}{% if sa.zip %} – {{ sa.zip }}{% endif %}, {{ sa.country }}</div>
+        <div class="address-field"><strong>Mobile:</strong> {{ sa.phone }}</div>
+        <div class="address-field"><strong>Email:</strong> {{ order.email }}</div>
+      {% endif %}
+    </div>
+  </div>
+
+  <table class="items-table">
+    <thead>
+      <tr>
+        <th style="width: 44%;">Price Component</th>
+        <th class="text-center" style="width: 16%;">Weight</th>
+        <th class="text-right" style="width: 18%;">Rate</th>
+        <th class="text-right" style="width: 22%;">Value</th>
+      </tr>
+    </thead>
+    <tbody class="watermark">
+      <img src="https://cdn.shopify.com/s/files/1/0775/8322/0993/files/Timanti_Logo_Black.jpg?v=1766506323" alt="Watermark" class="watermark-image">
+
+      {% assign order_total_rs = 0 %}
+      {% assign piece_no = 0 %}
+
+      {% for line_item in order.line_items %}
+
+        {% comment %}── Product lines only. An exchange note reaches the draft as a negative custom
+        line and a manual discount as a negative-priced line; neither is a piece, and breaking
+        either one into components would print an empty block. Both are handled in the totals
+        section below, exactly as the order confirmation handles them. ──{% endcomment %}
+        {% assign li_title = line_item.title | downcase %}
+        {% assign skip_line = false %}
+        {% if li_title contains "exchange note" %}{% assign skip_line = true %}{% endif %}
+        {% if li_title contains "discount" and line_item.price < 0 %}{% assign skip_line = true %}{% endif %}
+
+        {% unless skip_line %}
+        {% assign piece_no = piece_no | plus: 1 %}
+
+        {% assign qty = line_item.quantity | plus: 0 %}
+        {% if qty < 1 %}{% assign qty = 1 %}{% endif %}
+
+        {% comment %}══ Read every property once ═════════════════════════════════════════════
+        Component VALUES are stored as "Rs44103.00" and are LINE TOTALS (already times
+        quantity). Weights and carats are PER PIECE. Rates are stored bare.
+        ──{% endcomment %}
+        {% assign v_gold = "" %}{% assign v_dia = "" %}{% assign v_making = "" %}{% assign v_gem = "" %}
+        {% assign v_dia_ad = "" %}{% assign v_making_ad = "" %}
+        {% assign v_taxable = "" %}{% assign v_gst = "" %}{% assign v_disc = "0" %}
+        {% assign w_net = "" %}{% assign w_gross = "" %}{% assign c_dia = "" %}{% assign n_dia = "" %}{% assign c_gem = "" %}
+        {% assign r_gold = "" %}{% assign r_making = "" %}{% assign r_gem = "" %}{% assign jcode = "" %}
+        {% for p in line_item.properties %}
+          {% if p.first == "Gold"                    %}{% assign v_gold      = p.last | remove: "Rs" | strip %}{% endif %}
+          {% if p.first == "Diamond"                 %}{% assign v_dia       = p.last | remove: "Rs" | strip %}{% endif %}
+          {% if p.first == "Gemstone"                %}{% assign v_gem       = p.last | remove: "Rs" | strip %}{% endif %}
+          {% if p.first == "Making" or p.first == "Making Charges" %}{% assign v_making = p.last | remove: "Rs" | strip %}{% endif %}
+          {% if p.first == "Diamond (After Discount)" %}{% assign v_dia_ad    = p.last | remove: "Rs" | strip %}{% endif %}
+          {% if p.first == "Making (After Discount)"  %}{% assign v_making_ad = p.last | remove: "Rs" | strip %}{% endif %}
+          {% if p.first == "Taxable Value"           %}{% assign v_taxable   = p.last | remove: "Rs" | strip %}{% endif %}
+          {% if p.first == "GST"                     %}{% assign v_gst       = p.last | remove: "Rs" | strip %}{% endif %}
+          {% if p.first == "Discount Applied"        %}{% assign v_disc      = p.last | remove: "Rs" | strip %}{% endif %}
+          {% if p.first == "_net_wt"                 %}{% assign w_net       = p.last | strip %}{% endif %}
+          {% if p.first == "_gross_wt"               %}{% assign w_gross     = p.last | strip %}{% endif %}
+          {% if p.first == "_diamond_cts"            %}{% assign c_dia       = p.last | strip %}{% endif %}
+          {% if p.first == "_diamond_pcs"            %}{% assign n_dia       = p.last | strip %}{% endif %}
+          {% if p.first == "_gemstone_cts"           %}{% assign c_gem       = p.last | strip %}{% endif %}
+          {% if p.first == "_gold_rate"              %}{% assign r_gold      = p.last | strip %}{% endif %}
+          {% if p.first == "_making_rate"            %}{% assign r_making    = p.last | strip %}{% endif %}
+          {% if p.first == "_gemstone_rate"          %}{% assign r_gem       = p.last | strip %}{% endif %}
+          {% if p.first == "_jewel_code"             %}{% assign jcode       = p.last | strip %}{% endif %}
+        {% endfor %}
+
+        {% comment %}── Fallbacks: every chain ends at the variant or product metafield the
+        catalogue actually holds. Variant breakups are PER UNIT, so they are multiplied by
+        quantity to match the line-total convention of the properties above. ──{% endcomment %}
+        {% if v_gold   == "" and line_item.variant.metafields.custom.price_breakup_gold    %}{% assign v_gold   = line_item.variant.metafields.custom.price_breakup_gold    | times: qty %}{% endif %}
+        {% if v_dia    == "" and line_item.variant.metafields.custom.price_breakup_diamond %}{% assign v_dia    = line_item.variant.metafields.custom.price_breakup_diamond | times: qty %}{% endif %}
+        {% if v_making == "" and line_item.variant.metafields.custom.price_breakup_making  %}{% assign v_making = line_item.variant.metafields.custom.price_breakup_making  | times: qty %}{% endif %}
+        {% comment %}Gemstone value became a line item property on 2026-09-04. Older drafts have
+        none, so the variant metafield the catalogue prices from is read directly.{% endcomment %}
+        {% if v_gem    == "" and line_item.variant.metafields.custom.gemstone_charges      %}{% assign v_gem    = line_item.variant.metafields.custom.gemstone_charges      | times: qty %}{% endif %}
+
+        {% if w_net  == "" and line_item.variant.metafields.custom.net_metal_weight_g   %}{% assign w_net  = line_item.variant.metafields.custom.net_metal_weight_g   %}{% endif %}
+        {% if w_net  == "" and line_item.product.metafields.custom.net_metal_weight_g   %}{% assign w_net  = line_item.product.metafields.custom.net_metal_weight_g   %}{% endif %}
+        {% if w_gross == "" and line_item.variant.metafields.custom.gross_weight_g      %}{% assign w_gross = line_item.variant.metafields.custom.gross_weight_g      %}{% endif %}
+        {% if c_dia  == "" and line_item.product.metafields.custom.totaldiamondweight   %}{% assign c_dia  = line_item.product.metafields.custom.totaldiamondweight   %}{% endif %}
+        {% if c_dia  == "" and line_item.variant.metafields.custom.totaldiamondweight   %}{% assign c_dia  = line_item.variant.metafields.custom.totaldiamondweight   %}{% endif %}
+        {% if n_dia  == "" and line_item.product.metafields.custom.diamond_pcs          %}{% assign n_dia  = line_item.product.metafields.custom.diamond_pcs          %}{% endif %}
+        {% if n_dia  == "" and line_item.product.metafields.custom.totaldiamondcount    %}{% assign n_dia  = line_item.product.metafields.custom.totaldiamondcount    %}{% endif %}
+        {% if c_gem  == "" and line_item.product.metafields.custom.gemstone_weight      %}{% assign c_gem  = line_item.product.metafields.custom.gemstone_weight      %}{% endif %}
+        {% if r_gold == "" and line_item.variant.metafields.custom.gold_rate            %}{% assign r_gold = line_item.variant.metafields.custom.gold_rate            %}{% endif %}
+        {% comment %}The two product rates. custom.making_charges_rate is the quoted labour rate per
+        gram and custom.gemstone_price the quoted stone rate per carat — both live on the PRODUCT,
+        the values they produce on the variant. The rate column is left blank when neither the line
+        nor the product carries a rate, which is the case when a flat custom.making override set the
+        labour: the amount is then simply what was agreed, and there is no per-gram rate to show.{% endcomment %}
+        {% if r_making == "" and line_item.product.metafields.custom.making_charges_rate %}{% assign r_making = line_item.product.metafields.custom.making_charges_rate %}{% endif %}
+        {% if r_gem  == "" and line_item.product.metafields.custom.gemstone_price       %}{% assign r_gem  = line_item.product.metafields.custom.gemstone_price       %}{% endif %}
+
+        {% comment %}times: 1.0 rather than plus: 0 throughout — Liquid does INTEGER division when
+        both operands are integers, so a value like "61920" over carats "1" would silently truncate
+        the per-carat rate. Forcing every operand to a float makes the arithmetic exact.{% endcomment %}
+        {% assign n_gold   = v_gold   | times: 1.0 %}
+        {% assign n_dia_v  = v_dia    | times: 1.0 %}
+        {% assign n_mk     = v_making | times: 1.0 %}
+        {% assign n_gem_v  = v_gem    | times: 1.0 %}
+        {% assign n_disc   = v_disc   | times: 1.0 %}
+        {% assign subtotal = n_gold | plus: n_dia_v | plus: n_mk | plus: n_gem_v %}
+
+        {% comment %}── Metal, from the variant title: "18K / YG / 18"" reads as 18K Yellow Gold ──{% endcomment %}
+        {% assign vt = line_item.variant_title | split: " / " %}
+        {% assign metal_karat = vt[0] | strip %}
+        {% assign metal_tone = "" %}
+        {% if vt[1] %}
+          {% assign tone_code = vt[1] | strip | upcase %}
+          {% if tone_code == "YG" %}{% assign metal_tone = "Yellow Gold" %}
+          {% elsif tone_code == "WG" %}{% assign metal_tone = "White Gold" %}
+          {% elsif tone_code == "RG" %}{% assign metal_tone = "Rose Gold" %}
+          {% else %}{% assign metal_tone = tone_code %}{% endif %}
+        {% endif %}
+
+        {% comment %}══ Piece header ═════════════════════════════════════════════════════════{% endcomment %}
+        {% comment %}line_item.title already reads "Product Title - 18K / YG / 14" in Order Printer,
+        so printing it AND variant_title spelled the options out twice. product.title is the clean
+        name; the options are appended once, with the gross weight inside the same brackets rather
+        than floating in a column of its own.{% endcomment %}
+        {% assign piece_title = line_item.product.title | default: line_item.title %}
+        <tr class="piece-row">
+          <td colspan="4">
+            {{ piece_no }}. {{ piece_title }}{% if line_item.variant_title != blank or w_gross != "" %} ({% if line_item.variant_title != blank %}{{ line_item.variant_title }}{% endif %}{% if line_item.variant_title != blank and w_gross != "" %}, {% endif %}{% if w_gross != "" %}{{ w_gross | plus: 0 | round: 3 }} g gross{% endif %}){% endif %}
+            <span class="piece-sub">
+              {% if jcode != "" %}&nbsp;·&nbsp;{{ jcode }}{% endif %}
+              {% if qty > 1 %}&nbsp;·&nbsp;Qty {{ qty }}{% endif %}
+            </span>
+          </td>
+        </tr>
+
+        {% comment %}── Gold. Weight and rate are both stored, so nothing here is derived. On a
+        multi-piece line the weight is shown as "2 × 4.820 g" — the rate is per gram of one
+        piece, and the value covers them all. ──{% endcomment %}
+        {% if n_gold > 0 %}
+          <tr class="component-row">
+            <td class="component-label">
+              Gold{% if metal_karat != blank %} — {{ metal_karat }}{% if metal_tone != "" %} {{ metal_tone }}{% endif %}{% endif %}
+            </td>
+            <td class="text-center">
+              {% if w_net != "" %}{% if qty > 1 %}{{ qty }} &times; {% endif %}{{ w_net | plus: 0 | round: 3 }} g <span class="qualifier">net</span>{% else %}<span class="tbd">TBC</span>{% endif %}
+            </td>
+            <td class="text-right">{% if r_gold != "" %}₹{{ r_gold | plus: 0 | times: 100 | round | money_without_currency | remove: ',' }} /g{% else %}—{% endif %}</td>
+            <td class="text-right">₹{{ n_gold | times: 100 | round | money_without_currency | remove: ',' }}</td>
+          </tr>
+        {% endif %}
+
+        {% comment %}── Diamonds. Pieces, carats and value — no rate. The per-carat figure used to be
+        derived here as value ÷ carats, and it is deliberately gone: a parcel is not priced at one
+        flat rate per carat, so a derived number invites the customer to multiply it back out and
+        arrive at a price we never quoted. Coloured stones below keep their rate, which is the
+        product's own stored custom.gemstone_price — quoted, not reverse-engineered. ──{% endcomment %}
+        {% if n_dia_v > 0 %}
+          <tr class="component-row">
+            <td class="component-label">
+              Diamonds{% if n_dia != "" and n_dia != "0" %} — {{ n_dia }} pcs{% endif %}
+            </td>
+            <td class="text-center">
+              {% if c_dia != "" and c_dia != "0.00" %}{{ c_dia | plus: 0 | round: 3 }} ct{% else %}<span class="tbd">TBC</span>{% endif %}
+            </td>
+            <td class="text-right">—</td>
+            <td class="text-right">₹{{ n_dia_v | times: 100 | round | money_without_currency | remove: ',' }}</td>
+          </tr>
+        {% endif %}
+
+        {% comment %}── Coloured stones. Priced as a component in its own right since 2026-09-04;
+        the rate is the product's own custom.gemstone_price, never the diamond rate. The whole
+        row disappears on a piece with no coloured stones. ──{% endcomment %}
+        {% if n_gem_v > 0 %}
+          <tr class="component-row">
+            <td class="component-label">Coloured stones</td>
+            <td class="text-center">
+              {% if c_gem != "" and c_gem != "0.00" %}{{ c_gem | plus: 0 | round: 3 }} ct{% else %}<span class="tbd">TBC</span>{% endif %}
+            </td>
+            <td class="text-right">{% if r_gem != "" %}₹{{ r_gem | plus: 0 | times: 100 | round | money_without_currency | remove: ',' }} /ct{% else %}—{% endif %}</td>
+            <td class="text-right">₹{{ n_gem_v | times: 100 | round | money_without_currency | remove: ',' }}</td>
+          </tr>
+        {% endif %}
+
+        {% comment %}── Making. A rate prints only when _making_rate is on the line, which the
+        middleware writes only when a per-gram rate actually produced the value. Labour agreed as
+        a flat amount shows its value and a dash — never a rate reverse-engineered from it. ──{% endcomment %}
+        {% if n_mk > 0 %}
+          <tr class="component-row">
+            <td class="component-label">
+              Making charges
+            </td>
+            <td class="text-center">
+              {% if w_net != "" %}{% if qty > 1 %}{{ qty }} &times; {% endif %}{{ w_net | plus: 0 | round: 3 }} g{% else %}—{% endif %}
+            </td>
+            <td class="text-right">{% if r_making != "" %}₹{{ r_making | plus: 0 | times: 100 | round | money_without_currency | remove: ',' }} /g{% endif %}</td>
+            <td class="text-right">₹{{ n_mk | times: 100 | round | money_without_currency | remove: ',' }}</td>
+          </tr>
+        {% endif %}
+
+        {% comment %}══ Discount, split by what it landed on ═══════════════════════════════════
+        A per-line discount stacks across three targets at once — diamond, making and the whole
+        line — and they are summed into one "Discount Applied". The split is recoverable only by
+        subtraction: each after-discount property is the component minus the cut that targeted it,
+        so whatever the two do not explain was a discount on the line as a whole.
+
+        When neither after-discount property is present (a line last touched by the manual reprice
+        endpoint, which does not write them) there is nothing to attribute, so a single unlabelled
+        Discount row prints instead of guessing a target.
+        ──{% endcomment %}
+        {% assign disc_dia = 0 %}
+        {% assign disc_mk  = 0 %}
+        {% assign has_split = false %}
+        {% if v_dia_ad != "" %}
+          {% assign has_split = true %}
+          {% assign disc_dia = n_dia_v | minus: v_dia_ad %}
+          {% if disc_dia < 0.01 %}{% assign disc_dia = 0 %}{% endif %}
+        {% endif %}
+        {% if v_making_ad != "" %}
+          {% assign has_split = true %}
+          {% assign disc_mk = n_mk | minus: v_making_ad %}
+          {% if disc_mk < 0.01 %}{% assign disc_mk = 0 %}{% endif %}
+        {% endif %}
+        {% assign disc_rest = n_disc | minus: disc_dia | minus: disc_mk %}
+        {% if disc_rest < 0.01 %}{% assign disc_rest = 0 %}{% endif %}
+
+        {% if disc_dia > 0 %}
+          <tr class="component-row discount-row">
+            <td class="component-label">Less: Discount on diamonds</td>
+            <td class="text-center">—</td>
+            <td class="text-right">—</td>
+            <td class="text-right">− ₹{{ disc_dia | times: 100 | round | money_without_currency | remove: ',' }}</td>
+          </tr>
+        {% endif %}
+        {% if disc_mk > 0 %}
+          <tr class="component-row discount-row">
+            <td class="component-label">Less: Discount on making</td>
+            <td class="text-center">—</td>
+            <td class="text-right">—</td>
+            <td class="text-right">− ₹{{ disc_mk | times: 100 | round | money_without_currency | remove: ',' }}</td>
+          </tr>
+        {% endif %}
+        {% if disc_rest > 0 %}
+          <tr class="component-row discount-row">
+            <td class="component-label">Less: Discount{% if has_split %} on order value{% endif %}</td>
+            <td class="text-center">—</td>
+            <td class="text-right">—</td>
+            <td class="text-right">− ₹{{ disc_rest | times: 100 | round | money_without_currency | remove: ',' }}</td>
+          </tr>
+        {% endif %}
+
+        {% comment %}══ Taxable, GST, item total ═══════════════════════════════════════════════
+        Taxable Value is read DIRECTLY, never re-derived from Gross Value. Gross Value means
+        pre-discount on a line the reprice engine wrote and post-discount on one the manual
+        endpoint wrote, so dividing it and subtracting the discount would double-count that
+        discount on the manual lines. Taxable Value carries the same meaning in every path.
+        ──{% endcomment %}
+        {% assign taxable = 0 %}
+        {% if v_taxable != "" %}
+          {% assign taxable = v_taxable | times: 1.0 %}
+        {% else %}
+          {% assign taxable = subtotal | minus: n_disc %}
+        {% endif %}
+        {% if taxable < 0 %}{% assign taxable = 0 %}{% endif %}
+
+        {% assign gst = 0 %}
+        {% if v_gst != "" %}
+          {% assign gst = v_gst | times: 1.0 %}
+        {% else %}
+          {% assign gst = taxable | times: 0.03 %}
+        {% endif %}
+
+        {% comment %}Accumulated but NOT printed per piece. Each piece closes on its GST line; the
+        only total on the document is the order's, so the estimate reads as one price made of parts
+        rather than a stack of sub-invoices. The order total is still the sum of Taxable + GST across
+        the pieces, so it ties to the rows above it.{% endcomment %}
+        {% assign item_total = taxable | plus: gst %}
+        {% assign order_total_rs = order_total_rs | plus: item_total %}
+
+        {% comment %}A product line the pricing engine has never touched carries no components and
+        no Taxable Value. Say so rather than printing a silent zero — staff need to know to reprice
+        before this reaches a customer.{% endcomment %}
+        {% if subtotal <= 0 and taxable <= 0 %}
+          <tr class="component-row">
+            <td colspan="4" class="text-center tbd">Pricing for this piece is not yet finalised.</td>
+          </tr>
+        {% else %}
+          <tr class="component-row">
+            <td colspan="3" class="text-right">Taxable value</td>
+            <td class="text-right">₹{{ taxable | times: 100 | round | money_without_currency | remove: ',' }}</td>
+          </tr>
+          <tr class="component-row">
+            <td colspan="3" class="text-right">GST @ 3%</td>
+            <td class="text-right">₹{{ gst | times: 100 | round | money_without_currency | remove: ',' }}</td>
+          </tr>
+          <tr class="item-total-row">
+            <td colspan="3" class="text-right">Item {{ piece_no }} total (incl. GST)</td>
+            <td class="text-right">₹{{ item_total | times: 100 | round | money_without_currency | remove: ',' }}</td>
+          </tr>
+        {% endif %}
+
+        {% endunless %}
+      {% endfor %}
+
+      {% comment %}══ Order totals ═══════════════════════════════════════════════════════════
+      Summed from the item totals above, which are themselves Taxable + GST — so the estimate
+      total always ties to the sum of its own rows.
+      ──{% endcomment %}
+      {% assign estimate_total = order_total_rs | times: 100 | round %}
+
+      <tr class="total-row">
+        <td colspan="3" class="text-right"><strong>Total Estimate Value (incl. GST)</strong></td>
+        <td class="text-right"><strong>₹{{ estimate_total | money_without_currency | remove: ',' }}</strong></td>
+      </tr>
+
+      {% assign final_payable = estimate_total %}
+
+      {% comment %}══ Post-tax adjustments ═══════════════════════════════════════════════════
+      Verbatim from the order confirmation: metafield first, note attribute as the fallback for
+      when Order Printer resolves no metafields at print time. These are the only deductions that
+      happen AFTER the 3% — everything inside a line is already net of its discounts.
+      ──{% endcomment %}
+      {% assign og_value  = order.metafields.custom.old_gold_value.value  | default: order.metafields.custom.old_gold_value  | plus: 0 %}
+      {% assign og_weight = order.metafields.custom.old_gold_weight.value | default: order.metafields.custom.old_gold_weight | plus: 0 %}
+      {% assign og_karat  = order.metafields.custom.old_gold_purity.value | default: order.metafields.custom.old_gold_purity | default: "" %}
+      {% for attr in order.note_attributes %}
+        {% if attr.name == "old_gold_value"  and og_value  == 0 %}{% assign og_value  = attr.value | plus: 0 %}{% endif %}
+        {% if attr.name == "old_gold_weight" and og_weight == 0 %}{% assign og_weight = attr.value | plus: 0 %}{% endif %}
+        {% if attr.name == "old_gold_purity" and og_karat  == "" %}{% assign og_karat  = attr.value %}{% endif %}
+        {% if attr.name == "old_gold_karat"  and og_karat  == "" %}{% assign og_karat  = attr.value %}{% endif %}
+      {% endfor %}
+      {% if og_value > 0 %}
+        {% assign og_value_paise = og_value | times: 100 | round %}
+        <tr class="totals-row">
+          <td colspan="3" class="text-right" style="border-top: 1px solid #ccc;">Less: Consideration against Gold received ({{ og_weight }}g{% if og_karat != "" %}, {{ og_karat }}kt{% endif %})</td>
+          <td class="text-right" style="border-top: 1px solid #ccc;">− ₹{{ og_value_paise | money_without_currency | remove: ',' }}</td>
+        </tr>
+        {% assign final_payable = final_payable | minus: og_value_paise %}
+      {% endif %}
+
+      {% assign exc_value = order.metafields.custom.exchange_note_value.value | default: order.metafields.custom.exchange_note_value | plus: 0 %}
+      {% for attr in order.note_attributes %}
+        {% if attr.name == "exchange_note_value" and exc_value == 0 %}{% assign exc_value = attr.value | plus: 0 %}{% endif %}
+      {% endfor %}
+      {% if exc_value > 0 %}
+        {% assign exc_value_paise = exc_value | times: 100 | round %}
+        <tr class="totals-row">
+          <td colspan="3" class="text-right" style="border-top: 1px solid #ccc;">Less: Exchange Note Adjustment</td>
+          <td class="text-right" style="border-top: 1px solid #ccc;">− ₹{{ exc_value_paise | money_without_currency | remove: ',' }}</td>
+        </tr>
+        {% assign final_payable = final_payable | minus: exc_value_paise %}
+      {% endif %}
+
+      {% assign voucher_value = order.metafields.custom.voucher_value.value | default: order.metafields.custom.voucher_value | plus: 0 %}
+      {% assign voucher_code  = "" %}
+      {% for attr in order.note_attributes %}
+        {% if attr.name == "voucher_value" and voucher_value == 0 %}{% assign voucher_value = attr.value | plus: 0 %}{% endif %}
+      {% endfor %}
+      {% for tag in order.tags %}
+        {% assign _t = tag | strip %}
+        {% if _t contains "voucher-num:" %}{% assign voucher_code = _t | remove: "voucher-num:" | strip %}{% endif %}
+      {% endfor %}
+      {% if voucher_value > 0 %}
+        {% assign voucher_value_paise = voucher_value | times: 100 | round %}
+        <tr class="totals-row">
+          <td colspan="3" class="text-right" style="border-top: 1px solid #ccc;">Less: Voucher Adjustment{% if voucher_code != "" %} ({{ voucher_code }}){% endif %}</td>
+          <td class="text-right" style="border-top: 1px solid #ccc;">− ₹{{ voucher_value_paise | money_without_currency | remove: ',' }}</td>
+        </tr>
+        {% assign final_payable = final_payable | minus: voucher_value_paise %}
+      {% endif %}
+
+      {% if og_value > 0 or exc_value > 0 or voucher_value > 0 %}
+        {% if final_payable < 0 %}{% assign final_payable = 0 %}{% endif %}
+        <tr class="total-row">
+          <td colspan="3" class="text-right"><strong>Net Payable</strong></td>
+          <td class="text-right"><strong>₹{{ final_payable | money_without_currency | remove: ',' }}</strong></td>
+        </tr>
+      {% endif %}
+
+      {% comment %}══ Money already taken against this draft ═════════════════════════════════
+      Up to four installment legs and up to two refunds, read exactly the way the tax invoice
+      reads them: the flat installment_N / refund_N metafields first, then the i1: to i4: and
+      r1: to r2: tags for when Order Printer hands this template empty order.metafields at print
+      time. The middleware writes both onto the DRAFT on every recompute, so an estimate the
+      customer has already paid against can show what has moved.
+
+      Legs are stored in RUPEES. Every other figure in this totals block is PAISE, so each leg is
+      scaled by 100 before it meets final_payable.
+
+      A cad_advance leg prints as Design Advance and counts as money paid, exactly as on the
+      invoice — it is settled against this order either way.
+
+      Balance Pending is measured against final_payable, not against the gross estimate value: the
+      gold, exchange and voucher adjustments above have already reduced what is owed, and the
+      balance has to be the number the customer would actually hand over.
+
+      NOTE: keep angle brackets out of this comment. Order Printer validates the template as HTML
+      and reads them as unknown tags, rejecting the paste with "Tag value invalid".
+      ──{% endcomment %}
+      {% assign inst_rows = "" %}
+      {% for i in (1..4) %}
+        {% case i %}
+          {% when 1 %}
+            {% assign _v = order.metafields.custom.installment_1_value.value | default: order.metafields.custom.installment_1_value | plus: 0 %}
+            {% assign _m = order.metafields.custom.installment_1_mode.value  | default: order.metafields.custom.installment_1_mode  | append: "" %}
+            {% assign _d = order.metafields.custom.installment_1_date.value  | default: order.metafields.custom.installment_1_date  | append: "" %}
+            {% assign _t = order.metafields.custom.installment_1_type.value  | default: order.metafields.custom.installment_1_type  | append: "" %}
+          {% when 2 %}
+            {% assign _v = order.metafields.custom.installment_2_value.value | default: order.metafields.custom.installment_2_value | plus: 0 %}
+            {% assign _m = order.metafields.custom.installment_2_mode.value  | default: order.metafields.custom.installment_2_mode  | append: "" %}
+            {% assign _d = order.metafields.custom.installment_2_date.value  | default: order.metafields.custom.installment_2_date  | append: "" %}
+            {% assign _t = "" %}
+          {% when 3 %}
+            {% assign _v = order.metafields.custom.installment_3_value.value | default: order.metafields.custom.installment_3_value | plus: 0 %}
+            {% assign _m = order.metafields.custom.installment_3_mode.value  | default: order.metafields.custom.installment_3_mode  | append: "" %}
+            {% assign _d = order.metafields.custom.installment_3_date.value  | default: order.metafields.custom.installment_3_date  | append: "" %}
+            {% assign _t = "" %}
+          {% when 4 %}
+            {% assign _v = order.metafields.custom.installment_4_value.value | default: order.metafields.custom.installment_4_value | plus: 0 %}
+            {% assign _m = order.metafields.custom.installment_4_mode.value  | default: order.metafields.custom.installment_4_mode  | append: "" %}
+            {% assign _d = order.metafields.custom.installment_4_date.value  | default: order.metafields.custom.installment_4_date  | append: "" %}
+            {% assign _t = "" %}
+        {% endcase %}
+        {% if _v > 0 %}
+          {% assign inst_rows = inst_rows | append: _d | append: "|" | append: _m | append: "|" | append: _v | append: "|" | append: _t | append: "~" %}
+        {% endif %}
+      {% endfor %}
+      {% if inst_rows == "" %}
+        {% for i in (1..4) %}
+          {% assign pfx = "i" | append: i | append: ":" %}
+          {% for tg in order.tags %}
+            {% assign t = tg | strip %}
+            {% if t contains pfx %}
+              {% assign pp = t | remove_first: pfx | split: "@" %}
+              {% assign _v = pp[0] | plus: 0 %}
+              {% if _v > 0 %}
+                {% assign _m = pp[1] | default: "" %}
+                {% assign _d = pp[2] | default: "" %}
+                {% assign _t = "" %}
+                {% if pp[3] == "c" %}{% assign _t = "cad_advance" %}{% endif %}
+                {% assign inst_rows = inst_rows | append: _d | append: "|" | append: _m | append: "|" | append: _v | append: "|" | append: _t | append: "~" %}
+              {% endif %}
+            {% endif %}
+          {% endfor %}
+        {% endfor %}
+      {% endif %}
+      {% assign inst_list = inst_rows | split: "~" %}
+
+      {% assign refund_rows = "" %}
+      {% for i in (1..2) %}
+        {% case i %}
+          {% when 1 %}
+            {% assign _rv = order.metafields.custom.refund_1_value.value | default: order.metafields.custom.refund_1_value | plus: 0 %}
+            {% assign _rm = order.metafields.custom.refund_1_mode.value  | default: order.metafields.custom.refund_1_mode  | append: "" %}
+            {% assign _rd = order.metafields.custom.refund_1_date.value  | default: order.metafields.custom.refund_1_date  | append: "" %}
+          {% when 2 %}
+            {% assign _rv = order.metafields.custom.refund_2_value.value | default: order.metafields.custom.refund_2_value | plus: 0 %}
+            {% assign _rm = order.metafields.custom.refund_2_mode.value  | default: order.metafields.custom.refund_2_mode  | append: "" %}
+            {% assign _rd = order.metafields.custom.refund_2_date.value  | default: order.metafields.custom.refund_2_date  | append: "" %}
+        {% endcase %}
+        {% if _rv > 0 %}
+          {% assign refund_rows = refund_rows | append: _rd | append: "|" | append: _rm | append: "|" | append: _rv | append: "~" %}
+        {% endif %}
+      {% endfor %}
+      {% if refund_rows == "" %}
+        {% for i in (1..2) %}
+          {% assign rpfx = "r" | append: i | append: ":" %}
+          {% for tg in order.tags %}
+            {% assign t = tg | strip %}
+            {% if t contains rpfx %}
+              {% assign rp = t | remove_first: rpfx | split: "@" %}
+              {% assign _rv = rp[0] | plus: 0 %}
+              {% if _rv > 0 %}
+                {% assign _rm = rp[1] | default: "" %}
+                {% assign _rd = rp[2] | default: "" %}
+                {% assign refund_rows = refund_rows | append: _rd | append: "|" | append: _rm | append: "|" | append: _rv | append: "~" %}
+              {% endif %}
+            {% endif %}
+          {% endfor %}
+        {% endfor %}
+      {% endif %}
+      {% assign refund_list = refund_rows | split: "~" %}
+
+      {% if inst_list.size > 0 or refund_list.size > 0 %}
+        {% assign paid_paise = 0 %}
+        {% for row in inst_list %}
+          {% assign pay_c = row | split: "|" %}
+          {% assign leg_paise = pay_c[2] | plus: 0 | times: 100 | round %}
+          {% assign paid_paise = paid_paise | plus: leg_paise %}
+          <tr class="totals-row">
+            <td colspan="3" class="text-right"{% if forloop.first %} style="border-top: 1px solid #ccc;"{% endif %}>
+              {% if pay_c[3] == "cad_advance" %}Design Advance{% else %}Amount Paid{% endif %}
+              {% if pay_c[0] != "" %}&nbsp;<em style="color:#555;">{{ pay_c[0] | date: "%d %b %Y" }}</em>{% endif %}
+              {% if pay_c[1] != "" %}&nbsp;<em style="color:#555;">({{ pay_c[1] }})</em>{% endif %}
+            </td>
+            <td class="text-right"{% if forloop.first %} style="border-top: 1px solid #ccc;"{% endif %}>₹{{ leg_paise | money_without_currency | remove: ',' }}</td>
+          </tr>
+        {% endfor %}
+
+        {% comment %}A refund reverses a PAYMENT. It never reduces the quoted price, so it sits
+        here among the money rows and not with the adjustments above.{% endcomment %}
+        {% for row in refund_list %}
+          {% assign pay_r = row | split: "|" %}
+          {% assign ref_paise = pay_r[2] | plus: 0 | times: 100 | round %}
+          {% assign paid_paise = paid_paise | minus: ref_paise %}
+          <tr class="totals-row">
+            <td colspan="3" class="text-right"{% if forloop.first and inst_list.size == 0 %} style="border-top: 1px solid #ccc;"{% endif %}>
+              Less: Refund
+              {% if pay_r[0] != "" %}&nbsp;<em style="color:#555;">{{ pay_r[0] | date: "%d %b %Y" }}</em>{% endif %}
+              {% if pay_r[1] != "" %}&nbsp;<em style="color:#555;">({{ pay_r[1] }})</em>{% endif %}
+            </td>
+            <td class="text-right"{% if forloop.first and inst_list.size == 0 %} style="border-top: 1px solid #ccc;"{% endif %}>− ₹{{ ref_paise | money_without_currency | remove: ',' }}</td>
+          </tr>
+        {% endfor %}
+
+        {% comment %}The net only earns a row when more than one thing moved — against a single
+        payment and no refund it would simply restate the row above it.{% endcomment %}
+        {% assign money_rows = inst_list.size | plus: refund_list.size %}
+        {% if money_rows > 1 %}
+          <tr class="totals-row">
+            <td colspan="3" class="text-right">Net Amount Paid</td>
+            <td class="text-right">₹{{ paid_paise | money_without_currency | remove: ',' }}</td>
+          </tr>
+        {% endif %}
+
+        {% comment %}Clamped at zero: money taken past the estimate is an excess to be settled when
+        the piece is billed, not a negative balance on a document that quotes a price.{% endcomment %}
+        {% assign balance_pending = final_payable | minus: paid_paise %}
+        {% if balance_pending < 0 %}{% assign balance_pending = 0 %}{% endif %}
+        <tr class="total-row">
+          <td colspan="3" class="text-right"><strong>Balance Pending</strong></td>
+          <td class="text-right"><strong>₹{{ balance_pending | money_without_currency | remove: ',' }}</strong></td>
+        </tr>
+      {% endif %}
+    </tbody>
+  </table>
+
+  <div style="padding: 4px 10px; font-size: 7.5px; font-style: italic; border-top: 1px solid #ccc;">
+    Weights, stone counts and prices shown are indicative estimates against the gold rate quoted above. Final weights and price will be confirmed on the tax invoice at the time of dispatch.
+  </div>
+
+  <div class="amount-words">
+    <span>
+      {% assign ones = "Zero,One,Two,Three,Four,Five,Six,Seven,Eight,Nine,Ten,Eleven,Twelve,Thirteen,Fourteen,Fifteen,Sixteen,Seventeen,Eighteen,Nineteen" | split: "," %}
+      {% assign tens = "Zero,Ten,Twenty,Thirty,Forty,Fifty,Sixty,Seventy,Eighty,Ninety" | split: "," %}
+      {% assign total_int = final_payable | divided_by: 100 | floor %}
+      {% assign words = "" %}
+      {% assign crores = total_int | divided_by: 10000000 %}
+      {% if crores > 0 %}{% assign temp = crores | modulo: 100 %}{% if temp < 20 %}{% assign words = words | append: ones[temp] | append: " " %}{% else %}{% assign td = temp | divided_by: 10 %}{% assign od = temp | modulo: 10 %}{% assign words = words | append: tens[td] %}{% if od > 0 %}{% assign words = words | append: "-" | append: ones[od] %}{% endif %}{% assign words = words | append: " " %}{% endif %}{% assign words = words | append: "Crore " %}{% assign total_int = total_int | modulo: 10000000 %}{% endif %}
+      {% assign lakhs = total_int | divided_by: 100000 %}
+      {% if lakhs > 0 %}{% assign temp = lakhs | modulo: 100 %}{% if temp < 20 %}{% assign words = words | append: ones[temp] | append: " " %}{% else %}{% assign td = temp | divided_by: 10 %}{% assign od = temp | modulo: 10 %}{% assign words = words | append: tens[td] %}{% if od > 0 %}{% assign words = words | append: "-" | append: ones[od] %}{% endif %}{% assign words = words | append: " " %}{% endif %}{% assign words = words | append: "Lakh " %}{% assign total_int = total_int | modulo: 100000 %}{% endif %}
+      {% assign thousands = total_int | divided_by: 1000 %}
+      {% if thousands > 0 %}{% assign temp = thousands | modulo: 100 %}{% if temp < 20 %}{% assign words = words | append: ones[temp] | append: " " %}{% else %}{% assign td = temp | divided_by: 10 %}{% assign od = temp | modulo: 10 %}{% assign words = words | append: tens[td] %}{% if od > 0 %}{% assign words = words | append: "-" | append: ones[od] %}{% endif %}{% assign words = words | append: " " %}{% endif %}{% assign words = words | append: "Thousand " %}{% assign total_int = total_int | modulo: 1000 %}{% endif %}
+      {% assign hundreds = total_int | divided_by: 100 %}{% if hundreds > 0 %}{% assign words = words | append: ones[hundreds] | append: " Hundred " %}{% assign total_int = total_int | modulo: 100 %}{% endif %}
+      {% if total_int > 0 %}{% if total_int < 20 %}{% assign words = words | append: ones[total_int] %}{% else %}{% assign td = total_int | divided_by: 10 %}{% assign od = total_int | modulo: 10 %}{% assign words = words | append: tens[td] %}{% if od > 0 %}{% assign words = words | append: "-" | append: ones[od] %}{% endif %}{% endif %}{% endif %}
+      Amount in Words: Rupees {{ words }} Only
+    </span>
+    <span>E. &amp; O. E.</span>
+  </div>
+
+  <div class="footer-section">
+    <div class="footer-left">
+      <h3>Terms of this Estimate</h3>
+      <p>
+        <strong>1.</strong> This is a pricing estimate issued for approval. It is not a tax invoice, not a demand for payment, and creates no obligation on either party until the order is confirmed.<br>
+        <strong>2.</strong> Prices are quoted against the gold rate stated above. Gold rates move daily; a change in the rate revises this estimate.<br>
+        <strong>3.</strong> Weights, stone counts and carat weights are the design specification. Actual weights are confirmed after production and the final price is billed on the tax invoice.<br>
+        <strong>4.</strong> Making charges are quoted per gram of net metal weight. Where no rate is shown, the amount stated is the agreed labour for that piece.<br>
+        <strong>5.</strong> Any disputes subject to Mumbai jurisdiction.<br>
+        <strong>6.</strong> The terms printed here are a summary only. Our full terms and conditions, including our returns, exchange, buyback and warranty policies, are published at www.timanti.in and are the terms that govern this transaction.
+      </p>
+    </div>
+    <div class="footer-right">
+      <h3>Bank Details:</h3>
+      <p>
+        <strong>1. ACCOUNT NAME:</strong> AURACARAT PVT LTD<br>
+        <strong>2. BANK A/C NUMBER:</strong> 924020062754092<br>
+        <strong>3. IFSC:</strong> UTIB0000186<br>
+        <strong>4. BANK:</strong> AXIS BANK, MATRU SMRITI, LINKING ROAD, KHAR WEST, MUMBAI 400052
+      </p>
+      <br>
+      <p style="text-align: right;"><strong>For – Auracarat Private Limited</strong></p>
+    </div>
+  </div>
+
+  <div style="border-top: 2px solid #000; padding: 10px 14px; font-size: 7.5px; color: #444; text-align: center; line-height: 1.5;">
+    <strong>COMPUTER GENERATED PRICING ESTIMATE</strong> — This estimate has been electronically generated and is valid without a physical signature or stamp. It is not a tax invoice and no GST is charged on this document; GST shown against each piece is indicative of what will be charged on the final tax invoice.
+  </div>
+
+</div>

@@ -58,6 +58,17 @@
 {% assign from_key  = from_code | remove: "-" | remove: " " %}
 {% assign to_key    = to_code   | remove: "-" | remove: " " %}
 
+{% comment %}
+  Ship Outside Codes: staff flag on the draft that says this movement goes to a customer, not to
+  another store. When it is Yes the consignee is taken from the draft's own shipping (then
+  billing) address and the typed delivery_code is ignored — staff can flip the toggle on a draft
+  that already has a code, because the extension greys the field without clearing it.
+  "true" is accepted alongside "yes" in case the field is ever migrated to a real boolean.
+{% endcomment %}
+{% assign ship_outside = order.metafields.custom.ship_outside_codes | strip | downcase %}
+{% assign is_outside = false %}
+{% if ship_outside == "yes" or ship_outside == "true" %}{% assign is_outside = true %}{% endif %}
+
 {% if from_key == "MHHQ" %}
   {% assign from_entity   = "Auracarat Pvt Ltd" %}
   {% assign from_addr     = "C207 Crystal Plaza, New Link Road, Andheri (W), Mumbai – 400053 Maharashtra" %}
@@ -84,7 +95,24 @@
   {% assign from_phone    = "" %}
 {% endif %}
 
-{% if to_key == "KAHSR" %}
+{% if is_outside %}
+  {% assign _to = order.shipping_address %}
+  {% if _to == blank %}{% assign _to = order.billing_address %}{% endif %}
+  {% assign _pc = _to.province_code | strip | upcase %}
+  {% if _pc == "JK" %}{% assign to_state = "01 Jammu & Kashmir" %}{% elsif _pc == "HP" %}{% assign to_state = "02 Himachal Pradesh" %}{% elsif _pc == "PB" %}{% assign to_state = "03 Punjab" %}{% elsif _pc == "CH" %}{% assign to_state = "04 Chandigarh" %}{% elsif _pc == "UK" %}{% assign to_state = "05 Uttarakhand" %}{% elsif _pc == "HR" %}{% assign to_state = "06 Haryana" %}{% elsif _pc == "DL" %}{% assign to_state = "07 Delhi" %}{% elsif _pc == "RJ" %}{% assign to_state = "08 Rajasthan" %}{% elsif _pc == "UP" %}{% assign to_state = "09 Uttar Pradesh" %}{% elsif _pc == "BR" %}{% assign to_state = "10 Bihar" %}{% elsif _pc == "SK" %}{% assign to_state = "11 Sikkim" %}{% elsif _pc == "AR" %}{% assign to_state = "12 Arunachal Pradesh" %}{% elsif _pc == "NL" %}{% assign to_state = "13 Nagaland" %}{% elsif _pc == "MN" %}{% assign to_state = "14 Manipur" %}{% elsif _pc == "MZ" %}{% assign to_state = "15 Mizoram" %}{% elsif _pc == "TR" %}{% assign to_state = "16 Tripura" %}{% elsif _pc == "ML" %}{% assign to_state = "17 Meghalaya" %}{% elsif _pc == "AS" %}{% assign to_state = "18 Assam" %}{% elsif _pc == "WB" %}{% assign to_state = "19 West Bengal" %}{% elsif _pc == "JH" %}{% assign to_state = "20 Jharkhand" %}{% elsif _pc == "OR" %}{% assign to_state = "21 Odisha" %}{% elsif _pc == "CT" %}{% assign to_state = "22 Chhattisgarh" %}{% elsif _pc == "MP" %}{% assign to_state = "23 Madhya Pradesh" %}{% elsif _pc == "GJ" %}{% assign to_state = "24 Gujarat" %}{% elsif _pc == "DN" or _pc == "DD" %}{% assign to_state = "26 Dadra & Nagar Haveli and Daman & Diu" %}{% elsif _pc == "MH" %}{% assign to_state = "27 Maharashtra" %}{% elsif _pc == "KA" %}{% assign to_state = "29 Karnataka" %}{% elsif _pc == "GA" %}{% assign to_state = "30 Goa" %}{% elsif _pc == "LD" %}{% assign to_state = "31 Lakshadweep" %}{% elsif _pc == "KL" %}{% assign to_state = "32 Kerala" %}{% elsif _pc == "TN" %}{% assign to_state = "33 Tamil Nadu" %}{% elsif _pc == "PY" %}{% assign to_state = "34 Puducherry" %}{% elsif _pc == "AN" %}{% assign to_state = "35 Andaman & Nicobar Islands" %}{% elsif _pc == "TG" %}{% assign to_state = "36 Telangana" %}{% elsif _pc == "AP" %}{% assign to_state = "37 Andhra Pradesh" %}{% elsif _pc == "LA" %}{% assign to_state = "38 Ladakh" %}{% else %}{% assign to_state = "" %}{% endif %}
+  {% if _to == blank or to_state == blank %}
+    {% assign to_entity = "⚠ NO CONSIGNEE — Ship Outside Codes is Yes but this draft has no usable customer address" %}
+    {% assign to_addr  = "" %}
+    {% assign to_state = "—" %}
+    {% assign to_email = "" %}
+    {% assign to_phone = "" %}
+  {% else %}
+    {% assign to_entity = _to.name %}
+    {% capture to_addr %}{{ _to.address1 }}{% if _to.address2 != blank %}, {{ _to.address2 }}{% endif %}, {{ _to.city }}, {{ _to.province }}{% if _to.zip != blank %} - {{ _to.zip }}{% endif %}, {{ _to.country }}{% endcapture %}
+    {% assign to_email = order.email %}
+    {% assign to_phone = _to.phone %}
+  {% endif %}
+{% elsif to_key == "KAHSR" %}
   {% assign to_entity = "Auracarat Private Limited (Karnataka) — TIMANTI" %}
   {% assign to_addr   = "No.2634, Opp. Gnan Srishti School, Haralukunte Village, Begur Hobli, 17th Main HSR Layout 2nd Sector, Bengaluru 560102" %}
   {% assign to_gstin  = "29ABBCA3309B1Z7" %}
@@ -107,18 +135,6 @@
   {% assign to_phone  = "" %}
 {% endif %}
 
-{% comment %}
-  Intra- vs inter-state, which drives the CGST/SGST vs IGST split at the foot of the table. It is
-  derived from the RESOLVED state strings, never from the typed codes: splitting the raw code on
-  "-" broke the moment one was entered without its hyphen ("KAHSR" vs "KA-HSR" compared unequal
-  and would have charged IGST on an intra-state movement). An unresolved party never counts as
-  same-state — that document is already printing a ⚠ block and must not be issued.
-{% endcomment %}
-{% assign is_same_state = false %}
-{% if from_state != "—" and to_state != "—" and from_state == to_state %}
-  {% assign is_same_state = true %}
-{% endif %}
-
 {% assign inv_num = order.metafields.custom.serial_code %}{% if inv_num == blank %}{% assign inv_num = order.metafields.custom.serial_display %}{% endif %}{% if inv_num == blank %}{% assign inv_num = order.name %}{% endif %}
 {% assign order_ref = order.metafields.custom.serial_no %}{% if order_ref == blank %}{% assign order_ref = order.name %}{% endif %}
 {% assign inv_date  = order.created_at | date: "%d-%m-%Y" %}
@@ -133,6 +149,8 @@
 {% assign grand_value   = 0 %}
 {% assign grand_gross_g = 0 %}
 {% assign grand_net_g   = 0 %}
+{% assign grand_dia_c   = 0 %}
+{% assign grand_gem_c   = 0 %}
 
 {% comment %}
   ── Grouping key set: karat (SKU segment 3) × HSN (product.custom.hsn_code) ──
@@ -200,7 +218,7 @@
       <strong>{{ to_entity }}</strong><br>
       {{ to_addr }}<br>
       <strong>State Code:</strong> {{ to_state }}<br>
-      <strong>GSTIN:</strong> {{ to_gstin }}<br>
+      {% unless is_outside %}<strong>GSTIN:</strong> {{ to_gstin }}<br>{% endunless %}
       <strong>Email:</strong> {{ to_email }}<br>
       <strong>Phone:</strong> {{ to_phone }}
     </div>
@@ -223,14 +241,14 @@
     <thead>
       <tr>
         <th style="width:5%;"  class="text-center">S.No.</th>
-        <th style="width:28%;">Description of Goods</th>
+        <th style="width:27%;">Description of Goods</th>
         <th class="text-center" style="width:10%;">HSN of Goods</th>
         <th class="text-center" style="width:6%;">Qty</th>
         <th class="text-center" style="width:9%;">Gross Wt (g)</th>
         <th class="text-center" style="width:9%;">Net Wt (g)</th>
         <th class="text-center" style="width:9%;">Dia Wt (cts)</th>
-        <th class="text-right"  style="width:12%;">Value of Goods (₹)</th>
-        <th class="text-right"  style="width:12%;">Taxable Value (₹)</th>
+        <th class="text-center" style="width:9%;">Gem Wt (cts)</th>
+        <th class="text-right"  style="width:16%;">Taxable Value (₹)</th>
       </tr>
     </thead>
     <tbody>
@@ -241,7 +259,7 @@
         {% assign g_kt  = _parts[0] %}
         {% assign g_hsn = _parts[1] %}
 
-        {% assign g_qty=0 %}{% assign g_gross=0 %}{% assign g_net=0 %}{% assign g_dia=0 %}{% assign g_value=0 %}
+        {% assign g_qty=0 %}{% assign g_gross=0 %}{% assign g_net=0 %}{% assign g_dia=0 %}{% assign g_gem=0 %}{% assign g_value=0 %}
 
         {% for li in order.line_items %}
           {% assign _sku = li.sku | split: "|" %}
@@ -251,37 +269,59 @@
           {% assign _hsn = li.product.metafields.custom.hsn_code | default: hsn_default %}
           {% unless _hsn == g_hsn %}{% continue %}{% endunless %}
 
-          {% comment %}── Physical: hidden props first, catalog metafields as fallback ──{% endcomment %}
-          {% assign _gw=0 %}{% assign _nw=0 %}{% assign _dia=0 %}{% assign _gw_from_prop=false %}
+          {% comment %}
+            ── Physical: hidden line props first, catalog metafields as fallback ──
+            EVERY source is PER PIECE, so every source is multiplied by li.quantity. The line
+            properties were previously added unmultiplied while the Qty column summed quantity, so
+            any line of qty 2 or more described a single piece: D219 printed 11.717 g gross for
+            six pieces that weigh 23.434 g.
+
+            Fallback order is dictated by what the print app can actually reach — only the first
+            10 PINNED definitions of an owner type are exposed:
+              gross     _gross_wt     → variant total_metal_weight_g (#5) → variant gross_weight_g (#7)
+              net       _net_wt       → variant net_metal_weight_g (#6)
+              diamond   _diamond_cts  → product totaldiamondweight (#4)
+              gemstone  _gemstone_cts → product gemstone_weight (#5)
+            Product net/total_metal_weight_g are UNPINNED, and there is no variant-level diamond or
+            gemstone weight definition at all, so the stones have no variant fallback to offer.
+          {% endcomment %}
+          {% assign _gw=0 %}{% assign _nw=0 %}{% assign _dia=0 %}{% assign _gem=0 %}
+          {% assign _gw_from_prop=false %}{% assign _nw_from_prop=false %}{% assign _dia_from_prop=false %}{% assign _gem_from_prop=false %}
           {% for p in li.properties %}
-            {% if p.first == "_gross_wt"    %}{% assign _gw  = p.last | plus: 0 %}{% assign _gw_from_prop = true %}{% endif %}
-            {% if p.first == "_net_wt"      %}{% assign _nw  = p.last | plus: 0 %}{% endif %}
-            {% if p.first == "_diamond_cts" %}{% assign _dia = p.last | plus: 0 %}{% endif %}
+            {% if p.first == "_gross_wt"     %}{% assign _gw  = p.last | plus: 0 | times: li.quantity %}{% assign _gw_from_prop  = true %}{% endif %}
+            {% if p.first == "_net_wt"       %}{% assign _nw  = p.last | plus: 0 | times: li.quantity %}{% assign _nw_from_prop  = true %}{% endif %}
+            {% if p.first == "_diamond_cts"  %}{% assign _dia = p.last | plus: 0 | times: li.quantity %}{% assign _dia_from_prop = true %}{% endif %}
+            {% if p.first == "_gemstone_cts" %}{% assign _gem = p.last | plus: 0 | times: li.quantity %}{% assign _gem_from_prop = true %}{% endif %}
           {% endfor %}
           {% unless _gw_from_prop %}
-            {% if li.variant.metafields.custom.total_metal_weight_g %}{% assign _gw = li.variant.metafields.custom.total_metal_weight_g | plus: 0 | times: li.quantity %}{% elsif li.product.metafields.custom.total_metal_weight_g %}{% assign _gw = li.product.metafields.custom.total_metal_weight_g | plus: 0 | times: li.quantity %}{% endif %}
+            {% if li.variant.metafields.custom.total_metal_weight_g %}{% assign _gw = li.variant.metafields.custom.total_metal_weight_g | plus: 0 | times: li.quantity %}
+            {% elsif li.variant.metafields.custom.gross_weight_g    %}{% assign _gw = li.variant.metafields.custom.gross_weight_g       | plus: 0 | times: li.quantity %}{% endif %}
           {% endunless %}
-          {% if _nw == 0 and li.variant.metafields.custom.net_metal_weight_g %}{% assign _nw = li.variant.metafields.custom.net_metal_weight_g | plus: 0 | times: li.quantity %}{% endif %}
-          {% if _dia == 0 and li.product.metafields.custom.totaldiamondweight %}{% assign _dia = li.product.metafields.custom.totaldiamondweight | plus: 0 | times: li.quantity %}{% endif %}
+          {% unless _nw_from_prop  %}{% if li.variant.metafields.custom.net_metal_weight_g %}{% assign _nw  = li.variant.metafields.custom.net_metal_weight_g | plus: 0 | times: li.quantity %}{% endif %}{% endunless %}
+          {% unless _dia_from_prop %}{% if li.product.metafields.custom.totaldiamondweight %}{% assign _dia = li.product.metafields.custom.totaldiamondweight | plus: 0 | times: li.quantity %}{% endif %}{% endunless %}
+          {% unless _gem_from_prop %}{% if li.product.metafields.custom.gemstone_weight    %}{% assign _gem = li.product.metafields.custom.gemstone_weight    | plus: 0 | times: li.quantity %}{% endif %}{% endunless %}
 
           {% comment %}
-            Value = pre-discount, tax-inclusive. `Gross Value` is authoritative; the fallback
-            adds `Discount Applied` back onto the charged price so both branches agree.
-            make-memo-custom never carries a discount, so the add-back is a no-op there — it is
-            retained only to keep challan/transfer prints correct if one is ever applied.
+            Value = TAXABLE, the weighted reprice's own output. handleWeightedDocReprice computes
+            (gold 100% + diamond 50% + making 100%), writes that as `Taxable Value`, then grosses
+            it up by 1.03 into `Gross Value`. This challan states no tax, so it prints the
+            pre-gross-up figure.
+            Read `Taxable Value` rather than dividing `Gross Value` by 1.03: Gross Value is
+            written PRE-discount and Taxable Value POST-discount, so the two diverge the moment a
+            discount reaches one of these drafts.
+            Fallback for a line the reprice never touched: the charged price, de-taxed.
           {% endcomment %}
-          {% assign _disc_str="0" %}{% assign _gross_str="" %}
+          {% assign _tax_str="" %}
           {% for p in li.properties %}
-            {% if p.first == "Discount Applied" %}{% assign _disc_str  = p.last | remove: "Rs" | strip %}{% endif %}
-            {% if p.first == "Gross Value"      %}{% assign _gross_str = p.last | remove: "Rs" | strip %}{% endif %}
+            {% if p.first == "Taxable Value" %}{% assign _tax_str = p.last | remove: "Rs" | remove: "," | strip %}{% endif %}
           {% endfor %}
-          {% assign _disc_p = _disc_str | times: 100 | round %}
-          {% if _gross_str != "" %}{% assign _val_p = _gross_str | times: 100 | round %}{% else %}{% assign _val_p = li.final_line_price | plus: _disc_p %}{% endif %}
+          {% if _tax_str != "" %}{% assign _val_p = _tax_str | times: 100 | round %}{% else %}{% assign _val_p = li.final_line_price | divided_by: 1.03 | round %}{% endif %}
 
           {% assign g_qty   = g_qty   | plus: li.quantity %}
           {% assign g_gross = g_gross | plus: _gw %}
           {% assign g_net   = g_net   | plus: _nw %}
           {% assign g_dia   = g_dia   | plus: _dia %}
+          {% assign g_gem   = g_gem   | plus: _gem %}
           {% assign g_value = g_value | plus: _val_p %}
         {% endfor %}
 
@@ -290,6 +330,8 @@
         {% assign grand_value   = grand_value   | plus: g_value %}
         {% assign grand_gross_g = grand_gross_g | plus: g_gross %}
         {% assign grand_net_g   = grand_net_g   | plus: g_net %}
+        {% assign grand_dia_c   = grand_dia_c   | plus: g_dia %}
+        {% assign grand_gem_c   = grand_gem_c   | plus: g_gem %}
         <tr>
           <td class="text-center">{{ sno }}.</td>
           <td>{% if g_kt == "?" %}Gold Jewellery <em>(karat not set in SKU)</em>{% else %}{{ g_kt }}Kt Gold Jewellery{% endif %}</td>
@@ -298,36 +340,22 @@
           <td class="text-center">{{ g_gross | round: 3 }}</td>
           <td class="text-center">{{ g_net | round: 3 }}</td>
           <td class="text-center">{% if g_dia > 0 %}{{ g_dia | round: 3 }}{% else %}—{% endif %}</td>
+          <td class="text-center">{% if g_gem > 0 %}{{ g_gem | round: 3 }}{% else %}—{% endif %}</td>
           <td class="text-right">{{ g_value | money_without_currency | remove: ',' }}</td>
-          <td class="text-right">{{ g_value | divided_by: 1.03 | money_without_currency | remove: ',' }}</td>
         </tr>
       {% endfor %}
-
-      {% assign grand_taxable = grand_value | divided_by: 1.03 %}
-      {% assign grand_tax     = grand_taxable | times: 0.03 %}
 
       <tr style="background:#f0f0f0; font-weight:bold;">
         <td colspan="3" class="text-right" style="font-size:8px; padding:4px 5px;">Total</td>
         <td class="text-center" style="font-size:8px;">{{ grand_qty }}</td>
         <td class="text-center" style="font-size:8px;">{{ grand_gross_g | round: 3 }}</td>
         <td class="text-center" style="font-size:8px;">{{ grand_net_g | round: 3 }}</td>
-        <td></td>
+        <td class="text-center" style="font-size:8px;">{% if grand_dia_c > 0 %}{{ grand_dia_c | round: 3 }}{% else %}—{% endif %}</td>
+        <td class="text-center" style="font-size:8px;">{% if grand_gem_c > 0 %}{{ grand_gem_c | round: 3 }}{% else %}—{% endif %}</td>
         <td class="text-right" style="font-size:8px;">{{ grand_value | money_without_currency | remove: ',' }}</td>
-        <td class="text-right" style="font-size:8px;">{{ grand_taxable | money_without_currency | remove: ',' }}</td>
       </tr>
-
-      {% if is_same_state %}
-        {% assign half_tax = grand_taxable | times: 0.015 %}
-        <tr class="totals-row"><td colspan="8" class="text-right">IGST</td><td class="text-right">—</td></tr>
-        <tr class="totals-row"><td colspan="8" class="text-right">CGST @ 1.5%</td><td class="text-right">₹{{ half_tax | money_without_currency | remove: ',' }}</td></tr>
-        <tr class="totals-row"><td colspan="8" class="text-right">SGST @ 1.5%</td><td class="text-right">₹{{ half_tax | money_without_currency | remove: ',' }}</td></tr>
-      {% else %}
-        <tr class="totals-row"><td colspan="8" class="text-right">IGST @ 3%</td><td class="text-right">₹{{ grand_tax | money_without_currency | remove: ',' }}</td></tr>
-        <tr class="totals-row"><td colspan="8" class="text-right">CGST @ 1.5%</td><td class="text-right">—</td></tr>
-        <tr class="totals-row"><td colspan="8" class="text-right">SGST @ 1.5%</td><td class="text-right">—</td></tr>
-      {% endif %}
       <tr class="total-row">
-        <td colspan="8" class="text-right"><strong>Total Value</strong></td>
+        <td colspan="8" class="text-right"><strong>Total Taxable Value</strong></td>
         <td class="text-right"><strong>₹{{ grand_value | money_without_currency | remove: ',' }}</strong></td>
       </tr>
     </tbody>
@@ -343,7 +371,7 @@
       {% assign thousands = total_int | divided_by: 1000 %}{% if thousands > 0 %}{% assign temp = thousands | modulo: 100 %}{% if temp < 20 %}{% assign words = words | append: ones[temp] | append: " " %}{% else %}{% assign td = temp | divided_by: 10 %}{% assign od = temp | modulo: 10 %}{% assign words = words | append: tens[td] %}{% if od > 0 %}{% assign words = words | append: "-" | append: ones[od] %}{% endif %}{% assign words = words | append: " " %}{% endif %}{% assign words = words | append: "Thousand " %}{% assign total_int = total_int | modulo: 1000 %}{% endif %}
       {% assign hundreds = total_int | divided_by: 100 %}{% if hundreds > 0 %}{% assign words = words | append: ones[hundreds] | append: " Hundred " %}{% assign total_int = total_int | modulo: 100 %}{% endif %}
       {% if total_int > 0 %}{% if total_int < 20 %}{% assign words = words | append: ones[total_int] %}{% else %}{% assign td = total_int | divided_by: 10 %}{% assign od = total_int | modulo: 10 %}{% assign words = words | append: tens[td] %}{% if od > 0 %}{% assign words = words | append: "-" | append: ones[od] %}{% endif %}{% endif %}{% endif %}
-      Total Value in Words: Rupees {{ words }} Only
+      Total Taxable Value in Words: Rupees {{ words }} Only
     </span>
     <span>E. &amp; O. E.</span>
   </div>

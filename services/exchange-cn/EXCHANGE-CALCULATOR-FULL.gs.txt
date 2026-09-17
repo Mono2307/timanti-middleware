@@ -279,6 +279,71 @@ function refreshNewDraftField() {
            'or leave it blank to issue standalone store credit.');
 }
 
+// ── SOURCE-DEPENDENT FIELD STATE ─────────────────────────────────────────────
+// The Old Gold block (rows 7–12) only means anything when Source = Old Gold. Under Purchase
+// Exchange it is dead weight that still LOOKS live, and worse than that: it holds whatever the last
+// old-gold customer typed. The calculator has been sitting with Old Gold set to one customer's
+// phone and weight while the order block below held a completely different customer's order — two
+// people's data on screen at once, with nothing to say which half the document would be built from.
+//
+// Graying it is the cheap fix: the fields stay readable (so a half-finished old-gold job is not
+// lost by switching the dropdown) but they visibly stop being part of the live calculation.
+//
+// Values are deliberately NOT cleared. refreshFinalIssueValue_ already ignores this block entirely
+// unless Source = Old Gold, so stale content here cannot reach a document — it was only ever a
+// READING problem, and clearing a staff member's typing to solve a reading problem loses work.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const OG_BLOCK_FIRST_ROW = cellRow_(OG_CUSTOMER_CELL) - 1;   // the "— OLD GOLD —" section header
+const OG_BLOCK_LAST_ROW  = cellRow_(OVERRIDE_REASON_CELL);   // through the override-reason row
+const OG_GRAY_BG         = '#f3f3f3';
+const OG_GRAY_FG         = '#b7b7b7';
+
+function refreshSourceFieldStates_(calc) {
+  if (!calc) return;
+  var isOldGold = String(calc.getRange(SOURCE_CELL).getValue()).trim().toLowerCase() === SOURCE_OLD_GOLD;
+  var rows = OG_BLOCK_LAST_ROW - OG_BLOCK_FIRST_ROW + 1;
+  var block = calc.getRange(OG_BLOCK_FIRST_ROW, 1, rows, 2);   // columns A (label) + B (value)
+  if (isOldGold) {
+    block.setBackground(null).setFontColor(null);
+  } else {
+    block.setBackground(OG_GRAY_BG).setFontColor(OG_GRAY_FG);
+  }
+}
+
+// Menu-visible so it can be re-applied by hand if a paste or a bulk format wipes the shading.
+function refreshSourceFieldStates() {
+  var calc = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CALC_SHEET_NAME);
+  var ui   = SpreadsheetApp.getUi();
+  if (!calc) { ui.alert('Sheet "' + CALC_SHEET_NAME + '" not found.'); return; }
+  refreshSourceFieldStates_(calc);
+  var src = String(calc.getRange(SOURCE_CELL).getValue()).trim();
+  ui.alert('✅ Field shading refreshed for Source = ' + (src || '(blank)') + '.\n\n' +
+           (src.toLowerCase() === SOURCE_OLD_GOLD
+              ? 'The Old Gold block is active.'
+              : 'The Old Gold block is grayed out — it is not used for this document type. Anything ' +
+                'still typed in it is ignored.'));
+}
+
+// Brings stale on-sheet TEXT up to date with the script.
+//
+// refreshNewDraftField and migrateGoldRateCell were taken off the menu as one-time migrations, and
+// on this sheet they were never run — so cell A6 still reads "New Draft/Order # (Exchange Note
+// only)" even though a voucher has used that field for months. A label that contradicts the
+// software is worse than no label: staff believed the field did not apply to vouchers.
+//
+// Cheap and idempotent, so it runs on open rather than waiting for someone to remember a migration.
+// Only ever rewrites a label it recognises as the OLD one — it will not fight a hand-edited sheet.
+function healCalcLabels_(calc) {
+  if (!calc) return;
+  var r         = calc.getRange(NEWDRAFT_CELL);
+  var labelCell = calc.getRange(r.getRow(), r.getColumn() - 1);
+  var current   = String(labelCell.getValue()).trim();
+  if (current === NEWDRAFT_LABEL_LEGACY || /exchange note only/i.test(current)) {
+    refreshNewDraftField_(calc);
+  }
+}
+
 // ── MENU ─────────────────────────────────────────────────────────────────────
 // The counter menu holds the things a staff member does at the counter, and nothing else.
 //
@@ -298,13 +363,30 @@ function refreshNewDraftField() {
 //   removeTriggers              remove the auto-fill triggers
 //   removeRefundSync            remove the hourly refund sync
 //   debugCells                  dump the control cells
+//   testCadAdvanceLog           smoke-test the CAD advance append (WRITES A ₹5,000 ROW)
+//
+// testCadAdvanceLog was on the menu and does not belong there: it writes a real row into the
+// production CAD Advance Log on every click, and it had been clicked twice. It is a smoke test, so
+// it lives where the other diagnostics live — the editor's Run dropdown.
 //   showLineItemProperties      dump an order's line-item properties
 function onOpen() {
   var ui = SpreadsheetApp.getUi();
+
+  // Self-healing sheet state. Wrapped so a formatting failure can never stop the MENU being built —
+  // without the menu, staff cannot raise a document at all.
+  try {
+    var calc = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CALC_SHEET_NAME);
+    if (calc) { healCalcLabels_(calc); refreshSourceFieldStates_(calc); }
+  } catch (e) {
+    Logger.log('onOpen sheet refresh skipped: ' + e.message);
+  }
+
   ui.createMenu('Timanti CN Tools')
     .addItem('✅  Create Document (Voucher / Exchange)', 'createDocument')
     .addItem('🗑️  Void Voucher', 'voidVoucher')
     .addItem('🗑️  Void Exchange Note', 'voidExchangeNote')
+    .addSeparator()
+    .addItem('🎨  Refresh field shading', 'refreshSourceFieldStates')
     .addSeparator()
     .addItem('🔄  Lookup Order Now', 'lookupOrderManual')
     .addItem('🔎  Look up Old-Gold customer', 'lookupOldGoldCustomer')
@@ -323,8 +405,7 @@ function onOpen() {
       .addItem('📥  Backfill After-Sales Log (dry run)', 'backfillAfterSalesLog')
       .addItem('📥  Backfill After-Sales Log (WRITE)', 'backfillAfterSalesLogApply')
       .addSeparator()
-      .addItem('📊  Add GST row + diamond cap', 'migrateAddTaxRow')
-      .addItem('🧪  Test CAD Advance Log', 'testCadAdvanceLog'))
+      .addItem('📊  Add GST row + diamond cap', 'migrateAddTaxRow'))
     .addToUi();
 }
 
@@ -396,8 +477,13 @@ function handleEdit(e) {
     const a1 = e.range.getA1Notation();
     if (col === 2 && row === cellRow_(ORDER_NUM_CELL)) { onOrderNumberEntered(sheet); try { refreshFinalIssueValue_(sheet); } catch (x) {} return; }
     if (col === 2 && row === cellRow_(SKU_CELL))       { onSkuSelected(sheet);        return; }
-    // Flipping Source or Exchange Type updates the "Value to Issue" cell live.
-    if (a1 === SOURCE_CELL || a1 === EXCHTYPE_CELL) { try { refreshFinalIssueValue_(sheet); } catch (x) {} return; }
+    // Flipping Source or Exchange Type updates the "Value to Issue" cell live. Source also decides
+    // whether the Old Gold block is live, so the shading follows the dropdown in the same edit.
+    if (a1 === SOURCE_CELL || a1 === EXCHTYPE_CELL) {
+      try { refreshFinalIssueValue_(sheet); } catch (x) {}
+      if (a1 === SOURCE_CELL) { try { refreshSourceFieldStates_(sheet); } catch (x) {} }
+      return;
+    }
     // Old-gold auto-fill: purity → buy-back rate; weight → value; customer phone/email → resolve.
     if (a1 === OG_PURITY_CELL) { try { fetchOldGoldRate(); refreshFinalIssueValue_(sheet); } catch (x) {} return; }
     if (a1 === OG_WEIGHT_CELL) { try { showOldGoldValue_(sheet, oldGoldValue_(sheet)); refreshFinalIssueValue_(sheet); } catch (x) {} return; }
@@ -995,6 +1081,9 @@ function createVoucher_() {
     ui.alert('Missing data. Fill customer email, order number, and ensure net credit > 0.');
     return;
   }
+
+  // Checked BEFORE the serial is allocated — an abandoned allocation leaves a gap in the ledger.
+  if (!confirmNoDuplicateInstrument_(ss, ui, orderNumber)) return;
 
   const year   = today.getFullYear();
   // Serial from the central counter service (atomic, no gaps/dupes across devices).
@@ -1652,11 +1741,47 @@ function migrateCalcToBeforeAfter() {
 }
 
 // Creates the Voucher Log / Exchange Log tabs if missing (extracted so the fresh build can call it).
+// Voucher Log header, in the order createVoucher_ / createOldGoldVoucher_ / handleIssueVoucher_
+// actually write. THE ORDER IS LOAD-BEARING: voidVoucher reads row[10], row[11] and row[12] by
+// index to delete the live Shopify discount, so these labels may be corrected but the columns must
+// never move.
+var VOUCHER_LOG_COLS = [
+  'Date Issued', 'Voucher Number', 'Order No.', 'Customer Name', 'Customer Email',
+  'Net Gold Wt (g)', 'Dia Wt (cts)', 'Gold Value', 'Diamond Value', 'Net Credit (₹)',
+  'Valid Until', 'Status',
+  'Price Rule ID',      // M — was labelled "Redeemed Date" and holds no date at all
+  'Reason / Source',    // N — no header at all until now; overloaded, see backfillRowsFromVoucherLog_
+  'Repair Draft Ref'    // O — no header at all until now
+];
+
+// Corrects the header row without touching a single data cell.
+//
+// Column M was labelled "Redeemed Date" while every row under it held a 13-digit price_rule_id —
+// the code was consistent, the header was simply older than the code. Columns N and O had no header
+// at all. Nobody reading this tab could tell what they were looking at, and there is no column that
+// holds a real redemption date (the After-Sales Log's "Redeemed On", filled by the ledger refresh,
+// is where that lives).
+function ensureVoucherLogHeader_(sh) {
+  if (!sh) return;
+  // Refuse to overwrite row 1 if it is a DATA row — a tab whose header was deleted by hand would
+  // otherwise lose its oldest voucher. A serial in column B is the tell.
+  if (sh.getLastRow() >= 1 &&
+      /^(VCH|CN|EXC)/i.test(String(sh.getRange(1, 2).getValue()).trim())) {
+    Logger.log(VOUCHER_LOG + ': row 1 looks like data, not a header — header left alone.');
+    return;
+  }
+  var width = VOUCHER_LOG_COLS.length;
+  if (sh.getMaxColumns() < width) sh.insertColumnsAfter(sh.getMaxColumns(), width - sh.getMaxColumns());
+  sh.getRange(1, 1, 1, width).setValues([VOUCHER_LOG_COLS]).setFontWeight('bold');
+  sh.setFrozenRows(1);
+}
+
 function ensureLogTabs_(ss) {
   if (!ss.getSheetByName(VOUCHER_LOG)) {
     var old = ss.getSheetByName('CN Log');
     if (old) old.setName(VOUCHER_LOG); else ss.insertSheet(VOUCHER_LOG);
   }
+  ensureVoucherLogHeader_(ss.getSheetByName(VOUCHER_LOG));
   if (!ss.getSheetByName(EXCHANGE_LOG)) {
     var ex = ss.insertSheet(EXCHANGE_LOG);
     ex.appendRow(['Issued', 'EXC Number', 'Old Order', 'New Draft', 'Customer', 'Email',
@@ -1738,9 +1863,19 @@ function logAfterSales_(fields) {
   try {
     var ss = SpreadsheetApp.getActiveSpreadsheet();
     var sh = ensureAfterSalesLog_(ss);
+    var tz = ss.getSpreadsheetTimeZone();
     if (!fields['Logged At']) {
-      fields['Logged At'] = Utilities.formatDate(new Date(), ss.getSpreadsheetTimeZone(), 'dd-MM-yyyy HH:mm');
+      fields['Logged At'] = Utilities.formatDate(new Date(), tz, 'dd-MM-yyyy HH:mm');
     }
+    // Every date column is forced to a STRING in one place, here, rather than trusted to each
+    // writer. The live writers passed pre-formatted strings and the backfill passed the Date object
+    // straight out of the old tab, so one column held both — and a column of mixed types cannot be
+    // sorted, which is the first thing anyone does to an event log. Formatting at the call sites
+    // fixed only the call sites that were remembered; formatting here covers every writer there
+    // will ever be.
+    ['Logged At', 'Expiry', 'Redeemed On', 'Status Synced'].forEach(function (h) {
+      fields[h] = dateCell_(fields[h], tz);
+    });
     sh.appendRow(AFTERSALES_COLS.map(function (h) {
       return fields[h] === undefined || fields[h] === null ? '' : fields[h];
     }));
@@ -1749,6 +1884,189 @@ function logAfterSales_(fields) {
     Logger.log('After-Sales Log write failed (' + (fields && fields.Serial) + '): ' + e.message);
     return false;
   }
+}
+
+// A date column value as dd-MM-yyyy text, whatever it arrived as.
+//
+// A Date keeps any time it carries (a gateway refund is logged to the minute); a midnight Date is
+// rendered date-only, because a value with no time in it must not be dressed up as a precise moment
+// — that is what put a fabricated "05:30" on every draft-refund row, which is midnight UTC seen
+// from IST. Text is passed through untouched: it is already whatever its writer meant.
+function dateCell_(v, tz) {
+  if (v === undefined || v === null || v === '') return '';
+  if (!(v instanceof Date)) return v;
+  tz = tz || SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone();
+  var midnight = v.getHours() === 0 && v.getMinutes() === 0 && v.getSeconds() === 0;
+  return Utilities.formatDate(v, tz, midnight ? 'dd-MM-yyyy' : 'dd-MM-yyyy HH:mm');
+}
+
+// An ISO timestamp from the middleware as a display string, WITHOUT inventing precision.
+//
+// A date-only value ('2026-09-01') is reformatted as text and never passed through Date/timezone
+// conversion: parsing it yields UTC midnight, and rendering that in IST produced the fabricated
+// "05:30" stamped on every draft-refund row — a time nobody recorded, on rows staff read as fact.
+// (In a timezone west of UTC the same conversion moves the row to the wrong DAY.) A full timestamp
+// is a real moment and is converted normally.
+function isoToCell_(iso, tz) {
+  var s = String(iso == null ? '' : iso).trim();
+  if (!s) return '';
+  var d = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+  if (d) return d[3] + '-' + d[2] + '-' + d[1];
+  var parsed = new Date(s);
+  if (isNaN(parsed.getTime())) return s;
+  return Utilities.formatDate(parsed, tz || SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone(),
+                              'dd-MM-yyyy HH:mm');
+}
+
+// The identity of REFUNDED MONEY, independent of which sync logged it.
+//
+// The two refund syncs key on their own sources — 'refund:<shopify refund id>' and
+// 'draft-refund:<serial>' — which can never collide, so the same money returned on the same order
+// was logged twice when it appeared in both Shopify's order.refunds[] and the middleware's
+// credit_instruments. The Returns Log tells staff to total money by filtering Event = refunded;
+// that is precisely the total a double row inflates.
+//
+// Order + amount + calendar day is the coarsest key that still separates genuinely distinct
+// refunds, and both syncs consult it in addition to their own Ref.
+function refundMoneyKey_(order, amount, whenCell) {
+  return 'money:' + String(order || '').trim().toUpperCase() +
+         ':' + Number(amount).toFixed(2) +
+         ':' + String(whenCell || '').trim().slice(0, 10);
+}
+
+// Every refund already logged, keyed by refundMoneyKey_ — built from the rows themselves, so it
+// covers rows written before this guard existed and needs no new column.
+function afterSalesRefundKeys_(sh) {
+  var keys = {};
+  var last = sh.getLastRow();
+  if (last < 2) return keys;
+  var eventCol = afterSalesCol_('Event');
+  var orderCol = afterSalesCol_('Order');
+  var valueCol = afterSalesCol_('Value');
+  var whenCol  = afterSalesCol_('Logged At');
+  var cols = [eventCol, orderCol, valueCol, whenCol];
+  var lo = Math.min.apply(null, cols), hi = Math.max.apply(null, cols);
+  sh.getRange(2, lo, last - 1, hi - lo + 1).getValues().forEach(function (r) {
+    if (String(r[eventCol - lo]).trim().toLowerCase() !== 'refunded') return;
+    var amount = toNum(r[valueCol - lo]);
+    if (!(amount > 0)) return;
+    keys[refundMoneyKey_(r[orderCol - lo], amount, dateCell_(r[whenCol - lo]))] = true;
+  });
+  return keys;
+}
+
+// Live instruments already raised against an order — the guard against issuing a second one.
+//
+// Nothing prevented it, and the sheet shows what that cost: #1011 carries EXC27-KATEST-0002 AND
+// EXC27-KATEST-0003 for the identical order, draft, value and draft id (two serials burned on one
+// event), plus VCH27-KATEST-0001 for the same amount again. #1019 carries both VCH-2026-0001 and
+// EXC-2026-0001 for the identical ₹61,960.20 — the same exchange settled twice, once as a voucher
+// and once as an exchange note.
+//
+// applyVoucherToDraft_ already refuses to stack two instruments on one DRAFT; this is the same
+// check at the other end, on the order being exchanged. Voided and refunded instruments are ignored
+// — those are precisely the cases where raising a replacement is correct.
+function liveInstrumentsForOrder_(ss, orderNumber) {
+  var order = String(orderNumber || '').trim().toUpperCase();
+  if (!order) return [];
+  var sh = ss.getSheetByName(AFTERSALES_LOG);
+  if (!sh || sh.getLastRow() < 2) return [];
+
+  var cols = { event: afterSalesCol_('Event'), order: afterSalesCol_('Order'),
+               serial: afterSalesCol_('Serial'), doc: afterSalesCol_('Doc Type'),
+               value: afterSalesCol_('Value'), status: afterSalesCol_('Status') };
+  var idx = Object.keys(cols).map(function (k) { return cols[k]; });
+  var lo = Math.min.apply(null, idx), hi = Math.max.apply(null, idx);
+
+  var out = [];
+  sh.getRange(2, lo, sh.getLastRow() - 1, hi - lo + 1).getValues().forEach(function (r) {
+    if (String(r[cols.event - lo]).trim().toLowerCase() !== 'issued') return;
+    if (String(r[cols.order - lo]).trim().toUpperCase() !== order) return;
+    var status = String(r[cols.status - lo]).trim().toLowerCase();
+    if (/void|refund/.test(status)) return;
+    var serial = String(r[cols.serial - lo]).trim();
+    if (!serial) return;
+    out.push({ serial: serial, docType: String(r[cols.doc - lo]).trim(),
+               value: toNum(r[cols.value - lo]), status: status });
+  });
+  return out;
+}
+
+// Shows what is already outstanding on the order and asks the staff member to confirm past it.
+// Returns true to proceed. Never blocks outright: a legitimate second document does exist (a repair
+// voucher on an order that was also exchanged), so this is a stop-and-look, not a refusal.
+//
+// This does NOT duplicate the middleware's guard, it sits in front of it. The middleware protects
+// the DRAFT — one instrument on it at a time, latest-one-wins — and it does that at apply time,
+// which is AFTER the serial has been minted. So a second document raised by mistake still burns a
+// number and still lands in the ledger, even though the draft ends up correct. This catches it one
+// step earlier, at the ORDER being exchanged, before any serial is spent.
+function confirmNoDuplicateInstrument_(ss, ui, orderNumber) {
+  var existing = liveInstrumentsForOrder_(ss, orderNumber);
+  if (!existing.length) return true;
+  var list = existing.map(function (e) {
+    return '  • ' + e.docType + ' ' + e.serial + ' — ₹' +
+           e.value.toLocaleString('en-IN', { minimumFractionDigits: 2 }) +
+           (e.status ? ' (' + e.status + ')' : '');
+  }).join('\n');
+  return ui.alert(
+    'Order ' + orderNumber + ' already has ' + existing.length + ' live instrument' +
+    (existing.length > 1 ? 's' : '') + '.',
+    list + '\n\nIf you are correcting the amount, VOID the one above instead — raising another ' +
+    'spends a second serial number, and both stay in the ledger against this order.\n\n' +
+    'If it lands on the same draft, the earlier one is automatically removed from that draft and ' +
+    'becomes spendable again; it is not cancelled.\n\nRaise a second document anyway?',
+    ui.ButtonSet.YES_NO) === ui.Button.YES;
+}
+
+// The store a serial was issued at, recovered from the serial itself.
+//
+// The old tabs never recorded the store, so the backfill wrote it blank — which left the ONE field
+// that separates KA-TEST from KA-HSR empty on two thirds of the log. The serial carries it:
+//   VCH27-KAHSR-0002  ->  KA-HSR       (middle segment, hyphen stripped by the allocator)
+//   EXC27-KATEST-0006 ->  KA-TEST
+//   VCH-2026-0001     ->  ''           (legacy, pre-store serials — a year, not a store)
+// Returns '' rather than a guess when the shape does not match, so a new serial format degrades to
+// the blank it produces today instead of inventing a store.
+function storeFromSerial_(serial) {
+  var parts = String(serial || '').trim().toUpperCase().split('-');
+  if (parts.length !== 3) return '';
+  var seg = parts[1];
+  if (/^\d{4}$/.test(seg)) return '';          // VCH-2026-0001 — that is the year
+  if (!/^[A-Z]{4,}$/.test(seg)) return '';
+  return seg.slice(0, 2) + '-' + seg.slice(2); // KAHSR -> KA-HSR
+}
+
+// One status vocabulary for the whole tab.
+//
+// The schema promises outstanding | applied | redeemed | voided | expired | refunded. What the old
+// tabs actually hold is 'Issued', 'Applied', 'Issued (apply failed)' and the sentence
+// 'Issued + Applied #D199' — capitalised, free-text, and in one case with a draft reference buried
+// inside it. A filter on 'applied' missed two of the three applied rows.
+//
+// Returns { status, appliedTo, note }: the draft reference is LIFTED OUT of the sentence rather
+// than discarded, because it is the only record that voucher was applied to that draft, and any
+// apply-failure wording is preserved as a note rather than thrown away with the status it was
+// riding on.
+function normalizeStatus_(raw) {
+  var s = String(raw == null ? '' : raw).trim();
+  if (!s) return { status: '', appliedTo: '', note: '' };
+  var lower = s.toLowerCase();
+
+  // 'Issued + Applied #D199' — the draft is data, not prose.
+  var m = /applied\s*(?:to\s*)?(#?D?\d+)/i.exec(s);
+  var appliedTo = m ? m[1] : '';
+
+  if (/void/.test(lower))                       return { status: 'voided',      appliedTo: appliedTo, note: '' };
+  if (/expire/.test(lower))                     return { status: 'expired',     appliedTo: appliedTo, note: '' };
+  if (/refund/.test(lower))                     return { status: 'refunded',    appliedTo: appliedTo, note: '' };
+  if (/redeem/.test(lower))                     return { status: 'redeemed',    appliedTo: appliedTo, note: '' };
+  // Check the failure wording BEFORE 'applied' — 'issued (apply failed)' contains both, and the
+  // failure is the fact that matters: nothing was applied.
+  if (/fail/.test(lower))                       return { status: 'outstanding', appliedTo: '',        note: s };
+  if (/appl/.test(lower))                       return { status: 'applied',     appliedTo: appliedTo, note: '' };
+  if (/issued|outstanding|open/.test(lower))    return { status: 'outstanding', appliedTo: appliedTo, note: '' };
+  return { status: lower, appliedTo: appliedTo, note: '' };   // unknown wording — lower-cased, kept
 }
 
 // The three control-cell classifications every counter-raised document shares. Read once, here, so
@@ -1776,6 +2094,35 @@ function afterSalesRefs_(sh) {
   sh.getRange(2, col, last - 1, 1).getValues().forEach(function (r) {
     var v = String(r[0]).trim();
     if (v) seen[v] = true;
+  });
+  return seen;
+}
+
+// Every serial that already has an 'issued' row, whoever wrote it.
+//
+// Ref alone is NOT enough to dedupe an issue event, because the live writers and the backfill key
+// the same document differently: createVoucher_ writes Ref = price_rule_id, createExchangeNote_
+// writes the draft id, handleIssueVoucher_ writes the repair draft ref, and the backfill writes
+// 'backfill:<serial>'. None of those collide, so a voucher raised at the counter and then caught by
+// a later backfill run landed TWICE — which is exactly what happened to VCH27-KAHSR-0002, and would
+// have happened to every document raised from now on, since "Backfill (WRITE)" is a live menu item
+// whose own dialog calls itself safe to re-run.
+//
+// A document can only be issued once, so the serial is the real identity of an issue event. This
+// dedupes on that and leaves Ref to do what it is good at — idempotency for the replayable syncs,
+// where there is no serial.
+function afterSalesIssuedSerials_(sh) {
+  var seen = {};
+  var last = sh.getLastRow();
+  if (last < 2) return seen;
+  var serialCol = afterSalesCol_('Serial');
+  var eventCol  = afterSalesCol_('Event');
+  var lo  = Math.min(serialCol, eventCol);
+  var wid = Math.abs(serialCol - eventCol) + 1;
+  sh.getRange(2, lo, last - 1, wid).getValues().forEach(function (r) {
+    var serial = String(r[serialCol - lo]).trim().toUpperCase();
+    var event  = String(r[eventCol  - lo]).trim().toLowerCase();
+    if (serial && event === 'issued') seen[serial] = true;
   });
   return seen;
 }
@@ -1890,8 +2237,11 @@ function syncReturnsLog_(showUi) {
 // and writes across whatever is missing.
 //
 // DRY RUN BY DEFAULT — it counts and shows a sample, and writes nothing until you run the WRITE
-// version. Idempotent either way: every row is keyed Ref = 'backfill:<serial>' and afterSalesRefs_
-// already dedupes on Ref, so a second run adds nothing.
+// version. Idempotent on the SERIAL: a serial that already has an 'issued' row is skipped, whoever
+// wrote that row. It used to dedupe on Ref = 'backfill:<serial>', which only ever recognised its
+// OWN previous runs — a document raised at the counter carries a completely different Ref, so
+// running this after any issuance duplicated it. Deduping on the serial is what the sentence "a
+// second run adds nothing" always meant.
 //
 // It does NOT touch Voucher Log or Exchange Log. voidVoucher and voidExchangeNote find their rows by
 // FIXED COLUMN INDEX in those tabs, so they must stay exactly as they are.
@@ -1908,12 +2258,22 @@ function backfillAfterSalesLog_(apply) {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var ui = SpreadsheetApp.getUi();
   var sh = ensureAfterSalesLog_(ss);
-  var seen = afterSalesRefs_(sh);
+
+  // Deduped on the SERIAL, not on Ref — see afterSalesIssuedSerials_. Ref could never see that a
+  // document had already been logged live under a different key scheme, so this used to duplicate
+  // every voucher and exchange note raised since the log was created.
+  var issued = afterSalesIssuedSerials_(sh);
 
   var rows = []
     .concat(backfillRowsFromVoucherLog_(ss))
     .concat(backfillRowsFromExchangeLog_(ss))
-    .filter(function (r) { return r && r.Serial && !seen[r.Ref]; });
+    .filter(function (r) {
+      if (!r || !r.Serial) return false;
+      var key = String(r.Serial).trim().toUpperCase();
+      if (issued[key]) return false;
+      issued[key] = true;   // also guards a serial duplicated WITHIN this batch
+      return true;
+    });
 
   if (!rows.length) {
     ui.alert('Nothing to backfill.\n\nEvery voucher and exchange note in the old tabs is already in ' +
@@ -1957,18 +2317,23 @@ function backfillRowsFromVoucherLog_(ss) {
     var draftRef = String(v[14] || '').trim();
     var source   = draftRef ? 'Repair refund'
                  : (order.toUpperCase() === 'OLD-GOLD' ? 'Old Gold' : 'Purchase Exchange');
+    // Status on the old tabs is free text ('Issued', 'Issued + Applied #D199'). Normalised here so
+    // the consolidated tab holds ONE vocabulary and a filter on it is trustworthy.
+    var st = normalizeStatus_(v[11]);
+    var note = [String(v[13] || '').trim(), st.note].filter(Boolean).join(' — ');
     return {
       'Logged At': v[0], 'Event': 'issued',
       'Source': source,
-      // Not recorded on the old tabs at all. Blank, never guessed — a confidently wrong
-      // classification is worse in a report than an obviously missing one.
-      'Exchange Type': '—', 'Store': '',
+      // Exchange Type was never recorded on the old tabs, so it stays blank — a confidently wrong
+      // classification is worse in a report than an obviously missing one. The STORE is different:
+      // it is not missing, it is encoded in the serial, so it is recovered rather than left blank.
+      'Exchange Type': '—', 'Store': storeFromSerial_(serial),
       'Doc Type': 'Voucher', 'Serial': serial, 'Order': order,
-      'Applied To': draftRef,
+      'Applied To': draftRef || st.appliedTo,
       'Value': v[9], 'Net Wt': v[5], 'Dia Cts': v[6], 'Gold Value': v[7], 'Diamond Value': v[8],
       'Customer': v[3], 'Email': v[4], 'Expiry': v[10],
-      'Status': v[11] || 'outstanding',
-      'Reason / Note': String(v[13] || '').trim(),
+      'Status': st.status || 'outstanding',
+      'Reason / Note': note,
       'Ref': 'backfill:' + serial
     };
   });
@@ -1983,15 +2348,18 @@ function backfillRowsFromExchangeLog_(ss) {
   return log.getDataRange().getValues().slice(1).map(function (v) {
     var serial = String(v[1] || '').trim();
     if (!serial) return null;
+    var st = normalizeStatus_(v[11]);
     return {
       'Logged At': v[0], 'Event': 'issued',
-      'Source': 'Purchase Exchange', 'Exchange Type': '—', 'Store': '',
+      'Source': 'Purchase Exchange', 'Exchange Type': '—',
+      'Store': storeFromSerial_(serial),
       'Doc Type': 'Exchange Note', 'Serial': serial, 'Order': String(v[2] || '').trim(),
-      'Applied To': String(v[3] || '').trim(),
+      'Applied To': String(v[3] || '').trim() || st.appliedTo,
       'Value': v[10], 'Net Wt': v[6], 'Dia Cts': v[7], 'Gold Value': v[8], 'Diamond Value': v[9],
       'Customer': v[4], 'Email': v[5],
       // An exchange note is deducted on the spot, so 'applied' is its state from birth.
-      'Status': v[11] || 'applied',
+      'Status': st.status || 'applied',
+      'Reason / Note': st.note,
       'Ref': 'backfill:' + serial
     };
   });
@@ -2034,8 +2402,10 @@ function syncShopifyRefunds_(showUi) {
   var runStartedAt = new Date();
 
   var seen    = afterSalesRefs_(sh);
+  var money   = afterSalesRefundKeys_(sh);   // cross-sync guard — see refundMoneyKey_
   var added   = 0;
   var scanned = 0;
+  var merged  = 0;
   var pageInfo = null;
   var guard    = 0;
 
@@ -2059,9 +2429,17 @@ function syncShopifyRefunds_(showUi) {
           // Logging it would inflate every refund total in the report.
           if (!(amount > 0)) return;
 
+          var whenCell = isoToCell_(refund.created_at || order.updated_at, tz);
+          var orderName = order.name || ('#' + order.id);
+
+          // Already logged by the draft-refund sync under its own key. Skipped rather than written,
+          // and counted so the merge is visible in the dialog instead of looking like a lost refund.
+          var mk = refundMoneyKey_(orderName, amount, whenCell);
+          if (money[mk]) { merged++; seen[ref] = true; return; }
+
           var cust = order.customer || {};
           logAfterSales_({
-            'Logged At':     Utilities.formatDate(new Date(refund.created_at || order.updated_at), tz, 'dd-MM-yyyy HH:mm'),
+            'Logged At':     whenCell,
             'Event':         'refunded',
             'Source':        'Gateway refund',
             'Exchange Type': '—',
@@ -2070,7 +2448,7 @@ function syncShopifyRefunds_(showUi) {
             // control cell happens to be set to right now, which has nothing to do with where the
             // refunded order was placed — stamping it would put a confidently wrong store on every
             // refund row. Blank is recoverable; wrong is not.
-            'Order':         order.name || ('#' + order.id),
+            'Order':         orderName,
             'Value':         amount,
             'Customer':      [cust.first_name, cust.last_name].filter(Boolean).join(' '),
             'Email':         order.email || cust.email || '',
@@ -2080,6 +2458,7 @@ function syncShopifyRefunds_(showUi) {
             'Status Synced': Utilities.formatDate(new Date(), tz, 'dd-MM-yyyy HH:mm')
           });
           seen[ref] = true;
+          money[mk] = true;
           added++;
         });
       });
@@ -2100,10 +2479,11 @@ function syncShopifyRefunds_(showUi) {
     SpreadsheetApp.getUi().alert('✅ Refund sync complete.\n\n' +
       'Orders scanned: ' + scanned + '\n' +
       'New refunds logged: ' + added + '\n' +
+      (merged ? 'Already logged by the draft-refund sync: ' + merged + '\n' : '') +
       'Window: since ' + Utilities.formatDate(since, tz, 'dd-MM-yyyy HH:mm') + '\n\n' +
       'Next run reads from ' + Utilities.formatDate(runStartedAt, tz, 'dd-MM-yyyy HH:mm') + '.');
   }
-  return { added: added, scanned: scanned };
+  return { added: added, scanned: scanned, merged: merged };
 }
 
 // DRAFT-ORDER refunds — the other half of the refund picture.
@@ -2139,8 +2519,10 @@ function syncDraftRefunds_(showUi) {
 
   // Read once per run, not per candidate — same as the gateway refund sync.
   var seen    = afterSalesRefs_(sh);
+  var money   = afterSalesRefundKeys_(sh);   // cross-sync guard — see refundMoneyKey_
   var added   = 0;
   var scanned = 0;
+  var merged  = 0;
 
   res.rows.forEach(function (r) {
     if (String(r.instrument_type) !== 'refund') return;   // belt-and-braces if type= is ever ignored
@@ -2158,10 +2540,22 @@ function syncDraftRefunds_(showUi) {
     if (r.gateway_ref) note.push('UTR ' + r.gateway_ref);
     if (r.voided_at)   note.push('draft deleted');
 
+    var against  = String(r.issued_against || '').trim();
+    var whenCell = isoToCell_(r.refunded_at, tz) ||
+                   Utilities.formatDate(new Date(), tz, 'dd-MM-yyyy HH:mm');
+
+    // Already logged by the gateway sync. Same reasoning as the other side of this pair.
+    var mk = refundMoneyKey_(against, amount, whenCell);
+    if (money[mk]) { merged++; seen[ref] = true; return; }
+
     logAfterSales_({
-      'Logged At':     Utilities.formatDate(r.refunded_at ? new Date(r.refunded_at) : new Date(), tz, 'dd-MM-yyyy HH:mm'),
+      'Logged At':     whenCell,
       'Event':         'refunded',
-      'Source':        'Draft refund',
+      // Read off the reference, not assumed. This sync exists FOR draft deposits, so it stamped
+      // 'Draft refund' on everything it pulled — but the ledger also holds refunds issued against
+      // real orders, and those were filed as draft refunds (order #1073 is the one in the sheet).
+      // syncReturnsLog_ makes exactly this test on exactly this field; this one simply did not.
+      'Source':        /^#?D/i.test(against) ? 'Draft refund' : 'Order refund (ledger)',
       'Exchange Type': '—',
       'Doc Type':      'Refund',
       // Unlike the gateway sync, the store IS known here: the middleware stamps it from the
@@ -2169,7 +2563,7 @@ function syncDraftRefunds_(showUi) {
       // than whatever the calculator's control cell happens to be set to right now.
       'Store':         r.state_code || '',
       'Serial':        r.serial_code || '',
-      'Order':         r.issued_against || '',
+      'Order':         against,
       'Value':         amount,
       'Customer':      r.customer_name || '',
       'Status':        'refunded',
@@ -2178,16 +2572,19 @@ function syncDraftRefunds_(showUi) {
       'Status Synced': Utilities.formatDate(new Date(), tz, 'dd-MM-yyyy HH:mm')
     });
     seen[ref] = true;
+    money[mk] = true;
     added++;
   });
 
   if (showUi) {
     SpreadsheetApp.getUi().alert('✅ Draft refund sync complete.\n\n' +
       'Refunds seen: ' + scanned + '\n' +
-      'New rows logged: ' + added + '\n\n' +
-      'Rows already in the log are skipped by their Ref, so this is safe to run any time.');
+      'New rows logged: ' + added + '\n' +
+      (merged ? 'Already logged by the gateway refund sync: ' + merged + '\n' : '') +
+      '\nRows already in the log are skipped — by their Ref, and by order+amount+date so the same ' +
+      'money cannot be logged twice under two different keys. Safe to run any time.');
   }
-  return { added: added, scanned: scanned };
+  return { added: added, scanned: scanned, merged: merged };
 }
 
 // Trigger entry point — no UI scope, so it must not try to alert.
@@ -2600,6 +2997,9 @@ function createExchangeNote_() {
     return;
   }
 
+  // Checked BEFORE the serial is allocated — an abandoned allocation leaves a gap in the ledger.
+  if (!confirmNoDuplicateInstrument_(ss, ui, orderNumber)) return;
+
   const today  = new Date();
   // No local-format fallback here: an Exchange Note must not hit an invoice without a real
   // ledger number, so a failed allocation aborts rather than inventing one.
@@ -2795,10 +3195,27 @@ function applyVoucherIfDraftGiven_(calc, vchNumber, vchValue, oldOrder, customer
   if (out && out.success) {
     // Report what the middleware actually did. onlineCodeKilled is false when the ledger row carries
     // no price_rule_id (or the delete failed) — claiming otherwise would hide a live double-spend risk.
+    //
+    // 'displaced' is the voucher this one pushed off the draft. The middleware applies latest-one-wins
+    // rather than refusing, so a swap is a NORMAL outcome — but it must never be a silent one: the
+    // displaced voucher is spendable again and the staff member has to know that, and the log has to
+    // show why a document that read 'Applied' no longer is.
+    if (out.displaced) {
+      logAfterSales_({
+        'Event': 'released', 'Doc Type': 'Voucher', 'Serial': out.displaced,
+        'Applied To': name, 'Status': 'outstanding',
+        'Reason / Note': 'displaced from ' + name + ' by ' + vchNumber + ' — open and spendable again',
+        'Ref': 'displaced:' + out.displaced + ':' + name
+      });
+    }
     return { status: 'Issued + Applied ' + name, error: '',
              message: (out.alreadyApplied ? 'Already applied to ' : 'Applied to ') + name + ' — ₹' +
                       Number(vchValue).toLocaleString('en-IN', { minimumFractionDigits: 2 }) +
                       ' deducted after tax.\n' +
+                      (out.displaced
+                         ? '↩️ ' + out.displaced + ' was already on ' + name + '. It has been removed and ' +
+                           'is OPEN again — the customer can still spend it elsewhere.\n'
+                         : '') +
                       (out.onlineCodeKilled
                          ? 'Its online discount code was cancelled — it cannot also be used at checkout.\n\n'
                          : '⚠️ Its online discount code is STILL LIVE — cancel ' + vchNumber +
@@ -3407,6 +3824,37 @@ function doPost(e) {
 
 var CAD_ADVANCE_LOG = 'CAD Advance Log';
 
+var CAD_ADVANCE_COLS = ['Logged At (IST)', 'Event', 'Reference', 'Value',
+                        'Customer', 'Expires On', 'Applied / Redeemed Against', 'Draft ID',
+                        'Ref'];   // idempotency key — see the dedupe note in handleCadAdvanceLog_
+
+// A CAD advance event named in the After-Sales Log's vocabulary.
+//
+// The two logs describe the same lifecycle in different words: an advance is 'captured' where an
+// instrument is 'issued', and a draft that is 'deleted' is an instrument that is 'voided'. Mapping
+// here means a report can group Event across all four document types instead of special-casing
+// advances.
+var CAD_EVENT_MAP = {
+  captured: 'issued',
+  deleted:  'voided',
+  applied:  'applied',
+  redeemed: 'redeemed',
+  expired:  'expired',
+  refunded: 'refunded'
+};
+
+// The same lifecycle expressed as the Status column's vocabulary, which is a state and not an
+// event: an advance that has been 'captured' is money OUTSTANDING against the customer. Kept as its
+// own map rather than reusing CAD_EVENT_MAP, because 'issued' is an event and never a state.
+var CAD_STATUS_MAP = {
+  captured: 'outstanding',
+  deleted:  'voided',
+  applied:  'applied',
+  redeemed: 'redeemed',
+  expired:  'expired',
+  refunded: 'refunded'
+};
+
 function handleCadAdvanceLog_(body) {
   var out = function (ok, payload) {
     var o = { ok: ok };
@@ -3421,15 +3869,29 @@ function handleCadAdvanceLog_(body) {
 
     if (!sh) {
       sh = ss.insertSheet(CAD_ADVANCE_LOG);
-      sh.appendRow(['Logged At (IST)', 'Event', 'Reference', 'Value',
-                    'Customer', 'Expires On', 'Applied / Redeemed Against', 'Draft ID']);
-      sh.getRange(1, 1, 1, 8).setFontWeight('bold').setBackground('#f0f0f0');
+      sh.appendRow(CAD_ADVANCE_COLS);
+      sh.getRange(1, 1, 1, CAD_ADVANCE_COLS.length).setFontWeight('bold').setBackground('#f0f0f0');
       sh.setFrozenRows(1);
+    } else if (sh.getLastColumn() < CAD_ADVANCE_COLS.length) {
+      // Widened in place — a tab written by the earlier 8-column version keeps its history.
+      sh.getRange(1, 1, 1, CAD_ADVANCE_COLS.length)
+        .setValues([CAD_ADVANCE_COLS]).setFontWeight('bold').setBackground('#f0f0f0');
     }
 
     // Times arrive as UTC ISO from the server; staff read IST.
     var when = body.logged_at ? new Date(body.logged_at) : new Date();
     var whenIst = Utilities.formatDate(when, 'Asia/Kolkata', 'yyyy-MM-dd HH:mm');
+
+    // IDEMPOTENCY. This handler had none: it was a bare appendRow, so every middleware retry or
+    // redelivery appended again and stayed. That is what the four identical #D208 'captured' rows
+    // are. Both refund syncs already guard their writes this way; this one was simply missed.
+    //
+    // The tab is append-only by design — an advance taken, applied and redeemed is three rows — so
+    // the key has to identify the EVENT, not the advance: event + draft + the moment it happened.
+    var ref = 'cad:' + String(body.event || '') + ':' + String(body.draft_ref || '') + ':' + whenIst;
+    if (cadAdvanceHasRef_(sh, ref)) {
+      return out(true, { logged: 'duplicate ignored', ref: ref, duplicate: true });
+    }
 
     sh.appendRow([
       whenIst,
@@ -3439,16 +3901,54 @@ function handleCadAdvanceLog_(body) {
       String(body.customer_name || ''),
       body.expires_at ? String(body.expires_at).slice(0, 10) : '',
       String(body.against || ''),
-      String(body.draft_id || '')
+      String(body.draft_id || ''),
+      ref
     ]);
 
-    return out(true, { logged: body.event + ' ' + body.draft_ref });
+    // …and into the consolidated tab, which is the point of that tab. Design advances were the one
+    // after-sales instrument that never reached it: this handler wrote only to its own sheet, so
+    // "what did after-sales do" answered from the After-Sales Log silently excluded every advance
+    // captured, applied, redeemed or refunded.
+    //
+    // NO SERIAL, deliberately. An advance has none — its identity is the draft — and leaving the
+    // column blank keeps refreshLogStatuses from trying to join these rows to the credit-instrument
+    // ledger, which does not hold them. It is the same reason a gateway refund row carries none.
+    logAfterSales_({
+      'Logged At':     when,
+      'Event':         CAD_EVENT_MAP[String(body.event || '').toLowerCase()] || String(body.event || ''),
+      'Source':        'Design advance',
+      'Exchange Type': '—',
+      'Doc Type':      'CAD Advance',
+      'Store':         String(body.store_code || ''),
+      'Order':         String(body.draft_ref || ''),
+      'Applied To':    String(body.against || ''),
+      'Value':         (body.value === '' || body.value == null) ? '' : Number(body.value),
+      'Customer':      String(body.customer_name || ''),
+      'Expiry':        body.expires_at ? String(body.expires_at).slice(0, 10) : '',
+      'Status':        CAD_STATUS_MAP[String(body.event || '').toLowerCase()] || String(body.event || ''),
+      'Ref':           ref
+    });
+
+    return out(true, { logged: body.event + ' ' + body.draft_ref, ref: ref });
   } catch (err) {
     // The middleware ignores the body and only cares that the POST did not error, but returning the
     // message makes a broken sheet visible in its logs instead of silently losing rows.
     Logger.log('log_cad_advance failed: ' + err);
     return out(false, { error: String(err) });
   }
+}
+
+// Is this event already on the tab? Reads only the Ref column, newest rows first, because a
+// redelivery arrives close behind the row it duplicates.
+function cadAdvanceHasRef_(sh, ref) {
+  var last = sh.getLastRow();
+  if (last < 2) return false;
+  var col = CAD_ADVANCE_COLS.indexOf('Ref') + 1;
+  var vals = sh.getRange(2, col, last - 1, 1).getValues();
+  for (var i = vals.length - 1; i >= 0; i--) {
+    if (String(vals[i][0]).trim() === ref) return true;
+  }
+  return false;
 }
 
 /**

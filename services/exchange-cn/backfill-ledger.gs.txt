@@ -1,0 +1,73 @@
+// One-time credit-instrument ledger backfill.
+// Paste this into a NEW file in the Exchange Calculator's Apps Script project (the project that has
+// the "Voucher Log" / "Exchange Log" tabs). It reuses MIDDLEWARE_URL from the main script.
+// Then pick backfillLedgerFromLogs in the function dropdown and click Run.
+
+function backfillLedgerFromLogs() {
+  var ui = SpreadsheetApp.getUi();
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var ok = 0, fail = 0, skipped = 0;
+
+  var vLog = ss.getSheetByName('Voucher Log');
+  if (!vLog) { vLog = ss.getSheetByName('CN Log'); }
+  if (vLog) {
+    var vdata = vLog.getDataRange().getValues();
+    for (var i = 1; i < vdata.length; i++) {
+      var vserial = String(vdata[i][1] || '').trim();
+      var vvalue = Number(vdata[i][9]);
+      if (vserial === '' || !(vvalue > 0)) { skipped = skipped + 1; continue; }
+      var vstatus = 'open';
+      if (String(vdata[i][11]).toLowerCase().indexOf('void') >= 0) { vstatus = 'voided'; }
+      var vp = {};
+      vp.instrumentType = 'voucher';
+      vp.serialCode = vserial;
+      vp.value = vvalue;
+      vp.customerName = vdata[i][3];
+      vp.sourceOrderName = String(vdata[i][2] || '').trim();
+      vp.expiresAt = dmyToIso_(vdata[i][10]);
+      vp.status = vstatus;
+      if (postIssue_(vp) === 200) { ok = ok + 1; } else { fail = fail + 1; }
+    }
+  }
+
+  var eLog = ss.getSheetByName('Exchange Log');
+  if (eLog) {
+    var edata = eLog.getDataRange().getValues();
+    for (var j = 1; j < edata.length; j++) {
+      var eserial = String(edata[j][1] || '').trim();
+      var evalue = Number(edata[j][10]);
+      if (eserial === '' || !(evalue > 0)) { skipped = skipped + 1; continue; }
+      var estatus = 'redeemed';
+      if (String(edata[j][11]).toLowerCase().indexOf('void') >= 0) { estatus = 'voided'; }
+      var ep = {};
+      ep.instrumentType = 'exchange_note';
+      ep.serialCode = eserial;
+      ep.value = evalue;
+      ep.customerName = edata[j][4];
+      ep.sourceOrderName = String(edata[j][2] || '').trim();
+      ep.targetOrderName = String(edata[j][3] || '').trim();
+      ep.status = estatus;
+      if (postIssue_(ep) === 200) { ok = ok + 1; } else { fail = fail + 1; }
+    }
+  }
+
+  ui.alert('Backfill done. Written: ' + ok + ', Failed: ' + fail + ', Skipped: ' + skipped);
+}
+
+function postIssue_(payload) {
+  var res = UrlFetchApp.fetch(MIDDLEWARE_URL + '/api/credit-instrument/issue', {
+    method: 'post',
+    contentType: 'application/json',
+    muteHttpExceptions: true,
+    payload: JSON.stringify(payload)
+  });
+  return res.getResponseCode();
+}
+
+function dmyToIso_(s) {
+  var parts = String(s).trim().split('-');
+  if (parts.length !== 3) { return null; }
+  var d = Number(parts[0]), mo = Number(parts[1]), y = Number(parts[2]);
+  if (!d || !mo || !y) { return null; }
+  return new Date(y, mo - 1, d).toISOString();
+}

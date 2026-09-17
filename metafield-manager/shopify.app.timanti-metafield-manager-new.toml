@@ -1,0 +1,24 @@
+# Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
+
+client_id = "3c0a0f5a2127842e19391c5b20ec49a0"
+application_url = "https://example.com"
+embedded = true
+name = "Timanti-Metafield-Manager-New"
+
+[webhooks]
+api_version = "2026-04"
+
+[access.admin]
+direct_api_mode = "online"
+embedded_app_direct_api_access = true
+
+[access_scopes]
+# Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
+scopes = "read_draft_orders,write_draft_orders,read_orders,write_orders"
+optional_scopes = [ ]
+use_legacy_install_flow = false
+
+[auth]
+redirect_urls = [ ]
+[sidekick]
+extensions_summary = "Manage jewelry order and draft order metafields through a structured admin interface."

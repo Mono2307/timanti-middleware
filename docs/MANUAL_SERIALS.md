@@ -92,7 +92,7 @@ reprinted number is not.
 2. Deploy the middleware (GitHub Actions — see `docs/DEPLOY.md`).
 
 3. For **each** spreadsheet: Extensions → Apps Script → paste
-   `timanti-ops-assets/apps-script/services/serialization/manual-serials-apps-script.js`, then
+   `services/serialization/manual-serials-apps-script.js`, then
    edit the CONFIGURATION block at the top:
 
    ```js

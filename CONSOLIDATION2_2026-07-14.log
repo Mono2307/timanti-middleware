@@ -1,0 +1,36 @@
+=== capture tracked WIP as a commit on feat (untracked docs left alone) ===
+warning: in the working copy of 'services/reporting/apps-script.js', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'services/reporting/recon.js', LF will be replaced by CRLF the next time Git touches it
+WIP committed: c9051b2
+
+=== fresh worktree at main (short path, longpaths on) ===
+Preparing worktree (checking out 'main')
+HEAD is now at 92f977c feat(middleware): consolidate metafield-manager server logic onto main
+worktree @ 92f977c on main
+
+=== cherry-pick feat's 4 new commits + the WIP commit, in order ===
+[main 677182e] feat(serialization+pricing): make-transfer weighted %, make-memo-custom, store-code-aware serial re-issue
+ Date: Fri Jul 10 13:11:41 2026 +0530
+ 2 files changed, 163 insertions(+), 13 deletions(-)
+[main e122577] feat(reporting): stitched sales report + serial counters, GST fields, recon consolidation
+ Date: Fri Jul 10 13:24:02 2026 +0530
+ 4 files changed, 596 insertions(+), 75 deletions(-)
+ rename services/{recon => reporting}/recon.js (85%)
+ create mode 100644 services/reporting/reports.js
+[main 04bce9c] chore(recon): commit monthly reconciliation input CSVs so /api/recon runs on Fly
+ Date: Fri Jul 10 18:17:43 2026 +0530
+ 6 files changed, 31 insertions(+)
+ create mode 100644 Recon Test/Accounts - Fully Paid Orders.csv
+ create mode 100644 Recon Test/All transactions report (01-Jun-2026 to 30-Jun-2026)_0.csv
+ create mode 100644 Recon Test/MPR (01-Jun-2026 to 30-Jun-2026).xlsx
+ create mode 100644 Recon Test/draft-orders-report-2026-07-08.csv
+ create mode 100644 Recon Test/settlement_v2-report-20260531-20260630.csv
+ create mode 100644 Recon Test/transaction-report-20260531-20260630.csv
+[main a679858] fix(pricing): variant-anchored diamond/making reprice + GST-inclusive Gross Value
+ Date: Sat Jul 11 16:48:30 2026 +0530
+ 1 file changed, 31 insertions(+), 17 deletions(-)
+[main e5c05e8] wip(reporting/templates): apps-script + recon.js + invoice templates (pre-consolidation)
+ Date: Tue Jul 14 13:07:04 2026 +0530
+ 11 files changed, 559 insertions(+), 418 deletions(-)
+ delete mode 100644 cad adjustment pricing/PRD.md
+--- CONFLICTS (if any) ---

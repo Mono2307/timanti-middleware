@@ -1,0 +1,78 @@
+Metafield,Purpose,Editable by Staff?,Auto-filled?,Section,Applies To,Type
+order_type,MTO / In-stock,Yes,No,Order Details,Both,Defined
+channel,Online / Offline,Yes,No,Order Details,Both,Defined
+payment_status,Full / Partial (derived from the installment sum),No,Yes,Payments,Both,Defined
+payment_mode_advance,LEGACY - advance payment method; retired once all readers use installments,No,Yes,Payments,Both,Defined
+payment_mode_final,LEGACY - final payment method; retired once all readers use installments,No,Yes,Payments,Both,Defined
+amount_paid,Total received - SUM of installment values (cad_advance legs excluded),No,Yes,Payments,Both,Defined
+amount_paid_final,LEGACY - pinned to 0 so readers summing the old pair do not double-count,No,Yes,Payments,Both,Defined
+amount_pending,Outstanding amount,No,Yes,Payments,Both,Defined
+amount_to_be_collected,Net amount to collect after adjustments,No,Yes,Payments,Both,Defined
+installment_1_value,Installment 1 amount received,Yes,Maybe,Installments,Both,Defined
+installment_1_mode,Installment 1 payment mode,Yes,Maybe,Installments,Both,Defined
+installment_1_date,Installment 1 date received (system-stamped; staff may correct),Yes,Yes,Installments,Both,Defined
+installment_1_type,payment or cad_advance - cad_advance is display-only and excluded from amount_paid,No,Yes,Installments,Both,Defined
+installment_2_value,Installment 2 amount received,Yes,Maybe,Installments,Both,Defined
+installment_2_mode,Installment 2 payment mode,Yes,Maybe,Installments,Both,Defined
+installment_2_date,Installment 2 date received (system-stamped; staff may correct),Yes,Yes,Installments,Both,Defined
+installment_3_value,Installment 3 amount received,Yes,Maybe,Installments,Both,Defined
+installment_3_mode,Installment 3 payment mode,Yes,Maybe,Installments,Both,Defined
+installment_3_date,Installment 3 date received (system-stamped; staff may correct),Yes,Yes,Installments,Both,Defined
+installment_4_value,Installment 4 amount received,Yes,Maybe,Installments,Both,Defined
+installment_4_mode,Installment 4 payment mode,Yes,Maybe,Installments,Both,Defined
+installment_4_date,Installment 4 date received (system-stamped; staff may correct),Yes,Yes,Installments,Both,Defined
+advance,CAD design advance - tax-free credit that reduces the net,No,Yes,Adjustments,Both,Defined
+advance_ref,Order # of a past advance to redeem (Path B) - intake namespace,Yes,No,Adjustments,Both,Defined
+advance_date,Date the CAD advance was captured (starts the 365-day clock),No,Yes,Adjustments,Both,Defined
+advance_status,open / redeemed,No,Yes,Adjustments,Both,Defined
+redeemed_against,Order the advance was redeemed against,No,Yes,Adjustments,Both,Defined
+discount_applied,Pre-tax diamond-only discount in Rs,No,Yes,Adjustments,Both,Defined
+gold_rate,Gold rate used for repricing,Yes,No,Pricing,Both,Defined
+gold_rate_date,Date the gold rate was applied,Yes,No,Pricing,Both,Defined
+old_gold_weight,Old gold weight,Yes,No,Exchange,Both,Defined
+old_gold_value,Old gold value,Yes,No,Exchange,Both,Defined
+exchange_note_value,Exchange note value,No,Yes,Exchange,Both,Defined
+cn_number,Credit note number,No,Yes,Credit Note,Order,Defined
+cn_value,Credit note value,No,Yes,Credit Note,Order,Defined
+cn_issued_date,Credit note issue date,No,Yes,Credit Note,Order,Defined
+cn_expiry,Credit note expiry,No,Yes,Credit Note,Order,Defined
+mto_comments,Manufacturing notes,Yes,No,Manufacturing,Order,Defined
+jewelcode,Product metadata JSON,No,Yes,Product Metadata,Both,Defined
+jewelcode_gross_weight,Gross weight,Yes,No,Product Metadata,Both,Defined
+jewelcode_net_weight,Net weight,Yes,No,Product Metadata,Both,Defined
+jewelcode_diamond_carats,Diamond carat weight,Yes,No,Product Metadata,Both,Defined
+jewelcode_gemstone_weight,Gemstone weight,Yes,No,Product Metadata,Both,Defined
+gross_wt,Gross weight (legacy draft field),No,Yes,Product Metadata,Draft,UN
+net_wt,Net weight (legacy draft field),No,Yes,Product Metadata,Draft,UN
+diamond_cts,Diamond carats (legacy draft field),No,Yes,Product Metadata,Draft,UN
+sku_id,SKU identifier,No,Yes,Product Metadata,Draft,UN
+po_replenishment_variants,Replenishment workflow,Yes,No,Procurement,Order,Defined
+po_mto_variants,MTO workflow,Yes,No,Procurement,Order,Defined
+po_status,PO status,No,Yes,Procurement,Draft,Defined
+po_type,PO type,No,Yes,Procurement,Draft,Defined
+batch_id,PO batch ID,No,Yes,Procurement,Draft,UN
+batch_date,PO batch date,No,Yes,Procurement,Draft,UN
+delivery_code,Delivery / store code,Yes,No,Procurement,Draft,Defined
+repair_order_reference,Linked repair order,Yes,No,Repair,Draft,Defined
+repair_intake_at,Repair intake timestamp,No,Yes,Repair,Draft,UN
+repair_estimate_sent_at,Repair estimate sent timestamp,No,Yes,Repair,Draft,UN
+repair_completed_at,Repair completed timestamp,No,Yes,Repair,Draft,UN
+repair_store_pickup,Store pickup flag,Yes,No,Repair,Draft,UN
+state_code,Store / state code,Yes,No,System,Both,Defined
+document_type,Document type,No,Yes,System,Both,Defined
+serial_no,Running serial number,No,Yes,System,Both,Defined
+serial_code,Internal serial code,No,Yes,System,Both,Defined
+serial_display,Display serial,No,Yes,System,Both,Defined
+serial_state,Serial state,No,Yes,System,Draft,UN
+is_finalized,Finalization status,Yes,Maybe,System,Both,Defined
+invoice_date,Invoice date,Yes,No,System,Both,Defined
+action_token,Internal action token,No,Yes,System,Draft,Defined
+po_routing,PO routing rules (JSON),No,Yes,Procurement,Both,Defined
+replenishment_comments,Replenishment notes,Yes,No,Procurement,Both,Defined
+jewel_code,Jewel code identifier,No,Yes,Product Metadata,Draft,Defined
+jewelcode_diamond_pieces,Diamond piece count,Yes,No,Product Metadata,Draft,Defined
+mto_comment,Manufacturing note (draft-side singular key),Yes,No,Manufacturing,Draft,Defined
+old_gold_purity,Old gold purity (karat),Yes,No,Exchange,Draft,Defined
+order_name,Linked order name,No,Yes,System,Draft,Defined
+source_order_id,Source order ID (exchange/repair origin),No,Yes,System,Draft,Defined
+voucher_value,Exchange voucher value,No,Yes,Exchange,Draft,Defined

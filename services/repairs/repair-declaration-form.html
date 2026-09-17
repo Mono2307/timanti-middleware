@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Timanti — Repair Declaration Form</title>
+  <style>
+    @page { size: A4; margin: 0.6cm; }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    @media print {
+      body { padding: 4px !important; }
+      .no-print { display: none !important; }
+    }
+    body { font-family: Arial, sans-serif; font-size: 9px; line-height: 1.4; padding: 10px; background: #fff; }
+    .container { max-width: 780px; margin: 0 auto; border: 2px solid #000; }
+
+    /* Header */
+    .header { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; border-bottom: 2px solid #000; min-height: 70px; }
+    .logo { max-width: 130px; height: auto; }
+    .title-block { text-align: center; }
+    .title-block h1 { font-size: 17px; font-weight: bold; letter-spacing: 1px; margin-bottom: 2px; }
+    .title-block p  { font-size: 7.5px; color: #555; }
+    .meta-box { text-align: right; font-size: 8px; line-height: 2.0; }
+    .meta-box .mline { display: inline-block; border-bottom: 1px solid #999; min-width: 90px; height: 13px; vertical-align: bottom; }
+
+    /* Section headers */
+    .sh { background: #f0f0f0; padding: 4px 10px; font-size: 8px; font-weight: bold; border-top: 1px solid #000; border-bottom: 1px solid #000; text-transform: uppercase; letter-spacing: 0.5px; }
+
+    /* Two-col layout */
+    .two-col { display: grid; grid-template-columns: 1fr 1fr; border-bottom: 1px solid #000; }
+    .col { padding: 8px 10px; font-size: 8.5px; line-height: 2.1; }
+    .col:first-child { border-right: 1px solid #000; }
+    .row { display: flex; align-items: baseline; gap: 5px; }
+    .row label { color: #555; min-width: 105px; font-size: 8px; flex-shrink: 0; }
+    .row .fl { flex: 1; border-bottom: 1px solid #aaa; height: 13px; }
+
+    /* Measurements */
+    .meas-grid { display: grid; grid-template-columns: repeat(5, 1fr); border-bottom: 1px solid #000; }
+    .meas-cell { padding: 7px 8px; border-right: 1px solid #000; font-size: 8px; }
+    .meas-cell:last-child { border-right: none; }
+    .meas-cell .mlabel { color: #666; font-size: 7.5px; margin-bottom: 4px; }
+    .meas-cell .mval { border-bottom: 1.5px solid #000; height: 18px; }
+
+    /* Repair type checkboxes */
+    .checkbox-row { padding: 6px 10px; border-bottom: 1px solid #000; font-size: 8.5px; display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+    .checkbox-row label { color: #555; font-size: 8px; font-weight: bold; margin-right: 4px; }
+
+    /* Free text */
+    .free-text { padding: 7px 10px; border-bottom: 1px solid #000; }
+    .free-text .flabel { font-size: 8px; color: #555; margin-bottom: 4px; }
+    .free-text .fline { border-bottom: 1px solid #ccc; height: 16px; margin-bottom: 3px; }
+
+    /* Estimate row */
+    .est-row { display: grid; grid-template-columns: 1fr 1fr 1fr; border-bottom: 1px solid #000; }
+    .est-cell { padding: 8px 10px; border-right: 1px solid #000; font-size: 8px; }
+    .est-cell:last-child { border-right: none; }
+    .est-cell .el { border-bottom: 1.5px solid #000; height: 18px; margin-top: 5px; }
+    .est-cell .elabel { color: #555; font-size: 7.5px; }
+
+    /* T&Cs */
+    .tc { padding: 8px 10px; border-bottom: 1px solid #000; font-size: 7.5px; line-height: 1.6; color: #333; }
+    .tc h3 { font-size: 8px; font-weight: bold; margin-bottom: 5px; text-transform: uppercase; letter-spacing: 0.4px; }
+    .tc ol { padding-left: 14px; }
+    .tc ol li { margin-bottom: 2.5px; }
+
+    /* Declaration */
+    .declaration { padding: 8px 10px; border-bottom: 1px solid #000; background: #fffdf0; font-size: 8px; line-height: 1.65; }
+    .declaration strong { display: block; font-size: 8.5px; margin-bottom: 4px; }
+
+    /* Signatures */
+    .sig-grid { display: grid; grid-template-columns: 1fr 1fr; min-height: 72px; border-bottom: 2px solid #000; }
+    .sig-block { padding: 10px 12px; font-size: 8px; }
+    .sig-block:first-child { border-right: 2px solid #000; }
+    .sig-block strong { display: block; font-size: 8.5px; margin-bottom: 4px; }
+    .sig-line { border-bottom: 1px solid #000; margin: 20px 0 5px 0; }
+    .sig-detail { display: flex; gap: 10px; font-size: 7.5px; align-items: baseline; }
+    .sig-detail .sl { border-bottom: 1px solid #aaa; flex: 1; height: 12px; }
+
+    /* Office strip */
+    .office { display: grid; grid-template-columns: repeat(6, 1fr); font-size: 7.5px; }
+    .ocell { padding: 5px 8px; border-right: 1px solid #000; }
+    .ocell:last-child { border-right: none; }
+    .ocell .otitle { color: #888; font-size: 7px; display: block; margin-bottom: 3px; }
+    .ocell .oline { border-bottom: 1px solid #ccc; height: 11px; }
+
+    /* Footer */
+    .footer { border-top: 1px solid #ccc; padding: 4px 10px; font-size: 7px; color: #888; text-align: center; }
+
+    .no-print { text-align: center; padding: 12px; }
+    .no-print button { background: #000; color: #fff; border: none; padding: 9px 24px; font-size: 13px; border-radius: 4px; cursor: pointer; }
+  </style>
+</head>
+<body>
+
+<div class="no-print">
+  <button onclick="window.print()">Print / Save as PDF</button>
+</div>
+
+<div class="container">
+
+  <!-- Header -->
+  <div class="header">
+    <img src="https://cdn.shopify.com/s/files/1/0775/8322/0993/files/Timanti_Logo_Black.jpg?v=1766506323" alt="Timanti" class="logo">
+    <div class="title-block">
+      <h1>REPAIR DECLARATION FORM</h1>
+      <p>Auracarat Private Limited &nbsp;·&nbsp; 17th Cross, 19th Main Rd, HSR Layout Sec 2, Bengaluru – 560102</p>
+      <p>+91-7710938305 &nbsp;·&nbsp; hello@timanti.in &nbsp;·&nbsp; www.timanti.in</p>
+    </div>
+    <div class="meta-box">
+      <div>Form No. &nbsp;<span class="mline"></span></div>
+      <div>Date &nbsp;<span class="mline"></span></div>
+      <div>Draft Ref. &nbsp;<span class="mline"></span></div>
+      <div>Staff &nbsp;<span class="mline" style="min-width:50px;"></span></div>
+    </div>
+  </div>
+
+  <!-- Customer Details -->
+  <div class="sh">Customer Details</div>
+  <div class="two-col">
+    <div class="col">
+      <div class="row"><label>Full Name</label><div class="fl"></div></div>
+      <div class="row"><label>Mobile / WhatsApp</label><div class="fl"></div></div>
+      <div class="row"><label>Email</label><div class="fl"></div></div>
+    </div>
+    <div class="col">
+      <div class="row"><label>Original Order No.</label><div class="fl"></div></div>
+      <div class="row"><label>SKU / Product Code</label><div class="fl"></div></div>
+      <div class="row"><label>ID Proof (type / last 4)</label><div class="fl"></div></div>
+    </div>
+  </div>
+
+  <!-- Piece Details -->
+  <div class="sh">Piece Details</div>
+  <div class="two-col">
+    <div class="col">
+      <div class="row"><label>Item Description</label><div class="fl"></div></div>
+      <div class="row"><label>Metal Type &amp; Karat</label><div class="fl"></div></div>
+      <div class="row"><label>Hallmark No.</label><div class="fl"></div></div>
+    </div>
+    <div class="col">
+      <div class="row"><label>Current Ring Size</label><div class="fl"></div></div>
+      <div class="row"><label>Purchased from Timanti</label><div style="flex:1; padding-top:2px;">☐ Yes &nbsp;&nbsp; ☐ No</div></div>
+      <div class="row"><label>Accompanied by</label><div style="flex:1; padding-top:2px;">☐ Box &nbsp;☐ Certificate &nbsp;☐ Invoice</div></div>
+    </div>
+  </div>
+
+  <!-- Measurements at Receipt -->
+  <div class="sh">Measurements &amp; Condition at Receipt &nbsp;<span style="font-weight:normal; font-style:italic; font-size:7.5px;">(recorded by staff in customer's presence — both parties to verify)</span></div>
+  <div class="meas-grid">
+    <div class="meas-cell"><div class="mlabel">Gross Weight (g)</div><div class="mval"></div></div>
+    <div class="meas-cell"><div class="mlabel">Net Metal Weight (g)</div><div class="mval"></div></div>
+    <div class="meas-cell"><div class="mlabel">Diamond Weight (cts)</div><div class="mval"></div></div>
+    <div class="meas-cell"><div class="mlabel">Diamond Pieces</div><div class="mval"></div></div>
+    <div class="meas-cell"><div class="mlabel">Col. Stone (pcs / cts)</div><div class="mval"></div></div>
+  </div>
+  <div class="two-col" style="border-top: none;">
+    <div class="col" style="border-top: none;">
+      <div class="row"><label>Visible damage / scratches</label><div style="flex:1; padding-top:2px;">☐ None &nbsp;&nbsp; ☐ Yes — describe below</div></div>
+      <div class="row"><label>Missing stones</label><div style="flex:1; padding-top:2px;">☐ None &nbsp;&nbsp; ☐ Yes — count: ________</div></div>
+    </div>
+    <div class="col" style="border-top: none;">
+      <div class="row"><label>Prong / setting condition</label><div style="flex:1; padding-top:2px;">☐ Good &nbsp;&nbsp; ☐ Worn &nbsp;&nbsp; ☐ Broken</div></div>
+      <div class="row"><label>Overall condition</label><div style="flex:1; padding-top:2px;">☐ Good &nbsp;&nbsp; ☐ Fair &nbsp;&nbsp; ☐ Poor</div></div>
+    </div>
+  </div>
+
+  <!-- Type of Repair -->
+  <div class="sh">Type of Repair Required</div>
+  <div class="checkbox-row">
+    <label>Select all that apply:</label>
+    <span>☐ Resizing</span>
+    <span>☐ Stone replacement</span>
+    <span>☐ Prong re-tipping</span>
+    <span>☐ Polishing / Rhodium</span>
+    <span>☐ Chain / clasp repair</span>
+    <span>☐ Engraving</span>
+    <span>☐ Deep cleaning</span>
+    <span>☐ Soldering</span>
+    <span>☐ Other: ______________________</span>
+  </div>
+
+  <!-- Description of Work -->
+  <div class="sh">Description of Work Required</div>
+  <div class="free-text">
+    <div class="flabel">Describe the repair in the customer's own words (staff may assist):</div>
+    <div class="fline"></div>
+    <div class="fline"></div>
+    <div class="fline"></div>
+    <div class="fline" style="margin-bottom:0;"></div>
+  </div>
+
+  <!-- Estimate & Timeline -->
+  <div class="sh">Estimate &amp; Timeline</div>
+  <div class="est-row">
+    <div class="est-cell">
+      <div class="elabel">Estimated Cost (₹) — indicative</div>
+      <div class="el"></div>
+      <div style="font-size:6.5px; color:#888; margin-top:3px;">Final cost confirmed before work begins.</div>
+    </div>
+    <div class="est-cell">
+      <div class="elabel">Expected Completion (working days)</div>
+      <div class="el"></div>
+      <div style="font-size:6.5px; color:#888; margin-top:3px;">Subject to complexity; customer will be informed of any change.</div>
+    </div>
+    <div class="est-cell">
+      <div class="elabel">Expected Ready Date</div>
+      <div class="el"></div>
+      <div style="font-size:6.5px; color:#888; margin-top:3px;">Notify via: &nbsp;☐ WhatsApp &nbsp;☐ Email &nbsp;☐ Call</div>
+    </div>
+  </div>
+
+  <!-- Terms & Conditions -->
+  <div class="sh">Terms &amp; Conditions</div>
+  <div class="tc">
+    <ol>
+      <li>This form acknowledges that Timanti (Auracarat Private Limited) has received the above piece from the customer for repair and/or assessment.</li>
+      <li>All measurements and condition details recorded above are agreed upon by both parties in the customer's presence. Discrepancies must be raised before signing.</li>
+      <li>The estimated cost is indicative only. The final repair cost will be communicated to the customer for approval before any work commences. No work will begin without the customer's explicit consent.</li>
+      <li>Estimated timelines are based on standard workmanship. Complex repairs, stone sourcing, or external vendor requirements may extend the timeline; the customer will be notified of any changes.</li>
+      <li>Timanti shall not be liable for pre-existing undisclosed damage, hairline fractures, structural weaknesses, loose stones, or any loss of stones not noted on this form at the time of receipt.</li>
+      <li>In the event of damage caused solely by Timanti's workmanship, Timanti's liability shall be limited strictly to the agreed repair cost and shall not extend to the full intrinsic or sentimental value of the piece.</li>
+      <li>All diamond, gemstone, and metal weights recorded at intake are verified and mutually agreed. Timanti accepts no responsibility for weight discrepancies not raised at the time of drop-off.</li>
+      <li>The customer will be notified upon completion. The piece must be collected within <strong>30 days</strong> of the completion notification. Timanti reserves the right to levy a storage charge of ₹50 per day beyond this period.</li>
+      <li>Full payment of the agreed repair cost is due upon collection of the piece. Items will not be returned or dispatched until payment is received in full.</li>
+      <li>Timanti reserves the right to decline any repair where a satisfactory outcome cannot be reasonably guaranteed. In such cases, the piece will be returned to the customer intact at no charge.</li>
+      <li>This agreement is governed by the laws of India. Any disputes shall fall under the exclusive jurisdiction of courts in Bengaluru, Karnataka.</li>
+    </ol>
+  </div>
+
+  <!-- Customer Declaration -->
+  <div class="declaration">
+    <strong>Customer Declaration</strong>
+    I confirm that I am the lawful owner of the above-described jewellery piece, or that I am duly authorised by the owner to submit it for repair on their behalf. I have read and fully understood the Terms &amp; Conditions stated above. I authorise Timanti (Auracarat Private Limited) to carry out the described repair work at the estimated cost and timeline stated. I confirm that the measurements, stone counts, and condition details recorded above are accurate and agreed upon to the best of my knowledge. I understand that the final cost may vary and will be confirmed with me before work begins.
+  </div>
+
+  <!-- Signatures -->
+  <div class="sig-grid">
+    <div class="sig-block">
+      <strong>Customer Signature &amp; Acknowledgement</strong>
+      <div class="sig-line"></div>
+      <div class="sig-detail">
+        <span>Name:</span><div class="sl"></div>
+        <span style="margin-left:8px;">Date:</span><div class="sl" style="max-width:65px;"></div>
+      </div>
+    </div>
+    <div class="sig-block">
+      <strong>Timanti — Received By (Staff)</strong>
+      <div class="sig-line"></div>
+      <div class="sig-detail">
+        <span>Name:</span><div class="sl"></div>
+        <span style="margin-left:8px;">Date:</span><div class="sl" style="max-width:65px;"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- For Office Use -->
+  <div class="sh" style="border-top: 2px solid #000;">For Office Use Only</div>
+  <div class="office">
+    <div class="ocell"><span class="otitle">Draft Order Ref</span><div class="oline"></div></div>
+    <div class="ocell"><span class="otitle">HQ Notified</span><div class="oline"></div></div>
+    <div class="ocell"><span class="otitle">Estimate Sent</span><div class="oline"></div></div>
+    <div class="ocell"><span class="otitle">Customer Approved</span><div class="oline"></div></div>
+    <div class="ocell"><span class="otitle">Repair Completed</span><div class="oline"></div></div>
+    <div class="ocell"><span class="otitle">Piece Returned / Collected</span><div class="oline"></div></div>
+  </div>
+
+  <div class="footer">
+    Auracarat Private Limited &nbsp;·&nbsp; GSTIN: 29ABBCA3309B1Z7 &nbsp;·&nbsp; This is a service acknowledgement form, not a tax invoice. A tax invoice will be issued separately upon completion. &nbsp;·&nbsp; www.timanti.in
+  </div>
+
+</div>
+</body>
+</html>

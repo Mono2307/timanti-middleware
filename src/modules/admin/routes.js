@@ -716,6 +716,15 @@ const SALES_MF_DEFS = [
     validations: [{ name: 'choices', value: JSON.stringify(['Yes', 'No']) }] },
 ];
 
+// Yes/No as a CHOICE field, not a boolean, matching in_store_sale above. REST hands a real
+// boolean metafield back as a JSON boolean, so `v === 'true'` silently reads false forever —
+// the bug that made is_finalized a one-way latch. A choice field has no such edge.
+const SHIPPING_MF_DEFS = [
+  { key: 'ship_outside_codes', name: 'Ship Outside Codes', type: 'single_line_text_field',
+    description: 'Yes = the delivery challan is consigned to the customer address on this draft rather than to a store, and the Delivery / Store Code is ignored. No or blank = the normal store-to-store route.',
+    validations: [{ name: 'choices', value: JSON.stringify(['Yes', 'No']) }] },
+];
+
 const ADJUSTMENT_MF_DEFS = [
   { key: 'exchange_note_code', name: 'Exchange Note Applied', type: 'single_line_text_field', description: 'Serial code of the exchange note applied to this order (e.g. EXC27-KAHSR-0001).' },
   { key: 'voucher_code',       name: 'Voucher Applied',       type: 'single_line_text_field', description: 'Serial code of the voucher applied to this order (e.g. VCH27-KAHSR-0001).' },
@@ -906,6 +915,7 @@ async function runEnsureMetafieldDefinitions(req, res) {
   if (group === 'all' || group === 'installments') defs.push(...buildInstallmentMfDefs(modeChoices));
   if (group === 'all' || group === 'refunds')      defs.push(...buildRefundMfDefs(modeChoices));
   if (group === 'all' || group === 'repair')       defs.push(...REPAIR_MF_DEFS);
+  if (group === 'all' || group === 'shipping')     defs.push(...SHIPPING_MF_DEFS);
 
   const planned = [];
   for (const d of defs) for (const ownerType of owners) planned.push({ ...d, ownerType, namespace: 'custom' });

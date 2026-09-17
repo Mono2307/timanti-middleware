@@ -1,0 +1,217 @@
+<style>
+  @page { size: A4; margin: 1cm; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  @media print {
+    body { padding: 0 !important; }
+    a { display: none !important; }
+  }
+  body { font-family: Arial, sans-serif; font-size: 10px; line-height: 1.4; padding: 10px; }
+  .container { max-width: 740px; margin: 0 auto; }
+  .header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #000; padding-bottom: 10px; margin-bottom: 12px; }
+  .logo { max-width: 120px; height: auto; }
+  .order-info { text-align: right; }
+  .order-info .order-num { font-size: 15px; font-weight: bold; margin-bottom: 3px; }
+  .order-info .slip-label { font-size: 9px; text-transform: uppercase; letter-spacing: 1px; color: #555; margin-bottom: 2px; }
+  .order-info .order-date { font-size: 9px; color: #444; }
+  .addresses { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px; }
+  .address-box { border: 1px solid #000; padding: 8px 10px; }
+  .address-box h3 { font-size: 8px; font-weight: bold; text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 6px; padding-bottom: 4px; border-bottom: 1px solid #ccc; }
+  .address-box p { font-size: 9px; line-height: 1.55; }
+  .lbl { font-weight: bold; }
+  .items-table { width: 100%; border-collapse: collapse; border: 1px solid #000; }
+  .items-table th { background: #f0f0f0; padding: 5px 4px; text-align: left; font-weight: bold; font-size: 7.5px; text-transform: uppercase; letter-spacing: 0.4px; border: 1px solid #000; }
+  .items-table td { padding: 5px 4px; border: 1px solid #000; vertical-align: top; font-size: 8px; }
+  .items-table tfoot td { background: #f0f0f0; font-weight: bold; }
+  .text-right { text-align: right; }
+  .text-center { text-align: center; }
+  .item-title { font-size: 8.5px; font-weight: bold; }
+  .item-variant { font-size: 7.5px; color: #444; margin-top: 1px; }
+  .item-sku { font-size: 7.5px; color: #777; margin-top: 1px; }
+</style>
+
+<div class="container">
+
+  <div class="header">
+    <img src="https://cdn.shopify.com/s/files/1/0775/8322/0993/files/Timanti_Logo_Black.jpg?v=1766506323" alt="Timanti" class="logo">
+    <div class="order-info">
+      <div class="slip-label">Packing Slip</div>
+      <div class="order-num">{{ name }}</div>
+      <div class="order-date">{{ created_at | date: "%d %b %Y, %I:%M %p" }}</div>
+    </div>
+  </div>
+
+  <div class="addresses">
+    <div class="address-box">
+      <h3>Pickup From</h3>
+      <p>
+        <span class="lbl">Timanti by Auracarat</span><br>
+        17th Cross, 19th Main Rd,<br>
+        HSR Layout Sec 2,<br>
+        Opp. Gnan Srishti School,<br>
+        Bengaluru – 560102, Karnataka<br>
+        <span class="lbl">Tel:</span> +91-7710938305
+      </p>
+    </div>
+
+    <div class="address-box">
+      <h3>Deliver To</h3>
+      <p>
+        {% if shipping_address != blank %}
+          <span class="lbl">{{ shipping_address.name }}</span><br>
+          {{ shipping_address.address1 }}{% if shipping_address.address2 %}, {{ shipping_address.address2 }}{% endif %}<br>
+          {{ shipping_address.city }}, {{ shipping_address.province }} {{ shipping_address.zip }}<br>
+          {{ shipping_address.country }}<br>
+          {% if shipping_address.phone != blank %}<span class="lbl">Tel:</span> {{ shipping_address.phone }}<br>{% endif %}
+        {% endif %}
+        {% if shipping_method != blank %}<span class="lbl">Method:</span> {{ shipping_method.title }}<br>{% endif %}
+        {% if fulfillment.tracking_company != blank and fulfillment.tracking_company != "Other" %}<span class="lbl">Carrier:</span> {{ fulfillment.tracking_company }}<br>{% endif %}
+        {% if fulfillment.tracking_number != blank %}<span class="lbl">Tracking:</span> {{ fulfillment.tracking_number }}<br>{% endif %}
+        {% if note != blank %}<span class="lbl">Note:</span> {{ note }}{% endif %}
+      </p>
+    </div>
+
+    <div class="address-box">
+      <h3>Customer Contact</h3>
+      <p>
+        {% assign billing_address = billing_address | default: customer.default_address %}
+        {% if billing_address != blank %}
+          <span class="lbl">{{ billing_address.name }}</span><br>
+          {% if billing_address.phone != blank %}<span class="lbl">Mobile:</span> {{ billing_address.phone }}<br>{% endif %}
+          {% if customer.email != blank %}<span class="lbl">Email:</span> {{ customer.email }}{% endif %}
+        {% elsif customer != blank %}
+          <span class="lbl">{{ customer.name }}</span><br>
+          {% if customer.phone != blank %}<span class="lbl">Mobile:</span> {{ customer.phone }}<br>{% endif %}
+          {% if customer.email != blank %}<span class="lbl">Email:</span> {{ customer.email }}{% endif %}
+        {% endif %}
+      </p>
+    </div>
+  </div>
+
+  {% comment %}
+    ── One row per SKU ──
+    The whole SKU is the grouping key, so NK00053|Y|14 and NK00053|W|18 stay separate rows: the
+    same design in another colour, karat or size is a different physical piece to pack. "@"
+    delimits the key list on both ends so a `contains` probe cannot partially match.
+
+    QUANTITY: a draft has no fulfillment, so fulfillment_quantity is nil there and a bare
+    less-than-one test on it skipped every line and printed an empty slip. nil falls back to
+    quantity; a real 0 on an order is not blank and still skips that line.
+
+    WEIGHTS ARE PER PIECE at every source — the hidden line properties and the catalog metafields
+    alike — so each is multiplied by that quantity.
+            Fallback order is dictated by what the print app can actually reach — only the first
+            10 PINNED definitions of an owner type are exposed:
+              gross     _gross_wt     → variant total_metal_weight_g (#5) → variant gross_weight_g (#7)
+              net       _net_wt       → variant net_metal_weight_g (#6)
+              diamond   _diamond_cts  → product totaldiamondweight (#4)
+              gemstone  _gemstone_cts → product gemstone_weight (#5)
+            Product net/total_metal_weight_g are UNPINNED, and there is no variant-level diamond or
+            gemstone weight definition at all, so the stones have no variant fallback to offer.
+  {% endcomment %}
+  {% assign pack_keys = "@" %}
+  {% for li in line_items %}
+    {% if li.fulfillment_quantity == blank %}{% assign _q = li.quantity %}{% else %}{% assign _q = li.fulfillment_quantity %}{% endif %}
+    {% if _q < 1 %}{% continue %}{% endif %}
+    {% assign _k = li.sku | strip %}
+    {% if _k == blank %}{% assign _k = li.product_title | strip %}{% endif %}
+    {% assign _probe = "@" | append: _k | append: "@" %}
+    {% unless pack_keys contains _probe %}
+      {% assign pack_keys = pack_keys | append: _k | append: "@" %}
+    {% endunless %}
+  {% endfor %}
+  {% assign pack_list = pack_keys | split: "@" %}
+
+  {% assign sno = 0 %}
+  {% assign t_qty = 0 %}{% assign t_gross = 0 %}{% assign t_net = 0 %}{% assign t_dia = 0 %}{% assign t_gem = 0 %}
+
+  <table class="items-table">
+    <thead>
+      <tr>
+        <th style="width:5%;"  class="text-center">S.No.</th>
+        <th style="width:39%;">Item</th>
+        <th class="text-center" style="width:8%;">Qty</th>
+        <th class="text-center" style="width:12%;">Gross Wt (g)</th>
+        <th class="text-center" style="width:12%;">Net Wt (g)</th>
+        <th class="text-center" style="width:12%;">Diamond (cts)</th>
+        <th class="text-center" style="width:12%;">Gemstone (cts)</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for _key in pack_list %}
+        {% if _key == blank %}{% continue %}{% endif %}
+
+        {% assign g_qty = 0 %}{% assign g_gross = 0 %}{% assign g_net = 0 %}{% assign g_dia = 0 %}{% assign g_gem = 0 %}
+        {% assign g_title = "" %}{% assign g_variant = "" %}{% assign g_sku = "" %}
+
+        {% for li in line_items %}
+          {% if li.fulfillment_quantity == blank %}{% assign _q = li.quantity %}{% else %}{% assign _q = li.fulfillment_quantity %}{% endif %}
+          {% if _q < 1 %}{% continue %}{% endif %}
+          {% assign _k = li.sku | strip %}
+          {% if _k == blank %}{% assign _k = li.product_title | strip %}{% endif %}
+          {% unless _k == _key %}{% continue %}{% endunless %}
+
+          {% if g_title == blank %}
+            {% assign g_title   = li.product_title %}
+            {% assign g_variant = li.variant_title %}
+            {% assign g_sku     = li.sku %}
+          {% endif %}
+
+          {% assign _gw = 0 %}{% assign _nw = 0 %}{% assign _dia = 0 %}{% assign _gem = 0 %}
+          {% assign _gw_from_prop = false %}{% assign _nw_from_prop = false %}{% assign _dia_from_prop = false %}{% assign _gem_from_prop = false %}
+          {% for p in li.properties %}
+            {% if p.first == "_gross_wt"     %}{% assign _gw  = p.last | plus: 0 | times: _q %}{% assign _gw_from_prop  = true %}{% endif %}
+            {% if p.first == "_net_wt"       %}{% assign _nw  = p.last | plus: 0 | times: _q %}{% assign _nw_from_prop  = true %}{% endif %}
+            {% if p.first == "_diamond_cts"  %}{% assign _dia = p.last | plus: 0 | times: _q %}{% assign _dia_from_prop = true %}{% endif %}
+            {% if p.first == "_gemstone_cts" %}{% assign _gem = p.last | plus: 0 | times: _q %}{% assign _gem_from_prop = true %}{% endif %}
+          {% endfor %}
+          {% unless _gw_from_prop %}
+            {% if li.variant.metafields.custom.total_metal_weight_g %}{% assign _gw = li.variant.metafields.custom.total_metal_weight_g | plus: 0 | times: _q %}
+            {% elsif li.variant.metafields.custom.gross_weight_g    %}{% assign _gw = li.variant.metafields.custom.gross_weight_g       | plus: 0 | times: _q %}{% endif %}
+          {% endunless %}
+          {% unless _nw_from_prop  %}{% if li.variant.metafields.custom.net_metal_weight_g %}{% assign _nw  = li.variant.metafields.custom.net_metal_weight_g | plus: 0 | times: _q %}{% endif %}{% endunless %}
+          {% unless _dia_from_prop %}{% if li.product.metafields.custom.totaldiamondweight %}{% assign _dia = li.product.metafields.custom.totaldiamondweight | plus: 0 | times: _q %}{% endif %}{% endunless %}
+          {% unless _gem_from_prop %}{% if li.product.metafields.custom.gemstone_weight    %}{% assign _gem = li.product.metafields.custom.gemstone_weight    | plus: 0 | times: _q %}{% endif %}{% endunless %}
+
+          {% assign g_qty   = g_qty   | plus: _q %}
+          {% assign g_gross = g_gross | plus: _gw %}
+          {% assign g_net   = g_net   | plus: _nw %}
+          {% assign g_dia   = g_dia   | plus: _dia %}
+          {% assign g_gem   = g_gem   | plus: _gem %}
+        {% endfor %}
+
+        {% if g_qty < 1 %}{% continue %}{% endif %}
+        {% assign sno     = sno     | plus: 1 %}
+        {% assign t_qty   = t_qty   | plus: g_qty %}
+        {% assign t_gross = t_gross | plus: g_gross %}
+        {% assign t_net   = t_net   | plus: g_net %}
+        {% assign t_dia   = t_dia   | plus: g_dia %}
+        {% assign t_gem   = t_gem   | plus: g_gem %}
+
+        <tr>
+          <td class="text-center">{{ sno }}.</td>
+          <td>
+            <div class="item-title">{{ g_title }}</div>
+            {% if g_variant != blank %}<div class="item-variant">{{ g_variant }}</div>{% endif %}
+            {% if g_sku != blank %}<div class="item-sku">SKU: {{ g_sku }}</div>{% endif %}
+          </td>
+          <td class="text-center">{{ g_qty }}</td>
+          <td class="text-center">{% if g_gross > 0 %}{{ g_gross | round: 3 }}{% else %}—{% endif %}</td>
+          <td class="text-center">{% if g_net   > 0 %}{{ g_net   | round: 3 }}{% else %}—{% endif %}</td>
+          <td class="text-center">{% if g_dia   > 0 %}{{ g_dia   | round: 3 }}{% else %}—{% endif %}</td>
+          <td class="text-center">{% if g_gem   > 0 %}{{ g_gem   | round: 3 }}{% else %}—{% endif %}</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+    <tfoot>
+      <tr>
+        <td colspan="2" class="text-right">Total</td>
+        <td class="text-center">{{ t_qty }}</td>
+        <td class="text-center">{% if t_gross > 0 %}{{ t_gross | round: 3 }}{% else %}—{% endif %}</td>
+        <td class="text-center">{% if t_net   > 0 %}{{ t_net   | round: 3 }}{% else %}—{% endif %}</td>
+        <td class="text-center">{% if t_dia   > 0 %}{{ t_dia   | round: 3 }}{% else %}—{% endif %}</td>
+        <td class="text-center">{% if t_gem   > 0 %}{{ t_gem   | round: 3 }}{% else %}—{% endif %}</td>
+      </tr>
+    </tfoot>
+  </table>
+
+</div>

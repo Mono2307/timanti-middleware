@@ -1,0 +1,12 @@
+api_version = "2025-10"
+
+[[extensions]]
+name = "t:name"
+handle = "order-metafield-manager-order-action"
+uid = "9acd9d5c-e58c-27b2-185c-b9b0be200a93d5897a7d"
+type = "ui_extension"
+
+# Admin action: full-size "all fields" panel opened from More actions on an order.
+[[extensions.targeting]]
+module = "./src/OrderActionExtension.jsx"
+target = "admin.order-details.action.render"

@@ -1,0 +1,109 @@
+<!--
+  Reference copy of the credit note email.
+  The actual sending is done by buildCnEmailHtml() in apps-script.js via MailApp.sendEmail().
+  Variables shown as {{PLACEHOLDER}} are substituted in the script.
+-->
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+<body style="margin:0; padding:0; background:#f4f4f4; font-family:Arial, sans-serif; font-size:14px; color:#222;">
+
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f4; padding:24px 0;">
+    <tr><td align="center">
+      <table width="600" cellpadding="0" cellspacing="0" style="background:#ffffff; border:1px solid #ddd; max-width:600px; width:100%;">
+
+        <!-- Header -->
+        <tr>
+          <td align="center" style="padding:24px 32px 16px; border-bottom:2px solid #000;">
+            <img src="https://cdn.shopify.com/s/files/1/0775/8322/0993/files/Timanti_Logo_Black.jpg?v=1766506323"
+                 alt="Timanti" width="120" style="display:block; margin:0 auto 10px;">
+            <p style="margin:0; font-size:11px; color:#555; letter-spacing:1px; text-transform:uppercase;">Credit Note Issued</p>
+          </td>
+        </tr>
+
+        <!-- Greeting -->
+        <tr>
+          <td style="padding:24px 32px 8px;">
+            <p style="margin:0 0 8px;">Dear {{CUSTOMER_NAME}},</p>
+            <p style="margin:0; color:#444; font-size:13px; line-height:1.6;">
+              Thank you for your exchange at Timanti. Your store credit has been issued and is ready to use on your next purchase at
+              <a href="https://auracarat.com" style="color:#000; font-weight:bold;">auracarat.com</a>.
+            </p>
+          </td>
+        </tr>
+
+        <!-- CN Box -->
+        <tr>
+          <td style="padding:20px 32px;">
+            <table width="100%" cellpadding="0" cellspacing="0" style="border:2px solid #000;">
+              <tr>
+                <!-- Code side -->
+                <td width="55%" style="padding:18px 20px; border-right:1px solid #000; vertical-align:top;">
+                  <p style="margin:0 0 4px; font-size:10px; font-weight:bold; text-transform:uppercase; letter-spacing:0.5px; color:#555;">Discount Code</p>
+                  <p style="margin:0 0 6px; font-size:22px; font-weight:bold; letter-spacing:2px;">{{CN_NUMBER}}</p>
+                  <p style="margin:0; font-size:11px; color:#555;">One-time use &nbsp;·&nbsp; Non-transferable</p>
+                </td>
+                <!-- Amount side -->
+                <td width="45%" style="padding:18px 20px; text-align:right; vertical-align:top;">
+                  <p style="margin:0 0 4px; font-size:10px; font-weight:bold; text-transform:uppercase; letter-spacing:0.5px; color:#555;">Credit Amount</p>
+                  <p style="margin:0 0 6px; font-size:28px; font-weight:bold;">₹{{CN_AMOUNT}}</p>
+                  <p style="margin:0; font-size:11px; color:#555;">Valid until {{CN_EXPIRY}}</p>
+                </td>
+              </tr>
+              <!-- Bar -->
+              <tr>
+                <td colspan="2" style="background:#000; color:#fff; text-align:center; padding:8px 16px; font-size:12px;">
+                  Enter <strong>{{CN_NUMBER}}</strong> at checkout on <strong>auracarat.com</strong>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+
+        <!-- Order reference -->
+        <tr>
+          <td style="padding:0 32px 20px;">
+            <p style="margin:0; font-size:12px; color:#666;">
+              Issued against order <strong>{{ORDER_NUMBER}}</strong> &nbsp;·&nbsp; Expires <strong>{{CN_EXPIRY}}</strong>
+            </p>
+          </td>
+        </tr>
+
+        <!-- Divider -->
+        <tr><td style="padding:0 32px;"><hr style="border:none; border-top:1px solid #eee; margin:0;"></td></tr>
+
+        <!-- T&Cs -->
+        <tr>
+          <td style="padding:20px 32px;">
+            <p style="margin:0 0 10px; font-size:12px; font-weight:bold; text-transform:uppercase; letter-spacing:0.5px;">Terms &amp; Conditions</p>
+            <ol style="margin:0; padding-left:18px; font-size:11px; color:#555; line-height:1.8;">
+              <li>Valid for <strong>90 days</strong> from the date of issue. Expires on <strong>{{CN_EXPIRY}}</strong> and cannot be extended.</li>
+              <li>Valid for <strong>one-time use only</strong>. Any unused balance after redemption is forfeited.</li>
+              <li><strong>Non-transferable</strong> — may only be redeemed by the named customer.</li>
+              <li>Cannot be combined with any other discount code or promotional offer.</li>
+              <li>Applicable on all products on auracarat.com, subject to availability at time of redemption.</li>
+              <li>Issued under Section 34 of the CGST Act, 2017, against an exchange transaction.</li>
+              <li>The credit value is based on prevailing market rates for gold and diamonds at the time this exchange was processed. No adjustments will be made for subsequent rate changes.</li>
+              <li>Auracarat Private Limited reserves the right to cancel this credit note if the original order is found to be fraudulent or disputed.</li>
+            </ol>
+          </td>
+        </tr>
+
+        <!-- Divider -->
+        <tr><td style="padding:0 32px;"><hr style="border:none; border-top:1px solid #eee; margin:0;"></td></tr>
+
+        <!-- Footer -->
+        <tr>
+          <td style="padding:20px 32px; font-size:11px; color:#888; line-height:1.8;">
+            <p style="margin:0 0 4px;"><strong style="color:#222;">Timanti by Auracarat</strong></p>
+            <p style="margin:0;">hello@timanti.in &nbsp;·&nbsp; +91-7710938305 &nbsp;·&nbsp; www.timanti.in</p>
+            <p style="margin:0;">17th Cross, 19th Main Rd, HSR Layout Sec 2, Bengaluru – 560102</p>
+          </td>
+        </tr>
+
+      </table>
+    </td></tr>
+  </table>
+
+</body>
+</html>

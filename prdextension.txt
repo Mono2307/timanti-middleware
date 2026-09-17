@@ -1,0 +1,174 @@
+# ?? Product Requirements Document (PRD)
+## Unified Order, Payment & Communication System (Shopify)
+
+---
+
+## ?? Objective
+
+Create a consistent, scalable system across online and offline sales that:
+
+- Handles stock + MTO (made-to-order) journeys
+- Supports partial + full payments
+- Ensures accurate invoicing (proforma vs final)
+- Eliminates duplicate or incorrect customer communication
+- Simplifies execution for store staff
+
+---
+
+## ?? Core Problem
+
+- Orders behave inconsistently across online, offline, and payment links
+- Draft vs Order confusion breaks workflows
+- MTO pricing and attributes change post-order
+- Partial payments are not structured
+- Staff cannot handle JSON-based inputs
+- Communication triggers are event-based, not context-aware
+
+---
+
+## ?? Solution Overview
+
+Shift system from **order-state driven ? data-driven**
+
+### 3 Core Layers:
+
+#### 1. Payment Ledger
+- amount_paid  
+- amount_pending  
+- payment_status (partial / full)
+
+#### 2. Product Finalization
+- jewel_code  
+- gross/net weight  
+- diamond & gemstone details  
+- is_finalized (true/false)
+
+#### 3. Communication Engine
+
+Uses 3 Shopify constructs:
+
+- ?? Draft Order Invoice ? deposit / partial payment  
+- ? Order Confirmation ? proforma OR final invoice  
+- ?? Shipping Confirmation ? only when shipped  
+
+---
+
+## ??? Data Model
+
+### Metafields (Primary Control Layer)
+
+| Field | Purpose |
+|------|--------|
+| channel | online / offline |
+| order_type | stock / mto |
+| payment_status | partial / full |
+| amount_paid | payment tracking |
+| amount_pending | balance tracking |
+| is_finalized | product completion |
+
+---
+
+### Tags (Automation Only)
+
+- online
+- offline
+- stock
+- mto
+
+(Handled via Shopify Flow, not manually)
+
+---
+
+## ?? TABLE 1 — Scenario ? Construct ? Trigger ? Output
+
+| Scenario | Channel | Product | Payment | System State | Trigger Event | Shopify Construct | Email Sent | Invoice Type |
+|----------|--------|---------|--------|-------------|--------------|------------------|------------|--------------|
+| Online – Stock | online | stock | full | Order | Payment success | Order Confirmation | Yes | Proforma |
+| | | | | Fulfilled | Mark shipped | Shipping Confirmation | Yes | Final Tax + Tracking |
+| Online – MTO | online | mto | full | Order | Payment success | Order Confirmation | Yes | Proforma (approx) |
+| | | | | Fulfilled | Mark shipped | Shipping Confirmation | Yes | Final Tax |
+| Offline – Stock | offline | stock | full | Order | Payment captured | Order Confirmation | Yes | Final Tax |
+| Offline – MTO (partial) | offline | mto | partial | Draft | Partial payment | Draft Order Invoice | Yes | Deposit receipt |
+| Offline – MTO (final) | offline | mto | full | Draft ? Order | Final payment | Order Confirmation | Yes | Final Tax |
+| Offline – MTO (shipping optional) | offline | mto | full | Fulfilled | Mark shipped | Shipping Confirmation | Optional | Tracking |
+
+---
+
+## ?? TABLE 2 — Staff Execution Flow
+
+| Step | Scenario | Staff Action | System State | Payment Action | Construct Triggered | Outcome |
+|------|----------|-------------|-------------|---------------|---------------------|---------|
+| 1 | Offline – Stock | Create order | Order | Full payment | Order Confirmation | Final invoice sent |
+| 2 | Offline – MTO | Create draft order | Draft | — | — | Editable |
+| 3 | | Take advance | Draft | Partial payment | Draft Order Invoice | Deposit receipt sent |
+| 4 | | Wait for production | Draft | — | — | No comms |
+| 5 | MTO Ready | Update final details | Draft | — | — | Ready |
+| 6 | | Take final payment | Draft | Full payment | Order Confirmation | Final invoice sent |
+| 7 | | Convert to order | Order | — | — | Locked |
+| 8 | | If courier | Fulfilled | — | Shipping Confirmation | Tracking sent |
+| 9 | Online | No action | Order | Auto full payment | Order Confirmation | Proforma sent |
+| 10 | | Dispatch | Fulfilled | — | Shipping Confirmation | Final invoice sent |
+
+---
+
+## ?? Payment Link System
+
+Using GoKwik API:
+
+- Endpoint: `/v1/payments/links`
+- merchant_reference_id = Shopify Order ID
+
+### Flow:
+1. Generate link using amount_pending
+2. Send to customer
+3. On payment success (webhook/polling):
+   - Update amount_paid
+   - Update amount_pending
+   - Update payment_status
+   - Trigger correct email
+
+---
+
+## ?? Communication Rules
+
+| Event | Construct | Output |
+|------|----------|--------|
+| Partial payment | Draft Order Invoice | Deposit receipt |
+| Full payment (not final) | Order Confirmation | Proforma |
+| Final + full payment | Order Confirmation | Final Tax Invoice |
+| Shipment | Shipping Confirmation | Tracking |
+
+---
+
+## ????? Staff Mental Model
+
+- Advance ? Draft Invoice  
+- Final Payment ? Order Confirmation  
+- Dispatch ? Shipping  
+
+---
+
+## ?? Dependencies
+
+- GoKwik ? checkout + payment links  
+- Shopify Flow ? automation  
+- Payment Gateway (e.g. Easebuzz)
+
+---
+
+## ?? Success Criteria
+
+- No duplicate notifications  
+- MTO orders allow post-payment adjustments  
+- Staff can operate without complexity  
+- Consistent behavior across all channels  
+
+---
+
+## ?? Future Enhancements
+
+- Automated deposit receipt templates  
+- Admin dashboard for payments  
+- Analytics on payment cycles  
+
+---

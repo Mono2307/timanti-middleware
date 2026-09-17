@@ -1,0 +1,11 @@
+{
+  "name": "order-metafield-manager",
+  "private": true,
+  "version": "1.0.0",
+  "license": "UNLICENSED",
+  "dependencies": {
+    "preact": "^10.29.2",
+    "@preact/signals": "^2.9.2",
+    "@shopify/ui-extensions": "~2025.10.15"
+  }
+}

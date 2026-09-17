@@ -162,7 +162,7 @@ function generateRefundWalletToken(draftId) {
 }
 
 // Verify and update SEQUEL_TRACKING_BASE in Fly.io secrets if the URL format changes
-const SEQUEL_TRACKING_BASE = process.env.SEQUEL_TRACKING_BASE || 'https://www.sequellogistics.in/track-shipment?awb=';
+const SEQUEL_TRACKING_BASE = process.env.SEQUEL_TRACKING_BASE || 'https://sequel247.com/track/';
 
 function verifyShopifyHmac(rawBody, hmacHeader) {
   try {
