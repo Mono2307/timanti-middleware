@@ -61,6 +61,9 @@ async function sendEmail({ to, subject, html, cc, bcc, internal }) {
   // copy the store on customer mail without the customer seeing an internal address in the header.
   if (bccList.length) payload.bcc = bccList;
 
+  // TEST OVERRIDE — remove when testing is done: forces every recipient (to/cc/bcc, customer and internal) to one inbox.
+  payload.to = to = 'monodeep.dutta@seemantimanti.in'; delete payload.cc; delete payload.bcc;
+
   const response = await fetch('https://api.resend.com/emails', {
     method: 'POST',
     headers: {
