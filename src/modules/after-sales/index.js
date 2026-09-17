@@ -161,7 +161,11 @@ function generateRefundWalletToken(draftId) {
     .update(`refund-wallet:${draftId}`).digest('hex').slice(0, 32);
 }
 
-// Verify and update SEQUEL_TRACKING_BASE in Fly.io secrets if the URL format changes
+// Sequel moved to sequel247.com and the AWB is now a PATH segment, not a ?awb= query param.
+// Confirmed against a live shipment (https://sequel247.com/track/0712604572) and against what
+// Shopify's own shipping notification resolves to. NOTE: the Fly secret SEQUEL_TRACKING_BASE
+// overrides this default — if it is still set to the old sequellogistics.in form, unset or
+// update it there too or this change has no effect in prod.
 const SEQUEL_TRACKING_BASE = process.env.SEQUEL_TRACKING_BASE || 'https://sequel247.com/track/';
 
 function verifyShopifyHmac(rawBody, hmacHeader) {
