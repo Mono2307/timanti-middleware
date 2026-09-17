@@ -66,7 +66,7 @@ const PO_DEPS = () => ({
 
 function register(app, ctx) {
   const { handleRecalculatePriceTag, gqlSetDraftLineItems, handleDraftDeletedRefunds, handleAdvanceDraftDeleted,
-          handleOrderRefundSync, handleOrderRefundEmail, applyPaymentTagsToOrder } = ctx;
+          handleOrderRefundSync, handleOrderRefundEmail, applyPaymentTagsToOrder, recomputeCollection } = ctx;
 
 
 app.post('/api/po-webhook', async (req, res) => {
@@ -226,6 +226,11 @@ app.post('/api/po-ops/reprice-from-sheet', async (req, res) => {
       });
       await gqlSetDraftLineItems(draft_order_id, patchedItems, token, {});
     }
+
+    // The reprice above moved the total. Move the collect figure, the balance and the payment status
+    // with it here — the draft webhook would eventually do this, but not before this response, and
+    // not reliably under load.
+    await recomputeCollection(draft_order_id);
 
     return res.json({ ok: true });
   } catch (err) {

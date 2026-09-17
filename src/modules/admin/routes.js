@@ -17,6 +17,7 @@
  *   GET  /api/price-update-diag              are the Python job's files present in the image
  *   POST /api/trigger-price-update           run the daily gold-rate reprice
  *   GET+POST /api/backfill-installments      derive installment legs on historical documents
+ *   GET+POST /api/audit-collection-figures   find (and repair) drafts whose net/balance/status drifted
  *   POST /api/backfill-draft-tags            re-apply payment tags to drafts
  *   POST /api/backfill-order-metafields      freeze reproducible values onto old orders
  *   POST /api/backfill-order-tags            re-apply payment tags to orders
@@ -55,8 +56,11 @@ const backfillInstallments = require('../payments/backfill-installments');
 // buildInstallmentMfDefs loops to MAX_INSTALLMENTS. It read the bare name — in scope while this
 // lived in server.js, a free variable once it moved — so /api/metafield-definitions/ensure threw
 // the moment it was called. It is exported by the payments module; take it from there.
-const { MAX_INSTALLMENTS } = require('../payments/installments');
-const { MAX_REFUNDS } = require('../payments/refunds');
+const { MAX_INSTALLMENTS, readInstallments, sumInstallments } = require('../payments/installments');
+// paymentState is the shared balance arithmetic. The audit below takes it from here rather than
+// re-deriving the formula: an auditor that computes the balance its own way would drift from the live
+// path and start reporting healthy documents as broken.
+const { MAX_REFUNDS, readRefunds, sumRefunds, paymentState } = require('../payments/refunds');
 const { CAD_ADVANCE_MODE } = require('../adjustments/cad_advance');
 
 let _priceUpdateRunning = false;
@@ -76,7 +80,8 @@ function clearStalePriceUpdateFlag() {
 }
 
 function register(app, ctx) {
-  const { applyPaymentTagsToOrder, applyPaymentTagsToDraftOrder, copyDraftMetafieldsToOrder } = ctx;
+  const { applyPaymentTagsToOrder, applyPaymentTagsToDraftOrder, copyDraftMetafieldsToOrder,
+          recomputeCollection } = ctx;
 
 
 // ─────────────────────────────────────────
@@ -369,6 +374,134 @@ async function runBackfillInstallments(req, res) {
 }
 app.get('/api/backfill-installments', runBackfillInstallments);
 app.post('/api/backfill-installments', runBackfillInstallments);
+
+// GET/POST /api/audit-collection-figures
+//
+// Finds open drafts whose collection figures disagree with the document, and optionally repairs them.
+//
+// WHY THIS EXISTS
+// The draft-updated chain recomputes amount_to_be_collected, amount_pending and payment_status on
+// every edit — but those handlers run LAST, and until the retry interceptor landed they were the ones
+// starved when a burst of webhooks exhausted Shopify's REST limit. #D223 lost all three on ten
+// consecutive passes and went on reading "fully paid" after a product had raised its total. The fix
+// stops it recurring; it does nothing for documents already stranded, which staff are quoting from
+// today. This finds them.
+//
+// WHAT COUNTS AS WRONG — three independent checks, because they fail independently:
+//   stale_net     amount_to_be_collected != total − post-tax adjustments (the original failure)
+//   stale_pending amount_pending != net − paid + refunded
+//   false_paid    is_finalized/payment_status says settled while money is genuinely outstanding
+// false_paid is listed separately and FIRST in the response because it is the one staff act on: it is
+// the state where someone hands over a piece believing it is paid for.
+//
+// DRY RUN BY DEFAULT — pass apply=true to repair. The repair is just the normal recompute, so it can
+// only ever write what an ordinary edit would have written; there is no bespoke arithmetic here to
+// disagree with the live path later.
+async function runAuditCollectionFigures(req, res) {
+  try {
+    const p       = { ...(req.query || {}), ...(req.body || {}) };
+    const apply   = (p.apply === 'true' || p.apply === true);
+    const limit   = Math.min(parseInt(p.limit, 10) || 250, 250);
+    const token   = await getShopifyToken();
+    const storeUrl = config.shopify.storeUrl;
+    const headers = { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' };
+
+    const only = String(p.draftIds || '').split(',').map(s => s.trim()).filter(Boolean);
+    let drafts = [];
+    if (only.length) {
+      for (const id of only) {
+        const { data } = await axios.get(`${storeUrl}/admin/api/2024-01/draft_orders/${id}.json`, { headers, timeout: 10000 });
+        if (data?.draft_order) drafts.push(data.draft_order);
+      }
+    } else {
+      // Open drafts only. A completed draft's figures were frozen onto the order at conversion, and
+      // rewriting them now would contradict an invoice that has already been issued.
+      const { data } = await axios.get(
+        `${storeUrl}/admin/api/2024-01/draft_orders.json?limit=${limit}&status=open`, { headers, timeout: 30000 });
+      drafts = data?.draft_orders || [];
+    }
+
+    const findings = [];
+    for (const draft of drafts) {
+      const { data: mfData } = await axios.get(
+        `${storeUrl}/admin/api/2024-01/draft_orders/${draft.id}/metafields.json`, { headers, timeout: 10000 });
+      const mfMap = {};
+      for (const m of (mfData.metafields || [])) if (m.namespace === 'custom') mfMap[m.key] = m.value;
+
+      const num = (k) => { const v = parseFloat(mfMap[k]); return Number.isFinite(v) ? v : 0; };
+      const abs = (k) => Math.abs(num(k));
+      const total = parseFloat(draft.total_price || 0) || 0;
+
+      // Must mirror syncAmountToCollect exactly, INCLUDING the exclusion of `advance` — a CAD advance
+      // is a payment leg, not a post-tax deduction. An audit that computed the net differently from
+      // the live path would report healthy documents as broken forever.
+      const expectedNet = Math.max(0, total - abs('exchange_note_value') - abs('voucher_value') - abs('old_gold_value'));
+
+      const legs     = readInstallments(mfMap);
+      const paid     = legs.length ? sumInstallments(legs)
+                                   : (num('amount_paid') + num('amount_paid_final'));
+      const refunds  = readRefunds(mfMap);
+      const refunded = refunds.length ? sumRefunds(refunds) : num('amount_refunded');
+
+      const st = paymentState({ amountPaid: paid, amountRefunded: refunded, collectionBase: expectedNet, epsilon: 1 });
+      const expectedPending = Math.max(0, st.amountPending);
+
+      const recordedNet     = mfMap.amount_to_be_collected === undefined ? null : num('amount_to_be_collected');
+      const recordedPending = mfMap.amount_pending === undefined ? null : num('amount_pending');
+      const finalized       = String(mfMap.is_finalized) === 'true';
+      const status          = mfMap.payment_status || null;
+
+      const issues = [];
+      if (recordedNet === null || Math.abs(recordedNet - expectedNet) >= 0.5) issues.push('stale_net');
+      if (recordedPending === null || Math.abs(recordedPending - expectedPending) >= 0.5) issues.push('stale_pending');
+      // The one staff act on: the document says settled while money is actually outstanding.
+      if ((finalized || status === 'Full') && expectedPending >= 1) issues.push('false_paid');
+      if (!issues.length) continue;
+
+      const finding = {
+        draft_id: String(draft.id), name: draft.name, issues,
+        total,
+        net:     { recorded: recordedNet,     expected: +expectedNet.toFixed(2) },
+        pending: { recorded: recordedPending, expected: +expectedPending.toFixed(2) },
+        paid, refunded, payment_status: status, is_finalized: finalized,
+      };
+
+      if (apply) {
+        // The ordinary recompute, not a bespoke write — see the note above.
+        try {
+          await recomputeCollection(String(draft.id));
+          finding.repaired = true;
+        } catch (e) {
+          finding.repaired = false;
+          finding.repair_error = e.message;
+        }
+      }
+      findings.push(finding);
+    }
+
+    // false_paid first — it is the finding that costs money today.
+    const rank = (f) => (f.issues.includes('false_paid') ? 0 : 1);
+    findings.sort((a, b) => rank(a) - rank(b) || (b.pending.expected - a.pending.expected));
+
+    const tally = findings.reduce((acc, f) => {
+      for (const i of f.issues) acc[i] = (acc[i] || 0) + 1;
+      return acc;
+    }, {});
+
+    return res.json({
+      success: true, dryRun: !apply,
+      scanned: drafts.length, affected: findings.length, tally,
+      exposure: +findings.filter(f => f.issues.includes('false_paid'))
+                         .reduce((s, f) => s + f.pending.expected, 0).toFixed(2),
+      findings,
+    });
+  } catch (err) {
+    console.error('audit-collection-figures error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+}
+app.get('/api/audit-collection-figures', runAuditCollectionFigures);
+app.post('/api/audit-collection-figures', runAuditCollectionFigures);
 
 // POST /api/backfill-draft-tags
 // Reads metafields from draft orders and writes payment tags.

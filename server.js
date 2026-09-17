@@ -36,8 +36,13 @@ app.use(express.text({ type: '*/*' }));
 const { supabase } = require('./src/core/supabase');
 const {
   getShopifyToken, initShopifyToken, getTokenState, shopifyHeaders,
-  getBuyingRateTable, buyingRateFor,
+  getBuyingRateTable, buyingRateFor, installShopifyRetry,
 } = require('./src/core/shopify');
+
+// Install BEFORE anything can issue a Shopify call. This is an interceptor on the shared axios
+// instance, so it covers the direct axios calls throughout this file as well as the core helpers —
+// see the note in src/core/shopify.js for the #D223 failure it exists to stop.
+installShopifyRetry(axios);
 
 const AUTO_PUSH_TO_TERMINAL       = config.auto.pushToTerminal;
 const AUTO_CONVERT_DRAFT_TO_ORDER = config.auto.convertDraftToOrder;
@@ -1225,8 +1230,19 @@ async function handleDraftCreated(draft) {
   );
   if (productItems.length === 0) return;
 
-  const token    = await getShopifyToken();
-  const hydrated = await Promise.all(productItems.map(item => hydrateItemFromVariant(item, token)));
+  const token = await getShopifyToken();
+  // allSettled, not all. hydrateItemFromVariant costs TWO REST reads per line (variant + product
+  // metafields) and they all go out at once; Shopify's REST bucket refills at ~2/s, and one staff
+  // action fires a burst of draft webhooks. So a 429 or a 10s timeout on ONE line is routine — and
+  // under Promise.all it rejected the whole batch, losing hydration for every other line as well.
+  //
+  // A line that fails to look up is left exactly as it arrived (the `: item` arm below), which is the
+  // same state it was already in. It gets another chance on the next webhook, and the draft is not
+  // held hostage to it in the meantime.
+  const settled  = await Promise.allSettled(productItems.map(item => hydrateItemFromVariant(item, token)));
+  const hydrated = settled.filter(r => r.status === 'fulfilled').map(r => r.value);
+  const failed   = settled.length - hydrated.length;
+  if (failed) console.warn(`Draft ${draftOrderId}: ${failed}/${settled.length} variant lookups failed — those lines left unhydrated`);
 
   const anyUseful = hydrated.some(h => (h.properties || []).some(p => p.name === 'Gold'));
   if (!anyUseful) return;
@@ -2719,6 +2735,42 @@ async function syncAmountToCollect(draft) {
   }
 }
 
+// ── The one way to move all three collection figures ─────────────────────────────────────────────
+//
+// amount_to_be_collected, amount_pending and payment_status / is_finalized are what staff read to
+// answer "has this been paid?", and they are only ever correct TOGETHER. Any route that moves the
+// draft total or a post-tax adjustment has to move all three.
+//
+// Several routes used to do neither, or half of it:
+//   - /api/set-line-prices, /api/form-reprice and procurement's reprice-from-sheet rewrote the line
+//     items and returned, leaving all three to the draft webhook.
+//   - /api/voucher-redeem, /api/exc-redeem and the two void routes wrote amount_to_be_collected
+//     INLINE but never the balance or the status. That is worse than doing nothing, because the
+//     collect figure visibly corrects itself and the document still reads "fully paid" behind it —
+//     which is exactly how a 506,000 draft went on claiming to be settled at 478,000 paid.
+//
+// Leaving it to the webhook is not enough on its own for two reasons: delivery is asynchronous, so a
+// caller that reads the metafields straight back sees the old numbers; and a webhook is a single
+// point of failure that a caller cannot observe. Calling this inline makes the route's own response
+// the guarantee, and leaves the webhook as a second, independent chance rather than the only one.
+//
+// Both passes are change-guarded, so the webhook re-running this a moment later writes nothing.
+// Never throws: a failed recompute must not fail the redeem/reprice that already succeeded — the
+// caller's work is done and the webhook still gets its turn.
+async function recomputeCollection(draftOrderId, { total_price } = {}) {
+  const id = String(draftOrderId || '');
+  if (!id) return;
+  try {
+    // syncAmountToCollect re-reads the live total itself; total_price is only a fallback for the
+    // read failing, so a caller that already has the fresh total may pass it and one that does not
+    // may leave it out.
+    await syncAmountToCollect({ id, total_price });
+    await handlePaymentMetafieldSync({ id });
+  } catch (err) {
+    console.error(`Draft ${id}: recomputeCollection failed: ${err.message}`);
+  }
+}
+
 // CAD advance line-item predicates + constants live in the shared module: the serial minter and the
 // sweeps need exactly the same answers as this file, and must never drift from it.
 
@@ -2823,6 +2875,11 @@ async function stripInstrumentFromDraft(draftId, type, token) {
     .filter(t => t && t !== appliedTag && !t.startsWith(numPrefix)).join(', ');
   await axios.put(`${base}/admin/api/2024-01/draft_orders/${draftId}.json`,
     { draft_order: { id: Number(draftId), tags } }, { headers, timeout: 10000 });
+  // This draft just lost a credit it was counting on, so it owes MORE than it did a moment ago. The net
+  // above is only one of the three figures staff read; leave the balance and the status behind and the
+  // displaced draft goes on advertising itself as settled. It is also nobody's foreground task — the
+  // owner of this request is a DIFFERENT draft — so it gets no second look unless it happens here.
+  await recomputeCollection(draftId);
   console.log(`[${type}] latest-one-wins: stripped off prior draft ${draftId}`);
 }
 
@@ -3003,6 +3060,126 @@ async function handleApplyExcTag(draft) {
   }
 }
 
+// Remove a voucher / exchange note from a draft — the ✕ next to "Voucher Applied" and "Exchange
+// Note Applied" in the metafield-manager panel. Staff add a `remove-voucher` / `remove-exc` tag;
+// this clears the code AND value metafields, strips the linkage tags, re-seeds net-to-collect and
+// FREES the instrument in the ledger (status back to 'open' — available and re-addable elsewhere).
+//
+// FREE, never VOID. Taking an instrument off a draft means "it went on the wrong document", not
+// "this credit must never exist". Retiring the serial is the deliberate hardVoid path on
+// /api/voucher-void and /api/exc-void, and a cross in the panel must not be able to reach it.
+//
+// Both instruments are handled in ONE pass, and every tag change goes out as a SINGLE PUT: each
+// write to a draft re-delivers its webhook, so a second PUT here would cost another full chain.
+//
+// This mirrors /api/voucher-void and /api/exc-void. It exists as a tag route because the admin
+// block can only write tags and metafields — it has no authenticated way to POST to the middleware.
+const REMOVABLE_INSTRUMENTS = [
+  { tag: 'remove-voucher', type: 'voucher', label: 'voucher',
+    valueKey: 'voucher_value', codeKey: 'voucher_code', numPrefix: 'vch-num:',
+    appliedTag: 'vch-applied', prefixes: ['vch-num:', 'vch-original:'],
+    invalidRe: /^voucher-invalid:/i, convertedTag: 'voucher-invalid: order converted' },
+  { tag: 'remove-exc', type: 'exchange_note', label: 'exchange note',
+    valueKey: 'exchange_note_value', codeKey: 'exchange_note_code', numPrefix: 'exc-num:',
+    appliedTag: 'exc-applied', prefixes: ['exc-num:', 'exc-original:'],
+    invalidRe: /^exc-invalid:/i, convertedTag: 'exc-invalid: order converted' },
+];
+
+async function handleRemoveInstrumentTag(draft) {
+  try {
+    const tags = (draft.tags || '').split(',').map(t => t.trim());
+    const wanted = REMOVABLE_INSTRUMENTS.filter(i => tags.some(t => t.toLowerCase() === i.tag));
+    if (!wanted.length) return;
+
+    const draftOrderId = draft.id.toString();
+    const base = process.env.SHOPIFY_STORE_URL;
+    const token = await getShopifyToken();
+    const headers = { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' };
+    const putTags = async (kept) => {
+      await axios.put(`${base}/admin/api/2024-01/draft_orders/${draftOrderId}.json`,
+        { draft_order: { id: draftOrderId, tags: [...new Set(kept)].join(', ') } }, { headers, timeout: 10000 });
+    };
+
+    // A converted draft is off limits: the invoice is printed and the GST position settled, so the
+    // deduction has to stand. Drop the trigger and leave a reason rather than let it sit forever.
+    // (Reasons are kept short deliberately — Shopify rejects a tag over 40 characters, and a 422
+    // would take the whole PUT with it, including the trigger this is trying to strip.)
+    if (draft.status === 'completed' || draft.order_id) {
+      await putTags(tags.filter(t => t && !wanted.some(i => t.toLowerCase() === i.tag))
+        .concat(wanted.map(i => i.convertedTag)));
+      console.warn(`[remove-instrument] draft ${draftOrderId} already converted — refused`);
+      return;
+    }
+
+    const { data: mfData } = await axios.get(`${base}/admin/api/2024-01/draft_orders/${draftOrderId}/metafields.json`, { headers, timeout: 10000 });
+    const mfs = mfData.metafields || [];
+    const mfStr = (key) => { const m = mfs.find(x => x.namespace === 'custom' && x.key === key); return m ? String(m.value || '').trim() : ''; };
+    const mfVal = (key) => { const m = mfs.find(x => x.namespace === 'custom' && x.key === key); return m ? Math.abs(parseFloat(m.value) || 0) : 0; };
+
+    const removed = [];
+    for (const inst of wanted) {
+      // WHICH instrument is coming off. The metafield is the authority — it survives conversion and
+      // staff can't strip it from the admin UI — with the tag as the fallback for drafts written
+      // before the *_code metafields existed, when the code lived only in vch-num / exc-num.
+      const code = mfStr(inst.codeKey) || tags
+        .map(t => t.toLowerCase().startsWith(inst.numPrefix) ? t.slice(t.indexOf(':') + 1).trim() : null)
+        .find(Boolean) || '';
+      // Clear the code WITH the value. A stale code left behind makes the code-aware guard in the
+      // apply handlers refuse the next instrument for one the draft no longer carries.
+      for (const k of [inst.valueKey, inst.codeKey]) {
+        const m = mfs.find(x => x.namespace === 'custom' && x.key === k);
+        if (m) await axios.delete(`${base}/admin/api/2024-01/metafields/${m.id}.json`, { headers, timeout: 10000 });
+      }
+      removed.push({ ...inst, code });
+    }
+
+    // Seed net-to-collect off what is LEFT, exactly as stripInstrumentFromDraft does. 'advance' is
+    // deliberately absent: a CAD advance is a payment, not a post-tax adjustment, and
+    // syncAmountToCollect does not deduct it either — including it here would knock the advance off
+    // the bill as a side effect of removing a voucher.
+    const goneKeys = new Set(removed.map(i => i.valueKey));
+    const remaining = ['exchange_note_value', 'voucher_value', 'old_gold_value']
+      .filter(k => !goneKeys.has(k)).reduce((s, k) => s + mfVal(k), 0);
+    const net = Math.max(0, parseFloat(draft.total_price || 0) - remaining).toFixed(2);
+    await updateDraftOrderMetafields(draftOrderId, { amount_to_be_collected: net });
+
+    // One PUT: the triggers, the linkage tags of everything removed, and any stale invalid note.
+    await putTags(tags.filter(t => t
+      && !wanted.some(i => t.toLowerCase() === i.tag)
+      && !removed.some(i => t === i.appliedTag
+        || i.prefixes.some(p => t.toLowerCase().startsWith(p))
+        || i.invalidRe.test(t))));
+
+    // Ledger: free each instrument back to 'open' so it stops counting as held and can be applied
+    // somewhere else. Never touch one that is already REDEEMED — that belongs to a converted order,
+    // and reopening it would hand back a credit the customer has already spent.
+    for (const { type, label, code } of removed) {
+      if (!code) {
+        console.warn(`[remove-instrument] ${label} off draft ${draftOrderId}: no code on the draft — nothing to free in the ledger`);
+        continue;
+      }
+      try {
+        const row = await creditInstruments.getBySerial(supabase, { instrumentType: type, serialCode: code });
+        if (row && row.status === 'redeemed') {
+          console.warn(`[remove-instrument] ${code} is redeemed on ${row.target_order_name || row.target_order_id || 'an order'} — taken off draft ${draftOrderId}, ledger left alone`);
+          continue;
+        }
+        await creditInstruments.reopen(supabase, { instrumentType: type, serialCode: code });
+        console.log(`[remove-instrument] ${label} ${code} removed from draft ${draft.name || draftOrderId} — freed back to 'open'`);
+      } catch (e) {
+        console.error(`[remove-instrument] ledger ${code}:`, e.message);
+      }
+    }
+
+    // No recomputeCollection here, unlike the /api/*-void endpoints: this runs INSIDE the draft
+    // chain, where sync-net and payment-sync follow as their own isolated steps and re-derive the
+    // net and the balance off fresh metafields. Calling it here would be the same two writes twice,
+    // and every extra write to a draft re-delivers its webhook.
+  } catch (e) {
+    console.error(`[remove-instrument] failed for draft ${draft?.id}:`, e.message);
+  }
+}
+
 // Apply a PRE-TAX, DIAMOND-ONLY discount from the metafield-manager admin action. Staff add either:
 //   apply-discount:<code>                 → resolve a real Shopify discount code (% or fixed ₹) via Admin API
 //   apply-discount:custom:<value>:<pct|flat> → a custom order discount (% of diamond value, or flat ₹)
@@ -3105,12 +3282,25 @@ app.post('/api/shopify-draft-updated', async (req, res) => {
     const draft = req.body;
     if (!draft?.id) return;
 
+    // Isolation for the CREATE branch below, mirroring the update chain's own `step`. These handlers
+    // are unrelated to one another, so a throw in an early one must not silently skip every handler
+    // after it — and sync-net runs LAST, which would make it the first casualty of any earlier
+    // failure. A new draft reaching staff with no amount_to_be_collected at all is worse than one
+    // carrying a stale figure, because every later reader falls back to the raw gross total.
+    const step = async (name, fn) => {
+      try { await fn(); }
+      catch (err) { console.error(`Draft updated webhook — ${name} failed for #${draft.name}:`, err.message); }
+    };
+
     // Auto-hydrate line item properties from variant metafields on creation
     if ((req.headers['x-shopify-topic'] || '') === 'draft_orders/create') {
-      await handleDraftCreated(draft);
-      await handleWeightedDocReprice(draft);      // memo-custom / transfer weighted pricing (before serial + net-to-collect)
-      await handleDocumentSerialTags(draft);      // PO/memo/transfer present at creation
-      await syncAmountToCollect(draft);           // establish net-to-collect on every new draft
+      await step('hydrate',          () => handleDraftCreated(draft));
+      await step('weighted-reprice', () => handleWeightedDocReprice(draft));  // memo-custom / transfer weighted pricing (before serial + net-to-collect)
+      await step('document-serial',  () => handleDocumentSerialTags(draft));  // PO/memo/transfer present at creation
+      // Unconditional and LAST: a draft that reaches staff with no amount_to_be_collected at all is
+      // worse than one with a stale figure, because every later reader (getCollectionBase, the cash and
+      // gateway payment handlers) then silently falls back to the raw gross total.
+      await step('sync-net',         () => syncAmountToCollect(draft));       // establish net-to-collect on every new draft
       return;
     }
 
@@ -3181,57 +3371,141 @@ app.post('/api/shopify-draft-updated', async (req, res) => {
       return;
     }
 
-    // Auto-hydrate if any product line items are missing the Gold property (option 2: on update, not just create).
-    // Exclude items that have _gold_rate — that property is written by reprice and preserved by hydrate,
-    // so its presence with Gold absent means the item was repriced but the payload was truncated.
-    const needsHydration = (draft.line_items || []).some(item =>
-      item.variant_id &&
-      !((item.title || '').toLowerCase().includes('discount') && parseFloat(item.price) < 0) &&
-      !(item.properties || []).some(p => p.name === 'Gold') &&
-      !(item.properties || []).some(p => p.name === '_gold_rate')
-    );
-    if (needsHydration) await handleDraftCreated(draft);
-
-    // Tag-based handlers (fire independently, each removes its own tag).
-    // Each is isolated: these handlers are unrelated to one another, so a throw in an early one
-    // must not silently skip every handler after it. Order is still preserved.
-    const step = async (name, fn) => {
-      try { await fn(); }
-      catch (err) { console.error(`Draft updated webhook — ${name} failed for #${draft.name}:`, err.message); }
-    };
-    // FIRST, ahead of every reprice below: if the line composition moved, the positional overrides
-    // are pointing at the wrong products and must be gone before anything prices off them.
-    await step('stale-pricing',    () => wipeStalePositionalPricing(draft));
-    await step('send-link',        () => handleSendLinkTag(draft));
-    await step('cash-payment',     () => handleCashPaymentTag(draft));
-    await step('recalc-price',     () => handleRecalculatePriceTag(draft, { force: false }));
-    await step('recalc-price+force', () => handleRecalculatePriceTag(draft, { force: true }));
-    await step('weighted-reprice', () => handleWeightedDocReprice(draft));   // memo-custom / transfer weighted pricing (before serial + net-to-collect)
-    await step('advance-capture',  () => handleAdvanceCapture(draft));       // CAD: stamp advance metafields once a payment lands
-    await step('advance-line',     () => handleAdvanceLineRemoval(draft));   // CAD: drop the advance line once a real product joins it (before net-to-collect)
-    await step('advance-redeem',   () => handleAdvanceRedeem(draft));        // CAD: apply a referenced advance (Path B), gates + refs
-    await step('advance-refund',   () => handleAdvanceRefund(draft));        // CAD: a fully refunded advance stops being outstanding
-    await step('apply-voucher',    () => handleApplyVoucherTag(draft));      // admin action: apply-voucher:<code> → redeem from ledger
-    await step('apply-exc',        () => handleApplyExcTag(draft));          // admin action: apply-exc:<number> → redeem exchange note from ledger
-    await step('apply-discount',   () => handleApplyDiscountTag(draft));     // admin action: apply-discount:<code>|custom → dia-only pre-tax discount (drops reprice)
-    await step('repairs',          () => handleRepairDraftUpdate(draft, getShopifyToken, assignRepairSerial));
-    await step('document-serial',  () => handleDocumentSerialTags(draft));   // PO/memo/transfer tags added after creation
-    // Balance ordering matters: net-to-collect must be recomputed AFTER every adjustment above
-    // (voucher / advance / exchange / old-gold), and amount_pending is DERIVED off that fresh net —
-    // so the payment sync runs LAST. (Previously it ran before the adjustments, leaving pending stale.)
-    await step('sync-net',         () => syncAmountToCollect(draft));        // recompute net-to-collect after ALL adjustments above
-    // Refunds must land BETWEEN the two: amount_refunded is written off the fresh net, and
-    // payment-sync then derives amount_pending from paid AND refunded. Reversed, the balance would
-    // be one edit behind every refund.
-    await step('refund-sync',      () => handleRefundSync(draft));           // record refund legs → ledger + amount_refunded
-    await step('refund-email',     () => handleRefundEmailTag(draft));       // the panel's "Send refund email" button
-    await step('payment-sync',     () => handlePaymentMetafieldSync(draft)); // derive amount_pending off the FRESH net (must run last)
-
-    console.log(`Draft updated webhook: #${draft.name} — tag handlers complete`);
+    await runDraftUpdateChain(draft);
   } catch (err) {
     console.error('Draft updated webhook error:', err.message);
   }
 });
+
+// ── The draft-updated handler chain, single-flighted per draft ───────────────────────────────────
+//
+// One staff action does NOT produce one delivery. Nearly every handler below writes a tag or a
+// metafield to the very draft whose webhook it is handling, and each write makes Shopify deliver
+// again — so a single product being added to #D223 produced TEN deliveries in nine seconds, all
+// processed concurrently, each running the full chain.
+//
+// That is what exhausted the REST limit: ten passes' worth of calls against a bucket that refills at
+// two a second. The retry interceptor in src/core/shopify.js makes the survivors recover; this stops
+// nine tenths of the traffic being generated in the first place. Retry alone would just mean the same
+// storm takes longer to drain.
+//
+// COALESCING, not dropping. The repairs handler's older guard (after-sales/index.js) discards a
+// concurrent delivery outright, which is safe there because its work is idempotent and tag-gated. It
+// is NOT safe here: the delivery being discarded may be the only one carrying the final state, and
+// dropping it would leave the collect figures describing the draft as it was mid-edit — the very bug
+// this is meant to end. So a delivery arriving mid-pass sets a flag instead, and exactly one more
+// pass runs when the current one finishes.
+//
+// The re-run RE-FETCHES the draft rather than replaying the queued payload. By then several
+// deliveries have usually collapsed into that one flag, and their payloads are all stale; the live
+// draft is the only thing that reflects every edit plus whatever the last pass just wrote.
+const _draftChainInFlight = new Set();
+const _draftChainPending  = new Set();
+
+async function runDraftUpdateChain(draft) {
+  const id = String(draft?.id || '');
+  if (!id) return;
+
+  if (_draftChainInFlight.has(id)) {
+    _draftChainPending.add(id);
+    console.log(`⏭️  Draft ${draft.name || id}: chain already running — coalesced into a trailing pass`);
+    return;
+  }
+
+  _draftChainInFlight.add(id);
+  // Backstop so a hang can never strand the lock and wedge the draft permanently, matching the
+  // repairs guard. Without it one stuck pass would silence every later edit to that draft.
+  const backstop = setTimeout(() => _draftChainInFlight.delete(id), 120000);
+  try {
+    let current = draft;
+    // Bounded: a chain whose own writes keep re-triggering it must not spin forever. Each pass is
+    // change-guarded, so in practice the second pass writes nothing and the loop ends there.
+    for (let pass = 0; pass < 3; pass++) {
+      await runDraftUpdateHandlers(current);
+      if (!_draftChainPending.has(id)) break;
+      _draftChainPending.delete(id);
+      const fresh = await refetchDraft(id);
+      if (!fresh) break;
+      current = fresh;
+      console.log(`Draft ${current.name || id}: trailing pass ${pass + 1} on re-fetched state`);
+    }
+  } finally {
+    clearTimeout(backstop);
+    _draftChainInFlight.delete(id);
+    _draftChainPending.delete(id);
+  }
+}
+
+// Never throws — a failed re-fetch just ends the trailing loop, leaving the work the first pass did.
+async function refetchDraft(draftOrderId) {
+  try {
+    const token = await getShopifyToken();
+    const { data } = await axios.get(
+      `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}.json`,
+      { headers: { 'X-Shopify-Access-Token': token }, timeout: 10000 });
+    return data?.draft_order || null;
+  } catch (err) {
+    console.error(`Draft ${draftOrderId}: trailing re-fetch failed (${err.message}) — ending chain`);
+    return null;
+  }
+}
+
+async function runDraftUpdateHandlers(draft) {
+  // Each handler is isolated: they are unrelated to one another, so a throw in an early one must not
+  // silently skip every handler after it. Order is still preserved.
+  const step = async (name, fn) => {
+    try { await fn(); }
+    catch (err) { console.error(`Draft updated webhook — ${name} failed for #${draft.name}:`, err.message); }
+  };
+
+  // Auto-hydrate if any product line items are missing the Gold property (option 2: on update, not just create).
+  // Exclude items that have _gold_rate — that property is written by reprice and preserved by hydrate,
+  // so its presence with Gold absent means the item was repriced but the payload was truncated.
+  const needsHydration = (draft.line_items || []).some(item =>
+    item.variant_id &&
+    !((item.title || '').toLowerCase().includes('discount') && parseFloat(item.price) < 0) &&
+    !(item.properties || []).some(p => p.name === 'Gold') &&
+    !(item.properties || []).some(p => p.name === '_gold_rate')
+  );
+  // Isolated like every other handler. needsHydration is true EXACTLY when a line item was just
+  // added — which is also the one moment the collect figures most need recomputing — so an
+  // unguarded throw here took out the very pass that had to follow it.
+  if (needsHydration) await step('hydrate', () => handleDraftCreated(draft));
+
+  // Tag-based handlers (fire independently, each removes its own tag).
+  // FIRST, ahead of every reprice below: if the line composition moved, the positional overrides
+  // are pointing at the wrong products and must be gone before anything prices off them.
+  await step('stale-pricing',    () => wipeStalePositionalPricing(draft));
+  await step('send-link',        () => handleSendLinkTag(draft));
+  await step('cash-payment',     () => handleCashPaymentTag(draft));
+  await step('recalc-price',     () => handleRecalculatePriceTag(draft, { force: false }));
+  await step('recalc-price+force', () => handleRecalculatePriceTag(draft, { force: true }));
+  await step('weighted-reprice', () => handleWeightedDocReprice(draft));   // memo-custom / transfer weighted pricing (before serial + net-to-collect)
+  await step('advance-capture',  () => handleAdvanceCapture(draft));       // CAD: stamp advance metafields once a payment lands
+  await step('advance-line',     () => handleAdvanceLineRemoval(draft));   // CAD: drop the advance line once a real product joins it (before net-to-collect)
+  await step('advance-redeem',   () => handleAdvanceRedeem(draft));        // CAD: apply a referenced advance (Path B), gates + refs
+  await step('advance-refund',   () => handleAdvanceRefund(draft));        // CAD: a fully refunded advance stops being outstanding
+  // Removal runs BEFORE the applies: staff who take one instrument off and put another on in the
+  // same breath produce a single pass carrying both tags, and the apply has to be the last word.
+  await step('remove-instrument', () => handleRemoveInstrumentTag(draft)); // panel ✕: remove-voucher / remove-exc → strip from draft + free in ledger
+  await step('apply-voucher',    () => handleApplyVoucherTag(draft));      // admin action: apply-voucher:<code> → redeem from ledger
+  await step('apply-exc',        () => handleApplyExcTag(draft));          // admin action: apply-exc:<number> → redeem exchange note from ledger
+  await step('apply-discount',   () => handleApplyDiscountTag(draft));     // admin action: apply-discount:<code>|custom → dia-only pre-tax discount (drops reprice)
+  await step('repairs',          () => handleRepairDraftUpdate(draft, getShopifyToken, assignRepairSerial));
+  await step('document-serial',  () => handleDocumentSerialTags(draft));   // PO/memo/transfer tags added after creation
+  // Balance ordering matters: net-to-collect must be recomputed AFTER every adjustment above
+  // (voucher / advance / exchange / old-gold), and amount_pending is DERIVED off that fresh net —
+  // so the payment sync runs LAST. (Previously it ran before the adjustments, leaving pending stale.)
+  await step('sync-net',         () => syncAmountToCollect(draft));        // recompute net-to-collect after ALL adjustments above
+  // Refunds must land BETWEEN the two: amount_refunded is written off the fresh net, and
+  // payment-sync then derives amount_pending from paid AND refunded. Reversed, the balance would
+  // be one edit behind every refund.
+  await step('refund-sync',      () => handleRefundSync(draft));           // record refund legs → ledger + amount_refunded
+  await step('refund-email',     () => handleRefundEmailTag(draft));       // the panel's "Send refund email" button
+  await step('payment-sync',     () => handlePaymentMetafieldSync(draft)); // derive amount_pending off the FRESH net (must run last)
+
+  console.log(`Draft updated webhook: #${draft.name} — tag handlers complete`);
+}
 
 // Unified reprice endpoint — equivalent to adding the reprice or recalculate-price tag.
 // threshold=false (default): full reprice — fixes discount/GST and jewel reprices if jewelcode_net_weight is set.
@@ -3253,12 +3527,8 @@ app.post('/api/reprice', async (req, res) => {
     }
     await handleRecalculatePriceTag(draft, { force: !threshold });
     // A reprice changes the total, so the collection figures must follow it in the SAME request.
-    // The line-item write does fire a draft_orders/update webhook that would run these anyway, but
-    // that is delivery-dependent and arrives after this response — so a caller that reads the
-    // metafields straight back would see the old net. Both are no-op guarded, so the webhook
-    // running them again a moment later costs nothing.
-    await syncAmountToCollect({ id: draftOrderId, total_price: draft.total_price });
-    await handlePaymentMetafieldSync({ id: draftOrderId });
+    // See recomputeCollection for why the draft webhook is not enough on its own.
+    await recomputeCollection(draftOrderId, { total_price: draft.total_price });
     return res.json({ success: true, draftOrderId });
   } catch (err) {
     return res.status(500).json({ success: false, error: err.message, detail: err.response?.data });
@@ -3314,6 +3584,9 @@ app.post('/api/set-line-prices', async (req, res) => {
     });
 
     await gqlSetDraftLineItems(draftOrderId, updatedLineItems, token, { clearDiscount: true });
+
+    // A manual override moves the total, so the collection figures move with it in this same request.
+    await recomputeCollection(draftOrderId);
 
     return res.json({ success: true, draftOrderId, updatedCount: overrideMap.size });
   } catch (err) {
@@ -3530,6 +3803,9 @@ app.post('/api/form-reprice', async (req, res) => {
       console.log(`[form-reprice] sending ${lineItemsToSet.length} items:`, JSON.stringify(lineItemsToSet.map(li => ({ v: li.variant_id || li.title, price: li.price }))));
       const gqlNodes = await gqlSetDraftLineItems(draftOrderId, lineItemsToSet, token, { clearDiscount: true, noteAttributes: mergedNoteAttrs });
       gqlNodes.forEach((li, i) => console.log(`[form-reprice] item[${i}] id=${li.id} originalUnitPrice=${li.originalUnitPrice} discountedUnitPrice=${li.discountedUnitPrice}`));
+      // The form just moved the total — the collect figure, the balance and the status follow it here,
+      // not one webhook later.
+      await recomputeCollection(draftOrderId);
       return res.json({ success: true, draftOrderId, mode: 'manual', updatedCount: overrideCount, ...(rate18ktResponse ? { rate18kt: rate18ktResponse } : {}) });
 
     } else if (mode === 'weights') {
@@ -3595,6 +3871,9 @@ app.post('/api/form-reprice', async (req, res) => {
         });
         await gqlSetDraftLineItems(draftOrderId, patchedItems, token);
       }
+      // Unconditional: handleRecalculatePriceTag above moves the total whether or not the _diamond_pcs
+      // patch ran.
+      await recomputeCollection(draftOrderId);
       return res.json({ success: true, draftOrderId, mode: 'weights', force: !!force });
 
     } else {
@@ -4099,6 +4378,9 @@ app.post('/api/exc-redeem', async (req, res) => {
         instrumentType: 'exchange_note', serialCode: excNumber, targetDraftId: newDraftId, value: Math.abs(value),
       });
     } catch (e) { console.error('[ledger] exc-redeem:', e.message); }
+    // The inline seed above moved amount_to_be_collected only. The balance and the payment status are
+    // just as wrong now, and staff read all three — so recompute the set before answering.
+    await recomputeCollection(newDraftId);
     return res.json({ success: true, draftId: newDraftId, excNumber, deducted: Math.abs(value).toFixed(2), displaced: displacedCode });
   } catch (err) {
     console.error('exc-redeem error:', err.message);
@@ -4152,6 +4434,11 @@ app.post('/api/exc-void', async (req, res) => {
       { draft_order: { id: newDraftId, tags } },
       { headers, timeout: 10000 }
     );
+
+    // Voiding a note RAISES what there is to collect, so this is the direction that strands a document
+    // on "fully paid" with money outstanding. Recompute all three here, ahead of both return paths
+    // below, rather than seeding the net alone.
+    await recomputeCollection(newDraftId);
 
     // Cancel the ledger serial by its full code (resource_id). seq is no longer unique now that the
     // exchange_note counter resets per FY, so EXC-27-0001 must be matched whole, not by seq alone.
@@ -4298,6 +4585,9 @@ app.post('/api/voucher-redeem', async (req, res) => {
         instrumentType: 'voucher', serialCode: vchNumber, targetDraftId: newDraftId, value: Math.abs(value),
       });
     } catch (e) { console.error('[ledger] voucher-redeem:', e.message); }
+    // The seed above wrote amount_to_be_collected and nothing else — which is how a draft can show the
+    // voucher correctly deducted while still reading "fully paid". Recompute the whole set.
+    await recomputeCollection(newDraftId);
     // Cross-channel single-use: delete the online Shopify discount code so it can't ALSO be used at
     // checkout (Shopify's usage_limit doesn't see this metafield redemption). Needs price_rule_id,
     // recorded on the ledger at issue.
@@ -4366,6 +4656,10 @@ app.post('/api/voucher-void', async (req, res) => {
       { draft_order: { id: newDraftId, tags } },
       { headers, timeout: 10000 }
     );
+
+    // Removing a voucher RAISES what there is to collect — the direction that leaves a document
+    // claiming to be settled. Ahead of both return paths below, same as exc-void.
+    await recomputeCollection(newDraftId);
 
     // Default = FREE the voucher (reopen to 'open', keep serial — available + re-addable). hardVoid:true =
     // TRUE void (retire the serial counter + void the ledger) — rare, only to cancel a credit that must
@@ -4464,6 +4758,13 @@ app.post('/api/recompute-payment', async (req, res) => {
         const tags = (draft.tags || '').split(',').map(t => t.trim()).filter(Boolean);
         if (!tags.some(t => t.toLowerCase() === 'sync-refund')) tags.push('sync-refund');
         await handleRefundSync({ ...draft, tags: tags.join(', ') }, 'draft_orders');
+        // Re-derive the NET as well, not just the balance on top of it. This is the repair endpoint —
+        // the thing staff reach for when a document's figures are visibly wrong — and the most common
+        // way for that to happen is a stale amount_to_be_collected, which applyPaymentTags* cannot
+        // fix: it consumes that field, it does not compute it. Without this, the one tool meant to
+        // rescue a draft stranded on "fully paid" would faithfully re-derive the balance from the same
+        // wrong net and report success.
+        await syncAmountToCollect(draft);
       }
     } else {
       const { data: o } = await axios.get(
@@ -4503,6 +4804,10 @@ const ctx = {
   // the same GraphQL helper the pricing engine uses. Both are injected rather than referenced
   // by bare name from inside a module — that is what silently broke the serial mint.
   copyDraftMetafieldsToOrder, gqlSetDraftLineItems,
+  // Injected for the same reason: procurement's reprice-from-sheet rewrites line items, which moves
+  // the total, and the collection figures have to move with it in that same request rather than being
+  // left to the webhook.
+  recomputeCollection,
   // What happens once money is confirmed — deposits, tags, invoice, emails. Pine calls it from
   // five places (the poller, check-status, and both callbacks). It is payment logic rather than
   // terminal logic, so it stays here and is injected; that is what keeps the Pine module liftable

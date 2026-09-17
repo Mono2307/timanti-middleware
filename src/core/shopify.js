@@ -78,6 +78,108 @@ async function initShopifyToken() {
   } catch (err) { log.error('shopify', 'token init failed:', err.message); }
 }
 
+// ── Rate-limit retry ─────────────────────────────────────────────────────────
+//
+// Shopify's REST bucket refills at ~2 calls/second. This middleware routinely exceeds that, because
+// one staff action fans out: nearly every handler in the draft-updated chain writes a tag or a
+// metafield to the very draft whose webhook it is handling, and each write makes Shopify deliver the
+// webhook again. #D223 (2026-09-17 17:19) took ONE product being added and turned it into ten
+// deliveries in nine seconds, each running sixteen handlers, each making its own calls.
+//
+// Nothing retried any of it. Every 429 was final, and the handlers that came last in the chain were
+// the ones that never got served: `sync-net` and `payment-sync` failed with 429 on all ten passes, so
+// amount_to_be_collected, amount_pending and payment_status were left describing a draft that no
+// longer existed — it still read "fully paid" after a product had raised the total. Each pass logged
+// "tag handlers complete" while this happened, because per-handler failures are caught by design.
+//
+// Retrying is the fix rather than a patch over one: a 429 means the request was REFUSED, not that it
+// half-applied, so replaying it is safe for every verb.
+//
+// This is installed as a global axios interceptor rather than being built into `rest()` below,
+// because most of server.js still calls axios directly — an interceptor covers those call sites
+// without touching them, which is what makes this a fix for the whole system rather than for the
+// handful of places that happen to use the helpers.
+const RETRY_MAX_ATTEMPTS = 5;
+const RETRY_BASE_MS      = 500;
+const RETRY_CAP_MS       = 8000;
+
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+/** Scoped to the Admin API on purpose: a 429 from Apps Script or a payment gateway is not ours to retry. */
+function isShopifyAdminUrl(url) {
+  const store = config.shopify.storeUrl;
+  return !!(url && store && url.startsWith(store) && url.includes('/admin/'));
+}
+
+// Honour Retry-After when Shopify sends one; otherwise exponential backoff.
+//
+// The jitter is load-bearing, not decoration. The failure this addresses is a THUNDERING HERD: ten
+// concurrent passes hit the limit at the same instant, so a fixed backoff would send all ten back in
+// lockstep to be refused together, and again, until attempts ran out. Spreading each retry randomly
+// across its window is what lets the bucket drain them a few at a time.
+function retryDelayMs(err, attempt) {
+  const raSec = parseFloat(err.response?.headers?.['retry-after']);
+  if (Number.isFinite(raSec) && raSec > 0) {
+    // Jittered even here: Shopify hands every queued caller the SAME Retry-After, so obeying it
+    // exactly reconvenes the herd at one moment.
+    const base = Math.min(raSec * 1000, RETRY_CAP_MS);
+    return base + Math.random() * RETRY_BASE_MS;
+  }
+  const window = Math.min(RETRY_BASE_MS * (2 ** attempt), RETRY_CAP_MS);
+  return window / 2 + Math.random() * (window / 2);
+}
+
+function shouldRetry(err) {
+  const status = err.response?.status;
+  const method = String(err.config?.method || 'get').toLowerCase();
+  if (!isShopifyAdminUrl(err.config?.url)) return false;
+  // Refused outright — nothing was applied, so any verb may be replayed.
+  if (status === 429) return true;
+  // Shopify 5xx and dropped connections. Restricted to idempotent verbs: a POST that failed this way
+  // may well have been applied server-side, and replaying it would mint a second metafield, a second
+  // ledger row or a second serial. Losing a call is recoverable; silently doubling a write is not.
+  const idempotent = method === 'get' || method === 'put' || method === 'delete';
+  if (!idempotent) return false;
+  if (status >= 500 && status < 600) return true;
+  return !err.response && (err.code === 'ECONNABORTED' || err.code === 'ECONNRESET' || err.code === 'ETIMEDOUT');
+}
+
+// Per-instance, not a module-level boolean: the guard exists to stop the same instance stacking
+// duplicate interceptors, and a single flag would silently refuse to arm a SECOND instance (the
+// tests create their own) while reporting success.
+const _retryInstalled = new WeakSet();
+
+/**
+ * Install the retry interceptor on the shared axios instance. Idempotent — safe to call from more
+ * than one entry point (server.js and the test harness both do).
+ */
+function installShopifyRetry(axiosInstance = axios) {
+  // The smoke tests replace axios with a stub that has no interceptor chain. Retry is an
+  // optimisation on top of working calls, never a precondition for them, so a host that cannot
+  // accept it must still boot — crashing here would take the whole server down to install a
+  // resilience feature.
+  if (!axiosInstance?.interceptors?.response?.use) {
+    log.warn('shopify', 'axios instance has no interceptors — 429 retry NOT installed');
+    return;
+  }
+  if (_retryInstalled.has(axiosInstance)) return;
+  _retryInstalled.add(axiosInstance);
+  axiosInstance.interceptors.response.use(undefined, async (err) => {
+    const cfg = err.config;
+    if (!cfg || !shouldRetry(err)) throw err;
+    cfg.__shopifyRetries = (cfg.__shopifyRetries || 0) + 1;
+    if (cfg.__shopifyRetries > RETRY_MAX_ATTEMPTS) {
+      log.error('shopify', `gave up after ${RETRY_MAX_ATTEMPTS} retries: ${cfg.method?.toUpperCase()} ${cfg.url} (${err.response?.status || err.code})`);
+      throw err;
+    }
+    const wait = retryDelayMs(err, cfg.__shopifyRetries - 1);
+    log.warn('shopify', `${err.response?.status || err.code} on ${cfg.method?.toUpperCase()} ${cfg.url} — retry ${cfg.__shopifyRetries}/${RETRY_MAX_ATTEMPTS} in ${Math.round(wait)}ms`);
+    await sleep(wait);
+    return axiosInstance(cfg);
+  });
+  log.info('shopify', `429/5xx retry installed (max ${RETRY_MAX_ATTEMPTS} attempts)`);
+}
+
 // ── Call helpers ─────────────────────────────────────────────────────────────
 // server.js reconstructed the same URL + header + timeout triple at 80+ call sites. These
 // collapse that to one line and give retries/logging a single place to live later.
@@ -156,6 +258,7 @@ function buyingRateFor(table, purity) {
 module.exports = {
   API_VERSION,
   getShopifyToken, initShopifyToken, getTokenState,
+  installShopifyRetry,
   shopifyHeaders, restUrl, rest, getJson, postJson, putJson, deleteJson, graphql,
   getBuyingRateTable, buyingRateFor, primeBuyingRateTable,
 };
