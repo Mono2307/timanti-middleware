@@ -62,7 +62,7 @@ async function sendEmail({ to, subject, html, cc, bcc, internal }) {
   if (bccList.length) payload.bcc = bccList;
 
   // TEST OVERRIDE — remove when testing is done: forces every recipient (to/cc/bcc, customer and internal) to one inbox.
-  payload.to = to = 'monodeep.dutta@seemantimanti.in'; delete payload.cc; delete payload.bcc;
+  payload.to = to = 'monodeep.dutta@timanti.in'; delete payload.cc; delete payload.bcc;
 
   const response = await fetch('https://api.resend.com/emails', {
     method: 'POST',
