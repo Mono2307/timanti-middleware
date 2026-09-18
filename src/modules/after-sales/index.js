@@ -38,6 +38,10 @@ const MFM_CLIENT_ID = '3c0a0f5a2127842e19391c5b20ec49a0';
 // no customer, no store and no HQ received a single repair email for as long as it stood. Empty is
 // the correct production value; set it only for a deliberate test round, and clear it the same day.
 const REPAIR_TEST_EMAIL = process.env.REPAIR_TEST_EMAIL || '';
+// Second standing HQ Cc, treated exactly like HQ_CC_EMAIL. Both spellings are accepted so the
+// secret is picked up whichever way it was named — a mismatch here fails silently, with the
+// address simply never appearing on the mail.
+const HQ_CC_EMAIL_2 = process.env.HQ_CC_EMAIL_2 || process.env.HQ_CC_EMAIL2 || '';
 
 // Build the item block for the v2 email templates from the repair draft's line-item
 // properties. These are written by fetchAndCopyOriginalOrderSpecs from the ORIGINAL
@@ -120,7 +124,7 @@ function repairSendEmail(opts) {
     // actually resolves to a person, so internal repair mail was going to an individual and the
     // store was only on the customer BCC. STORE_EMAIL is not set as a secret and defaults to
     // hsrstore@timanti.in, which is the address that was wanted all along.
-    const hqCc = [process.env.HQ_EMAIL, process.env.HQ_CC_EMAIL].filter(Boolean);
+    const hqCc = [process.env.HQ_EMAIL, process.env.HQ_CC_EMAIL, HQ_CC_EMAIL_2].filter(Boolean);
     return sendEmail({
       ...rest,
       internal: true,   // staff-only mail: the oversight copy rides in a visible Cc, not Bcc

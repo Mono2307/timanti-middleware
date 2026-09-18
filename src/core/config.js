@@ -65,6 +65,9 @@ const config = {
     resendApiKey:  process.env.RESEND_API_KEY,
     hq:            process.env.HQ_EMAIL,
     hqCc:          process.env.HQ_CC_EMAIL,
+    /** Second standing HQ Cc. Treated exactly like hqCc everywhere it is used. Both spellings
+     *  are accepted so a secret named either way is picked up rather than silently ignored. */
+    hqCc2:         process.env.HQ_CC_EMAIL_2 || process.env.HQ_CC_EMAIL2,
     store:         process.env.STORE_EMAIL,
     /** Monthly CAD-advance digest recipient. Falls back to HQ, then the store, so the alert always
      *  lands somewhere rather than being silently dropped when the var is unset. */

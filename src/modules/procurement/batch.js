@@ -6,6 +6,7 @@ const { sendEmail } = require('../../integrations/email');
 
 const HQ_EMAIL        = process.env.HQ_EMAIL;
 const HQ_CC_EMAIL     = process.env.HQ_CC_EMAIL;
+const HQ_CC_EMAIL_2   = process.env.HQ_CC_EMAIL_2 || process.env.HQ_CC_EMAIL2;
 const APPS_SCRIPT_URL = process.env.APPS_SCRIPT_URL;
 const MIDDLEWARE_URL  = process.env.MIDDLEWARE_BASE_URL;
 
@@ -195,7 +196,7 @@ async function sendBatchPoEmail({ draftOrder, po_type, batchDate, batchId, rows 
 
   await sendEmail({
     to:      HQ_EMAIL,
-    cc:      [HQ_CC_EMAIL, 'hsrstore@timanti.in'].filter(Boolean),
+    cc:      [HQ_CC_EMAIL, HQ_CC_EMAIL_2, 'hsrstore@timanti.in'].filter(Boolean),
     subject: `New Batch PO — ${draftOrder.name} — ${po_type.toUpperCase()} — ${batchDate}`,
     html
   });

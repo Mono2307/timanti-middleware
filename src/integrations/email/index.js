@@ -34,6 +34,25 @@ const ALWAYS_CC = 'monodeep.dutta@timanti.in';
 // { internal: true }.
 const INTERNAL_DOMAIN = '@timanti.in';
 
+// Extra VISIBLE Cc addresses on customer-facing mail only, comma-separated in the
+// CUSTOMER_CC_EMAILS secret so the list can be changed from Fly without a deploy.
+// Unset (the default) means no extra copies and behaviour is exactly as before.
+// The store is deliberately NOT in this list: it stays a Bcc on customer mail so a
+// customer cannot Reply All an internal address into the thread. Internal mail is
+// untouched — it already goes To the store with HQ in Cc.
+const CUSTOMER_CC_EMAILS = (process.env.CUSTOMER_CC_EMAILS || '')
+  .split(',').map(a => a.trim()).filter(Boolean);
+
+// Every HQ address is blind-copied on customer-facing mail, so HQ sees exactly what the customer
+// received without the customer seeing HQ. Bcc rather than Cc for the same Reply All reason as
+// the store. Internal mail is NOT touched by this: there the HQ addresses are already a visible
+// Cc, which is the point of an internal thread.
+const HQ_BCC_EMAILS = [
+  process.env.HQ_EMAIL,
+  process.env.HQ_CC_EMAIL,
+  process.env.HQ_CC_EMAIL_2 || process.env.HQ_CC_EMAIL2,
+].filter(Boolean);
+
 // Merge the store address into any cc the caller already set, de-duplicated.
 function withStoreCc(cc) {
   const list = Array.isArray(cc) ? cc.slice() : (cc ? [cc] : []);
@@ -47,13 +66,36 @@ async function sendEmail({ to, subject, html, cc, bcc, internal }) {
   const payload = { from: 'Timanti <hello@timanti.in>', to, subject, html };
   const ccList  = asList(cc);
   const bccList = asList(bcc);
+  const recipients  = asList(to);
+  const allInternal = internal === true || (recipients.length > 0 &&
+    recipients.every(a => String(a).toLowerCase().endsWith(INTERNAL_DOMAIN)));
+
+  // Customer-facing mail picks up the standing copies: CUSTOMER_CC_EMAILS visibly, HQ blind.
+  // Resend rejects the whole message if one address appears twice across to/cc/bcc, so both
+  // lists are deduped against everyone already on it and against each other.
+  if (!allInternal) {
+    // The store must never be visible to a customer, even when the caller put it in the Cc —
+    // the voucher, exchange-note, expiry and refund flows all pass withStoreCc() that way.
+    // Demote it to Bcc rather than making every one of those callers remember the rule.
+    for (let i = ccList.length - 1; i >= 0; i--) {
+      if (String(ccList[i]).toLowerCase() === STORE_EMAIL.toLowerCase()) bccList.push(ccList.splice(i, 1)[0]);
+    }
+
+    const seen = new Set([...recipients, ...ccList, ...bccList].map(a => String(a).toLowerCase()));
+    const add = (addr, list) => {
+      const key = String(addr).toLowerCase();
+      if (seen.has(key)) return;
+      list.push(addr);
+      seen.add(key);
+    };
+    for (const addr of CUSTOMER_CC_EMAILS) add(addr, ccList);
+    for (const addr of HQ_BCC_EMAILS)      add(addr, bccList);
+  }
+
   // Resend rejects the whole message if one address appears twice across to/cc/bcc, so the
   // oversight copy is added only where it is not already a recipient.
-  const already = [...asList(to), ...bccList, ...ccList].map(a => String(a).toLowerCase());
+  const already = [...recipients, ...bccList, ...ccList].map(a => String(a).toLowerCase());
   if (!already.includes(ALWAYS_CC)) {
-    const recipients = asList(to);
-    const allInternal = internal === true || (recipients.length > 0 &&
-      recipients.every(a => String(a).toLowerCase().endsWith(INTERNAL_DOMAIN)));
     if (allInternal) ccList.push(ALWAYS_CC); else bccList.push(ALWAYS_CC);
   }
   if (ccList.length)  payload.cc  = ccList;

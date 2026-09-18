@@ -7,6 +7,7 @@ const { sendEmail } = require('../../integrations/email');
 const WEBHOOK_SECRET  = process.env.SHOPIFY_WEBHOOK_SECRET;
 const HQ_EMAIL        = process.env.HQ_EMAIL;
 const HQ_CC_EMAIL     = process.env.HQ_CC_EMAIL;
+const HQ_CC_EMAIL_2   = process.env.HQ_CC_EMAIL_2 || process.env.HQ_CC_EMAIL2;
 const APPS_SCRIPT_URL = process.env.APPS_SCRIPT_URL;
 const MIDDLEWARE_URL  = process.env.MIDDLEWARE_BASE_URL;
 
@@ -248,7 +249,7 @@ async function sendPoEmail({ draftOrder, poType, sourceOrderName }) {
 
   await sendEmail({
     to:      HQ_EMAIL,
-    cc:      ENABLE_CC ? [HQ_CC_EMAIL, 'hsrstore@timanti.in'].filter(Boolean) : undefined,
+    cc:      ENABLE_CC ? [HQ_CC_EMAIL, HQ_CC_EMAIL_2, 'hsrstore@timanti.in'].filter(Boolean) : undefined,
     subject: `${isUrgent ? '🔴 URGENT — ' : ''}New PO — ${draftOrder.name} — ${poType} — ${sourceOrderName}`,
     html
   });
