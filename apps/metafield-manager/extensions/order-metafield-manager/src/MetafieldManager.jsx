@@ -30,17 +30,36 @@ import { useEffect, useRef, useState } from "preact/hooks";
 // Installments sits FIRST so the payment table reads as one block. Leg 1 is marked required in
 // FIELD_CONFIG rather than promoted into Required Inputs, which would split it from legs 2-4.
 const SECTION_ORDER = [
+  // §2 Money. Installments first so the payment table reads as one block, then the totals derived
+  // from it, then money OUT — a balance only makes sense alongside what has already gone back.
   "Installments",
   "Payments",
-  // Money OUT sits directly under money IN, because the two are read together — a balance only makes
-  // sense alongside what has already gone back.
   "Refunds",
-  "Pricing",
-  "Product Metadata",
+  // §3 Discounts: the only PRE-tax adjustment, and the one staff reach for most often. It is
+  // deliberately not filed under Adjustments — those all land post-tax and move the balance only.
+  "Discounts",
+  // §4 What the pricing engine actually multiplies: rate, labour, and the weights/carats. Kept
+  // together because a reprice is one decision made from all of them at once, and split across two
+  // sections staff had to scroll between the rate and the weight it multiplies.
+  "Repricing",
+  // §5 Post-tax adjustments: old gold, exchange note, voucher, CAD design advance.
   "Adjustments",
+  // The invoice date belongs with the money decisions above it, not at the bottom of the panel.
+  "Invoice",
+  // §6 Read-only middleware output, then the repair workflow.
+  "System-Generated",
   "Repair",
+  // §7 Raised off a draft via make-memo-custom; nothing else reads these.
+  "Delivery Challan",
+  // §8 Everything else.
+  //
+  // "Product Metadata" is deliberately NOT here any more. Its editable weights and carats moved to
+  // Repricing, where the engine that multiplies them lives, and what was left was read-only clutter:
+  // the jewelcode JSON blob, the code and SKU that already show on the line items, and three legacy
+  // *_wt fields superseded years ago. Its config stays below as documentation, and unlisting it is
+  // how this panel retires a section — same as "Order Details", "Procurement" and "Manufacturing".
+  // "System" is gone for the opposite reason: every field it held has been re-homed, so it is empty.
   "Credit Note",
-  "System",
 ];
 
 // Compulsory staff inputs, in the priority order they must be filled. These are
@@ -70,20 +89,11 @@ const BLANK_CHOICE_LABEL = "—";
 const REQUIRED_SET = new Set(REQUIRED_FIELDS);
 const REQUIRED_SECTION = "Required Inputs";
 
-// Read-only identity block promoted ABOVE Required Inputs (document type + serials).
-// These are auto-stamped by the middleware; staff only read them.
-const IDENTITY_FIELDS = [
-  "document_type",
-  "serial_display",
-  "serial_code",
-  "serial_no",
-  "serial_state",
-  "order_name",
-  "source_order_id",
-  "action_token",
-];
-const IDENTITY_SET = new Set(IDENTITY_FIELDS);
-const IDENTITY_SECTION = "Document / Identity";
+// The document-type + serial block used to be promoted ABOVE Required Inputs. It is now an ordinary
+// "System-Generated" section down at §6, with the rest of the middleware's read-only output: staff
+// read it when they are chasing a number, not when they are filling the document in, and it was
+// pushing the fields they DO have to fill below the fold. Required Inputs is now the first thing on
+// the panel, which is the point of the order.
 
 const FIELD_CONFIG = {
   order_type: { section: "Order Details", label: "Order Type", editable: true, applies: "both" },
@@ -154,13 +164,19 @@ const FIELD_CONFIG = {
   // Payments so the running total sits with the fields staff type into.
   amount_refunded: { section: "Refunds", label: "Total Refunded", editable: false, applies: "both" },
 
-  gold_rate: { section: "Pricing", label: "Gold Rate", editable: true, applies: "both" },
-  gold_rate_date: { section: "Pricing", label: "Gold Rate Date", editable: true, applies: "both" },
+  gold_rate: { section: "Repricing", label: "Gold Rate", editable: true, applies: "both" },
+  gold_rate_date: { section: "Repricing", label: "Gold Rate Date", editable: true, applies: "both" },
   // Flat labour in Rs, positional per product ("1900,2500") — same CSV convention as gold_rate, hence
   // single_line_text. Blank = use the variant design spec. Labour never scales with weight.
+  //
+  // UNLISTED: "Pricing" is no longer in SECTION_ORDER, so this renders nowhere — the established way
+  // of retiring a field while keeping its config as documentation. Labour is no longer set from this
+  // panel; the variant design spec is the source, and custom.making stays the override for whoever
+  // needs it (the reprice engine still reads it, and it is still the ONLY channel that moves labour —
+  // the Making line item is computed output, not an input).
   making: { section: "Pricing", label: "Making / Labour (flat Rs, per product)", editable: true, applies: "both" },
-  gross_value: { section: "Pricing", label: "Gross Value (pre-discount)", editable: false, applies: "both" },
-  discount_applied: { section: "Pricing", label: "Discount Applied (pre-tax)", editable: false, applies: "both" },
+  gross_value: { section: "Repricing", label: "Gross Value (pre-discount)", editable: false, applies: "both" },
+  discount_applied: { section: "Discounts", label: "Discount Applied (pre-tax)", editable: false, applies: "both" },
 
   // Adjustments — old gold (staff enter weight+purity, system values it), exchange/voucher (system),
   // and CAD design advance. advance_ref is the one staff-fill here (redeem a past advance, Path B).
@@ -175,7 +191,11 @@ const FIELD_CONFIG = {
   voucher_code: { section: "Adjustments", label: "Voucher Applied", editable: false, applies: "both" },
   voucher_value: { section: "Adjustments", label: "Voucher Value (auto from Apply; override optional)", editable: true, applies: "both" },
   advance: { section: "Adjustments", label: "Design Advance (auto from reference; override optional)", editable: true, applies: "both" },
-  advance_ref: { section: "Adjustments", label: "Advance Ref — order # to redeem", editable: true, applies: "both" },
+  // Read-only since the Redeem a Design Advance panel took it over: one metafield with two boxes
+  // writing it on the same screen is a race staff would lose — type into one, save, and the other
+  // one's stale value goes over the top. The panel is the input; this row is what it did. It reads
+  // blank most of the time because the middleware clears the reference once it has acted on it.
+  advance_ref: { section: "Adjustments", label: "Advance Ref — order # being redeemed", editable: false, applies: "both" },
   advance_status: { section: "Adjustments", label: "Advance Status", editable: false, applies: "both" },
   redeemed_against: { section: "Adjustments", label: "Advance Redeemed Against", editable: false, applies: "both" },
 
@@ -187,11 +207,11 @@ const FIELD_CONFIG = {
   jewelcode: { section: "Product Metadata", label: "Jewelcode (JSON)", editable: false, applies: "both" },
   jewel_code: { section: "Product Metadata", label: "Jewel Code", editable: false, applies: "draft" },
   sku_id: { section: "Product Metadata", label: "SKU ID", editable: false, applies: "draft" },
-  jewelcode_gross_weight: { section: "Product Metadata", label: "Gross Weight", editable: true, applies: "both" },
-  jewelcode_net_weight: { section: "Product Metadata", label: "Net Weight", editable: true, applies: "both" },
-  jewelcode_diamond_carats: { section: "Product Metadata", label: "Diamond Carats", editable: true, applies: "both" },
-  jewelcode_diamond_pieces: { section: "Product Metadata", label: "Diamond Pieces", editable: true, applies: "draft" },
-  jewelcode_gemstone_weight: { section: "Product Metadata", label: "Gemstone Weight", editable: true, applies: "both" },
+  jewelcode_gross_weight: { section: "Repricing", label: "Gross Weight", editable: true, applies: "both" },
+  jewelcode_net_weight: { section: "Repricing", label: "Net Weight", editable: true, applies: "both" },
+  jewelcode_diamond_carats: { section: "Repricing", label: "Diamond Carats", editable: true, applies: "both" },
+  jewelcode_diamond_pieces: { section: "Repricing", label: "Diamond Pieces", editable: true, applies: "draft" },
+  jewelcode_gemstone_weight: { section: "Repricing", label: "Gemstone Weight", editable: true, applies: "both" },
   gross_wt: { section: "Product Metadata", label: "Gross Weight (legacy)", editable: false, applies: "draft" },
   net_wt: { section: "Product Metadata", label: "Net Weight (legacy)", editable: false, applies: "draft" },
   diamond_cts: { section: "Product Metadata", label: "Diamond Carats (legacy)", editable: false, applies: "draft" },
@@ -239,23 +259,26 @@ const FIELD_CONFIG = {
   // Consigning the challan to the customer instead of to a store. Yes/No rather than a boolean:
   // REST returns a real boolean metafield as a JSON boolean, so the string compare everything
   // else here does would read false forever.
-  ship_outside_codes: { section: "System", label: "Ship Outside Codes", editable: true, applies: "draft" },
+  ship_outside_codes: { section: "Delivery Challan", label: "Ship Outside Codes", editable: true, applies: "draft" },
   // Draft-only, and only read when a delivery challan is raised off the draft via make-memo-custom.
   // Greyed out, not hidden, once Ship Outside Codes is Yes: a code already typed stays visible so
   // staff can see what the document is NOT using, and flipping back restores it untouched.
-  delivery_code: { section: "System", label: "Delivery / Store Code (delivery challan)", editable: true, applies: "draft",
+  delivery_code: { section: "Delivery Challan", label: "Delivery / Store Code (delivery challan)", editable: true, applies: "draft",
     disabledWhen: (edits) => String(edits.ship_outside_codes || "").toLowerCase() === "yes",
     disabledNote: "not used — shipping outside codes" },
-  invoice_date: { section: "System", label: "Invoice Date", editable: true, applies: "both" },
-  is_finalized: { section: "System", label: "Finalized", editable: false, applies: "both" },
-  order_name: { section: "System", label: "Linked Order Name", editable: false, applies: "draft" },
-  source_order_id: { section: "System", label: "Source Order ID", editable: false, applies: "draft" },
-  document_type: { section: "System", label: "Document Type", editable: false, applies: "both" },
-  serial_no: { section: "System", label: "Serial No", editable: false, applies: "both" },
-  serial_code: { section: "System", label: "Serial Code", editable: false, applies: "both" },
-  serial_display: { section: "System", label: "Display Serial", editable: false, applies: "both" },
-  serial_state: { section: "System", label: "Serial State", editable: false, applies: "draft" },
-  action_token: { section: "System", label: "Action Token", editable: false, applies: "draft" },
+  // Its own section directly under Adjustments. It was the last field on the panel, buried under the
+  // serials, and it is the one date that prints on the customer's tax invoice — staff set it while
+  // the money is still in front of them, not after scrolling past everything the middleware stamped.
+  invoice_date: { section: "Invoice", label: "Invoice Date", editable: true, applies: "both" },
+  is_finalized: { section: "System-Generated", label: "Finalized", editable: false, applies: "both" },
+  order_name: { section: "System-Generated", label: "Linked Order Name", editable: false, applies: "draft" },
+  source_order_id: { section: "System-Generated", label: "Source Order ID", editable: false, applies: "draft" },
+  document_type: { section: "System-Generated", label: "Document Type", editable: false, applies: "both" },
+  serial_no: { section: "System-Generated", label: "Serial No", editable: false, applies: "both" },
+  serial_code: { section: "System-Generated", label: "Serial Code", editable: false, applies: "both" },
+  serial_display: { section: "System-Generated", label: "Display Serial", editable: false, applies: "both" },
+  serial_state: { section: "System-Generated", label: "Serial State", editable: false, applies: "draft" },
+  action_token: { section: "System-Generated", label: "Action Token", editable: false, applies: "draft" },
 };
 
 // Which class the document is carrying right now, read off its live tags. Free wins if both are
@@ -289,14 +312,6 @@ function buildSections(scope) {
   const inScope = fieldsForScope(scope);
   const inScopeSet = new Set(inScope);
 
-  // Read-only identity block → single section promoted ABOVE everything, in
-  // IDENTITY_FIELDS order (document type + serials). Always rendered read-only.
-  const identityFields = IDENTITY_FIELDS.filter((key) => inScopeSet.has(key)).map((key) => ({
-    key,
-    label: FIELD_CONFIG[key].label,
-    editable: false,
-  }));
-
   // Required staff inputs → single top section, in REQUIRED_FIELDS priority order.
   const requiredFields = REQUIRED_FIELDS.filter((key) => inScopeSet.has(key)).map((key) => ({
     key,
@@ -307,11 +322,11 @@ function buildSections(scope) {
     disabledNote: FIELD_CONFIG[key].disabledNote,
   }));
 
-  // Everything else stays in its topical section (required + identity keys are
-  // removed here since they've been promoted above).
+  // Everything else stays in its topical section (required keys are removed here
+  // since they've been promoted above).
   const bySection = {};
   for (const key of inScope) {
-    if (REQUIRED_SET.has(key) || IDENTITY_SET.has(key)) continue;
+    if (REQUIRED_SET.has(key)) continue;
     const cfg = FIELD_CONFIG[key];
     // `required` here is display only (the asterisk) — it marks a compulsory field that must stay
     // with its neighbours rather than being promoted into the Required Inputs section.
@@ -327,7 +342,6 @@ function buildSections(scope) {
   }));
 
   const sections = [];
-  if (identityFields.length) sections.push({ title: IDENTITY_SECTION, fields: identityFields });
   if (requiredFields.length) sections.push({ title: REQUIRED_SECTION, fields: requiredFields });
   return sections.concat(topical);
 }
@@ -418,6 +432,9 @@ const PAIRED_VALUE_KEY = { voucher_code: "voucher_value", exchange_note_code: "e
 // before the *_code metafields existed, when the code lived only in a vch-num / exc-num tag) or a
 // manual override typed into the value field. Both still need a way off the document.
 const NO_CODE_LABEL = "code not recorded";
+// What the ✕ clears locally while the middleware catches up.
+const REMOVE_CODE_KEY = { voucher: "voucher_code", exchange: "exchange_note_code" };
+const REMOVE_VALUE_KEY = { voucher: "voucher_value", exchange: "exchange_note_value" };
 
 // -- Repair class ----------------------------------------------------------------------------
 // The repairs workflow is started by exactly ONE tag, and WHICH tag it is decides the class of the
@@ -565,6 +582,10 @@ export default function MetafieldManager({ surface = "block" } = {}) {
   // The ✕ on an applied instrument. One at a time: "" | "voucher" | "exchange".
   const [removeBusy, setRemoveBusy] = useState("");
   const [removeNote, setRemoveNote] = useState("");
+  // Design Advance (CAD, Path B): the order number staff want to redeem against this draft.
+  const [advRef, setAdvRef] = useState("");
+  const [advBusy, setAdvBusy] = useState(false);
+  const [advNote, setAdvNote] = useState("");
   const [refundEmailBusy, setRefundEmailBusy] = useState(false);
   const [refundEmailNote, setRefundEmailNote] = useState("");
   // Repair class selector: the document's live tags (so the panel reports what the workflow actually
@@ -579,6 +600,10 @@ export default function MetafieldManager({ surface = "block" } = {}) {
   const [repairItemsLoading, setRepairItemsLoading] = useState(false);
   const [repairItemsError, setRepairItemsError] = useState("");
   const [selectedItemIds, setSelectedItemIds] = useState([]);
+  // An EMPTY stored list means "every piece" — that is the middleware's own fallback. But once staff
+  // start ticking, an empty list has to mean "none of them", or the last untick reads as the first
+  // state again and every box springs back on. This flag is what tells the two apart.
+  const [itemsTouched, setItemsTouched] = useState(false);
   const [repairItemsBusy, setRepairItemsBusy] = useState(false);
   const [repairItemsNote, setRepairItemsNote] = useState("");
   // True once staff have ticked something they haven't saved. Saving any OTHER field bumps
@@ -586,10 +611,7 @@ export default function MetafieldManager({ surface = "block" } = {}) {
   const repairItemsDirty = useRef(false);
   // Unified adjustments selector + discount inputs.
   const [adjType, setAdjType] = useState(""); // "" | "exchange" | "voucher" | "discount"
-  const [discountSubmode, setDiscountSubmode] = useState("code"); // "code" | "custom"
   const [discountCode, setDiscountCode] = useState("");
-  const [discountValue, setDiscountValue] = useState("");
-  const [discountMode, setDiscountMode] = useState("pct"); // "pct" | "flat"
   const [discountBusy, setDiscountBusy] = useState(false);
   const [discountNote, setDiscountNote] = useState("");
   const [refreshTick, setRefreshTick] = useState(0); // bumped after a save to re-pull server-recomputed values
@@ -687,7 +709,11 @@ export default function MetafieldManager({ surface = "block" } = {}) {
       const liveClass = repairClassFromTags(tagsOnDoc);
       setRepairClass((prev) => liveClass || prev);
       // Adopt the saved selection unless staff have an unsaved one in front of them.
-      if (!repairItemsDirty.current) setSelectedItemIds(parseRepairItems(valuesByKey[REPAIR_ITEMS_KEY]));
+      if (!repairItemsDirty.current) {
+        setSelectedItemIds(parseRepairItems(valuesByKey[REPAIR_ITEMS_KEY]));
+        // Back to the stored convention: whatever the server says, said fresh.
+        setItemsTouched(false);
+      }
       setLineRows(lineRowsInit);
       // On a post-save refresh the user may have started typing again — keep those in-progress edits and
       // don't clobber them; adopt fresh server values as the new baseline for everything else.
@@ -748,6 +774,13 @@ export default function MetafieldManager({ surface = "block" } = {}) {
     })();
     return () => { active = false; };
   }, [ctx.scope, repairRef, refreshTick]);
+
+  // What the checkboxes actually show, and what "Save pieces" writes. Before staff touch anything an
+  // empty selection renders as every piece ticked (the stored convention); after they touch it the
+  // list is literal, down to and including none.
+  const shownItemIds = itemsTouched || selectedItemIds.length
+    ? selectedItemIds
+    : repairOrderItems.map((x) => x.id);
 
   function setField(key, value) {
     editsRef.current = { ...editsRef.current, [key]: value };
@@ -940,8 +973,21 @@ export default function MetafieldManager({ surface = "block" } = {}) {
       const res = await shopify.query(TAGS_ADD_MUTATION, { variables: { id: ownerId, tags: [tag] } });
       const errs = collectErrors(res, "tagsAdd");
       if (errs.length) throw new Error(errs.join("; "));
+      // Clear the row here rather than waiting for the refresh. The middleware takes a few seconds,
+      // and a ✕ that leaves the voucher sitting there reads as a click that missed — which is
+      // exactly what staff then do something about, by clicking it again. The second press adds a
+      // tag that is already on the document, so Shopify changes nothing and no webhook fires: the
+      // panel looked broken AND the extra clicks genuinely did nothing.
+      setValues((prev) => {
+        const next = { ...prev };
+        delete next[REMOVE_CODE_KEY[kind]];
+        delete next[REMOVE_VALUE_KEY[kind]];
+        return next;
+      });
       setRemoveNote(`Removing the ${REMOVE_LABEL[kind]}… it comes off this order and goes back to unused in a few seconds, and the balance goes up by its value.`);
-      setTimeout(() => setRefreshTick((t) => t + 1), 3000);
+      // Late enough that the chain has normally finished. An early refresh would put the row back
+      // for a moment before taking it away again — the flicker this is meant to remove.
+      setTimeout(() => setRefreshTick((t) => t + 1), 6000);
     } catch (e) {
       setRemoveNote(`Couldn't remove: ${e?.message || e}`);
     } finally {
@@ -953,25 +999,15 @@ export default function MetafieldManager({ surface = "block" } = {}) {
   // `apply-discount:<code>` or `apply-discount:custom:<v>:<pct|flat>` tag; the middleware resolves the
   // amount against the diamond value, writes custom.discount_applied, and reprices dia-only pre-tax.
   async function applyDiscount() {
-    if (!ownerId) return;
-    let tag;
-    if (discountSubmode === "code") {
-      const code = discountCode.trim();
-      if (!code) return;
-      tag = `apply-discount:${code}`;
-    } else {
-      const v = parseFloat(discountValue);
-      if (!(v > 0)) return;
-      tag = `apply-discount:custom:${v}:${discountMode}`;
-    }
+    const code = discountCode.trim();
+    if (!ownerId || !code) return;
     setDiscountBusy(true);
     setDiscountNote("");
     try {
-      const res = await shopify.query(TAGS_ADD_MUTATION, { variables: { id: ownerId, tags: [tag] } });
+      const res = await shopify.query(TAGS_ADD_MUTATION, { variables: { id: ownerId, tags: [`apply-discount:${code}`] } });
       const errs = collectErrors(res, "tagsAdd");
       if (errs.length) throw new Error(errs.join("; "));
       setDiscountCode("");
-      setDiscountValue("");
       setDiscountNote(`Applying discount… the diamond value, line prices and balance update in a few seconds. If it can't be resolved, a "discount-invalid" tag appears with the reason.`);
       setTimeout(() => setRefreshTick((t) => t + 1), 3000);
     } catch (e) {
@@ -1025,7 +1061,14 @@ export default function MetafieldManager({ surface = "block" } = {}) {
     setRepairItemsNote("");
     try {
       const def = defs[REPAIR_ITEMS_KEY] || { namespace: "custom", type: "json" };
-      const picked = repairOrderItems.filter((li) => selectedItemIds.includes(li.id));
+      const picked = repairOrderItems.filter((li) => shownItemIds.includes(li.id));
+      // An empty pick used to fall through to the delete branch, which the middleware reads as
+      // "every piece" -- the exact opposite of what staff just did. Say so instead of saving the
+      // inverse of their selection.
+      if (repairOrderItems.length && !picked.length) {
+        setRepairItemsNote("Nothing is ticked. Pick at least one piece -- saving none would send every piece on the order instead.");
+        return;
+      }
       if (picked.length && picked.length < repairOrderItems.length) {
         const res = await shopify.query(SET_MUTATION, {
           variables: { metafields: [{ ownerId, namespace: def.namespace, key: REPAIR_ITEMS_KEY,
@@ -1122,17 +1165,79 @@ export default function MetafieldManager({ surface = "block" } = {}) {
         <s-text-field
           label="Exchange Note Number"
           value={excCode}
-          disabled={excBusy ? "" : undefined}
+          disabled={Boolean(excBusy)}
           onChange={(e) => setExcCode(e.target.value ?? "")}
         />
         <s-button
           onClick={applyExc}
-          loading={excBusy ? "" : undefined}
-          disabled={!excCode.trim() || excBusy ? "" : undefined}
+          loading={Boolean(excBusy)}
+          disabled={Boolean(!excCode.trim() || excBusy)}
         >
           Apply Exchange Note
         </s-button>
         {excNote ? <s-text>{excNote}</s-text> : null}
+      </s-stack>
+    </s-section>
+  );
+
+  // Redeem a CAD design advance taken on an EARLIER order (Path B). Staff type that order's number;
+  // the middleware resolves it, checks the advance is still outstanding, writes custom.advance and
+  // clears the reference again. Unlike the voucher and exchange-note paths this is not a trigger
+  // tag: handleAdvanceRedeem keys off intake.advance_ref itself, and runs on every draft pass. The
+  // `sync-payment` tag is only here to MAKE a pass happen — a metafield write fires no webhook.
+  //
+  // Namespace comes from the live definition like everything else. advance_ref is one of the few
+  // fields NOT in `custom` (it is `intake`), so hardcoding it here would write to the wrong place.
+  async function applyAdvance() {
+    const ref = advRef.trim();
+    if (!ownerId || !ref) return;
+    setAdvBusy(true);
+    setAdvNote("");
+    try {
+      const def = defs.advance_ref || { namespace: "intake", type: "single_line_text_field" };
+      const res = await shopify.query(SET_MUTATION, {
+        variables: { metafields: [{ ownerId, namespace: def.namespace, key: "advance_ref", type: def.type, value: ref }] },
+      });
+      const errs = collectErrors(res, "metafieldsSet");
+      if (errs.length) throw new Error(errs.join("; "));
+      try {
+        await shopify.query(TAGS_ADD_MUTATION, { variables: { id: ownerId, tags: ["sync-payment"] } });
+      } catch { /* non-blocking: the reference is saved, the next edit will pick it up */ }
+      setAdvRef("");
+      setAdvNote(`Redeeming the advance from ${ref}… the balance updates in a few seconds. If it can't be used, an "advance-invalid" tag appears with the reason.`);
+      setTimeout(() => setRefreshTick((t) => t + 1), 4000);
+    } catch (e) {
+      setAdvNote(`Couldn't redeem: ${e?.message || e}`);
+    } finally {
+      setAdvBusy(false);
+    }
+  }
+
+  const renderAdvanceApply = () => (
+    <s-section heading="Redeem a Design Advance">
+      <s-stack direction="block" gap="base">
+        <s-text tone="subdued">
+          Type the order number the advance was taken on (e.g. 1042 or #1042). The system looks it up,
+          checks the advance has not already been used, and deducts it from what there is to collect.
+          You never enter the amount. The Design Advance field below is a manual override.
+        </s-text>
+        <s-text tone="subdued">
+          {`Status: ${values.advance_status || "—"}${values.redeemed_against ? ` · already redeemed against ${values.redeemed_against}` : ""}`}
+        </s-text>
+        <s-text-field
+          label="Advance Ref — order # to redeem"
+          value={advRef}
+          disabled={Boolean(advBusy)}
+          onChange={(e) => setAdvRef(e.target.value ?? "")}
+        />
+        <s-button
+          onClick={applyAdvance}
+          loading={Boolean(advBusy)}
+          disabled={Boolean(!advRef.trim() || advBusy)}
+        >
+          Redeem Advance
+        </s-button>
+        {advNote ? <s-text>{advNote}</s-text> : null}
       </s-stack>
     </s-section>
   );
@@ -1147,13 +1252,13 @@ export default function MetafieldManager({ surface = "block" } = {}) {
         <s-text-field
           label="Voucher Code"
           value={voucherCode}
-          disabled={voucherBusy ? "" : undefined}
+          disabled={Boolean(voucherBusy)}
           onChange={(e) => setVoucherCode(e.target.value ?? "")}
         />
         <s-button
           onClick={applyVoucher}
-          loading={voucherBusy ? "" : undefined}
-          disabled={!voucherCode.trim() || voucherBusy ? "" : undefined}
+          loading={Boolean(voucherBusy)}
+          disabled={Boolean(!voucherCode.trim() || voucherBusy)}
         >
           Apply Voucher
         </s-button>
@@ -1193,8 +1298,8 @@ export default function MetafieldManager({ surface = "block" } = {}) {
           </s-text>
           <s-button
             onClick={sendRefundEmail}
-            loading={refundEmailBusy ? "" : undefined}
-            disabled={refundEmailBusy ? "" : undefined}
+            loading={Boolean(refundEmailBusy)}
+            disabled={Boolean(refundEmailBusy)}
           >
             Send refund email
           </s-button>
@@ -1204,54 +1309,29 @@ export default function MetafieldManager({ surface = "block" } = {}) {
     );
   };
 
+  // Discount codes ONLY. The custom %/₹ path is gone: a hand-typed rate leaves nothing to audit
+  // afterwards — no code, no record of who authorised it, and nothing tying two identical discounts
+  // on different orders to the same decision. A real Shopify code is created once, deliberately, and
+  // every draft that carries it is traceable back to it. The middleware still accepts
+  // `apply-discount:custom:<v>:<pct|flat>` for anything that already went out that way.
   const renderDiscountApply = () => (
     <s-section heading="Apply a Discount">
       <s-stack direction="block" gap="base">
         <s-text tone="subdued">
-          Discounts reduce the DIAMOND value pre-tax (order-level). Use a real Shopify discount code, or a
-          custom % / ₹ amount. Taxable value, GST, line price and amount-to-collect all update automatically.
+          Discounts reduce the DIAMOND value pre-tax (order-level). Enter a real Shopify discount code —
+          the system resolves its % or ₹ against the live diamond value. Taxable value, GST, line price
+          and amount-to-collect all update automatically.
         </s-text>
-        <s-select
-          label="Discount source"
-          value={discountSubmode}
-          onChange={(e) => setDiscountSubmode(e.target.value ?? "code")}
-        >
-          <s-option value="code">Discount code</s-option>
-          <s-option value="custom">Custom</s-option>
-        </s-select>
-        {discountSubmode === "code" ? (
-          <s-text-field
-            label="Discount code (e.g. FNF5)"
-            value={discountCode}
-            disabled={discountBusy ? "" : undefined}
-            onChange={(e) => setDiscountCode(e.target.value ?? "")}
-          />
-        ) : (
-          <s-stack direction="inline" gap="base">
-            <s-text-field
-              label="Value"
-              value={discountValue}
-              disabled={discountBusy ? "" : undefined}
-              onChange={(e) => setDiscountValue(e.target.value ?? "")}
-            />
-            <s-select
-              label="Type"
-              value={discountMode}
-              onChange={(e) => setDiscountMode(e.target.value ?? "pct")}
-            >
-              <s-option value="pct">% of diamond</s-option>
-              <s-option value="flat">₹ flat</s-option>
-            </s-select>
-          </s-stack>
-        )}
+        <s-text-field
+          label="Discount code (e.g. FNF5)"
+          value={discountCode}
+          disabled={Boolean(discountBusy)}
+          onChange={(e) => setDiscountCode(e.target.value ?? "")}
+        />
         <s-button
           onClick={applyDiscount}
-          loading={discountBusy ? "" : undefined}
-          disabled={
-            (discountSubmode === "code" ? !discountCode.trim() : !(parseFloat(discountValue) > 0)) || discountBusy
-              ? ""
-              : undefined
-          }
+          loading={Boolean(discountBusy)}
+          disabled={Boolean(!discountCode.trim() || discountBusy)}
         >
           Apply Discount
         </s-button>
@@ -1277,7 +1357,7 @@ export default function MetafieldManager({ surface = "block" } = {}) {
                   <s-select
                     label="On"
                     value={d.t}
-                    disabled={lineBusy ? "" : undefined}
+                    disabled={Boolean(lineBusy)}
                     onChange={(e) => setRowDiscount(i, di, { t: e.target.value ?? "dia" })}
                   >
                     <s-option value="dia">Diamond</s-option>
@@ -1287,7 +1367,7 @@ export default function MetafieldManager({ surface = "block" } = {}) {
                   <s-select
                     label="Type"
                     value={d.m}
-                    disabled={lineBusy ? "" : undefined}
+                    disabled={Boolean(lineBusy)}
                     onChange={(e) => setRowDiscount(i, di, { m: e.target.value ?? "pct" })}
                   >
                     <s-option value="pct">%</s-option>
@@ -1296,15 +1376,15 @@ export default function MetafieldManager({ surface = "block" } = {}) {
                   <s-number-field
                     label="Value"
                     value={d.v}
-                    disabled={lineBusy ? "" : undefined}
+                    disabled={Boolean(lineBusy)}
                     onChange={(e) => setRowDiscount(i, di, { v: e.target.value ?? "" })}
                   />
-                  <s-button onClick={() => removeRowDiscount(i, di)} disabled={lineBusy ? "" : undefined}>
+                  <s-button onClick={() => removeRowDiscount(i, di)} disabled={Boolean(lineBusy)}>
                     Remove
                   </s-button>
                 </s-stack>
               ))}
-              <s-button onClick={() => addRowDiscount(i)} disabled={lineBusy ? "" : undefined}>
+              <s-button onClick={() => addRowDiscount(i)} disabled={Boolean(lineBusy)}>
                 + Add discount
               </s-button>
             </s-stack>
@@ -1312,8 +1392,8 @@ export default function MetafieldManager({ surface = "block" } = {}) {
           <s-button
             variant="primary"
             onClick={applyLinePricing}
-            loading={lineBusy ? "" : undefined}
-            disabled={lineBusy ? "" : undefined}
+            loading={Boolean(lineBusy)}
+            disabled={Boolean(lineBusy)}
           >
             Apply per-line discounts
           </s-button>
@@ -1365,7 +1445,7 @@ export default function MetafieldManager({ surface = "block" } = {}) {
           <s-select
             label="Repair type"
             value={repairClass}
-            disabled={repairBusy ? "" : undefined}
+            disabled={Boolean(repairBusy)}
             onChange={(e) => {
               // The host hands back the option LABEL for the blank entry, so anything that isn't one
               // of the two real values is treated as "nothing picked".
@@ -1394,8 +1474,8 @@ export default function MetafieldManager({ surface = "block" } = {}) {
           <s-button
             variant="primary"
             onClick={applyRepairClass}
-            loading={repairBusy ? "" : undefined}
-            disabled={!changed || repairBusy ? "" : undefined}
+            loading={Boolean(repairBusy)}
+            disabled={Boolean(!changed || repairBusy)}
           >
             {current ? "Change repair type" : "Start repair"}
           </s-button>
@@ -1424,11 +1504,11 @@ export default function MetafieldManager({ surface = "block" } = {}) {
       );
     }
 
-    const allSelected = !selectedItemIds.length || selectedItemIds.length === repairOrderItems.length;
+    const allSelected = repairOrderItems.length > 0 && shownItemIds.length === repairOrderItems.length;
     // A selection that no longer matches the order -- the reference was edited to point somewhere
     // else -- is worth saying out loud, because until it is re-saved the middleware falls back to
     // every piece.
-    const stale = selectedItemIds.filter((id) => !repairOrderItems.some((li) => li.id === id));
+    const stale = shownItemIds.filter((id) => !repairOrderItems.some((li) => li.id === id));
 
     return (
       <s-section heading="Pieces in for Repair">
@@ -1452,21 +1532,31 @@ export default function MetafieldManager({ surface = "block" } = {}) {
                 // Everything the counter needs to tell two pieces of one order apart, on one line.
                 const bits = [li.sku, li.variantTitle].filter(Boolean).join(" / ");
                 const label = `${li.title}${bits ? ` -- ${bits}` : ""}${li.quantity > 1 ? ` (qty ${li.quantity})` : ""}`;
-                const on = allSelected || selectedItemIds.includes(li.id);
+                const on = shownItemIds.includes(li.id);
                 return (
                   <s-checkbox
                     key={li.id}
                     label={label}
-                    checked={on ? "" : undefined}
-                    disabled={repairItemsBusy ? "" : undefined}
-                    onChange={(e) => {
-                      const want = !!e.target.checked;
-                      // The stored list is always explicit. "Nothing selected" renders as everything
-                      // ticked, so the first untick has to start from the full list rather than from
-                      // an empty one -- otherwise unticking one piece would silently select it.
-                      const base = selectedItemIds.length ? selectedItemIds : repairOrderItems.map((x) => x.id);
+                    checked={Boolean(on)}
+                    disabled={Boolean(repairItemsBusy)}
+                    // onInput, NOT onChange. Polaris fires s-checkbox's `change` when the
+                    // value settles AND the control loses focus, so a tick only registered once
+                    // staff clicked somewhere else — which reads as "the picker doesn't work" and
+                    // then as "it takes several clicks". `input` fires on the click itself.
+                    onInput={(e) => {
+                      // currentTarget is the s-checkbox the handler is bound to. e.target can be
+                      // the inner input inside the component's shadow root.
+                      const want = !!e.currentTarget.checked;
+                      // Always write a LITERAL list, starting from what is on screen. The old code
+                      // fell back to "every id" whenever the stored list was empty, which made the
+                      // last untick land back on the all-ticked state -- so on a one-piece order the
+                      // box could never be unticked at all, and on a two-piece order unticking the
+                      // second one brought the first one back.
                       repairItemsDirty.current = true;
-                      setSelectedItemIds(want ? [...new Set([...base, li.id])] : base.filter((x) => x !== li.id));
+                      setItemsTouched(true);
+                      setSelectedItemIds(want
+                        ? [...new Set([...shownItemIds, li.id])]
+                        : shownItemIds.filter((x) => x !== li.id));
                     }}
                   />
                 );
@@ -1478,6 +1568,11 @@ export default function MetafieldManager({ surface = "block" } = {}) {
               {`${stale.length} previously picked piece(s) are not on ${repairRef} any more. Re-pick and save, or every piece on the order will be used.`}
             </s-text>
           ) : null}
+          {repairOrderItems.length && !shownItemIds.length ? (
+            <s-text tone="critical">
+              No pieces are ticked. Tick the one(s) on the counter -- a repair has to name at least one.
+            </s-text>
+          ) : null}
           {repairOrderItems.length > 1 && allSelected ? (
             <s-text tone="caution">
               {`All ${repairOrderItems.length} pieces are selected. The customer will be emailed about every one of them.`}
@@ -1486,8 +1581,8 @@ export default function MetafieldManager({ surface = "block" } = {}) {
           <s-button
             variant="secondary"
             onClick={applyRepairItems}
-            loading={repairItemsBusy ? "" : undefined}
-            disabled={repairItemsBusy || repairItemsLoading || !repairOrderItems.length ? "" : undefined}
+            loading={Boolean(repairItemsBusy)}
+            disabled={Boolean(repairItemsBusy || repairItemsLoading || !repairOrderItems.length)}
           >
             Save pieces
           </s-button>
@@ -1504,10 +1599,16 @@ export default function MetafieldManager({ surface = "block" } = {}) {
   // makes that boundary visible instead of silent. Discounts are unaffected.
   const creditsAllowed = ctx.scope !== "order";
 
-  // Unified adjustments selector: pick one to reveal its panel (Exchange / Voucher / Discount).
+  // The post-tax adjustments selector: pick one to reveal its panel. It renders directly under the
+  // Adjustments FIELDS now, not at the top of the panel, so the control and the values it writes are
+  // one block. Heading differs from that section's on purpose — two "Adjustments" headings in a row
+  // read as a repeat rather than as a control and its result.
+  //
+  // Discount is NOT in this list any more: it is pre-tax and has its own section at §3. The refund
+  // email moved out too — it belongs with the refund legs it announces, at §2.
   const renderAdjustmentSelector = () => (
     <>
-      <s-section heading="Adjustments">
+      <s-section heading="Apply an Adjustment">
         <s-stack direction="block" gap="base">
           <s-select
             label="Add adjustment"
@@ -1517,20 +1618,19 @@ export default function MetafieldManager({ surface = "block" } = {}) {
             <s-option value="">Select an adjustment to apply…</s-option>
             {creditsAllowed ? <s-option value="exchange">Exchange Note</s-option> : null}
             {creditsAllowed ? <s-option value="voucher">Voucher</s-option> : null}
-            <s-option value="discount">Discount</s-option>
+            {creditsAllowed ? <s-option value="advance">Design Advance</s-option> : null}
           </s-select>
           {creditsAllowed ? null : (
             <s-text tone="subdued">
-              Exchange notes and vouchers can only be applied to a draft order, before it is converted.
-              Apply them on the draft, then convert.
+              Exchange notes, vouchers and design advances can only be applied to a draft order, before
+              it is converted. Apply them on the draft, then convert.
             </s-text>
           )}
         </s-stack>
       </s-section>
       {creditsAllowed && adjType === "exchange" ? renderExcApply() : null}
       {creditsAllowed && adjType === "voucher" ? renderVoucherApply() : null}
-      {adjType === "discount" ? renderDiscountApply() : null}
-      {renderRefundEmail()}
+      {creditsAllowed && adjType === "advance" ? renderAdvanceApply() : null}
     </>
   );
 
@@ -1594,11 +1694,31 @@ export default function MetafieldManager({ surface = "block" } = {}) {
           </s-stack>
         </s-section>
       );
-      // The per-line discount editor belongs WITH the Pricing section (gold rate / making),
-      // so it renders right after it rather than at the top of the panel.
-      if (section.title === "Pricing") {
+      // Every extra panel hangs off the section whose fields it writes, so the order below IS the
+      // order on screen. The three that were action-surface-only stay that way: the inline block is
+      // height-capped, which is why they were never on it.
+      //
+      // §2 — the refund email announces the refund legs directly above it.
+      if (section.title === "Refunds" && surface === "action") {
+        const re = renderRefundEmail();
+        if (re) return [block, <s-stack key="refund-email" direction="block">{re}</s-stack>];
+      }
+      // §3 — both discount controls: the order-level apply, then the per-line editor. Labour is not
+      // written from either; custom.making under Repricing is its only channel.
+      if (section.title === "Discounts") {
+        const extras = [
+          surface === "action" ? <s-stack key="discount-apply" direction="block">{renderDiscountApply()}</s-stack> : null,
+        ];
         const lp = renderLinePricing();
-        if (lp) return [block, <s-stack key="line-pricing" direction="block">{lp}</s-stack>];
+        if (lp) extras.push(<s-stack key="line-pricing" direction="block">{lp}</s-stack>);
+        const kept = extras.filter(Boolean);
+        if (kept.length) return [block, ...kept];
+      }
+      // §5 — the exchange / voucher / design-advance selector, ABOVE the Adjustments fields. You act
+      // first and read the result second: the fields below it are what the selector just wrote, so
+      // putting the control after them made staff scroll past the answer to reach the question.
+      if (section.title === "Adjustments" && surface === "action") {
+        return [<s-stack key="adjustment-selector" direction="block">{renderAdjustmentSelector()}</s-stack>, block];
       }
       // Same idea for the repair class selector: it belongs with the repair fields (the Linked
       // Repair Order it depends on is one of them), not floating at the top of the panel.
@@ -1618,8 +1738,8 @@ export default function MetafieldManager({ surface = "block" } = {}) {
     <s-button
       variant="primary"
       onClick={save}
-      loading={saving ? "" : undefined}
-      disabled={!dirty || saving ? "" : undefined}
+      loading={Boolean(saving)}
+      disabled={Boolean(!dirty || saving)}
     >
       Save
     </s-button>
@@ -1632,15 +1752,14 @@ export default function MetafieldManager({ surface = "block" } = {}) {
       <s-admin-action heading="Jewellery Workspace — all fields">
         <s-stack direction="block" gap="large-100">
           {renderBanners()}
-          {renderAdjustmentSelector()}
           {renderSections()}
         </s-stack>
         <s-button
           slot="primary-action"
           variant="primary"
           onClick={save}
-          loading={saving ? "" : undefined}
-          disabled={!dirty || saving ? "" : undefined}
+          loading={Boolean(saving)}
+          disabled={Boolean(!dirty || saving)}
         >
           Save
         </s-button>
@@ -1674,6 +1793,12 @@ export default function MetafieldManager({ surface = "block" } = {}) {
   );
 }
 
+// Polaris web components take `disabled`, `loading`, `checked` and friends as BOOLEAN PROPERTIES,
+// not as HTML attributes whose mere presence means true. Preact assigns a property when the element
+// has one, so the `cond ? "" : undefined` spelling set them to an EMPTY STRING — falsy — and every
+// one of them silently did nothing: no button ever disabled, no spinner ever showed, and the repair
+// piece checkboxes never rendered ticked however the state read. Always pass a real boolean.
+
 function renderReadOnly(field, value) {
   return (
     <s-stack key={field.key} direction="block" gap="small-500">
@@ -1697,8 +1822,8 @@ function renderRemovableCode(field, value, onRemove, busy, disabled) {
           tone="critical"
           accessibilityLabel={`Remove ${value}`}
           onClick={onRemove}
-          loading={busy ? "" : undefined}
-          disabled={disabled ? "" : undefined}
+          loading={Boolean(busy)}
+          disabled={Boolean(disabled)}
         >
           ✕
         </s-button>
@@ -1708,7 +1833,7 @@ function renderRemovableCode(field, value, onRemove, busy, disabled) {
 }
 
 function renderEditable(field, type, choices, value, setField, saving, forcedOff) {
-  const disabled = saving || forcedOff ? "" : undefined;
+  const disabled = Boolean(saving || forcedOff);
   // The blank dropdown entry is <s-option value="">—</s-option>, but the host hands back the
   // OPTION LABEL rather than its empty value — so clearing a choice field yielded the literal
   // "—". That is not empty, so save() WROTE it instead of deleting the metafield, and Shopify
