@@ -1,0 +1,3848 @@
+{
+ "_comment": "Pricing-only copy of every order on auracarat.myshopify.com, fetched 2026-09-30 with status=any. Customer details stripped. Line-item properties are immutable once an order exists, so for #1067 and older this is final. Consumed by exchange-recon-review.js.",
+ "_fetched": "2026-09-30",
+ "orders": [
+  {
+   "id": 7366430949633,
+   "name": "#1074",
+   "created_at": "2026-09-22T10:20:53+05:30",
+   "financial_status": "paid",
+   "cancelled_at": "2026-09-29T20:43:00+05:30",
+   "tags": "deposit:fully-paid, i1:10000@cash@2026-09-16, i2:1@card@2026-09-21, i3:41280.14@cash@2026-09-22, paid:Rs51281, pmode-advance:cash, pmode-final:cash, pmodes:cash/card, total:Rs51281",
+   "taxes_included": true,
+   "total_price": "51281.14",
+   "refunds": [],
+   "line_items": [
+    {
+     "id": 18134250520833,
+     "title": "Aabha Halo necklace",
+     "sku": "NK00053|W|14|VVS-VS-EFG|H|16|0.77|NA",
+     "quantity": 1,
+     "price": "51281.14",
+     "total_discount": "0.00",
+     "variant_id": 48578141913345,
+     "product_id": 9121806876929,
+     "properties": [
+      {
+       "name": "_jewel_code",
+       "value": ""
+      },
+      {
+       "name": "_gross_wt",
+       "value": "2.573"
+      },
+      {
+       "name": "_net_wt",
+       "value": "2.419"
+      },
+      {
+       "name": "_diamond_cts",
+       "value": "0.77"
+      },
+      {
+       "name": "_making_rate",
+       "value": "2000.00"
+      },
+      {
+       "name": "Gold",
+       "value": "Rs21849.31"
+      },
+      {
+       "name": "Diamond",
+       "value": "Rs23100.00"
+      },
+      {
+       "name": "Making",
+       "value": "Rs4838.20"
+      },
+      {
+       "name": "Gross Value",
+       "value": "Rs51281.14"
+      },
+      {
+       "name": "_gold_rate",
+       "value": "9032.0"
+      }
+     ],
+     "discount_allocations": [],
+     "tax_lines": []
+    }
+   ]
+  },
+  {
+   "id": 7320736628993,
+   "name": "#1073",
+   "created_at": "2026-08-29T16:30:29+05:30",
+   "financial_status": "paid",
+   "cancelled_at": null,
+   "tags": "cn-exp:31-08-2027, cn-iss:31-08-2026, cn-issued, cn-num:VCH27-KAHSR-0002, cn-val:13664.00, deposit:fully-paid, i1:55000@card@, in-store-sale, paid:Rs55000, partial-june, pmode-advance:card, pmodes:card, r1:13664@card@2026-08-05, refunded:Rs13664, total:Rs41336",
+   "taxes_included": true,
+   "total_price": "41336.23",
+   "refunds": [],
+   "line_items": [
+    {
+     "id": 18040915132673,
+     "title": "Fiona Flare Loose Bangle",
+     "sku": "BC00021A|Y|18|VS-EF|H|6|NA|0.31",
+     "quantity": 1,
+     "price": "41336.23",
+     "total_discount": "0.00",
+     "variant_id": 50202732757249,
+     "product_id": 9317360959745,
+     "properties": [
+      {
+       "name": "Diamond",
+       "value": "Rs12400.00"
+      },
+      {
+       "name": "_jewel_code",
+       "value": ""
+      },
+      {
+       "name": "_gross_wt",
+       "value": "2.202"
+      },
+      {
+       "name": "_net_wt",
+       "value": "2.140"
+      },
+      {
+       "name": "_diamond_cts",
+       "value": "0.31"
+      },
+      {
+       "name": "Gold",
+       "value": "Rs23024.26"
+      },
+      {
+       "name": "Making",
+       "value": "Rs8560.00"
+      },
+      {
+       "name": "Taxable Value",
+       "value": "Rs40132.26"
+      },
+      {
+       "name": "GST",
+       "value": "Rs1203.97"
+      },
+      {
+       "name": "Gross Value",
+       "value": "Rs45303.79"
+      },
+      {
+       "name": "Discount Applied",
+       "value": "Rs3852.00"
+      },
+      {
+       "name": "Diamond (After Discount)",
+       "value": "Rs12400.00"
+      },
+      {
+       "name": "Making (After Discount)",
+       "value": "Rs4708.00"
+      },
+      {
+       "name": "_gold_rate",
+       "value": "10759"
+      }
+     ],
+     "discount_allocations": [],
+     "tax_lines": []
+    }
+   ]
+  },
+  {
+   "id": 7317328396545,
+   "name": "#1072",
+   "created_at": "2026-08-27T21:23:33+05:30",
+   "financial_status": "paid",
+   "cancelled_at": null,
+   "tags": "deposit:fully-paid, i1:263346@card@2026-08-27, in-store-sale, paid:Rs263346, pmodes:card, total:Rs263347",
+   "taxes_included": true,
+   "total_price": "263346.71",
+   "refunds": [],
+   "line_items": [
+    {
+     "id": 18033726259457,
+     "title": "Selene Lunar cascading earring",
+     "sku": "ER00084|W|14|VVS-VS-EFG|H|NA|5.75|NA",
+     "quantity": 1,
+     "price": "263346.71",
+     "total_discount": "0.00",
+     "variant_id": 48578124710145,
+     "product_id": 9121805107457,
+     "properties": [
+      {
+       "name": "_jewel_code",
+       "value": ""
+      },
+      {
+       "name": "_gross_wt",
+       "value": "5.090"
+      },
+      {
+       "name": "_net_wt",
+       "value": "3.940"
+      },
+      {
+       "name": "_diamond_cts",
+       "value": "5.75"
+      },
+      {
+       "name": "Gold",
+       "value": "Rs37796.42"
+      },
+      {
+       "name": "Diamond",
+       "value": "Rs230000.00"
+      },
+      {
+       "name": "Making",
+       "value": "Rs7880.00"
+      },
+      {
+       "name": "Taxable Value",
+       "value": "Rs255676.42"
+      },
+      {
+       "name": "GST",
+       "value": "Rs7670.29"
+      },
+      {
+       "name": "Gross Value",
+       "value": "Rs283946.71"
+      },
+      {
+       "name": "Discount Applied",
+       "value": "Rs20000.00"
+      },
+      {
+       "name": "Diamond (After Discount)",
+       "value": "Rs210000.00"
+      },
+      {
+       "name": "Making (After Discount)",
+       "value": "Rs7880.00"
+      },
+      {
+       "name": "_gold_rate",
+       "value": "9593.0"
+      }
+     ],
+     "discount_allocations": [],
+     "tax_lines": []
+    }
+   ]
+  },
+  {
+   "id": 7316508737793,
+   "name": "#1071",
+   "created_at": "2026-08-27T18:35:37+05:30",
+   "financial_status": "paid",
+   "cancelled_at": null,
+   "tags": "deposit:fully-paid, i1:26862.77@online_link@, paid:Rs26863, pmode-advance:online_link, pmodes:online_link, total:Rs26863",
+   "taxes_included": true,
+   "total_price": "26862.77",
+   "refunds": [],
+   "line_items": [
+    {
+     "id": 18032558997761,
+     "title": "Avira 0.30ct Lab-Grown Diamond Ring",
+     "sku": "RG00118|P|14|VS-EF|H|9|NA|0.32",
+     "quantity": 1,
+     "price": "26862.77",
+     "total_discount": "0.00",
+     "variant_id": 50238447550721,
+     "product_id": 9326639907073,
+     "properties": [
+      {
+       "name": "_jewel_code",
+       "value": ""
+      },
+      {
+       "name": "_gross_wt",
+       "value": "1.610"
+      },
+      {
+       "name": "_net_wt",
+       "value": "1.546"
+      },
+      {
+       "name": "_diamond_cts",
+       "value": "0.32"
+      },
+      {
+       "name": "Diamond",
+       "value": "Rs9600.00"
+      },
+      {
+       "name": "Gold",
+       "value": "Rs13388.36"
+      },
+      {
+       "name": "Making",
+       "value": "Rs3092.00"
+      },
+      {
+       "name": "Taxable Value",
+       "value": "Rs26080.36"
+      },
+      {
+       "name": "GST",
+       "value": "Rs782.41"
+      },
+      {
+       "name": "Gross Value",
+       "value": "Rs26862.77"
+      },
+      {
+       "name": "Discount Applied",
+       "value": "Rs0.00"
+      },
+      {
+       "name": "Diamond (After Discount)",
+       "value": "Rs9600.00"
+      },
+      {
+       "name": "Making (After Discount)",
+       "value": "Rs3092.00"
+      },
+      {
+       "name": "_gold_rate",
+       "value": "8660"
+      }
+     ],
+     "discount_allocations": [],
+     "tax_lines": []
+    }
+   ]
+  },
+  {
+   "id": 7290332676353,
+   "name": "#1070",
+   "created_at": "2026-08-14T14:10:36+05:30",
+   "financial_status": "paid",
+   "cancelled_at": null,
+   "tags": "deposit:fully-paid, i1:25000@card@, i2:16340.06@card@, paid:Rs41340, pmode-advance:card, pmodes:card, total:Rs41340",
+   "taxes_included": true,
+   "total_price": "41340.06",
+   "refunds": [],
+   "line_items": [
+    {
+     "id": 17979748319489,
+     "title": "Euro chain",
+     "sku": "CHNSCBL0001|W|18|NA|H|24|NA|NA",
+     "quantity": 1,
+     "price": "41340.06",
+     "total_discount": "0.00",
+     "variant_id": 50171201028353,
+     "product_id": 9307491533057,
+     "properties": [
+      {
+       "name": "_jewel_code",
+       "value": ""
+      },
+      {
+       "name": "_gross_wt",
+       "value": "3.230"
+      },
+      {
+       "name": "_net_wt",
+       "value": "3.230"
+      },
+      {
+       "name": "Gold",
+       "value": "Rs34906.61"
+      },
+      {
+       "name": "Making",
+       "value": "Rs5229.37"
+      },
+      {
+       "name": "Taxable Value",
+       "value": "Rs40135.98"
+      },
+      {
+       "name": "GST",
+       "value": "Rs1204.08"
+      },
+      {
+       "name": "Gross Value",
+       "value": "Rs41340.06"
+      },
+      {
+       "name": "Discount Applied",
+       "value": "Rs0.00"
+      },
+      {
+       "name": "Diamond (After Discount)",
+       "value": "Rs0.00"
+      },
+      {
+       "name": "Making (After Discount)",
+       "value": "Rs5229.37"
+      },
+      {
+       "name": "_gold_rate",
+       "value": "10807"
+      }
+     ],
+     "discount_allocations": [],
+     "tax_lines": []
+    }
+   ]
+  },
+  {
+   "id": 7279391637761,
+   "name": "#1069",
+   "created_at": "2026-08-08T16:14:51+05:30",
+   "financial_status": "paid",
+   "cancelled_at": null,
+   "tags": "deposit:fully-paid, discount-applied, i1:135000@online_link@2026-07-18, i2:187068.28@online_link@2026-08-08, paid:Rs509136, pmode-advance:online_link, pmodes:online_link, sync-payment, total:Rs322068",
+   "taxes_included": true,
+   "total_price": "322068.28",
+   "refunds": [],
+   "line_items": [
+    {
+     "id": 17957842452737,
+     "title": "Elaris 6.00ct Cushion Lab Diamond Earring",
+     "sku": "ER00106|Y|18|VVS-VS-EFG|H|NA|6.03|NA",
+     "quantity": 1,
+     "price": "322068.28",
+     "total_discount": "0.00",
+     "variant_id": 50162239602945,
+     "product_id": 9305795330305,
+     "properties": [
+      {
+       "name": "_jewel_code",
+       "value": ""
+      },
+      {
+       "name": "_net_wt",
+       "value": "5.450"
+      },
+      {
+       "name": "_diamond_cts",
+       "value": "6.03"
+      },
+      {
+       "name": "Gold",
+       "value": "Rs61677.65"
+      },
+      {
+       "name": "Diamond",
+       "value": "Rs301500.00"
+      },
+      {
+       "name": "Making",
+       "value": "Rs9810.00"
+      },
+      {
+       "name": "Taxable Value",
+       "value": "Rs312687.65"
+      },
+      {
+       "name": "GST",
+       "value": "Rs9380.63"
+      },
+      {
+       "name": "Gross Value",
+       "value": "Rs384177.28"
+      },
+      {
+       "name": "Discount Applied",
+       "value": "Rs60300.00"
+      },
+      {
+       "name": "Diamond (After Discount)",
+       "value": "Rs241200.00"
+      },
+      {
+       "name": "Making (After Discount)",
+       "value": "Rs9810.00"
+      },
+      {
+       "name": "_gold_rate",
+       "value": "11317.0"
+      }
+     ],
+     "discount_allocations": [],
+     "tax_lines": [
+      {
+       "price": "0.00"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": 7269404475649,
+   "name": "#1068",
+   "created_at": "2026-08-04T15:22:03+05:30",
+   "financial_status": "paid",
+   "cancelled_at": null,
+   "tags": "deposit:fully-paid, discount-applied, paid:Rs62710, pmode-advance:gokwik_link, pmode-final:card, total:Rs62710",
+   "taxes_included": true,
+   "total_price": "62709.60",
+   "refunds": [],
+   "line_items": [
+    {
+     "id": 17939779420417,
+     "title": "Lotus Marquise Pendant",
+     "sku": "PD00037|Y|18|VVSVS|H|NA|0.21|NA",
+     "quantity": 1,
+     "price": "39767.13",
+     "total_discount": "0.00",
+     "variant_id": 49930472915201,
+     "product_id": 9296157049089,
+     "properties": [
+      {
+       "name": "Gold",
+       "value": "Rs27700.86"
+      },
+      {
+       "name": "Diamond",
+       "value": "Rs8400.00"
+      },
+      {
+       "name": "Diamond (After Discount)",
+       "value": "Rs8400.00"
+      },
+      {
+       "name": "Making",
+       "value": "Rs5020.00"
+      },
+      {
+       "name": "Making (After Discount)",
+       "value": "Rs2508.00"
+      },
+      {
+       "name": "Gross Value",
+       "value": "Rs42354.49"
+      },
+      {
+       "name": "Taxable Value",
+       "value": "Rs38608.86"
+      },
+      {
+       "name": "GST",
+       "value": "Rs1158.27"
+      },
+      {
+       "name": "Discount Applied",
+       "value": "Rs2512.00"
+      },
+      {
+       "name": "_gross_wt",
+       "value": "2.550"
+      },
+      {
+       "name": "_net_wt",
+       "value": "2.508"
+      },
+      {
+       "name": "_diamond_cts",
+       "value": "0.21"
+      },
+      {
+       "name": "_gemstone_cts",
+       "value": "0.00"
+      },
+      {
+       "name": "_jewel_code",
+       "value": ""
+      },
+      {
+       "name": "_gold_rate",
+       "value": "11045"
+      }
+     ],
+     "discount_allocations": [],
+     "tax_lines": []
+    },
+    {
+     "id": 17939779453185,
+     "title": "Yellow Gold Chain 18K CHN00003",
+     "sku": "CHN00003|Y|18|NA|NA|16\"|NA|NA",
+     "quantity": 1,
+     "price": "22942.47",
+     "total_discount": "0.00",
+     "variant_id": 48646458835201,
+     "product_id": 9130178052353,
+     "properties": [
+      {
+       "name": "Gold",
+       "value": "Rs20394.24"
+      },
+      {
+       "name": "Diamond",
+       "value": "Rs0.00"
+      },
+      {
+       "name": "Diamond (After Discount)",
+       "value": "Rs0.00"
+      },
+      {
+       "name": "Making",
+       "value": "Rs1880.00"
+      },
+      {
+       "name": "Making (After Discount)",
+       "value": "Rs1880.00"
+      },
+      {
+       "name": "Gross Value",
+       "value": "Rs22942.47"
+      },
+      {
+       "name": "Taxable Value",
+       "value": "Rs22274.24"
+      },
+      {
+       "name": "GST",
+       "value": "Rs668.23"
+      },
+      {
+       "name": "Discount Applied",
+       "value": "Rs0.00"
+      },
+      {
+       "name": "_gross_wt",
+       "value": "1.880"
+      },
+      {
+       "name": "_net_wt",
+       "value": "1.880"
+      },
+      {
+       "name": "_diamond_cts",
+       "value": "0.00"
+      },
+      {
+       "name": "_gemstone_cts",
+       "value": "0.00"
+      },
+      {
+       "name": "_jewel_code",
+       "value": ""
+      },
+      {
+       "name": "_gold_rate",
+       "value": "10848"
+      }
+     ],
+     "discount_allocations": [],
+     "tax_lines": []
+    }
+   ]
+  },
+  {
+   "id": 7256293081345,
+   "name": "#1067",
+   "created_at": "2026-07-28T18:20:19+05:30",
+   "financial_status": "paid",
+   "cancelled_at": null,
+   "tags": "discount-applied, in-stock, sync-payment",
+   "taxes_included": true,
+   "total_price": "74288.67",
+   "refunds": [],
+   "line_items": [
+    {
+     "id": 17913491128577,
+     "title": "Alexia Earrings",
+     "sku": "ER00100|W|18|VVSVSEFG|H|NA|2.01|NA",
+     "quantity": 1,
+     "price": "74288.67",
+     "total_discount": "0.00",
+     "variant_id": 48671507054849,
+     "product_id": 9132059132161,
+     "properties": [
+      {
+       "name": "Gold",
+       "value": "Rs15364.92"
+      },
+      {
+       "name": "Diamond",
+       "value": "Rs60300.00"
+      },
+      {
+       "name": "Making",
+       "value": "Rs2490.00"
+      },
+      {
+       "name": "_jewel_code",
+       "value": ""
+      },
+      {
+       "name": "_gross_wt",
+       "value": "1.780"
+      },
+      {
+       "name": "_net_wt",
+       "value": "1.380"
+      },
+      {
+       "name": "_diamond_cts",
+       "value": "2.01"
+      },
+      {
+       "name": "Taxable Value",
+       "value": "Rs72124.92"
+      },
+      {
+       "name": "GST",
+       "value": "Rs2163.75"
+      },
+      {
+       "name": "Gross Value",
+       "value": "Rs77394.12"
+      },
+      {
+       "name": "Discount Applied",
+       "value": "Rs3015.00"
+      },
+      {
+       "name": "Diamond (After Discount)",
+       "value": "Rs57285.00"
+      },
+      {
+       "name": "_gold_rate",
+       "value": "11134.0"
+      }
+     ],
+     "discount_allocations": [],
+     "tax_lines": []
+    }
+   ]
+  },
+  {
+   "id": 7252565590273,
+   "name": "#1066",
+   "created_at": "2026-07-26T16:27:49+05:30",
+   "financial_status": "paid",
+   "cancelled_at": null,
+   "tags": "deposit:fully-paid, in-stock, paid:Rs109670, partial-june, pmode-advance:upi, pmode-final:upi, total:Rs54835",
+   "taxes_included": true,
+   "total_price": "54834.96",
+   "refunds": [],
+   "line_items": [
+    {
+     "id": 17905921261825,
+     "title": "Eirene Huggie Earrings",
+     "sku": "ER00011|Y|18|VVSVS-EFG|H|NA|0.34|NA",
+     "quantity": 1,
+     "price": "31927.35",
+     "total_discount": "0.00",
+     "variant_id": 48183142383873,
+     "product_id": 9047325933825,
+     "properties": [
+      {
+       "name": "Gold",
+       "value": "Rs18389.34"
+      },
+      {
+       "name": "Diamond",
+       "value": "Rs11165.00"
+      },
+      {
+       "name": "Making",
+       "value": "Rs1443.09"
+      },
+      {
+       "name": "Gross Value",
+       "value": "Rs31927.35"
+      },
+      {
+       "name": "Taxable Value",
+       "value": "Rs30997.43"
+      },
+      {
+       "name": "GST",
+       "value": "Rs929.92"
+      },
+      {
+       "name": "Discount Applied",
+       "value": "Rs0.00"
+      },
+      {
+       "name": "_gross_wt",
+       "value": "1.762"
+      },
+      {
+       "name": "_net_wt",
+       "value": "1.698"
+      },
+      {
+       "name": "_diamond_cts",
+       "value": "0.32"
+      },
+      {
+       "name": "_gemstone_cts",
+       "value": "0.00"
+      },
+      {
+       "name": "_jewel_code",
+       "value": ""
+      },
+      {
+       "name": "_gold_rate",
+       "value": "10830"
+      }
+     ],
+     "discount_allocations": [],
+     "tax_lines": []
+    },
+    {
+     "id": 17905921294593,
+     "title": "Yellow Gold Chain 18K CHN00002",
+     "sku": "CHN00002|Y|18|NA|NA|16\"|NA|NA",
+     "quantity": 1,
+     "price": "22907.61",
+     "total_discount": "0.00",
+     "variant_id": 48646458802433,
+     "product_id": 9130178019585,
+     "properties": [
+      {
+       "name": "Gold",
+       "value": "Rs20360.40"
+      },
+      {
+       "name": "Diamond",
+       "value": "Rs0.00"
+      },
+      {
+       "name": "Making",
+       "value": "Rs1880.00"
+      },
+      {
+       "name": "Gross Value",
+       "value": "Rs22907.61"
+      },
+      {
+       "name": "Taxable Value",
+       "value": "Rs22240.40"
+      },
+      {
+       "name": "GST",
+       "value": "Rs667.21"
+      },
+      {
+       "name": "Discount Applied",
+       "value": "Rs0.00"
+      },
+      {
+       "name": "_gross_wt",
+       "value": "1.880"
+      },
+      {
+       "name": "_net_wt",
+       "value": "1.880"
+      },
+      {
+       "name": "_diamond_cts",
+       "value": "0.00"
+      },
+      {
+       "name": "_gemstone_cts",
+       "value": "0.00"
+      },
+      {
+       "name": "_jewel_code",
+       "value": ""
+      },
+      {
+       "name": "_gold_rate",
+       "value": "10830"
+      }
+     ],
+     "discount_allocations": [],
+     "tax_lines": []
+    }
+   ]
+  },
+  {
+   "id": 7230179705089,
+   "name": "#1065",
+   "created_at": "2026-07-14T15:27:34+05:30",
+   "financial_status": "paid",
+   "cancelled_at": null,
+   "tags": "deposit:fully-paid, paid:Rs88962, pmode-final:card, total:Rs88962",
+   "taxes_included": true,
+   "total_price": "88961.61",
+   "refunds": [],
+   "line_items": [
+    {
+     "id": 17859987538177,
+     "title": "Infinity Rectangle Hoop Earrings",
+     "sku": "ER00021|W|18|VVSVS-EFG|H|NA|0.88|NA",
+     "quantity": 1,
+     "price": "88961.61",
+     "total_discount": "0.00",
+     "variant_id": 48093895000321,
+     "product_id": 9035743658241,
+     "properties": [
+      {
+       "name": "_jewel_code",
+       "value": "240"
+      },
+      {
+       "name": "_gross_wt",
+       "value": "4.069"
+      },
+      {
+       "name": "_net_wt",
+       "value": "3.893"
+      },
+      {
+       "name": "_diamond_cts",
+       "value": "0.88"
+      },
+      {
+       "name": "Gold",
+       "value": "Rs42877.50"
+      },
+      {
+       "name": "Diamond",
+       "value": "Rs39600.00"
+      },
+      {
+       "name": "Making",
+       "value": "Rs3893.00"
+      },
+      {
+       "name": "Gross Value",
+       "value": "Rs88961.62"
+      },
+      {
+       "name": "_gold_rate",
+       "value": "11014.0"
+      }
+     ],
+     "discount_allocations": [],
+     "tax_lines": []
+    }
+   ]
+  },
+  {
+   "id": 7224105173249,
+   "name": "#1064",
+   "created_at": "2026-07-11T12:36:09+05:30",
+   "financial_status": "paid",
+   "cancelled_at": null,
+   "tags": "deposit:fully-paid, in-stock, paid:Rs21639, total:Rs21639",
+   "taxes_included": true,
+   "total_price": "21639.02",
+   "refunds": [],
+   "line_items": [
+    {
+     "id": 17848100421889,
+     "title": "Rose Gold Elastic Bangle 18K",
+     "sku": "ELBG00003|P|18|NA|NA|2.4|NA|NA",
+     "quantity": 1,
+     "price": "21639.02",
+     "total_discount": "0.00",
+     "variant_id": 48646459490561,
+     "product_id": 9130178576641,
+     "properties": [
+      {
+       "name": "_jewel_code",
+       "value": ""
+      },
+      {
+       "name": "_gross_wt",
+       "value": "1.740"
+      },
+      {
+       "name": "_net_wt",
+       "value": "1.740"
+      },
+      {
+       "name": "Gold",
+       "value": "Rs19249.62"
+      },
+      {
+       "name": "Making",
+       "value": "Rs1740.00"
+      },
+      {
+       "name": "_gold_rate",
+       "value": "11063.0"
+      }
+     ],
+     "discount_allocations": [],
+     "tax_lines": []
+    }
+   ]
+  },
+  {
+   "id": 7197127278849,
+   "name": "#1063",
+   "created_at": "2026-06-27T10:47:46+05:30",
+   "financial_status": "paid",
+   "cancelled_at": null,
+   "tags": "cn-exp:27-06-2027, cn-iss:27-06-2026, cn-issued, cn-num:VCH27-KAHSR-0001, cn-val:2355.00, deposit:fully-paid, exc-applied, exc-num:EXC27-KAHSR-0001, exc-original:#1060, paid:Rs44686, reprice, total:Rs44686",
+   "taxes_included": true,
+   "total_price": "44686.41",
+   "refunds": [],
+   "line_items": [
+    {
+     "id": 17793568375041,
+     "title": "Orchid Round 1.06ct Lab Grown Diamond stud Earring",
+     "sku": "ER00061|P|14|VVSVSEFG|H|NA|1.06|NA",
+     "quantity": 1,
+     "price": "44686.41",
+     "total_discount": "0.00",
+     "variant_id": 48578107965697,
+     "product_id": 9121803272449,
+     "properties": [
+      {
+       "name": "_jewel_code",
+       "value": ""
+      },
+      {
+       "name": "_diamond_cts",
+       "value": "1.06"
+      },
+      {
+       "name": "Diamond",
+       "value": "Rs31800.00"
+      },
+      {
+       "name": "Making",
+       "value": "Rs1200.00"
+      },
+      {
+       "name": "Gold",
+       "value": "Rs10384.86"
+      },
+      {
+       "name": "Taxable Value",
+       "value": "Rs43384.86"
+      },
+      {
+       "name": "GST",
+       "value": "Rs1301.55"
+      },
+      {
+       "name": "Gross Value",
+       "value": "Rs44686.41"
+      },
+      {
+       "name": "Discount Applied",
+       "value": "Rs0.00"
+      },
+      {
+       "name": "_gold_rate",
+       "value": "8771"
+      }
+     ],
+     "discount_allocations": [],
+     "tax_lines": []
+    }
+   ]
+  },
+  {
+   "id": 7194050625793,
+   "name": "#1062",
+   "created_at": "2026-06-25T20:47:13+05:30",
+   "financial_status": "paid",
+   "cancelled_at": null,
+   "tags": "deposit:fully-paid, paid:Rs156110, pmode-advance:bank transfer, pmode-final:cash, total:Rs156111",
+   "taxes_included": true,
+   "total_price": "156110.92",
+   "refunds": [],
+   "line_items": [
+    {
+     "id": 17787196801281,
+     "title": "Dior Lab Diamond Band",
+     "sku": "RG00097|W|18|VVSVSEFG|H|12|0.64|NA",
+     "quantity": 1,
+     "price": "156110.92",
+     "total_discount": "0.00",
+     "variant_id": 48578353201409,
+     "product_id": 9121816838401,
+     "properties": [
+      {
+       "name": "_jewel_code",
+       "value": ""
+      },
+      {
+       "name": "_gross_wt",
+       "value": "9.360"
+      },
+      {
+       "name": "_net_wt",
+       "value": "9.232"
+      },
+      {
+       "name": "_diamond_cts",
+       "value": "0.64"
+      },
+      {
+       "name": "Diamond",
+       "value": "Rs19200.00"
+      },
+      {
+       "name": "Making",
+       "value": "Rs16964.00"
+      },
+      {
+       "name": "Gold",
+       "value": "Rs115400.00"
+      },
+      {
+       "name": "Taxable Value",
+       "value": "Rs151564.00"
+      },
+      {
+       "name": "GST",
+       "value": "Rs4546.92"
+      },
+      {
+       "name": "Gross Value",
+       "value": "Rs156110.92"
+      },
+      {
+       "name": "Discount Applied",
+       "value": "Rs0.00"
+      },
+      {
+       "name": "_gold_rate",
+       "value": "12500"
+      }
+     ],
+     "discount_allocations": [],
+     "tax_lines": [
+      {
+       "price": "0.00"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": 7145610739969,
+   "name": "#1061",
+   "created_at": "2026-06-20T16:55:01+05:30",
+   "financial_status": "paid",
+   "cancelled_at": null,
+   "tags": "deposit:fully-paid, in-store-sale, paid:Rs36968, pmode-advance:upi, pmode-final:upi, total:Rs36968",
+   "taxes_included": true,
+   "total_price": "36967.99",
+   "refunds": [],
+   "line_items": [
+    {
+     "id": 17695558861057,
+     "title": "Yellow Gold Paper Clip Chain 14K",
+     "sku": "CHN00008|Y|14|NA|NA|16\"|NA|NA",
+     "quantity": 1,
+     "price": "36967.99",
+     "total_discount": "0.00",
+     "variant_id": 48646459064577,
+     "product_id": 9130178248961,
+     "properties": [
+      {
+       "name": "_jewel_code",
+       "value": ""
+      },
+      {
+       "name": "Making",
+       "value": "Rs3750.00"
+      },
+      {
+       "name": "Gold",
+       "value": "Rs32141.25"
+      },
+      {
+       "name": "Taxable Value",
+       "value": "Rs35891.25"
+      },
+      {
+       "name": "GST",
+       "value": "Rs1076.74"
+      },
+      {
+       "name": "Gross Value",
+       "value": "Rs36967.99"
+      },
+      {
+       "name": "Discount Applied",
+       "value": "Rs0.00"
+      },
+      {
+       "name": "_gold_rate",
+       "value": "8571"
+      }
+     ],
+     "discount_allocations": [],
+     "tax_lines": []
+    }
+   ]
+  },
+  {
+   "id": 7119885631745,
+   "name": "#1060",
+   "created_at": "2026-06-19T18:36:36+05:30",
+   "financial_status": "paid",
+   "cancelled_at": null,
+   "tags": "deposit:fully-paid, exc-applied-to:#D154, exc-given, exc-iss:24-06-2026, exc-num:EXC27-KAHSR-0001, exc-val:47041.00, in-store-sale, paid:Rs47041, pmode-final:card, reprice, total:Rs47042",
+   "taxes_included": true,
+   "total_price": "47041.90",
+   "refunds": [],
+   "line_items": [
+    {
+     "id": 17644604784897,
+     "title": "Labyrinth Pear Earring",
+     "sku": "ER00056|P|14|VVSVSEFG|H|NA|0.74|NA",
+     "quantity": 1,
+     "price": "47041.90",
+     "total_discount": "0.00",
+     "variant_id": 48578104525057,
+     "product_id": 9121802813697,
+     "properties": [
+      {
+       "name": "_jewel_code",
+       "value": ""
+      },
+      {
+       "name": "_gross_wt",
+       "value": "1.570"
+      },
+      {
+       "name": "_net_wt",
+       "value": "1.422"
+      },
+      {
+       "name": "_diamond_cts",
+       "value": "0.74"
+      },
+      {
+       "name": "Gold",
+       "value": "Rs12673.75"
+      },
+      {
+       "name": "Diamond",
+       "value": "Rs31200.00"
+      },
+      {
+       "name": "Making",
+       "value": "Rs1798.00"
+      },
+      {
+       "name": "_gold_rate",
+       "value": "8912.62"
+      }
+     ],
+     "discount_allocations": [],
+     "tax_lines": []
+    }
+   ]
+  },
+  {
+   "id": 7115926634753,
+   "name": "#1059",
+   "created_at": "2026-06-17T20:13:08+05:30",
+   "financial_status": "paid",
+   "cancelled_at": null,
+   "tags": "deposit:partial, in-store-sale, paid:Rs72000, pending:Rs32548, pmode-advance:card, pmode-final:card, total:Rs104549",
+   "taxes_included": true,
+   "total_price": "104548.71",
+   "refunds": [],
+   "line_items": [
+    {
+     "id": 17636666048769,
+     "title": "Arabesque Elongated Cushion 1.04ct ring",
+     "sku": "RG00110|W|18|VVSVSEFG|H|12\"|1.04|1.04",
+     "quantity": 1,
+     "price": "104548.71",
+     "total_discount": "0.00",
+     "variant_id": 49269029896449,
+     "product_id": 9193806627073,
+     "properties": [
+      {
+       "name": "Diamond",
+       "value": "Rs52000.00"
+      },
+      {
+       "name": "Making",
+       "value": "Rs7000.00"
+      },
+      {
+       "name": "_jewel_code",
+       "value": ""
+      },
+      {
+       "name": "_gross_wt",
+       "value": "3.810"
+      },
+      {
+       "name": "_net_wt",
+       "value": "3.602"
+      },
+      {
+       "name": "_diamond_cts",
+       "value": "1.04"
+      },
+      {
+       "name": "Gold",
+       "value": "Rs42503.60"
+      },
+      {
+       "name": "Taxable Value",
+       "value": "Rs101503.60"
+      },
+      {
+       "name": "GST",
+       "value": "Rs3045.11"
+      },
+      {
+       "name": "Gross Value",
+       "value": "Rs104548.71"
+      },
+      {
+       "name": "Discount Applied",
+       "value": "Rs0.00"
+      },
+      {
+       "name": "_gold_rate",
+       "value": "11800"
+      }
+     ],
+     "discount_allocations": [],
+     "tax_lines": []
+    }
+   ]
+  },
+  {
+   "id": 7115041407233,
+   "name": "#1058",
+   "created_at": "2026-06-17T18:45:25+05:30",
+   "financial_status": "paid",
+   "cancelled_at": null,
+   "tags": "deposit:fully-paid, paid:Rs97868, pmode-final:online_link, total:Rs97868",
+   "taxes_included": true,
+   "total_price": "97868.05",
+   "refunds": [],
+   "line_items": [
+    {
+     "id": 17635098001665,
+     "title": "Pegasus Earring",
+     "sku": "ERH00001|Y|18|SI|N|NA|0.86|NA",
+     "quantity": 1,
+     "price": "97868.05",
+     "total_discount": "0.00",
+     "variant_id": 49269027045633,
+     "product_id": 9193806430465,
+     "properties": [
+      {
+       "name": "Diamond",
+       "value": "Rs60200.00"
+      },
+      {
+       "name": "Making",
+       "value": "Rs7000.00"
+      },
+      {
+       "name": "_jewel_code",
+       "value": ""
+      },
+      {
+       "name": "_gross_wt",
+       "value": "2.570"
+      },
+      {
+       "name": "_net_wt",
+       "value": "2.398"
+      },
+      {
+       "name": "_diamond_cts",
+       "value": "0.86"
+      },
+      {
+       "name": "Gold",
+       "value": "Rs27817.52"
+      },
+      {
+       "name": "Taxable Value",
+       "value": "Rs95017.52"
+      },
+      {
+       "name": "GST",
+       "value": "Rs2850.53"
+      },
+      {
+       "name": "Gross Value",
+       "value": "Rs97868.05"
+      },
+      {
+       "name": "Discount Applied",
+       "value": "Rs0.00"
+      },
+      {
+       "name": "_gold_rate",
+       "value": "11600.3"
+      }
+     ],
+     "discount_allocations": [],
+     "tax_lines": []
+    }
+   ]
+  },
+  {
+   "id": 7114954309889,
+   "name": "#1057",
+   "created_at": "2026-06-17T18:37:27+05:30",
+   "financial_status": "paid",
+   "cancelled_at": null,
+   "tags": "deposit:partial, paid:Rs116005, total:Rs529925",
+   "taxes_included": true,
+   "total_price": "529924.86",
+   "refunds": [],
+   "line_items": [
+    {
+     "id": 17634952511745,
+     "title": "Orb Halo Round 2.09ct Lariat",
+     "sku": "NK00068|Y|18|VVSVSEFG|H|18|2.82|NA",
+     "quantity": 1,
+     "price": "343090.03",
+     "total_discount": "0.00",
+     "variant_id": 48578176450817,
+     "product_id": 9121808744705,
+     "properties": [
+      {
+       "name": "Diamond",
+       "value": "Rs98700.00"
+      },
+      {
+       "name": "Making",
+       "value": "Rs29635.00"
+      },
+      {
+       "name": "_jewel_code",
+       "value": ""
+      },
+      {
+       "name": "_gross_wt",
+       "value": "18.300"
+      },
+      {
+       "name": "_net_wt",
+       "value": "17.736"
+      },
+      {
+       "name": "_diamond_cts",
+       "value": "2.82"
+      },
+      {
+       "name": "Gold",
+       "value": "Rs204762.12"
+      },
+      {
+       "name": "Taxable Value",
+       "value": "Rs333097.12"
+      },
+      {
+       "name": "GST",
+       "value": "Rs9992.91"
+      },
+      {
+       "name": "Gross Value",
+       "value": "Rs343090.03"
+      },
+      {
+       "name": "Discount Applied",
+       "value": "Rs0.00"
+      },
+      {
+       "name": "_gold_rate",
+       "value": "11545"
+      }
+     ],
+     "discount_allocations": [],
+     "tax_lines": []
+    },
+    {
+     "id": 17634952544513,
+     "title": "Yellow Gold Paper Clip Chain 18K",
+     "sku": "CHN00006|Y|18|NA|NA|16\"|NA|NA",
+     "quantity": 1,
+     "price": "56595.51",
+     "total_discount": "0.00",
+     "variant_id": 48646458999041,
+     "product_id": 9130178183425,
+     "properties": [
+      {
+       "name": "Making",
+       "value": "Rs4380.00"
+      },
+      {
+       "name": "_jewel_code",
+       "value": ""
+      },
+      {
+       "name": "_gross_wt",
+       "value": "4.380"
+      },
+      {
+       "name": "_net_wt",
+       "value": "4.380"
+      },
+      {
+       "name": "Gold",
+       "value": "Rs50567.10"
+      },
+      {
+       "name": "Taxable Value",
+       "value": "Rs54947.10"
+      },
+      {
+       "name": "GST",
+       "value": "Rs1648.41"
+      },
+      {
+       "name": "Gross Value",
+       "value": "Rs56595.51"
+      },
+      {
+       "name": "Discount Applied",
+       "value": "Rs0.00"
+      },
+      {
+       "name": "_gold_rate",
+       "value": "11545"
+      }
+     ],
+     "discount_allocations": [],
+     "tax_lines": []
+    },
+    {
+     "id": 17634952577281,
+     "title": "Union Bangle",
+     "sku": "BG00021|Y|14|VVSVSEFG|H|2.4|1.58|NA",
+     "quantity": 1,
+     "price": "130239.32",
+     "total_discount": "0.00",
+     "variant_id": 48578098594049,
+     "product_id": 9121802322177,
+     "properties": [
+      {
+       "name": "Diamond",
+       "value": "Rs56600.00"
+      },
+      {
+       "name": "Making",
+       "value": "Rs8250.00"
+      },
+      {
+       "name": "_jewel_code",
+       "value": ""
+      },
+      {
+       "name": "_gross_wt",
+       "value": "7.180"
+      },
+      {
+       "name": "_net_wt",
+       "value": "6.860"
+      },
+      {
+       "name": "_diamond_cts",
+       "value": "1.58"
+      },
+      {
+       "name": "Gold",
+       "value": "Rs61595.94"
+      },
+      {
+       "name": "Taxable Value",
+       "value": "Rs126445.94"
+      },
+      {
+       "name": "GST",
+       "value": "Rs3793.38"
+      },
+      {
+       "name": "Gross Value",
+       "value": "Rs130239.32"
+      },
+      {
+       "name": "Discount Applied",
+       "value": "Rs0.00"
+      },
+      {
+       "name": "_gold_rate",
+       "value": "8979"
+      }
+     ],
+     "discount_allocations": [],
+     "tax_lines": []
+    }
+   ]
+  },
+  {
+   "id": 7050335879425,
+   "name": "#1056",
+   "created_at": "2026-06-01T15:46:04+05:30",
+   "financial_status": "paid",
+   "cancelled_at": null,
+   "tags": "deposit:fully-paid, paid:Rs85000, pmode-final:cash, total:Rs85000",
+   "taxes_included": true,
+   "total_price": "85000.00",
+   "refunds": [],
+   "line_items": [
+    {
+     "id": 17514858545409,
+     "title": "Relic Earrings",
+     "sku": "ER00099|Y|18|VVSVSEFG|H|NA|2.18|NA",
+     "quantity": 1,
+     "price": "85000.00",
+     "total_discount": "0.00",
+     "variant_id": 48658652692737,
+     "product_id": 9131361730817,
+     "properties": [
+      {
+       "name": "_jewel_code",
+       "value": ""
+      },
+      {
+       "name": "_diamond_cts",
+       "value": "2.18"
+      },
+      {
+       "name": "Gold",
+       "value": "Rs18946.27"
+      },
+      {
+       "name": "Diamond",
+       "value": "Rs65400.00"
+      },
+      {
+       "name": "Making",
+       "value": "Rs3000.00"
+      },
+      {
+       "name": "Taxable Value",
+       "value": "Rs82524.27"
+      },
+      {
+       "name": "GST",
+       "value": "Rs2475.73"
+      },
+      {
+       "name": "Gross Value",
+       "value": "Rs89822.00"
+      },
+      {
+       "name": "Discount Applied",
+       "value": "Rs4822.00"
+      },
+      {
+       "name": "_gold_rate",
+       "value": "12067.69"
+      }
+     ],
+     "discount_allocations": [],
+     "tax_lines": []
+    }
+   ]
+  },
+  {
+   "id": 7043586490625,
+   "name": "#1055",
+   "created_at": "2026-05-28T20:22:54+05:30",
+   "financial_status": "paid",
+   "cancelled_at": null,
+   "tags": "deposit:fully-paid, paid:Rs165295, pmode-final:bank transfer, total:Rs165295",
+   "taxes_included": true,
+   "total_price": "165294.75",
+   "refunds": [],
+   "line_items": [
+    {
+     "id": 17500491415809,
+     "title": "Gold Coins",
+     "sku": "GCOIN|Y|22|VVSVSEFG|H|5|NA|NA",
+     "quantity": 17,
+     "price": "7846.50",
+     "total_discount": "0.00",
+     "variant_id": 48859253440769,
+     "product_id": 9126104170753,
+     "properties": [
+      {
+       "name": "_jewel_code",
+       "value": ""
+      },
+      {
+       "name": "Making",
+       "value": "Rs2125.00"
+      },
+      {
+       "name": "Gold",
+       "value": "Rs127380.41"
+      },
+      {
+       "name": "Taxable Value",
+       "value": "Rs129505.41"
+      },
+      {
+       "name": "GST",
+       "value": "Rs3885.16"
+      },
+      {
+       "name": "Gross Value",
+       "value": "Rs133390.57"
+      },
+      {
+       "name": "Discount Applied",
+       "value": "Rs0.00"
+      },
+      {
+       "name": "_gold_rate",
+       "value": "14985.93"
+      }
+     ],
+     "discount_allocations": [],
+     "tax_lines": []
+    },
+    {
+     "id": 17500491448577,
+     "title": "Silver Coin",
+     "sku": "SCOIN|Y|999|VVSVSEFG|H|5|NA|NA",
+     "quantity": 21,
+     "price": "1519.25",
+     "total_discount": "0.00",
+     "variant_id": 48872267120897,
+     "product_id": 9164790857985,
+     "properties": [
+      {
+       "name": "_jewel_code",
+       "value": ""
+      },
+      {
+       "name": "Gold",
+       "value": "Rs30450.00"
+      },
+      {
+       "name": "Making",
+       "value": "Rs525.00"
+      },
+      {
+       "name": "Taxable Value",
+       "value": "Rs30975.00"
+      },
+      {
+       "name": "GST",
+       "value": "Rs929.25"
+      },
+      {
+       "name": "Gross Value",
+       "value": "Rs31904.25"
+      },
+      {
+       "name": "Discount Applied",
+       "value": "Rs0.00"
+      },
+      {
+       "name": "_gold_rate",
+       "value": "14985.93"
+      }
+     ],
+     "discount_allocations": [],
+     "tax_lines": []
+    }
+   ]
+  },
+  {
+   "id": 7034759250177,
+   "name": "#1054",
+   "created_at": "2026-05-24T17:30:10+05:30",
+   "financial_status": "paid",
+   "cancelled_at": null,
+   "tags": "billingpending, deposit:fully-paid, paid:Rs20914, pmode-advance:gokwik_link, pmode-final:gokwik_link, reprice, total:Rs20914",
+   "taxes_included": true,
+   "total_price": "20914.15",
+   "refunds": [],
+   "line_items": [
+    {
+     "id": 17478690963713,
+     "title": "Box Chain",
+     "sku": "CHNBOX00001|Y|18|VVSVSEFG|H|16|NA|NA",
+     "quantity": 1,
+     "price": "20914.15",
+     "total_discount": "0.00",
+     "variant_id": 48708681629953,
+     "product_id": 9137657348353,
+     "properties": [
+      {
+       "name": "Gold",
+       "value": "Rs17980.00"
+      },
+      {
+       "name": "Diamond",
+       "value": "Rs0.00"
+      },
+      {
+       "name": "Making",
+       "value": "Rs2325.00"
+      },
+      {
+       "name": "Gross Value",
+       "value": "Rs20914.15"
+      },
+      {
+       "name": "Discount Applied",
+       "value": "Rs0.00"
+      },
+      {
+       "name": "Taxable Value",
+       "value": "Rs20305.00"
+      },
+      {
+       "name": "GST",
+       "value": "Rs609.15"
+      },
+      {
+       "name": "_net_wt",
+       "value": "1.550"
+      },
+      {
+       "name": "_gross_wt",
+       "value": "1.550"
+      },
+      {
+       "name": "_diamond_cts",
+       "value": "0.00"
+      },
+      {
+       "name": "_diamond_pcs",
+       "value": "0"
+      },
+      {
+       "name": "_gemstone_cts",
+       "value": "0.00"
+      },
+      {
+       "name": "_gold_rate",
+       "value": "11600.00"
+      },
+      {
+       "name": "_gold_updated_at",
+       "value": "2026-05-24T12:00:00.000Z"
+      }
+     ],
+     "discount_allocations": [],
+     "tax_lines": []
+    }
+   ]
+  },
+  {
+   "id": 7003584004353,
+   "name": "#1053",
+   "created_at": "2026-05-11T13:46:44+05:30",
+   "financial_status": "paid",
+   "cancelled_at": null,
+   "tags": "deposit:fully-paid, paid:Rs185706, pmode-advance:gokwik_link, pmode-final:card, total:Rs185707",
+   "taxes_included": true,
+   "total_price": "185706.94",
+   "refunds": [],
+   "line_items": [
+    {
+     "id": 17422357070081,
+     "title": "Helios 1.79ct Emerald cut Lab earrings stud",
+     "sku": "ER00073|W|14|VVSVSEFG|H|NA|1.79|NA",
+     "quantity": 1,
+     "price": "98970.64",
+     "total_discount": "0.00",
+     "variant_id": 48578115895553,
+     "product_id": 9121804026113,
+     "properties": [
+      {
+       "name": "Gold",
+       "value": "Rs21165.00"
+      },
+      {
+       "name": "Diamond",
+       "value": "Rs72850.00"
+      },
+      {
+       "name": "Making",
+       "value": "Rs2073.00"
+      },
+      {
+       "name": "Gross Value",
+       "value": "Rs98970.64"
+      },
+      {
+       "name": "Discount Applied",
+       "value": "Rs0.00"
+      },
+      {
+       "name": "Taxable Value",
+       "value": "Rs96088.00"
+      },
+      {
+       "name": "GST",
+       "value": "Rs2882.64"
+      },
+      {
+       "name": "_jewel_code",
+       "value": ""
+      },
+      {
+       "name": "_net_wt",
+       "value": "2.180"
+      },
+      {
+       "name": "_gross_wt",
+       "value": "2.540"
+      },
+      {
+       "name": "_diamond_cts",
+       "value": "1.79"
+      },
+      {
+       "name": "_diamond_pcs",
+       "value": "38"
+      },
+      {
+       "name": "_gemstone_cts",
+       "value": "0.00"
+      },
+      {
+       "name": "_gold_rate",
+       "value": "9713.00"
+      },
+      {
+       "name": "_gold_updated_at",
+       "value": "2026-04-24T12:00:00.000Z"
+      }
+     ],
+     "discount_allocations": [],
+     "tax_lines": []
+    },
+    {
+     "id": 17422357102849,
+     "title": "Trapezoid Band",
+     "sku": "RG00091|W|14|VVSVSEFG|H|14|1.38|NA",
+     "quantity": 1,
+     "price": "86736.30",
+     "total_discount": "0.00",
+     "variant_id": 48578334785793,
+     "product_id": 9121816248577,
+     "properties": [
+      {
+       "name": "Gold",
+       "value": "Rs26422.00"
+      },
+      {
+       "name": "Diamond",
+       "value": "Rs55200.00"
+      },
+      {
+       "name": "Making",
+       "value": "Rs2588.00"
+      },
+      {
+       "name": "Gross Value",
+       "value": "Rs86736.30"
+      },
+      {
+       "name": "Discount Applied",
+       "value": "Rs0.00"
+      },
+      {
+       "name": "Taxable Value",
+       "value": "Rs84210.00"
+      },
+      {
+       "name": "GST",
+       "value": "Rs2526.30"
+      },
+      {
+       "name": "_jewel_code",
+       "value": ""
+      },
+      {
+       "name": "_net_wt",
+       "value": "2.720"
+      },
+      {
+       "name": "_gross_wt",
+       "value": "3.000"
+      },
+      {
+       "name": "_diamond_cts",
+       "value": "1.38"
+      },
+      {
+       "name": "_diamond_pcs",
+       "value": "1"
+      },
+      {
+       "name": "_gemstone_cts",
+       "value": "0.00"
+      },
+      {
+       "name": "_gold_rate",
+       "value": "9713.00"
+      },
+      {
+       "name": "_gold_updated_at",
+       "value": "2026-04-24T12:00:00.000Z"
+      }
+     ],
+     "discount_allocations": [],
+     "tax_lines": []
+    }
+   ]
+  },
+  {
+   "id": 7003583840513,
+   "name": "#1052",
+   "created_at": "2026-05-11T13:46:38+05:30",
+   "financial_status": "paid",
+   "cancelled_at": null,
+   "tags": "deposit:fully-paid, paid:Rs132630, pmode-final:card, skip-serial, total:Rs546551",
+   "taxes_included": true,
+   "total_price": "546550.96",
+   "refunds": [],
+   "line_items": [
+    {
+     "id": 17422356676865,
+     "title": "Orb Halo Round 0.73ct Lariat",
+     "sku": "NK00068|Y|18|VVSVSEFG|H|18|2.82|NA",
+     "quantity": 1,
+     "price": "343089.91",
+     "total_discount": "0.00",
+     "variant_id": 48578176450817,
+     "product_id": 9121808744705,
+     "properties": [
+      {
+       "name": "Gold",
+       "value": "Rs204762.00"
+      },
+      {
+       "name": "Diamond",
+       "value": "Rs98700.00"
+      },
+      {
+       "name": "Making",
+       "value": "Rs29635.00"
+      },
+      {
+       "name": "Gross Value",
+       "value": "Rs343089.91"
+      },
+      {
+       "name": "Discount Applied",
+       "value": "Rs0.00"
+      },
+      {
+       "name": "Taxable Value",
+       "value": "Rs333097.00"
+      },
+      {
+       "name": "GST",
+       "value": "Rs9992.91"
+      },
+      {
+       "name": "_net_wt",
+       "value": "17.736"
+      },
+      {
+       "name": "_gross_wt",
+       "value": "18.300"
+      },
+      {
+       "name": "_diamond_cts",
+       "value": "2.82"
+      },
+      {
+       "name": "_diamond_pcs",
+       "value": "58"
+      },
+      {
+       "name": "_gemstone_cts",
+       "value": "0.00"
+      },
+      {
+       "name": "_gold_rate",
+       "value": "11545.00"
+      },
+      {
+       "name": "_gold_updated_at",
+       "value": "2026-05-04T12:00:00.000Z"
+      }
+     ],
+     "discount_allocations": [],
+     "tax_lines": []
+    },
+    {
+     "id": 17422356709633,
+     "title": "Weave hoop earring",
+     "sku": "ER00091|Y|14|VVSVSEFG|H|NA|1.78|NA",
+     "quantity": 1,
+     "price": "203461.05",
+     "total_discount": "0.00",
+     "variant_id": 48578134704385,
+     "product_id": 9121806516481,
+     "properties": [
+      {
+       "name": "Gold",
+       "value": "Rs110350.00"
+      },
+      {
+       "name": "Diamond",
+       "value": "Rs71200.00"
+      },
+      {
+       "name": "Making",
+       "value": "Rs15985.00"
+      },
+      {
+       "name": "Gross Value",
+       "value": "Rs203461.05"
+      },
+      {
+       "name": "Discount Applied",
+       "value": "Rs0.00"
+      },
+      {
+       "name": "Taxable Value",
+       "value": "Rs197535.00"
+      },
+      {
+       "name": "GST",
+       "value": "Rs5926.05"
+      },
+      {
+       "name": "_net_wt",
+       "value": "13.250"
+      },
+      {
+       "name": "_gross_wt",
+       "value": "13.620"
+      },
+      {
+       "name": "_diamond_cts",
+       "value": "1.78"
+      },
+      {
+       "name": "_diamond_pcs",
+       "value": "200"
+      },
+      {
+       "name": "_gemstone_cts",
+       "value": "0.00"
+      },
+      {
+       "name": "_gold_rate",
+       "value": "8979.44"
+      },
+      {
+       "name": "_gold_updated_at",
+       "value": "2026-05-04T12:00:00.000Z"
+      }
+     ],
+     "discount_allocations": [],
+     "tax_lines": []
+    }
+   ]
+  },
+  {
+   "id": 7003480064257,
+   "name": "#1051",
+   "created_at": "2026-05-11T11:56:13+05:30",
+   "financial_status": "paid",
+   "cancelled_at": null,
+   "tags": "deposit:fully-paid, paid:Rs87550, pmode-final:online_link, total:Rs87550",
+   "taxes_included": true,
+   "total_price": "87550.00",
+   "refunds": [],
+   "line_items": [
+    {
+     "id": 17422148108545,
+     "title": "Relic Earrings",
+     "sku": "ER00099|Y|18|VVSVSEFG|H|NA|2.18|NA",
+     "quantity": 1,
+     "price": "87550.00",
+     "total_discount": "0.00",
+     "variant_id": 48658652692737,
+     "product_id": 9131361730817,
+     "properties": [
+      {
+       "name": "Gold",
+       "value": "Rs18428.00"
+      },
+      {
+       "name": "Diamond",
+       "value": "Rs63572.00"
+      },
+      {
+       "name": "Making",
+       "value": "Rs3000.00"
+      },
+      {
+       "name": "Gross Value",
+       "value": "Rs87550.00"
+      },
+      {
+       "name": "Discount Applied",
+       "value": "Rs0.00"
+      },
+      {
+       "name": "Taxable Value",
+       "value": "Rs85000.00"
+      },
+      {
+       "name": "GST",
+       "value": "Rs2550.00"
+      },
+      {
+       "name": "_net_wt",
+       "value": "1.535"
+      },
+      {
+       "name": "_gross_wt",
+       "value": "1.959"
+      },
+      {
+       "name": "_diamond_cts",
+       "value": "2.12"
+      },
+      {
+       "name": "_diamond_pcs",
+       "value": "2"
+      },
+      {
+       "name": "_gemstone_cts",
+       "value": "0.00"
+      },
+      {
+       "name": "_gold_rate",
+       "value": "12005.00"
+      },
+      {
+       "name": "_gold_updated_at",
+       "value": "2026-05-06T12:00:00.000Z"
+      }
+     ],
+     "discount_allocations": [],
+     "tax_lines": []
+    }
+   ]
+  },
+  {
+   "id": 6974617878785,
+   "name": "#1050",
+   "created_at": "2026-04-25T20:36:42+05:30",
+   "financial_status": "paid",
+   "cancelled_at": null,
+   "tags": "",
+   "taxes_included": false,
+   "total_price": "58865.89",
+   "refunds": [],
+   "line_items": [
+    {
+     "id": 17364573978881,
+     "title": "Titan Peak Band",
+     "sku": "RG00088|Y|18|VVSVSEFG|H|20|0.44|NA",
+     "quantity": 1,
+     "price": "58865.89",
+     "total_discount": "0.00",
+     "variant_id": 48578327609601,
+     "product_id": 9121815953665,
+     "properties": [],
+     "discount_allocations": [],
+     "tax_lines": []
+    }
+   ]
+  },
+  {
+   "id": 6971243954433,
+   "name": "#1049",
+   "created_at": "2026-04-24T12:30:17+05:30",
+   "financial_status": "paid",
+   "cancelled_at": null,
+   "tags": "deposit:fully-paid, gokwik payment link, paid:Rs78589, pmode-advance:card, pmode-final:gokwik_link, total:Rs78589",
+   "taxes_included": false,
+   "total_price": "78589.00",
+   "refunds": [],
+   "line_items": [
+    {
+     "id": 17357932921089,
+     "title": "Sage Serenity Emerald necklace",
+     "sku": "NK00084|Y|14|VVSVSEFG|H|16|5.89|NA",
+     "quantity": 1,
+     "price": "78589.00",
+     "total_discount": "0.00",
+     "variant_id": 48578209579265,
+     "product_id": 9121810481409,
+     "properties": [],
+     "discount_allocations": [],
+     "tax_lines": []
+    }
+   ]
+  },
+  {
+   "id": 6965987475713,
+   "name": "#1048",
+   "created_at": "2026-04-21T20:29:55+05:30",
+   "financial_status": "paid",
+   "cancelled_at": null,
+   "tags": "deposit:fully-paid, paid:Rs12500, pmode-final:upi, raised-po, total:Rs12500",
+   "taxes_included": false,
+   "total_price": "12500.00",
+   "refunds": [],
+   "line_items": [
+    {
+     "id": 17347950051585,
+     "title": "Nosepin",
+     "sku": null,
+     "quantity": 1,
+     "price": "12500.00",
+     "total_discount": "0.00",
+     "variant_id": null,
+     "product_id": null,
+     "properties": [],
+     "discount_allocations": [],
+     "tax_lines": []
+    }
+   ]
+  },
+  {
+   "id": 6965975154945,
+   "name": "#1047",
+   "created_at": "2026-04-21T20:20:31+05:30",
+   "financial_status": "paid",
+   "cancelled_at": null,
+   "tags": "po-confirmed",
+   "taxes_included": false,
+   "total_price": "18000.00",
+   "refunds": [],
+   "line_items": [
+    {
+     "id": 17347925704961,
+     "title": "Valor Pear Pendant",
+     "sku": "PD00025|Y|14|VVSVSEFG|H|NA|0.3|NA",
+     "quantity": 1,
+     "price": "23802.27",
+     "total_discount": "0.00",
+     "variant_id": 48578221801729,
+     "product_id": 9121811497217,
+     "properties": [
+      {
+       "name": "Gold",
+       "value": "Rs9894"
+      },
+      {
+       "name": "Diamond",
+       "value": "Rs6366.73"
+      },
+      {
+       "name": "Making",
+       "value": "Rs1215"
+      },
+      {
+       "name": "Discount Applied",
+       "value": "Rs5802.27"
+      },
+      {
+       "name": "Taxable Value",
+       "value": "Rs17475.73"
+      },
+      {
+       "name": "GST",
+       "value": "Rs524.27"
+      },
+      {
+       "name": "Gross Value",
+       "value": "Rs23802.27"
+      }
+     ],
+     "discount_allocations": [
+      {
+       "amount": "5802.27"
+      }
+     ],
+     "tax_lines": []
+    }
+   ]
+  },
+  {
+   "id": 6965956051201,
+   "name": "#1046",
+   "created_at": "2026-04-21T20:10:54+05:30",
+   "financial_status": "paid",
+   "cancelled_at": null,
+   "tags": "deposit:fully-paid, paid:Rs16500, pmode-final:card, total:Rs16500",
+   "taxes_included": false,
+   "total_price": "16500.00",
+   "refunds": [],
+   "line_items": [
+    {
+     "id": 17347894411521,
+     "title": "Gold Coins",
+     "sku": "GCOIN|Y|24|VVSVSEFG|H|1|NA|NA",
+     "quantity": 1,
+     "price": "16500.00",
+     "total_discount": "0.00",
+     "variant_id": 48618049569025,
+     "product_id": 9126104170753,
+     "properties": [],
+     "discount_allocations": [],
+     "tax_lines": []
+    }
+   ]
+  },
+  {
+   "id": 6965943435521,
+   "name": "#1045",
+   "created_at": "2026-04-21T20:07:14+05:30",
+   "financial_status": "paid",
+   "cancelled_at": null,
+   "tags": "deposit:fully-paid, paid:Rs40500, pmode-final:card, raised-po, total:Rs40500",
+   "taxes_included": false,
+   "total_price": "40500.00",
+   "refunds": [],
+   "line_items": [
+    {
+     "id": 17347874160897,
+     "title": "Sia  round 1.00ct lab-diamond necklace",
+     "sku": "PD00021|Y|14|VVSVSEFG|H|NA|1.18|NA",
+     "quantity": 1,
+     "price": "65467.62",
+     "total_discount": "0.00",
+     "variant_id": 48578219835649,
+     "product_id": 9121811235073,
+     "properties": [
+      {
+       "name": "Gold",
+       "value": "Rs24191.8"
+      },
+      {
+       "name": "Diamond",
+       "value": "Rs12759.59"
+      },
+      {
+       "name": "Making",
+       "value": "Rs2369"
+      },
+      {
+       "name": "Discount Applied",
+       "value": "Rs24967.62"
+      },
+      {
+       "name": "Taxable Value",
+       "value": "Rs39320.39"
+      },
+      {
+       "name": "GST",
+       "value": "Rs1179.61"
+      },
+      {
+       "name": "Gross Value",
+       "value": "Rs65467.62"
+      }
+     ],
+     "discount_allocations": [
+      {
+       "amount": "24967.62"
+      }
+     ],
+     "tax_lines": []
+    }
+   ]
+  },
+  {
+   "id": 6965908668673,
+   "name": "#1044",
+   "created_at": "2026-04-21T19:49:33+05:30",
+   "financial_status": "paid",
+   "cancelled_at": null,
+   "tags": "po-confirmed",
+   "taxes_included": false,
+   "total_price": "25000.00",
+   "refunds": [],
+   "line_items": [
+    {
+     "id": 17347817210113,
+     "title": "Sheen Pear Earring",
+     "sku": "ER00054|W|14|VVSVSEFG|H|NA|0.6|NA",
+     "quantity": 1,
+     "price": "36363.12",
+     "total_discount": "0.00",
+     "variant_id": 48578102657281,
+     "product_id": 9121802617089,
+     "properties": [
+      {
+       "name": "Gold",
+       "value": "Rs9506"
+      },
+      {
+       "name": "Diamond",
+       "value": "Rs12967.84"
+      },
+      {
+       "name": "Making",
+       "value": "Rs1798"
+      },
+      {
+       "name": "Discount Applied",
+       "value": "Rs11363.12"
+      },
+      {
+       "name": "Taxable Value",
+       "value": "Rs24271.84"
+      },
+      {
+       "name": "GST",
+       "value": "Rs728.16"
+      },
+      {
+       "name": "Gross Value",
+       "value": "Rs36363.12"
+      }
+     ],
+     "discount_allocations": [
+      {
+       "amount": "11363.12"
+      }
+     ],
+     "tax_lines": []
+    }
+   ]
+  },
+  {
+   "id": 6965902246145,
+   "name": "#1043",
+   "created_at": "2026-04-21T19:44:12+05:30",
+   "financial_status": "paid",
+   "cancelled_at": null,
+   "tags": "deposit:fully-paid, paid:Rs16995, pmode-final:card, total:Rs16995",
+   "taxes_included": false,
+   "total_price": "16995.00",
+   "refunds": [],
+   "line_items": [
+    {
+     "id": 17347803447553,
+     "title": "Gold Coins",
+     "sku": "GCOIN|Y|24|VVSVSEFG|H|1|NA|NA",
+     "quantity": 1,
+     "price": "16995.00",
+     "total_discount": "0.00",
+     "variant_id": 48618049569025,
+     "product_id": 9126104170753,
+     "properties": [],
+     "discount_allocations": [],
+     "tax_lines": []
+    }
+   ]
+  },
+  {
+   "id": 6965896806657,
+   "name": "#1042",
+   "created_at": "2026-04-21T19:40:05+05:30",
+   "financial_status": "paid",
+   "cancelled_at": null,
+   "tags": "po-confirmed",
+   "taxes_included": false,
+   "total_price": "30000.00",
+   "refunds": [],
+   "line_items": [
+    {
+     "id": 17347791257857,
+     "title": "Radiance Round 0.40ct pair Lab-Grown Diamond Stud Earrings",
+     "sku": "ER00003|Y|18|VVSVS-EFG|H|NA|0.41|NA",
+     "quantity": 1,
+     "price": "40263.37",
+     "total_discount": "0.00",
+     "variant_id": 48056766300417,
+     "product_id": 8979371032833,
+     "properties": [
+      {
+       "name": "Gold",
+       "value": "Rs21906.42"
+      },
+      {
+       "name": "Diamond",
+       "value": "Rs4385.56"
+      },
+      {
+       "name": "Making",
+       "value": "Rs2834.23"
+      },
+      {
+       "name": "Discount Applied",
+       "value": "Rs10263.37"
+      },
+      {
+       "name": "Taxable Value",
+       "value": "Rs29126.21"
+      },
+      {
+       "name": "GST",
+       "value": "Rs873.79"
+      },
+      {
+       "name": "Gross Value",
+       "value": "Rs40263.37"
+      }
+     ],
+     "discount_allocations": [
+      {
+       "amount": "10263.37"
+      }
+     ],
+     "tax_lines": []
+    }
+   ]
+  },
+  {
+   "id": 6964752449793,
+   "name": "#1041",
+   "created_at": "2026-04-21T02:37:10+05:30",
+   "financial_status": "paid",
+   "cancelled_at": null,
+   "tags": "deposit:fully-paid, paid:Rs117884, pmode-final:gokwik_link, total:Rs117884",
+   "taxes_included": false,
+   "total_price": "117883.96",
+   "refunds": [],
+   "line_items": [
+    {
+     "id": 17345610809601,
+     "title": "Rhea Luminary Bangle",
+     "sku": "BG00019B|Y|18|VVSVSEFG|H|2.5|5.83|NA",
+     "quantity": 1,
+     "price": "58941.98",
+     "total_discount": "0.00",
+     "variant_id": 48578094792961,
+     "product_id": 9121802125569,
+     "properties": [],
+     "discount_allocations": [],
+     "tax_lines": []
+    },
+    {
+     "id": 17345610842369,
+     "title": "Cia Luminary Bangle",
+     "sku": "BG00019C|Y|18|VVSVSEFG|H|2.5|5.83|NA",
+     "quantity": 1,
+     "price": "58941.98",
+     "total_discount": "0.00",
+     "variant_id": 48578095972609,
+     "product_id": 9121802191105,
+     "properties": [],
+     "discount_allocations": [],
+     "tax_lines": []
+    }
+   ]
+  },
+  {
+   "id": 6964736327937,
+   "name": "#1040",
+   "created_at": "2026-04-21T02:25:36+05:30",
+   "financial_status": "paid",
+   "cancelled_at": null,
+   "tags": "po-confirmed",
+   "taxes_included": false,
+   "total_price": "82109.54",
+   "refunds": [],
+   "line_items": [
+    {
+     "id": 17345576894721,
+     "title": "Nexus Love necklace",
+     "sku": "NK00066|Y|18|VVSVSEFG|H|16|1.09|NA",
+     "quantity": 1,
+     "price": "82109.54",
+     "total_discount": "0.00",
+     "variant_id": 48578171601153,
+     "product_id": 9121808187649,
+     "properties": [],
+     "discount_allocations": [],
+     "tax_lines": []
+    }
+   ]
+  },
+  {
+   "id": 6964725022977,
+   "name": "#1039",
+   "created_at": "2026-04-21T02:17:08+05:30",
+   "financial_status": "paid",
+   "cancelled_at": null,
+   "tags": "po-confirmed",
+   "taxes_included": false,
+   "total_price": "65000.00",
+   "refunds": [],
+   "line_items": [
+    {
+     "id": 17345551565057,
+     "title": "Arya Lab Diamond Mangalsutra",
+     "sku": "NK00013|Y|18|VVSVS|H|16 inches|1.18|NA",
+     "quantity": 1,
+     "price": "79300.00",
+     "total_discount": "0.00",
+     "variant_id": 48183457022209,
+     "product_id": 9047378657537,
+     "properties": [
+      {
+       "name": "Gold",
+       "value": "Rs39387.5"
+      },
+      {
+       "name": "Diamond",
+       "value": "Rs21516.51"
+      },
+      {
+       "name": "Making",
+       "value": "Rs1752.85"
+      },
+      {
+       "name": "Discount Applied",
+       "value": "Rs14300"
+      },
+      {
+       "name": "Taxable Value",
+       "value": "Rs63106.8"
+      },
+      {
+       "name": "GST",
+       "value": "Rs1893.2"
+      },
+      {
+       "name": "Gross Value",
+       "value": "Rs79300"
+      }
+     ],
+     "discount_allocations": [
+      {
+       "amount": "14300.00"
+      }
+     ],
+     "tax_lines": []
+    }
+   ]
+  },
+  {
+   "id": 6962426872065,
+   "name": "#1038",
+   "created_at": "2026-04-19T20:29:37+05:30",
+   "financial_status": "paid",
+   "cancelled_at": null,
+   "tags": "cn-exp:19-09-2027, cn-iss:19-09-2026, cn-issued, cn-num:VCH27-KATEST-0007, cn-val:78675.00, deposit:fully-paid, i1:82915@card@, paid:Rs82915, pmode-final:card, pmodes:card, total:Rs82915",
+   "taxes_included": false,
+   "total_price": "82915.00",
+   "refunds": [],
+   "line_items": [
+    {
+     "id": 17340995076353,
+     "title": "Gold Coins",
+     "sku": "GCOIN|Y|24|VVSVSEFG|H|5|NA|NA",
+     "quantity": 1,
+     "price": "82915.00",
+     "total_discount": "0.00",
+     "variant_id": 48618049634561,
+     "product_id": 9126104170753,
+     "properties": [],
+     "discount_allocations": [],
+     "tax_lines": []
+    }
+   ]
+  },
+  {
+   "id": 6962375459073,
+   "name": "#1037",
+   "created_at": "2026-04-19T19:55:10+05:30",
+   "financial_status": "paid",
+   "cancelled_at": null,
+   "tags": "deposit:fully-paid, exc-applied-to:#D199, exc-given, exc-iss:21-08-2026, exc-num:EXC27-KATEST-0006, exc-val:500.00, paid:Rs500, test orders",
+   "taxes_included": false,
+   "total_price": "500.00",
+   "refunds": [],
+   "line_items": [
+    {
+     "id": 17340889366785,
+     "title": "TestPOS",
+     "sku": null,
+     "quantity": 1,
+     "price": "500.00",
+     "total_discount": "0.00",
+     "variant_id": 48120221958401,
+     "product_id": 9042656329985,
+     "properties": [],
+     "discount_allocations": [],
+     "tax_lines": []
+    }
+   ]
+  },
+  {
+   "id": 6962339741953,
+   "name": "#1036",
+   "created_at": "2026-04-19T19:31:36+05:30",
+   "financial_status": "paid",
+   "cancelled_at": null,
+   "tags": "deposit:partial, i1:300@upi@2026-08-10, paid:Rs300, pending:Rs200, pmodes:upi, test orders, total:Rs500",
+   "taxes_included": false,
+   "total_price": "500.00",
+   "refunds": [],
+   "line_items": [
+    {
+     "id": 17340817932545,
+     "title": "TestPOS",
+     "sku": null,
+     "quantity": 1,
+     "price": "500.00",
+     "total_discount": "0.00",
+     "variant_id": 48120221958401,
+     "product_id": 9042656329985,
+     "properties": [],
+     "discount_allocations": [],
+     "tax_lines": []
+    }
+   ]
+  },
+  {
+   "id": 6956903596289,
+   "name": "#1035",
+   "created_at": "2026-04-16T20:45:45+05:30",
+   "financial_status": "paid",
+   "cancelled_at": null,
+   "tags": "test orders",
+   "taxes_included": false,
+   "total_price": "500.00",
+   "refunds": [],
+   "line_items": [
+    {
+     "id": 17329946427649,
+     "title": "TestPOS",
+     "sku": null,
+     "quantity": 1,
+     "price": "500.00",
+     "total_discount": "0.00",
+     "variant_id": 48120221958401,
+     "product_id": 9042656329985,
+     "properties": [],
+     "discount_allocations": [],
+     "tax_lines": []
+    }
+   ]
+  },
+  {
+   "id": 6951316259073,
+   "name": "#1034",
+   "created_at": "2026-04-13T21:59:30+05:30",
+   "financial_status": "paid",
+   "cancelled_at": null,
+   "tags": "cn-exp:17-09-2027, cn-iss:17-09-2026, cn-issued, cn-num:VCH27-KATEST-0006, cn-val:194313.07, deposit:partial, exc-applied-to:#D171, exc-given, exc-iss:20-07-2026, exc-num:EXC27-KATEST-0001, exc-val:118000.00, i1:135000@cash@, in-store-sale, paid:Rs135000, pending:Rs141084, pmode-advance:cash, pmodes:cash, test orders, total:Rs276084",
+   "taxes_included": false,
+   "total_price": "276083.60",
+   "refunds": [],
+   "line_items": [
+    {
+     "id": 17313457963265,
+     "title": "Archive - Lab-Grown Diamond Bracelet",
+     "sku": "BC00012|Y|18|VVSVS|H|7|5.46|NA",
+     "quantity": 1,
+     "price": "276083.60",
+     "total_discount": "0.00",
+     "variant_id": 48056722096385,
+     "product_id": 9000787542273,
+     "properties": [],
+     "discount_allocations": [],
+     "tax_lines": []
+    }
+   ]
+  },
+  {
+   "id": 6951283851521,
+   "name": "#1033",
+   "created_at": "2026-04-13T21:38:18+05:30",
+   "financial_status": "paid",
+   "cancelled_at": null,
+   "tags": "deposit:fully-paid, paid:Rs500, test orders",
+   "taxes_included": false,
+   "total_price": "500.00",
+   "refunds": [],
+   "line_items": [
+    {
+     "id": 17313350910209,
+     "title": "TestPOS",
+     "sku": null,
+     "quantity": 1,
+     "price": "500.00",
+     "total_discount": "0.00",
+     "variant_id": 48120221958401,
+     "product_id": 9042656329985,
+     "properties": [],
+     "discount_allocations": [],
+     "tax_lines": []
+    }
+   ]
+  },
+  {
+   "id": 6951270220033,
+   "name": "#1032",
+   "created_at": "2026-04-13T21:29:47+05:30",
+   "financial_status": "paid",
+   "cancelled_at": null,
+   "tags": "deposit:fully-paid, i1:1000@cash@2026-09-01, paid:Rs1000, pmodes:cash, r1:500@cash@2026-09-01, refunded:Rs500, test orders, total:Rs500",
+   "taxes_included": false,
+   "total_price": "500.00",
+   "refunds": [],
+   "line_items": [
+    {
+     "id": 17313310015745,
+     "title": "TestPOS",
+     "sku": null,
+     "quantity": 1,
+     "price": "500.00",
+     "total_discount": "0.00",
+     "variant_id": 48120221958401,
+     "product_id": 9042656329985,
+     "properties": [],
+     "discount_allocations": [],
+     "tax_lines": []
+    }
+   ]
+  },
+  {
+   "id": 6945629962497,
+   "name": "#1031",
+   "created_at": "2026-04-10T16:23:15+05:30",
+   "financial_status": "paid",
+   "cancelled_at": null,
+   "tags": "GoKwik, test orders, UPI",
+   "taxes_included": true,
+   "total_price": "500.00",
+   "refunds": [],
+   "line_items": [
+    {
+     "id": 17288954675457,
+     "title": "TestPOS",
+     "sku": null,
+     "quantity": 1,
+     "price": "500.00",
+     "total_discount": "0.00",
+     "variant_id": 48120221958401,
+     "product_id": 9042656329985,
+     "properties": [],
+     "discount_allocations": [],
+     "tax_lines": []
+    }
+   ]
+  },
+  {
+   "id": 6938587791617,
+   "name": "#1030",
+   "created_at": "2026-04-06T14:10:59+05:30",
+   "financial_status": "paid",
+   "cancelled_at": null,
+   "tags": "test orders",
+   "taxes_included": false,
+   "total_price": "500.00",
+   "refunds": [],
+   "line_items": [
+    {
+     "id": 17260773703937,
+     "title": "TestPOS",
+     "sku": null,
+     "quantity": 1,
+     "price": "500.00",
+     "total_discount": "0.00",
+     "variant_id": 48120221958401,
+     "product_id": 9042656329985,
+     "properties": [],
+     "discount_allocations": [],
+     "tax_lines": []
+    }
+   ]
+  },
+  {
+   "id": 6931515146497,
+   "name": "#1029",
+   "created_at": "2026-04-02T13:07:19+05:30",
+   "financial_status": "refunded",
+   "cancelled_at": null,
+   "tags": "GoKwik, test orders, UPI",
+   "taxes_included": true,
+   "total_price": "500.00",
+   "refunds": [
+    {
+     "refund_line_items": []
+    }
+   ],
+   "line_items": [
+    {
+     "id": 17235198050561,
+     "title": "TestPOS",
+     "sku": null,
+     "quantity": 1,
+     "price": "500.00",
+     "total_discount": "0.00",
+     "variant_id": 48120221958401,
+     "product_id": 9042656329985,
+     "properties": [],
+     "discount_allocations": [],
+     "tax_lines": []
+    }
+   ]
+  },
+  {
+   "id": 6931447218433,
+   "name": "#1028",
+   "created_at": "2026-04-02T12:05:25+05:30",
+   "financial_status": "refunded",
+   "cancelled_at": null,
+   "tags": "GoKwik, test orders, UPI",
+   "taxes_included": true,
+   "total_price": "450.00",
+   "refunds": [
+    {
+     "refund_line_items": []
+    }
+   ],
+   "line_items": [
+    {
+     "id": 17235025658113,
+     "title": "TestPOS",
+     "sku": null,
+     "quantity": 1,
+     "price": "500.00",
+     "total_discount": "0.00",
+     "variant_id": 48120221958401,
+     "product_id": 9042656329985,
+     "properties": [],
+     "discount_allocations": [
+      {
+       "amount": "50.00"
+      }
+     ],
+     "tax_lines": []
+    }
+   ]
+  },
+  {
+   "id": 6931436404993,
+   "name": "#1027",
+   "created_at": "2026-04-02T11:50:45+05:30",
+   "financial_status": "paid",
+   "cancelled_at": null,
+   "tags": "test orders",
+   "taxes_included": false,
+   "total_price": "500.00",
+   "refunds": [],
+   "line_items": [
+    {
+     "id": 17234995708161,
+     "title": "TestPOS",
+     "sku": null,
+     "quantity": 1,
+     "price": "500.00",
+     "total_discount": "0.00",
+     "variant_id": 48120221958401,
+     "product_id": 9042656329985,
+     "properties": [],
+     "discount_allocations": [],
+     "tax_lines": []
+    }
+   ]
+  },
+  {
+   "id": 6930666848513,
+   "name": "#1026",
+   "created_at": "2026-04-02T00:21:21+05:30",
+   "financial_status": "paid",
+   "cancelled_at": null,
+   "tags": "terminal:HSR-BLR-STORE, test orders",
+   "taxes_included": false,
+   "total_price": "500.00",
+   "refunds": [],
+   "line_items": [
+    {
+     "id": 17232364437761,
+     "title": "TestPOS",
+     "sku": null,
+     "quantity": 1,
+     "price": "500.00",
+     "total_discount": "0.00",
+     "variant_id": 48120221958401,
+     "product_id": 9042656329985,
+     "properties": [],
+     "discount_allocations": [],
+     "tax_lines": []
+    }
+   ]
+  },
+  {
+   "id": 6930664358145,
+   "name": "#1025",
+   "created_at": "2026-04-02T00:19:27+05:30",
+   "financial_status": "paid",
+   "cancelled_at": null,
+   "tags": "deposit:partial, paid:Rs200, pending:Rs300, terminal:HSR-BLR-STORE, test orders",
+   "taxes_included": false,
+   "total_price": "500.00",
+   "refunds": [],
+   "line_items": [
+    {
+     "id": 17232354771201,
+     "title": "TestPOS",
+     "sku": null,
+     "quantity": 1,
+     "price": "500.00",
+     "total_discount": "0.00",
+     "variant_id": 48120221958401,
+     "product_id": 9042656329985,
+     "properties": [],
+     "discount_allocations": [],
+     "tax_lines": []
+    }
+   ]
+  },
+  {
+   "id": 6930295914753,
+   "name": "#1024",
+   "created_at": "2026-04-01T20:43:59+05:30",
+   "financial_status": "refunded",
+   "cancelled_at": null,
+   "tags": "test orders",
+   "taxes_included": false,
+   "total_price": "500.00",
+   "refunds": [
+    {
+     "refund_line_items": []
+    }
+   ],
+   "line_items": [
+    {
+     "id": 17231120957697,
+     "title": "TestPOS",
+     "sku": null,
+     "quantity": 1,
+     "price": "500.00",
+     "total_discount": "0.00",
+     "variant_id": 48120221958401,
+     "product_id": 9042656329985,
+     "properties": [],
+     "discount_allocations": [],
+     "tax_lines": []
+    }
+   ]
+  },
+  {
+   "id": 6928495378689,
+   "name": "#1023",
+   "created_at": "2026-03-31T21:12:57+05:30",
+   "financial_status": "paid",
+   "cancelled_at": null,
+   "tags": "inventory_pending, test orders",
+   "taxes_included": false,
+   "total_price": "70122.26",
+   "refunds": [],
+   "line_items": [
+    {
+     "id": 17226443784449,
+     "title": "Apex Emerald cut Band",
+     "sku": "RG00054|W|18|VVSVS-EFG|H|13|1.00|NA",
+     "quantity": 1,
+     "price": "70122.26",
+     "total_discount": "0.00",
+     "variant_id": 48183169843457,
+     "product_id": 9047328948481,
+     "properties": [],
+     "discount_allocations": [],
+     "tax_lines": []
+    }
+   ]
+  },
+  {
+   "id": 6928358146305,
+   "name": "#1022",
+   "created_at": "2026-03-31T20:23:26+05:30",
+   "financial_status": "paid",
+   "cancelled_at": null,
+   "tags": "exc-applied-to:#D191, exc-given, exc-iss:30-07-2026, exc-num:EXC27-KATEST-0005, exc-val:70122.26, inventory_pending, test orders",
+   "taxes_included": false,
+   "total_price": "70122.26",
+   "refunds": [],
+   "line_items": [
+    {
+     "id": 17226165256449,
+     "title": "Apex Emerald cut Band",
+     "sku": "RG00054|W|18|VVSVS-EFG|H|13|1.00|NA",
+     "quantity": 1,
+     "price": "70122.26",
+     "total_discount": "0.00",
+     "variant_id": 48183169843457,
+     "product_id": 9047328948481,
+     "properties": [],
+     "discount_allocations": [],
+     "tax_lines": []
+    }
+   ]
+  },
+  {
+   "id": 6925898252545,
+   "name": "#1021",
+   "created_at": "2026-03-30T13:21:09+05:30",
+   "financial_status": "paid",
+   "cancelled_at": null,
+   "tags": "cn-exp:21-08-2027, cn-iss:21-08-2026, cn-issued, cn-num:VCH27-KATEST-0005, cn-val:500.00, deposit:fully-paid, paid:Rs500, test orders",
+   "taxes_included": false,
+   "total_price": "500.00",
+   "refunds": [],
+   "line_items": [
+    {
+     "id": 17220048814337,
+     "title": "TestPOS",
+     "sku": null,
+     "quantity": 1,
+     "price": "500.00",
+     "total_discount": "0.00",
+     "variant_id": 48120221958401,
+     "product_id": 9042656329985,
+     "properties": [],
+     "discount_allocations": [],
+     "tax_lines": []
+    }
+   ]
+  },
+  {
+   "id": 6920514404609,
+   "name": "#1020",
+   "created_at": "2026-03-27T16:14:48+05:30",
+   "financial_status": "paid",
+   "cancelled_at": null,
+   "tags": "deposit:fully-paid, paid:Rs500, test orders",
+   "taxes_included": false,
+   "total_price": "500.00",
+   "refunds": [],
+   "line_items": [
+    {
+     "id": 17203095142657,
+     "title": "TestPOS",
+     "sku": null,
+     "quantity": 1,
+     "price": "500.00",
+     "total_discount": "0.00",
+     "variant_id": 48120221958401,
+     "product_id": 9042656329985,
+     "properties": [],
+     "discount_allocations": [],
+     "tax_lines": []
+    }
+   ]
+  },
+  {
+   "id": 6920504803585,
+   "name": "#1019",
+   "created_at": "2026-03-27T16:01:45+05:30",
+   "financial_status": "paid",
+   "cancelled_at": null,
+   "tags": "cn-exp:20-07-2027, cn-iss:20-07-2026, cn-issued, cn-num:VCH-2026-0001, cn-val:61960.20, exc-applied-to:#D172, exc-given, exc-iss:20-07-2026, exc-num:EXC-2026-0001, exc-val:61960.20, in-store-sale, returned, test orders",
+   "taxes_included": false,
+   "total_price": "100110.75",
+   "refunds": [],
+   "line_items": [
+    {
+     "id": 17203072336129,
+     "title": "Heirloom - Lab-Grown Diamond Bracelet",
+     "sku": "BC00015|W|18|VVSVS|H|7|1.9|NA",
+     "quantity": 1,
+     "price": "100110.75",
+     "total_discount": "0.00",
+     "variant_id": 48056676122881,
+     "product_id": 9001507193089,
+     "properties": [],
+     "discount_allocations": [],
+     "tax_lines": []
+    }
+   ]
+  },
+  {
+   "id": 6920495497473,
+   "name": "#1018",
+   "created_at": "2026-03-27T15:49:18+05:30",
+   "financial_status": "paid",
+   "cancelled_at": null,
+   "tags": "cn-exp:30-07-2027, cn-iss:30-07-2026, cn-issued, cn-num:VCH27-KATEST-0003, cn-val:500.00, test orders",
+   "taxes_included": false,
+   "total_price": "500.00",
+   "refunds": [],
+   "line_items": [
+    {
+     "id": 17203046187265,
+     "title": "TestPOS",
+     "sku": null,
+     "quantity": 1,
+     "price": "500.00",
+     "total_discount": "0.00",
+     "variant_id": 48120221958401,
+     "product_id": 9042656329985,
+     "properties": [],
+     "discount_allocations": [],
+     "tax_lines": []
+    }
+   ]
+  },
+  {
+   "id": 6919419527425,
+   "name": "#1017",
+   "created_at": "2026-03-26T23:36:21+05:30",
+   "financial_status": "paid",
+   "cancelled_at": null,
+   "tags": "deposit:fully-paid, paid:₹500, test orders",
+   "taxes_included": false,
+   "total_price": "500.00",
+   "refunds": [],
+   "line_items": [
+    {
+     "id": 17199805956353,
+     "title": "TestPOS",
+     "sku": null,
+     "quantity": 1,
+     "price": "500.00",
+     "total_discount": "0.00",
+     "variant_id": 48120221958401,
+     "product_id": 9042656329985,
+     "properties": [],
+     "discount_allocations": [],
+     "tax_lines": []
+    }
+   ]
+  },
+  {
+   "id": 6919365198081,
+   "name": "#1016",
+   "created_at": "2026-03-26T23:05:23+05:30",
+   "financial_status": "paid",
+   "cancelled_at": null,
+   "tags": "#D18, in-store-sale, Partialy, test orders",
+   "taxes_included": false,
+   "total_price": "19334.11",
+   "refunds": [],
+   "line_items": [
+    {
+     "id": 17199641723137,
+     "title": "Pending Payment for #D18",
+     "sku": null,
+     "quantity": 1,
+     "price": "19334.11",
+     "total_discount": "0.00",
+     "variant_id": null,
+     "product_id": null,
+     "properties": [],
+     "discount_allocations": [],
+     "tax_lines": []
+    }
+   ]
+  },
+  {
+   "id": 6913032814849,
+   "name": "#1015",
+   "created_at": "2026-03-23T19:53:48+05:30",
+   "financial_status": "paid",
+   "cancelled_at": null,
+   "tags": "inventory_pending, test orders",
+   "taxes_included": false,
+   "total_price": "173632.90",
+   "refunds": [],
+   "line_items": [
+    {
+     "id": 17181767008513,
+     "title": "Celestial Link Double Strand Bracelet- Lab-Grown Diamond Bracelet",
+     "sku": "BC00004|P|18|VVSVS|H|7|0.43|NA",
+     "quantity": 1,
+     "price": "86816.45",
+     "total_discount": "0.00",
+     "variant_id": 48056805327105,
+     "product_id": 8979366969601,
+     "properties": [],
+     "discount_allocations": [],
+     "tax_lines": []
+    },
+    {
+     "id": 17181767041281,
+     "title": "Celestial Link Double Strand Bracelet- Lab-Grown Diamond Bracelet",
+     "sku": "BC00004|P|18|VVSVS|H|5|0.43|NA",
+     "quantity": 1,
+     "price": "86816.45",
+     "total_discount": "0.00",
+     "variant_id": 48056805359873,
+     "product_id": 8979366969601,
+     "properties": [],
+     "discount_allocations": [],
+     "tax_lines": []
+    }
+   ]
+  },
+  {
+   "id": 6912792658177,
+   "name": "#1014",
+   "created_at": "2026-03-23T16:11:26+05:30",
+   "financial_status": "paid",
+   "cancelled_at": null,
+   "tags": "test orders",
+   "taxes_included": false,
+   "total_price": "500.00",
+   "refunds": [],
+   "line_items": [
+    {
+     "id": 17181184590081,
+     "title": "TestPOS",
+     "sku": null,
+     "quantity": 1,
+     "price": "500.00",
+     "total_discount": "0.00",
+     "variant_id": 48120221958401,
+     "product_id": 9042656329985,
+     "properties": [],
+     "discount_allocations": [],
+     "tax_lines": []
+    }
+   ]
+  },
+  {
+   "id": 6870943465729,
+   "name": "#1013",
+   "created_at": "2026-02-27T20:23:19+05:30",
+   "financial_status": "paid",
+   "cancelled_at": null,
+   "tags": "inventory_pending, test orders",
+   "taxes_included": false,
+   "total_price": "500.00",
+   "refunds": [],
+   "line_items": [
+    {
+     "id": 17056846250241,
+     "title": "TestPOS",
+     "sku": null,
+     "quantity": 1,
+     "price": "500.00",
+     "total_discount": "0.00",
+     "variant_id": 48120221958401,
+     "product_id": 9042656329985,
+     "properties": [],
+     "discount_allocations": [],
+     "tax_lines": []
+    }
+   ]
+  },
+  {
+   "id": 6868708262145,
+   "name": "#1012",
+   "created_at": "2026-02-26T18:28:52+05:30",
+   "financial_status": "paid",
+   "cancelled_at": "2026-06-26T14:48:34+05:30",
+   "tags": "test orders",
+   "taxes_included": false,
+   "total_price": "500.00",
+   "refunds": [],
+   "line_items": [
+    {
+     "id": 17051876360449,
+     "title": "TestPOS",
+     "sku": null,
+     "quantity": 1,
+     "price": "500.00",
+     "total_discount": "0.00",
+     "variant_id": 48120221958401,
+     "product_id": 9042656329985,
+     "properties": [],
+     "discount_allocations": [],
+     "tax_lines": []
+    }
+   ]
+  },
+  {
+   "id": 6866693521665,
+   "name": "#1011",
+   "created_at": "2026-02-25T15:35:18+05:30",
+   "financial_status": "refunded",
+   "cancelled_at": null,
+   "tags": "cn-exp:20-07-2027, cn-iss:20-07-2026, cn-issued, cn-num:VCH27-KATEST-0001, cn-val:47533.49, exc-applied-to:#D173, exc-given, exc-iss:20-07-2026, exc-num:EXC27-KATEST-0003, exc-val:47533.49, in-store-sale, test orders",
+   "taxes_included": false,
+   "total_price": "64633.22",
+   "refunds": [
+    {
+     "refund_line_items": []
+    }
+   ],
+   "line_items": [
+    {
+     "id": 17048217223425,
+     "title": "Aura Lab Diamond Ring",
+     "sku": "RG00006|P|14|VVSVS|H|13|0.79|NA",
+     "quantity": 1,
+     "price": "64633.22",
+     "total_discount": "0.00",
+     "variant_id": 48067018162433,
+     "product_id": 9028982374657,
+     "properties": [],
+     "discount_allocations": [],
+     "tax_lines": []
+    }
+   ]
+  },
+  {
+   "id": 6865070948609,
+   "name": "#1010",
+   "created_at": "2026-02-24T18:10:16+05:30",
+   "financial_status": "paid",
+   "cancelled_at": "2026-02-25T14:31:16+05:30",
+   "tags": "test orders",
+   "taxes_included": false,
+   "total_price": "252232.74",
+   "refunds": [],
+   "line_items": [
+    {
+     "id": 17045218722049,
+     "title": "Archive - Lab-Grown Diamond Bracelet",
+     "sku": "BC00012|Y|14|VVSVS|H|7|5.46|NA",
+     "quantity": 1,
+     "price": "252232.74",
+     "total_discount": "0.00",
+     "variant_id": 48056213831937,
+     "product_id": 9000787542273,
+     "properties": [],
+     "discount_allocations": [],
+     "tax_lines": []
+    }
+   ]
+  },
+  {
+   "id": 6841432047873,
+   "name": "#1009",
+   "created_at": "2026-02-20T01:38:04+05:30",
+   "financial_status": "refunded",
+   "cancelled_at": null,
+   "tags": "cn-email-sent, cn-exp:16-06-2027, cn-iss:16-06-2026, cn-issued, cn-num:VCH-2026-0001, cn-val:13736.96, exc-applied-to:#D186, exc-given, exc-iss:27-07-2026, exc-num:EXC27-KATEST-0004, exc-val:19617.32, GoKwik, Refund_initiated, test orders, UPI",
+   "taxes_included": true,
+   "total_price": "19617.32",
+   "refunds": [
+    {
+     "refund_line_items": []
+    }
+   ],
+   "line_items": [
+    {
+     "id": 17029738529025,
+     "title": "Horizon Lab Diamond Band",
+     "sku": "RG00021|P|14|VVSVS|H|17|0.23|NA",
+     "quantity": 1,
+     "price": "19617.32",
+     "total_discount": "0.00",
+     "variant_id": 48093896278273,
+     "product_id": 9035743920385,
+     "properties": [],
+     "discount_allocations": [],
+     "tax_lines": []
+    }
+   ]
+  },
+  {
+   "id": 6840607932673,
+   "name": "#1008",
+   "created_at": "2026-02-19T15:10:29+05:30",
+   "financial_status": "paid",
+   "cancelled_at": null,
+   "tags": "Cards, cn-email-sent, cn-exp:27-07-2027, cn-iss:27-07-2026, cn-issued, cn-num:VCH27-KATEST-0002, cn-val:20908.69, GoKwik, Refund_credited, Refund_initiated, test orders",
+   "taxes_included": true,
+   "total_price": "29891.37",
+   "refunds": [],
+   "line_items": [
+    {
+     "id": 17028052648193,
+     "title": "Triad Pendant",
+     "sku": "PD00004|P|14|VVSVS|H|NA|0.21|NA",
+     "quantity": 1,
+     "price": "29891.37",
+     "total_discount": "0.00",
+     "variant_id": 48091388543233,
+     "product_id": 9035021844737,
+     "properties": [],
+     "discount_allocations": [],
+     "tax_lines": []
+    }
+   ]
+  },
+  {
+   "id": 6816535675137,
+   "name": "#1007",
+   "created_at": "2026-02-06T21:15:45+05:30",
+   "financial_status": "refunded",
+   "cancelled_at": "2026-02-06T21:17:30+05:30",
+   "tags": "GoKwik, PPCOD-UPI, Refund_credited, Refund_initiated, test orders",
+   "taxes_included": true,
+   "total_price": "24093.42",
+   "refunds": [
+    {
+     "refund_line_items": [
+      {
+       "line_item_id": 16982255534337,
+       "quantity": 1
+      }
+     ]
+    }
+   ],
+   "line_items": [
+    {
+     "id": 16982255534337,
+     "title": "Io Lab-Grown Diamond Solitaire Pendant",
+     "sku": "PD00013|PG|14|VVSVSEFG|H|None|0.26|NA",
+     "quantity": 1,
+     "price": "24093.42",
+     "total_discount": "0.00",
+     "variant_id": 47378935677185,
+     "product_id": 8984652448001,
+     "properties": [],
+     "discount_allocations": [],
+     "tax_lines": []
+    }
+   ]
+  },
+  {
+   "id": 6809706561793,
+   "name": "#1006",
+   "created_at": "2026-02-03T15:25:47+05:30",
+   "financial_status": "paid",
+   "cancelled_at": null,
+   "tags": "Cards, GoKwik, test orders",
+   "taxes_included": true,
+   "total_price": "22805.83",
+   "refunds": [],
+   "line_items": [
+    {
+     "id": 16969261187329,
+     "title": "Horizon Contemporary Lab-Grown Diamond Band",
+     "sku": "RG00021|Y|18|VVSVS|H|13|0.23|NA",
+     "quantity": 1,
+     "price": "22805.83",
+     "total_discount": "0.00",
+     "variant_id": 47379020808449,
+     "product_id": 8979368116481,
+     "properties": [
+      {
+       "name": "Engraving Font",
+       "value": "Font 1"
+      },
+      {
+       "name": "Engraving Text",
+       "value": "sgweta"
+      }
+     ],
+     "discount_allocations": [],
+     "tax_lines": []
+    }
+   ]
+  },
+  {
+   "id": 6807326195969,
+   "name": "#1005",
+   "created_at": "2026-02-02T17:52:23+05:30",
+   "financial_status": "voided",
+   "cancelled_at": "2026-02-02T17:53:07+05:30",
+   "tags": "COD, GoKwik, test orders",
+   "taxes_included": true,
+   "total_price": "43015.00",
+   "refunds": [
+    {
+     "refund_line_items": [
+      {
+       "line_item_id": 16965405835521,
+       "quantity": 1
+      }
+     ]
+    }
+   ],
+   "line_items": [
+    {
+     "id": 16965405835521,
+     "title": "Celestial Tapered Lab-Grown Diamond Ring",
+     "sku": "RG00030|Y|18|VVSVS|H|10|0.18|NA",
+     "quantity": 1,
+     "price": "43015.00",
+     "total_discount": "0.00",
+     "variant_id": 47379037520129,
+     "product_id": 8979367067905,
+     "properties": [
+      {
+       "name": "Engraving Font",
+       "value": "Font 1"
+      },
+      {
+       "name": "Engraving Text",
+       "value": "1212321"
+      }
+     ],
+     "discount_allocations": [],
+     "tax_lines": []
+    }
+   ]
+  },
+  {
+   "id": 6742122332417,
+   "name": "#1004",
+   "created_at": "2026-01-02T14:14:08+05:30",
+   "financial_status": "refunded",
+   "cancelled_at": "2026-01-08T16:57:28+05:30",
+   "tags": "test orders",
+   "taxes_included": false,
+   "total_price": "91922.00",
+   "refunds": [
+    {
+     "refund_line_items": [
+      {
+       "line_item_id": 16835553624321,
+       "quantity": 1
+      }
+     ]
+    }
+   ],
+   "line_items": [
+    {
+     "id": 16835553624321,
+     "title": "Stardust Lab-Grown Diamond Band",
+     "sku": "RG00005|Y|18|VVSVS|H|10|0.99|NA",
+     "quantity": 1,
+     "price": "77900.00",
+     "total_discount": "0.00",
+     "variant_id": 47004075131137,
+     "product_id": 8979372114177,
+     "properties": [],
+     "discount_allocations": [],
+     "tax_lines": [
+      {
+       "price": "14022.00"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": 6742116827393,
+   "name": "#1003",
+   "created_at": "2026-01-02T14:11:55+05:30",
+   "financial_status": "refunded",
+   "cancelled_at": "2026-01-02T14:12:39+05:30",
+   "tags": "test orders",
+   "taxes_included": false,
+   "total_price": "91450.00",
+   "refunds": [
+    {
+     "refund_line_items": [
+      {
+       "line_item_id": 16835540058369,
+       "quantity": 1
+      }
+     ]
+    }
+   ],
+   "line_items": [
+    {
+     "id": 16835540058369,
+     "title": "Aurora Lab-Grown Diamond Ring",
+     "sku": "RG00004|Y|18|VVSVS|H|10|NA|NA",
+     "quantity": 1,
+     "price": "77500.00",
+     "total_discount": "0.00",
+     "variant_id": 47004019720449,
+     "product_id": 8979365888257,
+     "properties": [],
+     "discount_allocations": [],
+     "tax_lines": [
+      {
+       "price": "13950.00"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": 6742113026305,
+   "name": "#1002",
+   "created_at": "2026-01-02T14:10:16+05:30",
+   "financial_status": "refunded",
+   "cancelled_at": "2026-01-02T14:10:58+05:30",
+   "tags": "test orders",
+   "taxes_included": false,
+   "total_price": "116112.00",
+   "refunds": [
+    {
+     "refund_line_items": [
+      {
+       "line_item_id": 16835531440385,
+       "quantity": 1
+      }
+     ]
+    }
+   ],
+   "line_items": [
+    {
+     "id": 16835531440385,
+     "title": "Stellar Lab-Grown Diamond Cocktail Ring",
+     "sku": "RG00008|P|18|VVSVS|H|10|1.48|NA",
+     "quantity": 1,
+     "price": "98400.00",
+     "total_discount": "0.00",
+     "variant_id": 47018008412417,
+     "product_id": 8979372409089,
+     "properties": [],
+     "discount_allocations": [],
+     "tax_lines": [
+      {
+       "price": "17712.00"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": 6739474317569,
+   "name": "#1001",
+   "created_at": "2026-01-01T14:11:19+05:30",
+   "financial_status": "refunded",
+   "cancelled_at": "2026-01-01T14:12:15+05:30",
+   "tags": "test orders",
+   "taxes_included": false,
+   "total_price": "58764.00",
+   "refunds": [
+    {
+     "refund_line_items": [
+      {
+       "line_item_id": 16829840130305,
+       "quantity": 1
+      }
+     ]
+    }
+   ],
+   "line_items": [
+    {
+     "id": 16829840130305,
+     "title": "Quasar Lab-Grown Diamond Engagement Ring",
+     "sku": "RG00037|Y|14|VVSVS|H|10|0.7|NA",
+     "quantity": 1,
+     "price": "49800.00",
+     "total_discount": "0.00",
+     "variant_id": 47017995403521,
+     "product_id": 8979370737921,
+     "properties": [
+      {
+       "name": "Engraving Font",
+       "value": "Font 1"
+      },
+      {
+       "name": "Engraving Text",
+       "value": "UK"
+      }
+     ],
+     "discount_allocations": [],
+     "tax_lines": [
+      {
+       "price": "8964.00"
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

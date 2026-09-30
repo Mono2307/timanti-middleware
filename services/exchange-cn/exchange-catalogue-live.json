@@ -1,0 +1,617 @@
+{
+ "_comment": "Live variant state for every variant ever sold, read 2026-09-30. status=deleted means GET variants/{id}.json returned 404. Re-fetch before relying on today-dependent figures (rates, diamond prices move).",
+ "_fetched": "2026-09-30",
+ "_gold_rate_config": {
+  "pure": 15140,
+  "mode": "manual",
+  "r18k": 11355,
+  "r14k": 8831,
+  "_note": "INFERRED from the live variant rates on 2026-09-30 (24K 15140, 22K 13878.84 = pure x 0.9167, 18K 11355, 14K 8831). The sheet reads the real row from Supabase config key gold_rate."
+ },
+ "variants": {
+  "48578141913345": {
+   "status": "ok",
+   "sku": "NK00053|W|14|VVS-VS-EFG|H|18|0.77|NA",
+   "product_id": 9121806876929,
+   "variant": {
+    "net_metal_weight_g": "2.4191",
+    "gold_rate": "8831.0",
+    "price_breakup_diamond": "23100.0",
+    "price_breakup_gold": "21363.07",
+    "gold_last_updated_at": "2026-09-30T10:18:10+00:00"
+   }
+  },
+  "50202732757249": {
+   "status": "ok",
+   "sku": "BC00021A|Y|18|VS-EF|H|6|NA|0.31",
+   "product_id": 9317360959745,
+   "variant": {
+    "net_metal_weight_g": "1.8692",
+    "gold_rate": "11355.0",
+    "price_breakup_diamond": "12400.0",
+    "price_breakup_gold": "21224.77",
+    "gold_last_updated_at": "2026-09-30T10:18:10+00:00"
+   }
+  },
+  "48578124710145": {
+   "status": "ok",
+   "sku": "ER00084|W|14|VVS-VS-EFG|H|NA|5.75|NA",
+   "product_id": 9121805107457,
+   "variant": {
+    "net_metal_weight_g": "3.94",
+    "gold_rate": "8831.0",
+    "price_breakup_diamond": "230000.0",
+    "price_breakup_gold": "34794.14",
+    "gold_last_updated_at": "2026-09-30T10:18:10+00:00"
+   }
+  },
+  "50238447550721": {
+   "status": "ok",
+   "sku": "RG00118|P|14|VS-EF|H|9|NA|0.32",
+   "product_id": 9326639907073,
+   "variant": {
+    "net_metal_weight_g": "1.546",
+    "gold_rate": "8831.0",
+    "price_breakup_diamond": "9600.0",
+    "price_breakup_gold": "13652.73",
+    "gold_last_updated_at": "2026-09-30T10:18:10+00:00"
+   }
+  },
+  "50171201028353": {
+   "status": "ok",
+   "sku": "CHNSCBL0001-26W18K|W|18|NA|H|24|NA|NA",
+   "product_id": 9307491533057,
+   "variant": {
+    "net_metal_weight_g": "3.23",
+    "gold_rate": "11355.0",
+    "price_breakup_gold": "36676.65",
+    "gold_last_updated_at": "2026-09-30T10:18:10+00:00"
+   }
+  },
+  "50162239602945": {
+   "status": "ok",
+   "sku": "ER00106|Y|18|VVS-VS-EF|H|NA|NA|6.03",
+   "product_id": 9305795330305,
+   "variant": {
+    "net_metal_weight_g": "5.45",
+    "gold_rate": "11355.0",
+    "price_breakup_diamond": "301500.0",
+    "price_breakup_gold": "61884.75",
+    "gold_last_updated_at": "2026-09-30T10:18:10+00:00"
+   }
+  },
+  "49930472915201": {
+   "status": "ok",
+   "sku": "PD00037|Y|18|VS-EF|H|NA|NA|0.21",
+   "product_id": 9296157049089,
+   "variant": {
+    "net_metal_weight_g": "2.508",
+    "gold_rate": "11355.0",
+    "price_breakup_diamond": "8400.0",
+    "price_breakup_gold": "28478.34",
+    "gold_last_updated_at": "2026-09-30T10:18:10+00:00"
+   }
+  },
+  "48646458835201": {
+   "status": "ok",
+   "sku": "CHN00003|Y|18|NA|H|16|NA|NA",
+   "product_id": 9130178052353,
+   "variant": {
+    "net_metal_weight_g": "1.88",
+    "gold_rate": "11355.0",
+    "price_breakup_diamond": "0.0",
+    "price_breakup_gold": "21347.4",
+    "gold_last_updated_at": "2026-09-30T10:18:10+00:00"
+   }
+  },
+  "48671507054849": {
+   "status": "ok",
+   "sku": "ER00100|W|18|VVS-VS-EFG|H|NA|NA|2.01",
+   "product_id": 9132059132161,
+   "variant": {
+    "net_metal_weight_g": "1.378",
+    "gold_rate": "11355.0",
+    "price_breakup_diamond": "60300.0",
+    "price_breakup_gold": "15647.19",
+    "gold_last_updated_at": "2026-09-30T10:18:10+00:00"
+   }
+  },
+  "48183142383873": {
+   "status": "ok",
+   "sku": "ER00011|Y|18|VVS-VS-EFG|H|NA|0.34|NA",
+   "product_id": 9047325933825,
+   "variant": {
+    "net_metal_weight_g": "1.592",
+    "gold_rate": "11355.0",
+    "price_breakup_diamond": "11900.0",
+    "price_breakup_gold": "18077.16",
+    "gold_last_updated_at": "2026-09-30T10:18:10+00:00"
+   }
+  },
+  "48646458802433": {
+   "status": "ok",
+   "sku": "CHN00002|Y|18|NA|H|16|NA|NA",
+   "product_id": 9130178019585,
+   "variant": {
+    "net_metal_weight_g": "1.88",
+    "gold_rate": "11355.0",
+    "price_breakup_diamond": "0.0",
+    "price_breakup_gold": "21347.4",
+    "gold_last_updated_at": "2026-09-30T10:18:10+00:00"
+   }
+  },
+  "48093895000321": {
+   "status": "ok",
+   "sku": "ER00021|W|18|VVS-VS-EFG|H|NA|0.88|NA",
+   "product_id": 9035743658241,
+   "variant": {
+    "net_metal_weight_g": "3.893",
+    "gold_rate": "11355.0",
+    "price_breakup_diamond": "39600.0",
+    "price_breakup_gold": "44205.01",
+    "gold_last_updated_at": "2026-09-30T10:18:10+00:00"
+   }
+  },
+  "48646459490561": {
+   "status": "ok",
+   "sku": "ELBG00003|P|18|NA|H|2.4|NA|NA",
+   "product_id": 9130178576641,
+   "variant": {
+    "net_metal_weight_g": "1.74",
+    "gold_rate": "11355.0",
+    "price_breakup_diamond": "0.0",
+    "price_breakup_gold": "19757.7",
+    "gold_last_updated_at": "2026-09-30T10:18:10+00:00"
+   }
+  },
+  "48578107965697": {
+   "status": "ok",
+   "sku": "ER00061|P|14|VVS-VS-EFG|H|NA|1.06|NA",
+   "product_id": 9121803272449,
+   "variant": {
+    "net_metal_weight_g": "1.184",
+    "gold_rate": "8831.0",
+    "price_breakup_diamond": "31800.0",
+    "price_breakup_gold": "10455.9",
+    "gold_last_updated_at": "2026-09-30T10:18:10+00:00"
+   }
+  },
+  "48578353201409": {
+   "status": "ok",
+   "sku": "RG00097|W|18|VVS-VS-EFG|H|12|0.64|NA",
+   "product_id": 9121816838401,
+   "variant": {
+    "net_metal_weight_g": "9.232",
+    "gold_rate": "11355.0",
+    "price_breakup_diamond": "19200.0",
+    "price_breakup_gold": "104829.36",
+    "gold_last_updated_at": "2026-09-30T10:18:10+00:00"
+   }
+  },
+  "48646459064577": {
+   "status": "ok",
+   "sku": "CHN00008|Y|14|NA|H|16|NA|NA",
+   "product_id": 9130178248961,
+   "variant": {
+    "net_metal_weight_g": "3.75",
+    "gold_rate": "8831.0",
+    "price_breakup_diamond": "0.0",
+    "price_breakup_gold": "33116.25",
+    "gold_last_updated_at": "2026-09-30T10:18:10+00:00"
+   }
+  },
+  "48578104525057": {
+   "status": "ok",
+   "sku": "ER00056|P|14|VVS-VS-EFG|H|NA|0.74|NA",
+   "product_id": 9121802813697,
+   "variant": {
+    "net_metal_weight_g": "1.422",
+    "gold_rate": "8831.0",
+    "price_breakup_diamond": "31200.0",
+    "price_breakup_gold": "12557.68",
+    "gold_last_updated_at": "2026-09-30T10:18:10+00:00"
+   }
+  },
+  "49269029896449": {
+   "status": "ok",
+   "sku": "RG00110|W|18|VVS-EF|H|12|1.04|NA",
+   "product_id": 9193806627073,
+   "variant": {
+    "net_metal_weight_g": "3.5314",
+    "gold_rate": "11355.0",
+    "price_breakup_diamond": "41600.0",
+    "price_breakup_gold": "40099.05",
+    "gold_last_updated_at": "2026-09-30T10:18:10+00:00"
+   }
+  },
+  "49269027045633": {
+   "status": "ok",
+   "sku": "ERH00001|Y|18|SI|H|NA|0.86|NA",
+   "product_id": 9193806430465,
+   "variant": {
+    "net_metal_weight_g": "2.398",
+    "gold_rate": "11355.0",
+    "price_breakup_diamond": "60200.0",
+    "price_breakup_gold": "27229.29",
+    "gold_last_updated_at": "2026-09-30T10:18:10+00:00"
+   }
+  },
+  "48578176450817": {
+   "status": "ok",
+   "sku": "NK00068|Y|18|VVS2-F|H|16|0.73|2.09",
+   "product_id": 9121808744705,
+   "variant": {
+    "net_metal_weight_g": "16.736",
+    "gold_rate": "11355.0",
+    "price_breakup_diamond": "98700.0",
+    "price_breakup_gold": "190037.28",
+    "gold_last_updated_at": "2026-09-30T10:18:10+00:00"
+   }
+  },
+  "48646458999041": {
+   "status": "ok",
+   "sku": "CHN00006|Y|18|NA|H|16|NA|NA",
+   "product_id": 9130178183425,
+   "variant": {
+    "net_metal_weight_g": "4.38",
+    "gold_rate": "11355.0",
+    "price_breakup_diamond": "0.0",
+    "price_breakup_gold": "49734.9",
+    "gold_last_updated_at": "2026-09-30T10:18:10+00:00"
+   }
+  },
+  "48578098594049": {
+   "status": "ok",
+   "sku": "BG00021|Y|14|VVS-VS-EFG|H|2.4|1.58|NA",
+   "product_id": 9121802322177,
+   "variant": {
+    "net_metal_weight_g": "6.415",
+    "gold_rate": "8831.0",
+    "price_breakup_diamond": "56600.0",
+    "price_breakup_gold": "56650.86",
+    "gold_last_updated_at": "2026-09-30T10:18:10+00:00"
+   }
+  },
+  "48658652692737": {
+   "status": "ok",
+   "sku": "ER00099|Y|18|VS1-D|H|NA|2.18|NA",
+   "product_id": 9131361730817,
+   "variant": {
+    "net_metal_weight_g": "1.567",
+    "gold_rate": "11355.0",
+    "price_breakup_diamond": "76300.0",
+    "price_breakup_gold": "17793.28",
+    "gold_last_updated_at": "2026-09-30T10:18:10+00:00"
+   }
+  },
+  "48859253440769": {
+   "status": "ok",
+   "sku": "GCOIN|Y|22|NA|H|NA|NA|NA",
+   "product_id": 9126104170753,
+   "variant": {
+    "net_metal_weight_g": "0.5",
+    "gold_rate": "13878.84",
+    "price_breakup_gold": "6939.42",
+    "gold_last_updated_at": "2026-09-30T10:18:10+00:00"
+   }
+  },
+  "48872267120897": {
+   "status": "ok",
+   "sku": "SCOIN|S|999|NA|H|NA|NA|NA",
+   "product_id": 9164790857985,
+   "variant": {
+    "net_metal_weight_g": "5.0",
+    "price_breakup_gold": "1450.0"
+   }
+  },
+  "48708681629953": {
+   "status": "ok",
+   "sku": "CHNBOX00001|Y|18|NA|H|16|NA|NA",
+   "product_id": 9137657348353,
+   "variant": {
+    "net_metal_weight_g": "1.8",
+    "gold_rate": "11355.0",
+    "price_breakup_gold": "20439.0",
+    "gold_last_updated_at": "2026-09-30T10:18:10+00:00"
+   }
+  },
+  "48578115895553": {
+   "status": "ok",
+   "sku": "ER00073|W|14|VVS-VS-EFG|H|NA|1.79|NA",
+   "product_id": 9121804026113,
+   "variant": {
+    "net_metal_weight_g": "2.182",
+    "gold_rate": "8831.0",
+    "price_breakup_diamond": "72850.0",
+    "price_breakup_gold": "19269.24",
+    "gold_last_updated_at": "2026-09-30T10:18:10+00:00"
+   }
+  },
+  "48578334785793": {
+   "status": "deleted",
+   "code": 404
+  },
+  "48578134704385": {
+   "status": "deleted",
+   "code": 404
+  },
+  "48578327609601": {
+   "status": "deleted",
+   "code": 404
+  },
+  "48578209579265": {
+   "status": "ok",
+   "sku": "NK00084|Y|14|NATEMREMCGRN|H|16|5.71|NA",
+   "product_id": 9121810481409,
+   "variant": {
+    "net_metal_weight_g": "5.73",
+    "gold_rate": "8831.0",
+    "price_breakup_diamond": "13000.01",
+    "price_breakup_gold": "50601.63",
+    "gold_last_updated_at": "2026-09-30T10:18:10+00:00"
+   }
+  },
+  "48578221801729": {
+   "status": "ok",
+   "sku": "PD00025|Y|14|VS-EF|H|NA|NA|0.3",
+   "product_id": 9121811497217,
+   "variant": {
+    "net_metal_weight_g": "1.02",
+    "gold_rate": "8831.0",
+    "price_breakup_diamond": "12000.0",
+    "price_breakup_gold": "9007.62",
+    "gold_last_updated_at": "2026-09-30T10:18:10+00:00"
+   }
+  },
+  "48618049569025": {
+   "status": "ok",
+   "sku": "GCOIN|Y|24|NA|H|NA|NA|NA",
+   "product_id": 9126104170753,
+   "variant": {
+    "net_metal_weight_g": "1.0",
+    "gold_rate": "15140.0",
+    "price_breakup_diamond": "0.0",
+    "price_breakup_gold": "15140.0",
+    "gold_last_updated_at": "2026-09-30T10:18:10+00:00"
+   }
+  },
+  "48578219835649": {
+   "status": "ok",
+   "sku": "PD00021|Y|14|VVS-VS-EFG|H|NA|0.16|1.02",
+   "product_id": 9121811235073,
+   "variant": {
+    "net_metal_weight_g": "2.494",
+    "gold_rate": "8831.0",
+    "price_breakup_diamond": "37000.0",
+    "price_breakup_gold": "22024.51",
+    "gold_last_updated_at": "2026-09-30T10:18:10+00:00"
+   }
+  },
+  "48578102657281": {
+   "status": "deleted",
+   "code": 404
+  },
+  "48056766300417": {
+   "status": "ok",
+   "sku": "ER00003|Y|18|VVS-VS-EFG|H|NA|0.41|NA",
+   "product_id": 8979371032833,
+   "variant": {
+    "net_metal_weight_g": "1.722",
+    "gold_rate": "11355.0",
+    "price_breakup_diamond": "12300.0",
+    "price_breakup_gold": "19553.31",
+    "gold_last_updated_at": "2026-09-30T10:18:10+00:00"
+   }
+  },
+  "48578094792961": {
+   "status": "ok",
+   "sku": "BG00019B|Y|18|VVS-VS-EF|H|2.4|5.83|NA",
+   "product_id": 9121802125569,
+   "variant": {
+    "net_metal_weight_g": "8.3879",
+    "gold_rate": "11355.0",
+    "price_breakup_diamond": "174900.0",
+    "price_breakup_gold": "95244.6",
+    "gold_last_updated_at": "2026-09-30T10:18:10+00:00"
+   }
+  },
+  "48578095972609": {
+   "status": "ok",
+   "sku": "BG00019C|Y|18|VVS-VS-EF|H|2.4|5.83|NA",
+   "product_id": 9121802191105,
+   "variant": {
+    "net_metal_weight_g": "8.4346",
+    "gold_rate": "11355.0",
+    "price_breakup_diamond": "174900.0",
+    "price_breakup_gold": "95774.88",
+    "gold_last_updated_at": "2026-09-30T10:18:10+00:00"
+   }
+  },
+  "48578171601153": {
+   "status": "ok",
+   "sku": "NK00066|Y|18|VVS-VS-EFG|H|16|NA|1.09",
+   "product_id": 9121808187649,
+   "variant": {
+    "net_metal_weight_g": "2.892",
+    "gold_rate": "11355.0",
+    "price_breakup_diamond": "38500.0",
+    "price_breakup_gold": "32838.66",
+    "gold_last_updated_at": "2026-09-30T10:18:10+00:00"
+   }
+  },
+  "48183457022209": {
+   "status": "ok",
+   "sku": "NK00013|Y|18|VVS-VS-EFG|H|16|0.99|0.19",
+   "product_id": 9047378657537,
+   "variant": {
+    "net_metal_weight_g": "3.187",
+    "gold_rate": "11355.0",
+    "price_breakup_diamond": "35400.0",
+    "price_breakup_gold": "36188.38",
+    "gold_last_updated_at": "2026-09-30T10:18:10+00:00"
+   }
+  },
+  "48618049634561": {
+   "status": "ok",
+   "sku": "GCOIN|Y|24|NA|H|NA|NA|NA",
+   "product_id": 9126104170753,
+   "variant": {
+    "net_metal_weight_g": "5.0",
+    "gold_rate": "15140.0",
+    "price_breakup_diamond": "0.0",
+    "price_breakup_gold": "75700.0",
+    "gold_last_updated_at": "2026-09-30T10:18:10+00:00"
+   }
+  },
+  "48056722096385": {
+   "status": "ok",
+   "sku": "BC00012|Y|18|VVS-VS-EFG|H|7|5.46|NA",
+   "product_id": 9000787542273,
+   "variant": {
+    "net_metal_weight_g": "5.448",
+    "gold_rate": "11355.0",
+    "price_breakup_diamond": "163800.0",
+    "price_breakup_gold": "61862.04",
+    "gold_last_updated_at": "2026-09-30T10:18:10+00:00"
+   }
+  },
+  "48183169843457": {
+   "status": "ok",
+   "sku": "RG00054|W|18|VVS-VS-EFG|H|13|1.0|NA",
+   "product_id": 9047328948481,
+   "variant": {
+    "net_metal_weight_g": "2.04",
+    "gold_rate": "11355.0",
+    "price_breakup_diamond": "40000.0",
+    "price_breakup_gold": "23164.2",
+    "gold_last_updated_at": "2026-09-30T10:18:10+00:00"
+   }
+  },
+  "48056676122881": {
+   "status": "ok",
+   "sku": "BC00015|W|18|VVS-VS-EFG|H|7|1.9|NA",
+   "product_id": 9001507193089,
+   "variant": {
+    "net_metal_weight_g": "1.49",
+    "gold_rate": "11355.0",
+    "price_breakup_diamond": "57000.0",
+    "price_breakup_gold": "16918.95",
+    "gold_last_updated_at": "2026-09-30T10:18:10+00:00"
+   }
+  },
+  "48056805327105": {
+   "status": "ok",
+   "sku": "BC00004|P|18|VVS-VS-EFG|H|7|0.43|NA",
+   "product_id": 8979366969601,
+   "variant": {
+    "net_metal_weight_g": "5.024",
+    "price_breakup_diamond": "12900.0",
+    "price_breakup_gold": "62800.0"
+   }
+  },
+  "48056805359873": {
+   "status": "ok",
+   "sku": "BC00004|P|18|VVS-VS-EFG|H|5|0.43|NA",
+   "product_id": 8979366969601,
+   "variant": {
+    "net_metal_weight_g": "5.024",
+    "price_breakup_diamond": "12900.0",
+    "price_breakup_gold": "62800.0"
+   }
+  },
+  "48067018162433": {
+   "status": "ok",
+   "sku": "RG00006|P|14|VVS-VS-EFG|H|13|0.79|NA",
+   "product_id": 9028982374657,
+   "variant": {
+    "net_metal_weight_g": "2.6061",
+    "gold_rate": "8831.0",
+    "price_breakup_diamond": "31600.0",
+    "price_breakup_gold": "23014.47",
+    "gold_last_updated_at": "2026-09-30T10:18:10+00:00"
+   }
+  },
+  "48056213831937": {
+   "status": "ok",
+   "sku": "BC00012|Y|14|VVS-VS-EFG|H|7|5.46|NA",
+   "product_id": 9000787542273,
+   "variant": {
+    "net_metal_weight_g": "4.6308",
+    "gold_rate": "8831.0",
+    "price_breakup_diamond": "163800.0",
+    "price_breakup_gold": "40894.59",
+    "gold_last_updated_at": "2026-09-30T10:18:10+00:00"
+   }
+  },
+  "48093896278273": {
+   "status": "ok",
+   "sku": "RG00021|P|14|VVS-VS-EFG|H|17|0.23|NA",
+   "product_id": 9035743920385,
+   "variant": {
+    "net_metal_weight_g": "1.0944",
+    "gold_rate": "8831.0",
+    "price_breakup_diamond": "6900.0",
+    "price_breakup_gold": "9664.65",
+    "gold_last_updated_at": "2026-09-30T10:18:10+00:00"
+   }
+  },
+  "48091388543233": {
+   "status": "ok",
+   "sku": "PD00004|P|14|VVS-VS-EFG|H|NA|0.21|NA",
+   "product_id": 9035021844737,
+   "variant": {
+    "net_metal_weight_g": "1.5368",
+    "gold_rate": "8831.0",
+    "price_breakup_diamond": "9500.0",
+    "price_breakup_gold": "13571.48",
+    "gold_last_updated_at": "2026-09-30T10:18:10+00:00"
+   }
+  },
+  "47378935677185": {
+   "status": "ok",
+   "sku": "PD00013|P|14|VVS-VS-EFG|H|NA|0.26|NA",
+   "product_id": 8984652448001,
+   "variant": {
+    "net_metal_weight_g": "1.3855",
+    "price_breakup_diamond": "9100.0",
+    "price_breakup_gold": "13807.89"
+   }
+  },
+  "47379020808449": {
+   "status": "ok",
+   "sku": "RG00021|Y|18|VVS-VS-EFG|H|13|0.23|NA",
+   "product_id": 8979368116481,
+   "variant": {
+    "net_metal_weight_g": "1.144",
+    "price_breakup_diamond": "6900.0",
+    "price_breakup_gold": "14553.4"
+   }
+  },
+  "47379037520129": {
+   "status": "ok",
+   "sku": "RG00030|Y|18|VVS-VS-EFG|H|10|0.18|NA",
+   "product_id": 8979367067905,
+   "variant": {
+    "net_metal_weight_g": "2.754",
+    "price_breakup_diamond": "7200.0",
+    "price_breakup_gold": "35035.01"
+   }
+  },
+  "47004075131137": {
+   "status": "deleted",
+   "code": 404
+  },
+  "47004019720449": {
+   "status": "deleted",
+   "code": 404
+  },
+  "47018008412417": {
+   "status": "deleted",
+   "code": 404
+  },
+  "47017995403521": {
+   "status": "deleted",
+   "code": 404
+  }
+ }
+}

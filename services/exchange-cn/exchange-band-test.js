@@ -78,6 +78,7 @@ let lineCount = 0;
 for (const o of orders.slice().reverse()) {
   const num = parseInt(o.name.replace('#', ''), 10);
   if (!(num >= FROM)) continue;
+  if (o.cancelled_at) continue;          // never exchangeable (the sheet blocks it), and no catalogue snapshot
 
   o.line_items.forEach((li, idx) => {
     const p = {}; (li.properties || []).forEach((x) => { p[x.name] = x.value; });

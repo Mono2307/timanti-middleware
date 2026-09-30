@@ -151,6 +151,16 @@ today's value.
 
 ## When `B35` is missing
 
+> **Superseded 2026-09-30.** The sheet no longer issues an uncapped diamond. `resolveExchangeUnit_`
+> recovers the cap from the order wherever the data allows: no discount → the Diamond property;
+> components already after discount (#1047 and earlier) → the Diamond property; pre-discount with
+> `Making (After Discount)` → exact; discount split not recorded (#1056) → the least the stone
+> could have cost; no breakup at all (#1040, #1041, #1049) → bounded by what was paid ex-GST less
+> today's gold, with the whole Deduction held to what was paid ex-GST. No table, no sign-offs.
+> #1045 is now capped at ₹12,759.59. `exchange-legacy-recon.csv` (from `exchange-recon-review.js`)
+> shows what the script does with every line; it is a developer report, not read by the sheet.
+> The rest of this section describes the behaviour before that change.
+
 On an order placed before the middleware started writing `Diamond (After Discount)`, `B35` is
 blank and the formula takes its uncapped branch — 80% of today's value, no ceiling.
 
