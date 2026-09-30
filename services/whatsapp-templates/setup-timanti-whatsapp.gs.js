@@ -1,5 +1,5 @@
 // ============================================================
-// Timanti WhatsApp Templates — Google Sheets Setup Script v9
+// Timanti WhatsApp Templates — Google Sheets Setup Script v10
 //
 // HOW TO USE:
 //   1. Open Apps Script: https://script.google.com/home/projects/
@@ -8,6 +8,26 @@
 //   3. Ctrl+V → Paste this file
 //   4. Ctrl+S → Save
 //   5. Dropdown shows setupTimantiWhatsApp → click Run → Authorise
+//
+// ── CHANGES IN v10 — TEST TAB ONLY ──────────────────────────
+//   NEW function buildOrderConfirmationTest. Run it from the
+//   dropdown INSTEAD of setupTimantiWhatsApp. It builds ONE new
+//   tab, "3 - Order Confirmation (TEST)", and touches nothing else
+//   — the live "3 - Order Confirmation (OC)" tab and every other
+//   tab are left exactly as they are.
+//
+//   The test tab has a 2x2 toggle at the top: Record Type
+//   (Order / Draft) x Document (Payment Receipt / Tax Invoice).
+//   One PDF link follows both, and every version's "Your … is
+//   here" line follows the Document toggle. Draft + Tax Invoice
+//   is for internal checking only: a red band shows and the send
+//   buttons / backup URLs are blocked.
+//     C5 Record Type | C6 Document | C12 Order/Draft Name
+//     C13 Order/Draft ID | C14 Staff | C17 the one PDF link
+//
+//   setupTimantiWhatsApp is UNCHANGED from v9: it still builds
+//   the old Sheet 3 and never touches the TEST tab. Once the test
+//   tab is signed off, buildS3Toggle replaces buildS3 there.
 //
 // ── CHANGES IN v9 ───────────────────────────────────────────
 //   1. NEW Sheet 5 — Pricing Estimate. Draft-order PDF, hash
@@ -51,7 +71,7 @@ var SS_ID = '1l0tRGEBVc3_SVODSMfnTntmsC9iDj-DtweiXjRNlzkU';
 
 // Stamped into the finish alert. If the popup does not say v9, the Apps Script project is still
 // running an older paste and nothing in this file has taken effect.
-var VERSION = 'v9';
+var VERSION = 'v10';
 
 var NAV='#111827', WHITE='#FFFFFF', WAG='#25D366';
 var Y_BG='#FFFBEB', Y_FG='#1E3A8A', Y_BD='#D97706';
@@ -110,6 +130,31 @@ function setupTimantiWhatsApp() {
       + 'created) and run again.';
   }
   SpreadsheetApp.getUi().alert(msg);
+}
+
+// ============================================================
+// buildOrderConfirmationTest — builds ONE tab and nothing else.
+//
+// Creates (or rebuilds) "3 - Order Confirmation (TEST)" with the 2x2 Order/Draft x Receipt/Tax
+// Invoice toggle, placed right after the live Order Confirmation tab so the two sit side by side.
+// It never opens, clears or renames the live tab or any other tab; re-running only rebuilds the
+// TEST tab itself.
+// ============================================================
+var OC_TEST_TAB = '3 - Order Confirmation (TEST)';
+function buildOrderConfirmationTest() {
+  var ss = SpreadsheetApp.openById(SS_ID);
+  var sh = ss.getSheetByName(OC_TEST_TAB);
+  if (!sh) {
+    var live = ss.getSheetByName('3 - Order Confirmation (OC)');
+    sh = live ? ss.insertSheet(OC_TEST_TAB, live.getIndex()) : ss.insertSheet(OC_TEST_TAB);
+  }
+  buildS3Toggle(sh);
+  sh.setTabColor('#DC2626');
+  ss.setActiveSheet(sh);
+  SpreadsheetApp.getUi().alert('Timanti WhatsApp Templates ' + VERSION + '\n\n'
+    + 'Built ONLY the tab "' + OC_TEST_TAB + '".\nNo other tab was touched.\n\n'
+    + 'Try all four combinations of Record Type (C5) and Document (C6).\n'
+    + 'Draft + Tax Invoice should show a red band and block every Send button.');
 }
 
 // ============================================================
@@ -244,9 +289,11 @@ function backupUrl(sh,r,formula){
     .setFontSize(7).setFontStyle('italic').setFontColor('#9CA3AF').setWrap(true).setVerticalAlignment('middle');
   return r+1;
 }
-function sendBtn(sh,r,prRow,phone,reqCells){
+// block (optional) = {cond, msg}: while cond is TRUE the button shows msg and builds no link at all.
+function sendBtn(sh,r,prRow,phone,reqCells,block){
   phone=phone||'C6';
   var chk=(reqCells||['C5','C6','C7']).map(function(c){return c+'=""';}).join(',');
+  var pre=block?'IF('+block.cond+',"'+block.msg+'",':'', post=block?')':'';
   rh(sh,r,17);
   sh.getRange(r,2,1,3).merge().setValue('SEND  |  click the green button')
     .setBackground(SEC_BG).setFontColor('#6B7280').setFontSize(7).setFontWeight('bold')
@@ -254,8 +301,8 @@ function sendBtn(sh,r,prRow,phone,reqCells){
   r++;
   rh(sh,r,40);
   sh.getRange(r,2,1,3).merge()
-    .setFormula('=IF(OR('+chk+'),"Fill all required (red) fields above first",'
-      +'HYPERLINK("https://wa.me/91"&'+phone+'&"?text="&ENCODEURL(B'+prRow+'),"  Open WhatsApp >>"))')
+    .setFormula('='+pre+'IF(OR('+chk+'),"Fill all required (red) fields above first",'
+      +'HYPERLINK("https://wa.me/91"&'+phone+'&"?text="&ENCODEURL(B'+prRow+'),"  Open WhatsApp >>"))'+post)
     .setBackground(WAG).setFontColor(WHITE).setFontSize(13).setFontWeight('bold')
     .setHorizontalAlignment('center').setVerticalAlignment('middle');
   return r+1;
@@ -289,6 +336,15 @@ function fOC(id,nm){
   return pdfGuard(id,nm,'Enter Order Number (C7) + Shopify Order ID (C8)',
     '"https://timanti.in/apps/download-pdf/orders/91013a1d4c9b2beea028/"&'+pdfMult(id,5255)+'&"/"&SUBSTITUTE(LOWER('+nm+'),"#","")&".pdf"');
 }
+// Sheet 3's single link. The two Order Printer templates keep their own hash + multiplier whether
+// the record is a draft or an order; only the drafts/ vs orders/ path segment follows the record.
+function fOCSwitch(id,nm,isDraft,isTax){
+  return '=IF(OR(NOT(ISNUMBER('+id+')),'+id+'<=0,'+nm+'=""),'
+    +'IF('+isDraft+',"Enter Draft Order Name + Draft Order ID above","Enter Order Number + Shopify Order ID above"),'
+    +'"https://timanti.in/apps/download-pdf/"&IF('+isDraft+',"drafts","orders")&"/"&'
+    +'IF('+isTax+',"00f6f4bcc547f05bf47f/"&'+pdfMult(id,8909)+',"91013a1d4c9b2beea028/"&'+pdfMult(id,5255)+')'
+    +'&"/"&SUBSTITUTE(LOWER('+nm+'),"#","")&".pdf")';
+}
 // Pricing Estimate. Shared BEFORE the customer commits, so it is always a DRAFT order — the path
 // segment is drafts/, and the ID that goes in is the draft order id, not an order id.
 function fEstimate(id,nm){
@@ -296,9 +352,10 @@ function fEstimate(id,nm){
   return pdfGuard(id,nm,'Enter Draft Order Name (C7) + Draft Order ID (C8)',
     '"https://timanti.in/apps/download-pdf/drafts/6fb7c284e3dd71764a10/"&'+pdfMult(id,8810)+'&"/"&SUBSTITUTE(LOWER('+nm+'),"#","")&".pdf"');
 }
-function waBackup(prCell,phone){
+function waBackup(prCell,phone,block){
   phone=phone||'C6';
-  return '="https://wa.me/91"&'+phone+'&"?text="&ENCODEURL('+prCell+')';
+  var url='"https://wa.me/91"&'+phone+'&"?text="&ENCODEURL('+prCell+')';
+  return block ? '=IF('+block.cond+',"'+block.msg+'",'+url+')' : '='+url;
 }
 
 // ═══════════════════════════════════════════════════
@@ -461,6 +518,137 @@ function buildS3(sh){
   r=backupUrl(sh,r,waBackup('B'+prC));
   r=gap(sh,r,4);
   r=sendBtn(sh,r,prC,'C6',['C5','C6','C7','C8']);
+}
+
+// ═══════════════════════════════════════════════════
+// SHEET 3 — ORDER CONFIRMATION  (2x2 toggle + 3 message versions)
+// C5 ◆Record (Order/Draft) | C6 ◆Document (Payment Receipt/Tax Invoice) | C7 block alert
+// C10 Name | C11 Mobile | C12 ★Order/Draft No | C13 ★Order/Draft ID | C14 Staff
+// C17 PDF link — one cell, follows the two toggles:
+//   Order + Payment Receipt = orders/9101.../{C13x5255}/1063.pdf
+//   Order + Tax Invoice     = orders/00f6.../{C13x8909}/1063.pdf
+//   Draft + Payment Receipt = drafts/9101.../{C13x5255}/1063.pdf
+//   Draft + Tax Invoice     = drafts/00f6.../{C13x8909}/1063.pdf  — INTERNAL CHECK, sending blocked
+// ═══════════════════════════════════════════════════
+function buildS3Toggle(sh){
+  clearSh(sh); setCols(sh);
+  sh.clearConditionalFormatRules();
+  var r=1;
+  r=hdr(sh,r,'ORDER CONFIRMATION — Message  (3 versions)',
+    'AFTER order is confirmed and paid. Pick the record + document first, fill the details once, then pick the right version below.');
+  r=gap(sh,r);
+
+  // The two toggles sit FIRST: they decide what the ID fields below mean (draft vs order) and which
+  // PDF the link points at, so staff set them before typing anything else.
+  r=sec(sh,r,'STEP 1  —  WHAT ARE YOU SENDING?');
+  var rec='C'+r;
+  r=inpDD(sh,r,'◆ Record Type','Order = converted order (usual).  Draft = the draft order is fully paid but not converted yet.',
+    ['Order','Draft']);
+  sh.getRange(rec).setValue('Order');
+  var doc='C'+r;
+  r=inpDD(sh,r,'◆ Document','Payment Receipt or Tax Invoice.  Changes the PDF link AND the "Your … is here" line in every version.',
+    ['Payment Receipt','Tax Invoice']);
+  sh.getRange(doc).setValue('Payment Receipt');
+  var isDraft=rec+'="Draft"', isTax=doc+'="Tax Invoice"';
+  var blocked='AND('+isDraft+','+isTax+')';
+  var docName='IF('+isTax+',"tax invoice","payment receipt")';
+
+  // Draft + Tax Invoice is for checking the invoice before conversion — never for the customer.
+  // The band is blank until that combination is picked, then turns red; the send buttons and
+  // backup URLs below refuse to build a WhatsApp link while it is showing.
+  rh(sh,r,26);
+  sh.getRange(r,2,1,3).merge()
+    .setFormula('=IF('+blocked+',"⛔  DRAFT + TAX INVOICE is for INTERNAL CHECKING only -- open the PDF link to check it, but do NOT send it to the customer. Sending is blocked.","")')
+    .setFontSize(9).setFontWeight('bold').setWrap(true).setVerticalAlignment('middle').setHorizontalAlignment('center');
+  var alertRange=sh.getRange(r,2,1,3);
+  r++;
+  r=gap(sh,r,8);
+
+  r=sec(sh,r,'STEP 2  —  ENTER DETAILS  —  fill once, used by all 3 versions');
+  var name='C'+r; r=inp(sh,r,'Customer Name','First name  (e.g.  Priya)');
+  var phone='C'+r; r=inp(sh,r,'Mobile Number','10 digits, no country code  (e.g.  9830380785)');
+  var num='C'+r;
+  r=inpReq(sh,r,'★ REQUIRED  Order Number',
+    'WITH the hash symbol  (e.g.  #1063)  — shown at the top of the order in Shopify.  '
+    +'Becomes the filename in the PDF link below.');
+  sh.getRange(r-1,2).setFormula('=IF('+isDraft+',"★ REQUIRED  Draft Order Name","★ REQUIRED  Order Number")');
+  var id='C'+r;
+  r=inpReq(sh,r,'★ REQUIRED  Shopify Order ID  (long number)','');
+  sh.getRange(r-1,2).setFormula('=IF('+isDraft+',"★ REQUIRED  Shopify Draft Order ID  (long number)","★ REQUIRED  Shopify Order ID  (long number)")');
+  sh.getRange(r-1,4).setFormula('=IF('+isDraft+','
+    +'"From URL bar:  Shopify Admin → Draft Orders → click draft → URL ends with  /draft_orders/1429984444673  → enter  1429984444673  here.",'
+    +'"From URL bar:  Shopify Admin → Orders → click order → URL ends with  /orders/7197127278849  → enter  7197127278849  here.")'
+    +'&"  Leave blank = broken link."');
+  var staff='C'+r; r=inpStaff(sh,r);
+  r=gap(sh,r,8);
+
+  r=sec(sh,r,'AUTO-GENERATED PDF LINK  (follows Step 1 — needs the number + ID above)');
+  var pdf='C'+r;
+  r=auto(sh,r,'PDF link  →  '+pdf,fOCSwitch(id,num,isDraft,isTax),'');
+  sh.getRange(r-1,2).setFormula('=IF('+isTax+',"Tax Invoice","Payment Receipt")&"  ("&IF('+isDraft+',"draft","order")&")  →  '+pdf+'"');
+  sh.getRange(r-1,4).setFormula('="Auto: "&IF('+isDraft+',"Draft ","")&"ID x "&IF('+isTax+',"8909","5255")&"  |  "&IF('+isDraft+',"drafts/","orders/")&" link"');
+  r=gap(sh,r,12);
+
+  // Red band only while the internal-check combination is selected.
+  sh.setConditionalFormatRules([
+    SpreadsheetApp.newConditionalFormatRule().whenFormulaSatisfied('='+blocked.replace(/C(\d+)/g,'$$C$$$1'))
+      .setBackground(R_FG).setFontColor(WHITE).setRanges([alertRange]).build()
+  ]);
+
+  var block={cond:blocked,msg:'Blocked -- Draft + Tax Invoice is for internal checking only'};
+  var req=[name,phone,num,id];
+
+  // Version A — Online
+  r=divider(sh,r);
+  r=sec(sh,r,'VERSION A  —  ONLINE ORDER  —  website purchase  —  usually a Payment Receipt');
+  r=note(sh,r,'timanti.in order paid via Razorpay / UPI.');
+  var prA=r;
+  r=preview(sh,r,
+    '="Hi "&'+name+'&","&CHAR(10)&CHAR(10)&'
+    +'"Your Timanti order "&'+num+'&" is confirmed -- thank you for your purchase."&CHAR(10)&CHAR(10)&'
+    +'"Your "&'+docName+'&" is here:"&CHAR(10)&'+pdf+'&CHAR(10)&CHAR(10)&'
+    +'"Your piece will be dispatched within 2 to 3 business days. Tracking details will follow once it ships."&CHAR(10)&CHAR(10)&'
+    +'"Please reach out on this number if there is anything you need."&CHAR(10)&CHAR(10)&'
+    +sign(staff));
+  r=gap(sh,r,6);
+  r=backupUrl(sh,r,waBackup('B'+prA,phone,block));
+  r=gap(sh,r,4);
+  r=sendBtn(sh,r,prA,phone,req,block);
+  r=gap(sh,r,12);
+
+  // Version B — Offline delivery
+  r=divider(sh,r);
+  r=sec(sh,r,'VERSION B  —  OFFLINE ORDER, DELIVERY  —  outstation shipment  —  usually a Tax Invoice');
+  r=note(sh,r,'Offline customer, piece to be shipped.');
+  var prB=r;
+  r=preview(sh,r,
+    '="Hi "&'+name+'&","&CHAR(10)&CHAR(10)&'
+    +'"Your Timanti order "&'+num+'&" is confirmed -- thank you for your trust in us."&CHAR(10)&CHAR(10)&'
+    +'"Your "&'+docName+'&" is here:"&CHAR(10)&'+pdf+'&CHAR(10)&CHAR(10)&'
+    +'"Your piece will be dispatched within 2 to 3 business days. Tracking details will follow once it ships."&CHAR(10)&CHAR(10)&'
+    +'"Please reach out on this number if there is anything you need."&CHAR(10)&CHAR(10)&'
+    +sign(staff));
+  r=gap(sh,r,6);
+  r=backupUrl(sh,r,waBackup('B'+prB,phone,block));
+  r=gap(sh,r,4);
+  r=sendBtn(sh,r,prB,phone,req,block);
+  r=gap(sh,r,12);
+
+  // Version C — Walk-in
+  r=divider(sh,r);
+  r=sec(sh,r,'VERSION C  —  WALK-IN / IN-STORE  —  collected at store  —  usually a Tax Invoice');
+  r=note(sh,r,'Walk-in purchase, collected at store.');
+  var prC=r;
+  r=preview(sh,r,
+    '="Hi "&'+name+'&","&CHAR(10)&CHAR(10)&'
+    +'"It was lovely having you with us! Your Timanti order "&'+num+'&" is confirmed."&CHAR(10)&CHAR(10)&'
+    +'"Your "&'+docName+'&" is here:"&CHAR(10)&'+pdf+'&CHAR(10)&CHAR(10)&'
+    +'"We hope you love your new piece. Please do not hesitate to reach out if you have any questions."&CHAR(10)&CHAR(10)&'
+    +sign(staff));
+  r=gap(sh,r,6);
+  r=backupUrl(sh,r,waBackup('B'+prC,phone,block));
+  r=gap(sh,r,4);
+  r=sendBtn(sh,r,prC,phone,req,block);
 }
 
 // ═══════════════════════════════════════════════════
