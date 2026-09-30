@@ -205,7 +205,7 @@
             {% if line_item.variant.option2 %} {{ line_item.variant.option2 }}{% endif %}
           </td>
           <td class="text-center">
-            {% assign gw = line_item.product.metafields.custom.gross_weight_g | default: line_item.product.metafields.custom.total_metal_weight_g %}
+            {% assign gw = line_item.variant.metafields.custom.gross_weight_g | default: line_item.product.metafields.custom.gross_weight_g %}
             {% if gw %}{{ gw | round: 2 }}{% else %}<span class="tbd">TBC</span>{% endif %}
           </td>
           <td class="text-center">

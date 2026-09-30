@@ -278,7 +278,7 @@
 
             Fallback order is dictated by what the print app can actually reach — only the first
             10 PINNED definitions of an owner type are exposed:
-              gross     _gross_wt     → variant total_metal_weight_g (#5) → variant gross_weight_g (#7)
+              gross     variant gross_weight_g (#7) → _gross_wt   (B2B: catalogue first; total_metal_weight_g is never read — it is routinely set equal to NET)
               net       _net_wt       → variant net_metal_weight_g (#6)
               diamond   _diamond_cts  → product totaldiamondweight (#4)
               gemstone  _gemstone_cts → product gemstone_weight (#5)
@@ -293,10 +293,7 @@
             {% if p.first == "_diamond_cts"  %}{% assign _dia = p.last | plus: 0 | times: li.quantity %}{% assign _dia_from_prop = true %}{% endif %}
             {% if p.first == "_gemstone_cts" %}{% assign _gem = p.last | plus: 0 | times: li.quantity %}{% assign _gem_from_prop = true %}{% endif %}
           {% endfor %}
-          {% unless _gw_from_prop %}
-            {% if li.variant.metafields.custom.total_metal_weight_g %}{% assign _gw = li.variant.metafields.custom.total_metal_weight_g | plus: 0 | times: li.quantity %}
-            {% elsif li.variant.metafields.custom.gross_weight_g    %}{% assign _gw = li.variant.metafields.custom.gross_weight_g       | plus: 0 | times: li.quantity %}{% endif %}
-          {% endunless %}
+          {% if li.variant.metafields.custom.gross_weight_g %}{% assign _gw = li.variant.metafields.custom.gross_weight_g | plus: 0 | times: li.quantity %}{% endif %}
           {% unless _nw_from_prop  %}{% if li.variant.metafields.custom.net_metal_weight_g %}{% assign _nw  = li.variant.metafields.custom.net_metal_weight_g | plus: 0 | times: li.quantity %}{% endif %}{% endunless %}
           {% unless _dia_from_prop %}{% if li.product.metafields.custom.totaldiamondweight %}{% assign _dia = li.product.metafields.custom.totaldiamondweight | plus: 0 | times: li.quantity %}{% endif %}{% endunless %}
           {% unless _gem_from_prop %}{% if li.product.metafields.custom.gemstone_weight    %}{% assign _gem = li.product.metafields.custom.gemstone_weight    | plus: 0 | times: li.quantity %}{% endif %}{% endunless %}

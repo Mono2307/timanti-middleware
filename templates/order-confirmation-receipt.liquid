@@ -492,14 +492,12 @@ below spans a different number of cells. One variable keeps them all in step.{% 
 
           {% comment %}── Gross Wt (indicative on this advance copy → trailing * ; TBC when unknown) ──{% endcomment %}
           <td class="text-center">
-            {% comment %}Order of trust: staff override, then the variant's gross_weight_g — the only key
-            that means GROSS — then whatever was captured on the line item. total_metal_weight_g is
-            routinely set equal to NET, so preferring it printed the net weight in the gross column.{% endcomment %}
+            {% comment %}Customer-facing: the weight captured on the line item wins. Order of trust: staff
+            override, then _gross_wt, then the variant's gross_weight_g. total_metal_weight_g is never
+            read — it is routinely set equal to NET.{% endcomment %}
             {% if gw_override != "" %}{{ gw_override }}*
+            {% elsif prop_gross_wt != "" %}{{ prop_gross_wt }}*
             {% elsif line_item.variant.metafields.custom.gross_weight_g %}{{ line_item.variant.metafields.custom.gross_weight_g | round: 2 }}*
-            {% elsif has_repriced_props and prop_gross_wt != "" %}{{ prop_gross_wt }}*
-            {% elsif line_item.variant.metafields.custom.total_metal_weight_g %}{{ line_item.variant.metafields.custom.total_metal_weight_g | round: 2 }}*
-            {% elsif line_item.product.metafields.custom.total_metal_weight_g %}{{ line_item.product.metafields.custom.total_metal_weight_g | round: 2 }}*
             {% else %}<span class="tbd">TBC</span>{% endif %}
           </td>
 
