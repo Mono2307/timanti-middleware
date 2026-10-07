@@ -273,6 +273,8 @@ app.get('/api/adjustment-report', async (req, res) => {
       // another order — so the voucher arrow format would print a dangling "→". Label it by how it
       // went back instead, which is what someone reconciling against the gateway actually needs.
       if (r.instrument_type === 'refund') {
+        // status 'voided' = staff removed the refund leg; the money never went back.
+        if (r.status === 'voided') continue;
         refundRows.push(r);
         const detail = [r.refund_mode, r.gateway_ref].filter(Boolean).join(' ');
         if (r.source_order_name) {

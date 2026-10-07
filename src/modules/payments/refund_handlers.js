@@ -109,15 +109,44 @@ function createRefundHandlers(deps) {
       const mf    = await readCustom(res, docId, token);
       const legs  = readRefunds(mf);
 
-      // Tag present but no legs: staff added it by hand, or blanked the fields again. Consume it, or
-      // it sits on the document re-triggering this on every future edit.
+      const docName      = doc.name || `#${docId}`;
+
+      // A ledger row whose slot no longer holds a refund was REMOVED by staff. Void it, so reports
+      // stop counting money that never went back. Runs before the no-legs exit: removing the last
+      // refund is exactly the case that used to leave everything behind (#D235).
+      const liveKeys = new Set(legs.map(l => refundLedgerKey(docName, l.slot)));
+      try {
+        const { data: rows } = await supabase.from('credit_instruments')
+          .select('id, serial_code')
+          .eq('instrument_type', REFUND_INSTRUMENT)
+          .eq('source_order_id', docId)
+          .neq('status', 'voided');
+        const gone = (rows || []).filter(r => !liveKeys.has(r.serial_code));
+        if (gone.length) {
+          const now = new Date().toISOString();
+          await supabase.from('credit_instruments')
+            .update({ status: 'voided', voided_at: now, updated_at: now })
+            .in('id', gone.map(r => r.id));
+          console.log(`[refunds] ${res.label} ${docId}: voided removed refund row(s) ${gone.map(r => r.serial_code).join(', ')}`);
+        }
+      } catch (e) {
+        console.error(`[refunds] void of removed refund rows for ${docId} failed: ${e.message}`);
+      }
+
+      // No legs left: either never had any, or staff just removed the last one. amount_refunded is
+      // derived, so it must follow the legs down to zero — leaving it was what kept a removed refund
+      // in the balance and on the invoice.
       if (!legs.length) {
-        console.log(`[refunds] ${res.label} ${docId}: sync-refund with no refund legs — nothing to record`);
+        const recorded = parseFloat(mf.amount_refunded);
+        if (Number.isFinite(recorded) && recorded !== 0) {
+          await res.writeMetafields(docId, { amount_refunded: '0.00' });
+          if (!isOrder) await syncDepositRow(docId, mf, 0);
+          console.log(`[refunds] ${res.label} ${docId}: last refund removed — amount_refunded reset to 0`);
+        }
         await res.removeTag(docId, 'sync-refund');
         return;
       }
 
-      const docName      = doc.name || `#${docId}`;
       const customer     = doc.customer || {};
       const customerName = [customer.first_name, customer.last_name].filter(Boolean).join(' ')
         || doc.billing_address?.name || '';
@@ -165,6 +194,19 @@ function createRefundHandlers(deps) {
           if (error) throw new Error(error.message);
           if (data && data.length) {
             console.log(`[refunds] ledger row ${serialCode} — Rs${leg.value} (${leg.mode || 'no mode'})`);
+          } else {
+            // Row already exists. ignoreDuplicates made an EDITED refund a silent no-op, so the ledger
+            // kept the old amount forever. Bring the staff-editable fields in line with the leg.
+            const { error: upErr } = await supabase.from('credit_instruments')
+              .update({
+                value: leg.value, refund_mode: leg.mode || null, gateway_ref: leg.ref || null,
+                issued_at: stamp, refunded_at: stamp, status: 'refunded', voided_at: null,
+                updated_at: new Date().toISOString(),
+              })
+              .eq('instrument_type', REFUND_INSTRUMENT)
+              .eq('serial_code', serialCode)
+              .or(`value.neq.${leg.value},status.eq.voided`);
+            if (upErr) throw new Error(upErr.message);
           }
         } catch (e) {
           // Bookkeeping must never break the Shopify-facing flow — the rule every other writer

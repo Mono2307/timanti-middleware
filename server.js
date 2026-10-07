@@ -2281,6 +2281,15 @@ async function copyDraftMetafieldsToOrder(draftOrderId, orderId, token) {
 // paid is the SUM of the installment legs, cad_advance INCLUDED — a design advance is money settled
 // against this document. pending is derived against the net, never gross. Everything here is
 // arithmetic only.
+// Tags this module owns: the panel's sync-payment nudge plus every tag derived from the payment and
+// refund metafields. All are rewritten (or, on an unpaid document, removed) on every pass.
+function isPaymentDerivedTag(t) {
+  return t.toLowerCase() === 'sync-payment' ||
+    t.startsWith('deposit:') || t.startsWith('paid:') || t.startsWith('pending:') ||
+    t.startsWith('pmode-') || t.startsWith('pmodes:') || /^i[1-9]:/.test(t) || t.startsWith('total:') ||
+    t.startsWith('refunded:') || /^r[1-9]:/.test(t);
+}
+
 async function applyPaymentTagsToOrder(orderId, token) {
   const headers = { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' };
 
@@ -2311,10 +2320,10 @@ async function applyPaymentTagsToOrder(orderId, token) {
   // Fold any pre-installment balance into its own leg before trusting the leg sum — otherwise a
   // document paid the old way has its balance written down by exactly the un-legged amount.
   const legsRaw     = readInstallments(mfMap);
-  const legacyFold  = materializeLegacyLeg(mfMap, legsRaw);
+  const legacyFold  = materializeLegacyLeg(mfMap, legsRaw, { tags: order.tags });
   const legs        = legacyFold.rows;
   const legacyPaid  = (parseFloat(mf('amount_paid') || 0) || 0) + (parseFloat(mf('amount_paid_final') || 0) || 0);
-  const amountPaid  = legs.length ? sumInstallments(legs) : legacyPaid;
+  const amountPaid  = legs.length ? sumInstallments(legs) : (legacyFold.cleared ? 0 : legacyPaid);
   const modes       = legs.length ? installmentModes(legs)
                                   : [mf('payment_mode_advance'), mf('payment_mode_final')].filter(Boolean);
   const modeAdvance = mf('payment_mode_advance');
@@ -2328,7 +2337,7 @@ async function applyPaymentTagsToOrder(orderId, token) {
   // order converted after a partial refund keeps a correct balance. Same rule as the draft twin:
   // amount_paid stays GROSS and the settled figure is derived. See payments/refunds.
   const refundLegs     = readRefunds(mfMap);
-  const amountRefunded = refundLegs.length ? sumRefunds(refundLegs) : (parseFloat(mf('amount_refunded')) || 0);
+  const amountRefunded = sumRefunds(refundLegs);   // legs only — see the draft twin (#D235)
   // "Fully paid" is ARITHMETIC ONLY — see the draft variant for why payment_status/is_finalized must
   // never feed back in as inputs here (one-way latch), and for what isUnpaid is guarding against.
   const st = paymentState({ amountPaid, amountRefunded, collectionBase: netBase, epsilon: PAID_EPSILON });
@@ -2349,7 +2358,7 @@ async function applyPaymentTagsToOrder(orderId, token) {
     // amount_paid is DERIVED from the legs. The admin panel writes legs but never the total (it is
     // read-only there), and a leg edited by hand changes the sum this figure must follow — so
     // re-summing here is what keeps the figure the invoice prints actually true.
-    if (legs.length) {
+    if (legs.length || legacyFold.cleared) {
       const curPaid = parseFloat(mf('amount_paid'));
       if (!Number.isFinite(curPaid) || Math.abs(curPaid - amountPaid) >= 0.5) patch.amount_paid = amountPaid.toFixed(2);
       // Legacy field pinned to 0 so readers still summing the old pair get total + 0, never double.
@@ -2361,6 +2370,17 @@ async function applyPaymentTagsToOrder(orderId, token) {
       if (isFinalized) patch.is_finalized = 'false';
       if (paymentStatus !== null && paymentStatus !== 'None') patch.payment_status = 'None';
       if (Object.keys(patch).length) await updateOrderMetafields(orderId, patch, token);
+      // Consume sync-payment and the stale payment tags — see the draft twin (#D231).
+      const existing = (order.tags || '').split(',').map(t => t.trim()).filter(Boolean);
+      const kept = existing.filter(t => !isPaymentDerivedTag(t));
+      if (kept.length !== existing.length) {
+        await axios.put(
+          `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/orders/${orderId}.json`,
+          { order: { id: parseInt(orderId), tags: kept.join(', ') } },
+          { headers, timeout: 10000 }
+        );
+        console.log(`Order ${orderId}: unpaid — cleared ${existing.length - kept.length} payment tag(s)`);
+      }
       return false;   // no payment tags on an unpaid document — same as before
     }
     const wantStatus = isUnpaid ? 'None' : (isFull ? 'Full' : 'Partial');  // choice-list: Partial|Full|None
@@ -2376,15 +2396,8 @@ async function applyPaymentTagsToOrder(orderId, token) {
   }
 
   const existingTags = (order.tags || '').split(',').map(t => t.trim()).filter(Boolean);
-  const cleanedTags  = existingTags.filter(t =>
-    // sync-payment is the admin panel's nudge; consume it here exactly as the draft twin does.
-    t.toLowerCase() !== 'sync-payment' &&
-    !t.startsWith('deposit:') && !t.startsWith('paid:') && !t.startsWith('pending:') &&
-    !t.startsWith('pmode-') && !t.startsWith('pmodes:') && !/^i[1-9]:/.test(t) && !t.startsWith('total:') &&
-    // Rewritten from the metafields on every pass, exactly like the payment tags — a stale
-    // refunded:/r1: left behind by an edited leg would print a refund that no longer exists.
-    !t.startsWith('refunded:') && !/^r[1-9]:/.test(t)
-  );
+  // sync-payment is the admin panel's nudge; consume it here exactly as the draft twin does.
+  const cleanedTags  = existingTags.filter(t => !isPaymentDerivedTag(t));
 
   const paymentTags = [
     isUnpaid ? 'deposit:refunded' : (isFull ? 'deposit:fully-paid' : 'deposit:partial'),
@@ -2465,10 +2478,12 @@ async function applyPaymentTagsToDraftOrder(draftOrderId, token, { netOverride =
   // Fold any pre-installment balance into its own leg before trusting the leg sum — otherwise a
   // document paid the old way has its balance written down by exactly the un-legged amount.
   const legsRaw     = readInstallments(mfMap);
-  const legacyFold  = materializeLegacyLeg(mfMap, legsRaw);
+  const legacyFold  = materializeLegacyLeg(mfMap, legsRaw, { tags: draft.tags });
   const legs        = legacyFold.rows;
   const legacyPaid  = (parseFloat(mf('amount_paid') || 0) || 0) + (parseFloat(mf('amount_paid_final') || 0) || 0);
-  const amountPaid  = legs.length ? sumInstallments(legs) : legacyPaid;
+  // cleared: every leg was removed from a document that had legs. Nothing is paid — the stale
+  // amount_paid must not be read back as a legacy payment.
+  const amountPaid  = legs.length ? sumInstallments(legs) : (legacyFold.cleared ? 0 : legacyPaid);
   const modes       = legs.length ? installmentModes(legs)
                                   : [mf('payment_mode_advance'), mf('payment_mode_final')].filter(Boolean);
   const modeAdvance = mf('payment_mode_advance');
@@ -2489,8 +2504,10 @@ async function applyPaymentTagsToDraftOrder(draftOrderId, token, { netOverride =
   // Refunds are a PARALLEL dimension to the legs, never a negative leg (readInstallments drops
   // values <= 0, and the four slots belong to payments). amount_paid above stays GROSS collected and
   // is never written down; what the customer has actually settled is derived. See payments/refunds.
+  // The legs are the only source. amount_refunded is derived from them and is never reset when the
+  // last leg is removed, so falling back to it brought a deleted refund back into the balance (#D235).
   const refundLegs     = readRefunds(mfMap);
-  const amountRefunded = refundLegs.length ? sumRefunds(refundLegs) : (parseFloat(mf('amount_refunded')) || 0);
+  const amountRefunded = sumRefunds(refundLegs);
   // "Fully paid" is ARITHMETIC ONLY: what is owed vs what is paid, right now.
   //
   // It previously read `isFinalized || payment_status === 'full' || ...`, which made payment_status
@@ -2531,7 +2548,7 @@ async function applyPaymentTagsToDraftOrder(draftOrderId, token, { netOverride =
     // amount_paid is DERIVED from the legs. The admin panel writes legs but never the total (it is
     // read-only there), and a leg edited by hand changes the sum this figure must follow — so
     // re-summing here is what keeps the figure the invoice prints actually true.
-    if (legs.length) {
+    if (legs.length || legacyFold.cleared) {
       const curPaid = parseFloat(mf('amount_paid'));
       if (!Number.isFinite(curPaid) || Math.abs(curPaid - amountPaid) >= 0.5) patch.amount_paid = amountPaid.toFixed(2);
       // Legacy field pinned to 0 so readers still summing the old pair get total + 0, never double.
@@ -2547,6 +2564,20 @@ async function applyPaymentTagsToDraftOrder(draftOrderId, token, { netOverride =
       if (isFinalized) patch.is_finalized = 'false';
       if (paymentStatus !== null && paymentStatus !== 'None') patch.payment_status = 'None';
       if (Object.keys(patch).length) await updateDraftOrderMetafields(draftOrderId, patch);
+      // Consume sync-payment and drop the payment/refund tags here too. Returning with them still on
+      // was the worst part of this: a leftover sync-payment makes the panel's next tagsAdd a no-op, a
+      // no-op fires no webhook, and every later save on the draft silently never recomputed (#D231).
+      // Stale deposit:/paid:/iN:/refunded: tags would also keep printing removed money on the invoice.
+      const existing = (draft.tags || '').split(',').map(t => t.trim()).filter(Boolean);
+      const kept = existing.filter(t => !isPaymentDerivedTag(t));
+      if (kept.length !== existing.length) {
+        await axios.put(
+          `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}.json`,
+          { draft_order: { id: parseInt(draftOrderId), tags: kept.join(', ') } },
+          { headers, timeout: 10000 }
+        );
+        console.log(`Draft ${draftOrderId}: unpaid — cleared ${existing.length - kept.length} payment tag(s)`);
+      }
       return false;   // no payment tags on an unpaid document — same as before
     }
     const wantStatus = isUnpaid ? 'None' : (isFull ? 'Full' : 'Partial');  // choice-list: Partial|Full|None
@@ -2566,14 +2597,9 @@ async function applyPaymentTagsToDraftOrder(draftOrderId, token, { netOverride =
   }
 
   const existingTags = (draft.tags || '').split(',').map(t => t.trim()).filter(Boolean);
-  const cleanedTags  = existingTags.filter(t =>
-    t.toLowerCase() !== 'sync-payment' &&
-    !t.startsWith('deposit:') && !t.startsWith('paid:') && !t.startsWith('pending:') &&
-    !t.startsWith('pmode-') && !t.startsWith('pmodes:') && !/^i[1-9]:/.test(t) && !t.startsWith('total:') &&
-    // Refund tags are rewritten from the metafields on every pass, exactly like the payment ones —
-    // a stale refunded:/r1: left behind by an edited leg would print a refund that no longer exists.
-    !t.startsWith('refunded:') && !/^r[1-9]:/.test(t)
-  );
+  // Refund tags are rewritten from the metafields on every pass, exactly like the payment ones —
+  // a stale refunded:/r1: left behind by an edited leg would print a refund that no longer exists.
+  const cleanedTags  = existingTags.filter(t => !isPaymentDerivedTag(t));
 
   const paymentTags = [
     isUnpaid ? 'deposit:refunded' : (isFull ? 'deposit:fully-paid' : 'deposit:partial'),

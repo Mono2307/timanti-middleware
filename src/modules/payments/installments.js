@@ -78,9 +78,24 @@ function installmentModes(rows) {
 // impossible: blank a leg to remove a payment and the difference would just reappear as a new
 // leg, pinning the order permanently at its old total and at "fully paid".
 //
+// "No legs" alone cannot tell a never-migrated document from one whose legs staff have just blanked,
+// and getting that wrong is what made removing the LAST payment impossible: the leg was deleted, the
+// stale amount_paid was folded straight back into slot 1, and the panel showed the old value again
+// (#D242). A document has been in the installment model if it carries an `iN:` tag (written on
+// every recompute while a leg exists) or any leftover installment_N_* key. Those documents get
+// `cleared: true` — no fold, and the caller resets amount_paid to 0.
+const INSTALLMENT_TAG_RE = /^i[1-9]:/;
+const INSTALLMENT_KEY_RE = /^installment_[1-9]_(value|mode|date|type)$/;
+function hadInstallments(mfMap, tags) {
+  const tagList = Array.isArray(tags) ? tags : String(tags || '').split(',');
+  if (tagList.some(t => INSTALLMENT_TAG_RE.test(String(t).trim()))) return true;
+  return Object.keys(mfMap || {}).some(k => INSTALLMENT_KEY_RE.test(k));
+}
+
 // Returns the effective rows plus the patch needed to persist the synthetic leg ({} when none).
-function materializeLegacyLeg(mfMap, rows) {
+function materializeLegacyLeg(mfMap, rows, { tags } = {}) {
   if ((rows || []).length) return { rows, patch: {} };
+  if (hadInstallments(mfMap, tags)) return { rows: rows || [], patch: {}, cleared: true };
   const recorded = parseFloat((mfMap || {}).amount_paid) || 0;
   const residue  = recorded - sumInstallments(rows);
   if (!(residue >= 0.5)) return { rows, patch: {} };
@@ -144,4 +159,5 @@ module.exports = {
   installmentModes,
   installmentLegPatch,
   materializeLegacyLeg,
+  hadInstallments,
 };

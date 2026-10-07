@@ -206,6 +206,26 @@ t('no-op once legs already reconcile', () => {
   assert.deepStrictEqual(patch, {});
   assert.strictEqual(rows.length, 2);
 });
+t('#D242: removing the ONLY payment is not undone by a legacy fold (iN: tag present)', () => {
+  // Staff deleted installment_1_value; amount_paid still holds the old figure until the recompute.
+  const map = { amount_paid: '207038.45' };
+  const out = materializeLegacyLeg(map, readInstallments(map), { tags: 'deposit:fully-paid, i1:207038.45@upi@2026-10-06' });
+  assert.deepStrictEqual(out.patch, {});
+  assert.strictEqual(out.cleared, true);
+  assert.strictEqual(sumInstallments(out.rows), 0);
+});
+t('#D242: a leftover installment_N_mode/date key also marks the document as installment-era', () => {
+  const map = { amount_paid: '5000', installment_1_mode: 'card', installment_1_date: '2026-10-01' };
+  const out = materializeLegacyLeg(map, readInstallments(map), { tags: '' });
+  assert.deepStrictEqual(out.patch, {});
+  assert.strictEqual(out.cleared, true);
+});
+t('a genuinely pre-installment document still folds (no iN: tag, no installment keys)', () => {
+  const map = { amount_paid: '10000' };
+  const out = materializeLegacyLeg(map, readInstallments(map), { tags: 'deposit:partial, paid:Rs10000' });
+  assert.strictEqual(out.patch.installment_1_value, '10000.00');
+  assert.ok(!out.cleared);
+});
 t('no-op on a clean draft with no payments', () => {
   assert.deepStrictEqual(materializeLegacyLeg({}, []).patch, {});
 });

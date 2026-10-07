@@ -56,7 +56,7 @@ const backfillInstallments = require('../payments/backfill-installments');
 // buildInstallmentMfDefs loops to MAX_INSTALLMENTS. It read the bare name — in scope while this
 // lived in server.js, a free variable once it moved — so /api/metafield-definitions/ensure threw
 // the moment it was called. It is exported by the payments module; take it from there.
-const { MAX_INSTALLMENTS, readInstallments, sumInstallments } = require('../payments/installments');
+const { MAX_INSTALLMENTS, readInstallments, sumInstallments, hadInstallments } = require('../payments/installments');
 // paymentState is the shared balance arithmetic. The audit below takes it from here rather than
 // re-deriving the formula: an auditor that computes the balance its own way would drift from the live
 // path and start reporting healthy documents as broken.
@@ -437,11 +437,14 @@ async function runAuditCollectionFigures(req, res) {
       // the live path would report healthy documents as broken forever.
       const expectedNet = Math.max(0, total - abs('exchange_note_value') - abs('voucher_value') - abs('old_gold_value'));
 
+      // Same rules as the live path: a document that had legs and lost them all has paid 0, and
+      // refunds come from the legs only — otherwise the audit would bless the stale figures.
       const legs     = readInstallments(mfMap);
       const paid     = legs.length ? sumInstallments(legs)
-                                   : (num('amount_paid') + num('amount_paid_final'));
+                     : hadInstallments(mfMap, draft.tags) ? 0
+                     : (num('amount_paid') + num('amount_paid_final'));
       const refunds  = readRefunds(mfMap);
-      const refunded = refunds.length ? sumRefunds(refunds) : num('amount_refunded');
+      const refunded = sumRefunds(refunds);
 
       const st = paymentState({ amountPaid: paid, amountRefunded: refunded, collectionBase: expectedNet, epsilon: 1 });
       const expectedPending = Math.max(0, st.amountPending);
