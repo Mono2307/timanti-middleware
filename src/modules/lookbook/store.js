@@ -15,6 +15,7 @@
  * is the difference between a row Postgres is happy with and one it is not.
  */
 
+const fs = require('fs');
 const zlib = require('zlib');
 const crypto = require('crypto');
 const { supabase } = require('../../core/supabase');
@@ -141,8 +142,41 @@ function msUntilNextRebuild(now = Date.now()) {
  * catalog walk -- staff see yesterday's imagery (with live prices over it) while the rebuild runs
  * behind them.
  */
+// The daily gold-rate reprice writes this while it runs (admin/routes.js). A clock-time rebuild that
+// lands mid-run either loses the GraphQL bucket to it and fails, or captures half-repriced prices --
+// and either way the lookbook then sat stale until the next slot. Seen 2026-10-07: the run started
+// 11:03 IST and was still going at the 14:00 rebuild.
+const PRICE_UPDATE_FLAG = '/app/Outputs/price_update.running';
+const RETRY_MS = 15 * 60 * 1000;
+const MAX_TRIES = 4;
+const MAX_DEFERS = 24;   // 6h of waiting on a reprice before building anyway
+
+const repriceRunning = () => { try { return fs.existsSync(PRICE_UPDATE_FLAG); } catch { return false; } };
+
+/**
+ * Rebuild, retrying a failure instead of leaving yesterday's catalog up until the next slot, and
+ * waiting out a reprice that is still running. Never throws.
+ */
+function rebuildSoon(why, { tries = 0, defers = 0 } = {}) {
+  if (repriceRunning() && defers < MAX_DEFERS) {
+    log.info('lookbook', `${why} rebuild deferred - gold-rate reprice still running`);
+    setTimeout(() => rebuildSoon(why, { tries, defers: defers + 1 }), RETRY_MS);
+    return;
+  }
+  refresh().catch((err) => {
+    log.error('lookbook', `${why} rebuild failed (attempt ${tries + 1}/${MAX_TRIES}):`, err.message);
+    if (tries + 1 < MAX_TRIES) setTimeout(() => rebuildSoon(why, { tries: tries + 1, defers }), RETRY_MS);
+  });
+}
+
+/** Called when the reprice child exits, so the lookbook carries the new prices within minutes. */
+function afterPriceUpdate() {
+  // A short pause lets Shopify's bucket refill after the reprice's last mutations.
+  setTimeout(() => rebuildSoon('post-reprice'), 60 * 1000);
+}
+
 function start() {
-  const kick = (why) => refresh().catch((err) => log.error('lookbook', `${why} rebuild failed:`, err.message));
+  const kick = (why) => rebuildSoon(why);
 
   setTimeout(async () => {
     const loaded = await loadFromSupabase();
@@ -171,4 +205,4 @@ function start() {
 /** Pre-gzipped response body, or null before the first snapshot exists. */
 const gzipped = () => _gzip;
 
-module.exports = { get, etag, gzipped, ageMs, refresh, start, loadFromSupabase, msUntilNextRebuild, CONFIG_KEY, REBUILD_HOUR_IST, REBUILD_HOURS };
+module.exports = { get, etag, gzipped, ageMs, refresh, start, afterPriceUpdate, loadFromSupabase, msUntilNextRebuild, CONFIG_KEY, REBUILD_HOUR_IST, REBUILD_HOURS };

@@ -175,6 +175,12 @@ function _spawnPriceUpdate(extraArgs = []) {
       ? `[price-update] KILLED by ${signal} — run did NOT complete, no report email will arrive`
       : `[price-update] exited with code ${code}`);
 
+    // Rebuild the lookbook off the prices just written, rather than waiting for a clock slot that
+    // may have fired mid-run. Even a partial run moved prices, so this fires on any exit. Lazy
+    // require keeps the price job independent of the lookbook module loading.
+    try { require('../lookbook/store').afterPriceUpdate(); }
+    catch (err) { console.error(`[price-update] lookbook rebuild hook failed: ${err.message}`); }
+
     // The alert of last resort. Every silent failure in this saga was a run ending without
     // Python's except block running — SIGKILL on a deploy or an OOM — so the orchestrator's own
     // FATAL email could not fire. This fires from the PARENT, which is still alive to notice,
