@@ -255,6 +255,52 @@ function register(app /* , ctx */) {
     } catch (e) { return res.status(500).json({ success: false, error: e.message }); }
   });
 
+  // Live acceptance self-test (loyalty/UAT_LOYALTY.md). Creates and deletes scratch drafts and its own
+  // codes on a UAT test customer; never creates an order. Driven by tools/loyalty-uat.js.
+  app.post('/api/loyalty/selftest', requireEnabled, requireAdmin, (req, res) => {
+    const b = req.body || {};
+    if (!b.customerId || !b.eligibleVariantId) return res.status(400).json({ success: false, error: 'customerId and eligibleVariantId are required' });
+    return res.json({ success: true, ...require('./selftest').start(b) });
+  });
+  app.get('/api/loyalty/selftest', requireEnabled, requireAdmin, (req, res) => res.json({ success: true, job: require('./selftest').status() }));
+
+  // Simulate the benefit on any cart and date without creating anything: the engine with real
+  // catalogue facts and either a real customer or a made-up profile.
+  //   { lines: [{variant_id, quantity}], customerId? | profile?: {points, birthday, anniversary}, date? }
+  app.post('/api/loyalty/simulate/cart', requireEnabled, requireAdmin, async (req, res) => {
+    try {
+      const b = req.body || {};
+      const cfg = await loadConfig();
+      let prof = b.profile || {};
+      if (b.customerId) {
+        const c = await readCustomer(String(b.customerId));
+        prof = { points: await ledger.customerPoints(supabase, String(b.customerId)), birthday: c && c.birthday, anniversary: c && c.anniversary };
+      }
+      const facts = await online.cartLineFacts(b.lines || []);
+      const lines = (b.lines || []).map(l => {
+        const f = facts[String(l.variant_id)] || {};
+        const q = Math.max(1, parseInt(l.quantity, 10) || 1);
+        return { variant_id: String(l.variant_id), title: f.title, sku: f.sku, productType: f.productType, tags: f.tags,
+          collections: f.collections, jewelCode: f.jewelCode, diamond: (f.diamondUnit || 0) * q };
+      });
+      const r = E.computeLoyalty({ ...prof, lines, cfg, now: b.date ? new Date(b.date) : new Date() });
+      return res.json({ success: true, ...r, onlineAmount: E.onlineAmount(r.total), lines });
+    } catch (e) { return res.status(500).json({ success: false, error: e.message }); }
+  });
+
+  // What an existing order earns under the rule, without writing anything. { orderId }
+  app.post('/api/loyalty/simulate/order', requireEnabled, requireAdmin, async (req, res) => {
+    try {
+      const id = String((req.body || {}).orderId || '').replace(/\D/g, '');
+      const { order } = await getJson(`orders/${id}.json`);
+      const data = await graphql(`query($id: ID!) { order(id: $id) { r: metafield(namespace: "custom", key: "amount_refunded") { value } } }`, { id: `gid://shopify/Order/${id}` });
+      const refunded = Number(data.order && data.order.r && data.order.r.value) || 0;
+      const { data: row } = await supabase.from('loyalty_ledger').select('*').eq('entry_key', `order:${id}`).maybeSingle();
+      return res.json({ success: true, order: order.name, customerId: order.customer && order.customer.id,
+        earns: E.orderEarnValue(order, { amountRefunded: refunded }), ledger: row || null });
+    } catch (e) { return res.status(500).json({ success: false, error: e.message }); }
+  });
+
   app.post('/api/loyalty/sweep', requireEnabled, requireAdmin, async (req, res) => {
     try { return res.json({ success: true, ...(await runLoyaltySweep({ dryRun: !!req.query.dryRun })) }); }
     catch (e) { return res.status(500).json({ success: false, error: e.message }); }

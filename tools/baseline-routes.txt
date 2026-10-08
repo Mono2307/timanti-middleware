@@ -1,4 +1,4 @@
-# route inventory — 108 routes across 1 express app(s)
+# route inventory — 112 routes across 1 express app(s)
 # Regenerate: node tools/route-inventory.js --write
 # This file must not change during a pure move/refactor.
 
@@ -41,7 +41,11 @@ GET    /api/loyalty/draft-preview
 POST   /api/loyalty/proxy/apply
 GET    /api/loyalty/proxy/benefits
 GET    /api/loyalty/redemptions
+GET    /api/loyalty/selftest
+POST   /api/loyalty/selftest
 POST   /api/loyalty/setup
+POST   /api/loyalty/simulate/cart
+POST   /api/loyalty/simulate/order
 POST   /api/loyalty/sweep
 POST   /api/loyalty/voucher-combos
 GET    /api/metafield-definitions/ensure

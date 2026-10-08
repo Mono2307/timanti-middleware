@@ -124,7 +124,21 @@ async function storeRedemptionForDraft(supabase, draftId) {
   return data || null;
 }
 
+/** Remove ledger rows whose entry_key starts with prefix — the self-test's own rows only. */
+async function deleteEntriesByPrefix(supabase, prefix) {
+  if (!/^(adjust|order):uat-/.test(prefix)) throw new Error('refusing to delete non-UAT ledger rows');
+  const { error } = await supabase.from(LEDGER).delete().like('entry_key', `${prefix}%`);
+  if (error) throw new Error(`loyalty ledger cleanup: ${error.message}`);
+}
+
+/** Remove a redemption row by code — the self-test's own codes only. */
+async function deleteRedemptionByCode(supabase, code) {
+  const { error } = await supabase.from(REDEMPTIONS).delete().eq('code', String(code));
+  if (error) throw new Error(`loyalty redemption cleanup: ${error.message}`);
+}
+
 module.exports = {
+  deleteEntriesByPrefix, deleteRedemptionByCode,
   upsertOrderEntry, addAdjustment, customerPoints, customerEntries,
   insertRedemption, getRedemptionByCode, updateRedemption,
   pendingCodesFor, expiredPendingCodes, codesIssuedSince, storeRedemptionForDraft,
