@@ -22,3 +22,9 @@ use_legacy_install_flow = false
 redirect_urls = [ ]
 [sidekick]
 extensions_summary = "Manage jewelry order and draft order metafields through a structured admin interface."
+# Loyalty: the storefront cart block ("My benefits") reaches the middleware through this proxy.
+# https://<store>/apps/loyalty/benefits → <url>/benefits, signed by Shopify with this app's secret.
+[app_proxy]
+url = "https://timanti-middleware.fly.dev/api/loyalty/proxy"
+subpath = "loyalty"
+prefix = "apps"

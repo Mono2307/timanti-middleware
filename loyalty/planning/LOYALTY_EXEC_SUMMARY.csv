@@ -1,0 +1,23 @@
+Topic,Plan A: Build it ourselves,Plan B: Use ready-made Shopify apps,Who wins
+In short,Simple and fully in our hands; looks plainer to customers,Looks and feels richer for customers; costs a monthly fee and relies on outside companies,Tie
+How a customer uses it online,"Logs in, sees ""My benefits"" in the cart, taps to apply","Logs in, sees ""My benefits"" in the cart, taps to apply",Tie
+Discount only on the diamond part of the price,Yes - same calculation online and in-store,Yes - but in-store needs testing first,A
+Can be used with a voucher or exchange note,Yes,Yes,Tie
+Blocks other promo codes,Yes,Yes,Tie
+In-store use by staff,Same staff screen and steps they already use,Staff press one extra button; works only if testing passes,A
+Fits with our current systems,"Fits right in - pricing, invoices and vouchers all stay as they are",Two new outside apps to connect and keep in sync,A
+Ease of getting started,No new companies to sign up with,Need trials and setup with two app companies,A
+Counts customers' past purchases,Yes - we load the full history ourselves,Only if the app's import tool works - still to be checked,A
+What customers see in their account,Simple: their tier and how much more to spend for the next one,Polished: tier badge and progress bar,B
+Rewards experience for customers,Discount only,"Discount plus points, reward history and referrals",B
+Birthday and anniversary extra 2%,Yes,Yes,Tie
+Marketing messages (new tier / birthday),Basic emails; campaigns set up separately,"Ready-made campaigns on email, SMS and WhatsApp",B
+Look and feel,Plain; making it fancy is extra work,Attractive designs out of the box,B
+Changing tiers or discount %,One setting in Shopify,Change in the apps' own screens (two places),A
+Who holds the customer tier data,We do - one place,The outside app,A
+Works with our current Shopify plan and GoKwik checkout,Yes,Yes,Tie
+Monthly cost,None,About US$100-400 a month depending on which apps we pick (cheaper apps may not import past purchases),A
+Effort to set up,High,Medium,B
+Ongoing upkeep,Our team looks after it,The app companies look after their apps; we look after the connections,B
+Main risk,Plainer customer experience,Relying on two outside companies; some features not yet confirmed,A
+Recommendation,"Go with Plan A. It fits our current systems, has no monthly fees, counts every past purchase and keeps all customer data with us. Plan B wins on how it looks and on marketing, but costs up to US$400 a month and still has to be proven in testing. If we later want a fancier customer experience, we can add a rewards app on top of Plan A without starting again.",,A

@@ -1,0 +1,14 @@
+api_version = "2025-10"
+
+[[extensions]]
+name = "t:name"
+handle = "loyalty-account"
+type = "ui_extension"
+
+# The customer's loyalty tier on their account Profile page (new customer accounts).
+[[extensions.targeting]]
+module = "./src/ProfileBlock.jsx"
+target = "customer-account.profile.block.render"
+
+[extensions.capabilities]
+api_access = true

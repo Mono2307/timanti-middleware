@@ -586,6 +586,11 @@ export default function MetafieldManager({ surface = "block" } = {}) {
   const [advRef, setAdvRef] = useState("");
   const [advBusy, setAdvBusy] = useState(false);
   const [advNote, setAdvNote] = useState("");
+  // Loyalty (in-store): the middleware's preview of what "Apply loyalty" would do on this draft.
+  const [loyalty, setLoyalty] = useState(null);
+  const [loyaltyErr, setLoyaltyErr] = useState("");
+  const [loyaltyBusy, setLoyaltyBusy] = useState(false);
+  const [loyaltyNote, setLoyaltyNote] = useState("");
   const [refundEmailBusy, setRefundEmailBusy] = useState(false);
   const [refundEmailNote, setRefundEmailNote] = useState("");
   // Repair class selector: the document's live tags (so the panel reports what the workflow actually
@@ -774,6 +779,31 @@ export default function MetafieldManager({ surface = "block" } = {}) {
     })();
     return () => { active = false; };
   }, [ctx.scope, repairRef, refreshTick]);
+
+  // Loyalty preview. The panel app has no customer access, so the middleware reads the customer's
+  // tier and the draft's pieces and answers with what Apply would do. Session-token authenticated,
+  // same as the repair lookup above. Draft action surface only.
+  useEffect(() => {
+    if (ctx.scope !== "draft" || surface !== "action" || !ownerId) return;
+    let active = true;
+    (async () => {
+      try {
+        const idToken = await shopify.auth.idToken();
+        if (!idToken) throw new Error("this admin session could not be verified");
+        const draftId = String(ownerId).split("/").pop();
+        const res = await fetch(`${MIDDLEWARE_BASE_URL}/api/loyalty/draft-preview?draft=${encodeURIComponent(draftId)}`,
+          { headers: { Authorization: `Bearer ${idToken}` } });
+        const body = await res.json().catch(() => null);
+        if (!active) return;
+        if (!res.ok) throw new Error(body?.error || `HTTP ${res.status}`);
+        setLoyalty(body);
+        setLoyaltyErr("");
+      } catch (e) {
+        if (active) setLoyaltyErr(`Loyalty unavailable: ${e?.message || e}`);
+      }
+    })();
+    return () => { active = false; };
+  }, [ctx.scope, surface, ownerId, refreshTick]);
 
   // What the checkboxes actually show, and what "Save pieces" writes. Before staff touch anything an
   // empty selection renders as every piece ticked (the stored convention); after they touch it the
@@ -1212,6 +1242,80 @@ export default function MetafieldManager({ surface = "block" } = {}) {
       setAdvBusy(false);
     }
   }
+
+  // Loyalty is a trigger tag like the voucher: the middleware checks the tier and that no other
+  // discount is on the draft, records which pieces qualify and reprices. Refusals come back as a
+  // short "loyalty-invalid" tag plus a full sentence in the note shown here.
+  async function loyaltyAction(tag, msg) {
+    if (!ownerId) return;
+    setLoyaltyBusy(true);
+    setLoyaltyNote("");
+    try {
+      const res = await shopify.query(TAGS_ADD_MUTATION, { variables: { id: ownerId, tags: [tag] } });
+      const errs = collectErrors(res, "tagsAdd");
+      if (errs.length) throw new Error(errs.join("; "));
+      setLoyaltyNote(msg);
+      setTimeout(() => setRefreshTick((t) => t + 1), 5000);
+    } catch (e) {
+      setLoyaltyNote(`Couldn't update loyalty: ${e?.message || e}`);
+    } finally {
+      setLoyaltyBusy(false);
+    }
+  }
+
+  const inr = (v) => "₹" + Math.round(Number(v) || 0).toLocaleString("en-IN");
+
+  const renderLoyalty = () => {
+    if (ctx.scope !== "draft") return null;
+    const p = loyalty?.preview;
+    const applied = loyalty?.applied;
+    const occ = p?.occasion?.occasions?.length ? ` + ${p.occasion.pct}% (${p.occasion.occasions.join(" & ")} month)` : "";
+    const tierLine = p?.tier
+      ? `${p.tier.name} member · lifetime spend ${inr(p.points)} · ${p.basePct}% off diamond${occ}`
+      : p ? `No tier yet · lifetime spend ${inr(p.points)}${p.next ? ` · ${inr(p.gapToNext)} to ${p.next.name}` : ""}` : "";
+    return (
+      <s-section heading="Loyalty">
+        <s-stack direction="block" gap="base">
+          {loyaltyErr ? <s-text tone="subdued">{loyaltyErr}</s-text> : null}
+          {!loyalty && !loyaltyErr ? <s-text tone="subdued">Checking the customer's loyalty tier…</s-text> : null}
+          {p?.customer ? <s-text>{`${p.customer.name}: ${tierLine}`}</s-text> : null}
+          {applied ? (
+            <s-text>{`Applied: ${applied.name} ${applied.rate}% off the diamond value of ${(applied.eligible_variants || []).length} piece(s). Other discounts are blocked while loyalty is on.`}</s-text>
+          ) : null}
+          {p && p.ok ? (
+            <s-stack direction="block" gap="small-200">
+              {(p.lines || []).map((l) => (
+                <s-text key={String(l.variant_id)} tone={l.eligible ? undefined : "subdued"}>
+                  {l.eligible ? `${l.title}: ${inr(l.discount)} off diamond ${inr(l.diamond)}` : `${l.title}: not eligible (${l.reason})`}
+                </s-text>
+              ))}
+              <s-text>{`Estimated saving: ${inr(p.total)} before GST (${p.rate}% of the diamond value)`}</s-text>
+            </s-stack>
+          ) : null}
+          {p && !p.ok && !applied ? <s-text tone="subdued">{p.reason}</s-text> : null}
+          {loyalty?.note ? <s-text tone="subdued">{loyalty.note}</s-text> : null}
+          <s-stack direction="inline" gap="base">
+            <s-button
+              onClick={() => loyaltyAction("apply-loyalty", "Applying loyalty… prices update in a few seconds.")}
+              loading={Boolean(loyaltyBusy)}
+              disabled={Boolean(loyaltyBusy || !p || (!p.ok && !applied))}
+            >
+              {applied ? "Re-apply loyalty" : "Apply loyalty"}
+            </s-button>
+            {applied ? (
+              <s-button
+                onClick={() => loyaltyAction("remove-loyalty", "Removing loyalty… prices update in a few seconds.")}
+                disabled={Boolean(loyaltyBusy)}
+              >
+                Remove loyalty
+              </s-button>
+            ) : null}
+          </s-stack>
+          {loyaltyNote ? <s-text>{loyaltyNote}</s-text> : null}
+        </s-stack>
+      </s-section>
+    );
+  };
 
   const renderAdvanceApply = () => (
     <s-section heading="Redeem a Design Advance">
@@ -1707,6 +1811,7 @@ export default function MetafieldManager({ surface = "block" } = {}) {
       // written from either; custom.making under Repricing is its only channel.
       if (section.title === "Discounts") {
         const extras = [
+          surface === "action" ? <s-stack key="loyalty" direction="block">{renderLoyalty()}</s-stack> : null,
           surface === "action" ? <s-stack key="discount-apply" direction="block">{renderDiscountApply()}</s-stack> : null,
         ];
         const lp = renderLinePricing();

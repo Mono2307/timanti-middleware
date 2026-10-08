@@ -1,0 +1,28 @@
+<div class="tl-benefits" data-tl-benefits
+  data-logged-in="{% if customer %}true{% else %}false{% endif %}"
+  data-login-url="{{ routes.account_login_url }}?return_url={{ routes.cart_url | url_encode }}">
+  <h3 class="tl-benefits__title">{{ block.settings.heading }}</h3>
+  {% if customer %}
+    <div class="tl-benefits__body" data-tl-body>
+      <p class="tl-benefits__muted">Checking your benefits…</p>
+    </div>
+  {% else %}
+    <p class="tl-benefits__muted">{{ block.settings.logged_out_text }}</p>
+    <a class="tl-benefits__btn" href="{{ routes.account_login_url }}?return_url={{ routes.cart_url | url_encode }}">Log in</a>
+  {% endif %}
+  <p class="tl-benefits__msg" data-tl-msg role="status" aria-live="polite"></p>
+</div>
+
+<script src="{{ 'loyalty-benefits.js' | asset_url }}" defer></script>
+<link rel="stylesheet" href="{{ 'loyalty-benefits.css' | asset_url }}">
+
+{% schema %}
+{
+  "name": "My benefits",
+  "target": "section",
+  "settings": [
+    { "type": "text", "id": "heading", "label": "Heading", "default": "My benefits" },
+    { "type": "text", "id": "logged_out_text", "label": "Text when logged out", "default": "Log in to see your loyalty benefit and vouchers." }
+  ]
+}
+{% endschema %}

@@ -26,6 +26,9 @@ const { handleTypeformWebhook } = require('./src/integrations/typeform');
 // Pine Labs card terminals — push, poll, cancel, callbacks. Lifted out of this file wholesale.
 // What remains here is the draft-created auto-push (a mixed concern) and /api/test-db's readout.
 const pine = require('./src/integrations/pine');
+// Loyalty programme: tiers on lifetime spend, diamond-only discount online and in-store.
+const loyaltyDraft = require('./src/modules/loyalty/draft');
+const { startLoyaltySweep } = require('./src/modules/loyalty/sweep');
 
 const app = express();
 app.use(cors());
@@ -1535,6 +1538,10 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
     console.log(`handleRecalculatePriceTag: no ${tagToProcess} tag, skipping`);
     return;
   }
+  // Loyalty is an exclusive diamond-only % per eligible line. When it is applied this rewrites the
+  // in-memory map (order-level discount keys dropped, loyalty entries added to line_discounts) so the
+  // engine below prices it like any per-line discount. No-op otherwise. See src/modules/loyalty/draft.js.
+  loyaltyDraft.applyLoyaltyToPricingInputs(mfMap, draft);
 
   const draftOrderId = draft.id;
   const token = await getShopifyToken();
@@ -3225,6 +3232,15 @@ async function handleApplyDiscountTag(draft) {
     const tags = (draft.tags || '').split(',').map(t => t.trim());
     const trigger = tags.find(t => /^apply-discount:/i.test(t));
     if (!trigger) return;
+    // Loyalty is exclusive: no discount code on a draft that carries it (src/modules/loyalty).
+    if (tags.some(t => t.toLowerCase() === loyaltyDraft.T_ON)) {
+      const keep = tags.filter(t => t && !/^apply-discount:/i.test(t) && !/^discount-invalid:/i.test(t));
+      await axios.put(`${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draft.id}.json`,
+        { draft_order: { id: draft.id, tags: [...keep, 'discount-invalid: loyalty applied'].join(', ') } },
+        { headers: { 'X-Shopify-Access-Token': await getShopifyToken(), 'Content-Type': 'application/json' }, timeout: 10000 });
+      console.log(`[apply-discount] draft ${draft.name || draft.id}: refused — loyalty is applied; remove loyalty first`);
+      return;
+    }
     const spec = trigger.slice(trigger.indexOf(':') + 1).trim();   // "<code>" | "custom:<v>:<pct|flat>"
     const base = process.env.SHOPIFY_STORE_URL;
     const token = await getShopifyToken();
@@ -3359,6 +3375,9 @@ app.post('/api/shopify-draft-updated', async (req, res) => {
           // conversion.
           await handleRefundConversion(draft, orderId, orderName)
             .catch(e => console.error(`[refunds] conversion rekey for ${orderName || orderId}:`, e.message));
+          // Loyalty used on this draft → one store redemption row. Isolated, like the two above.
+          await loyaltyDraft.recordStoreRedemption(draft, orderId, orderName)
+            .catch(e => console.error(`[loyalty] store redemption for ${orderName || orderId}:`, e.message));
           const dtags = (draft.tags || '').split(',').map(t => t.trim());
           const codeFrom = (re) => { const t = dtags.find(x => re.test(x)); return t ? t.slice(t.indexOf(':') + 1).trim() : ''; };
           const toRedeem = [
@@ -3519,6 +3538,7 @@ async function runDraftUpdateHandlers(draft) {
   await step('apply-discount',   () => handleApplyDiscountTag(draft));     // admin action: apply-discount:<code>|custom → dia-only pre-tax discount (drops reprice)
   await step('repairs',          () => handleRepairDraftUpdate(draft, getShopifyToken, assignRepairSerial));
   await step('document-serial',  () => handleDocumentSerialTags(draft));   // PO/memo/transfer tags added after creation
+  await step('loyalty',          () => loyaltyDraft.handleLoyaltyStep(draft)); // apply-loyalty / remove-loyalty / keep it correct as lines change (drops reprice)
   // Balance ordering matters: net-to-collect must be recomputed AFTER every adjustment above
   // (voucher / advance / exchange / old-gold), and amount_pending is DERIVED off that fresh net —
   // so the payment sync runs LAST. (Previously it ran before the adjustments, leaving pending stale.)
@@ -4727,6 +4747,11 @@ app.post('/api/credit-instrument/issue', async (req, res) => {
     });
     if (b.status === 'redeemed') await creditInstruments.redeem(supabase, { instrumentType: b.instrumentType, serialCode: b.serialCode, targetOrderName: b.targetOrderName, value: parseFloat(b.value) });
     if (b.status === 'voided')   await creditInstruments.voidInstrument(supabase, { instrumentType: b.instrumentType, serialCode: b.serialCode });
+    // A new voucher code must be allowed to sit beside a loyalty code on the cart. Fire-and-forget.
+    if (config.loyalty.enabled && b.instrumentType === 'voucher' && !b.status) {
+      require('./src/modules/loyalty/routes').allowVoucherWithLoyalty(b.serialCode)
+        .catch(e => console.error(`[loyalty] voucher ${b.serialCode} combine setting:`, e.message));
+    }
     return res.json({ success: true, serialCode: b.serialCode });
   } catch (err) {
     console.error('credit-instrument/issue error:', err.message);
@@ -4869,6 +4894,9 @@ require('./src/modules/admin/metafield-explorer').register(app);
 const lookbook = require('./src/modules/lookbook/routes');
 lookbook.register(app);
 
+// Loyalty programme: storefront proxy, staff preview, operator endpoints. src/modules/loyalty.
+require('./src/modules/loyalty/routes').register(app, ctx);
+
 // ─────────────────────────────────────────
 // Start
 // ─────────────────────────────────────────
@@ -4916,6 +4944,8 @@ app.listen(PORT, async () => {
     storeUrl: config.shopify.storeUrl,
   });
   startCadAdvanceSweep(CAD_SWEEP_DEPS());
+  // Loyalty: expire unused online codes, keep the occasion-month tag current. No-op unless LOYALTY_ENABLED.
+  startLoyaltySweep();
 
   // Counter-vs-ledger reconciliation. Emails accounts only when a document number has gone missing;
   // silence means the counters and the ledger agree. This is the layer that catches a cause we have

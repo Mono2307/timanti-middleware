@@ -1,0 +1,11 @@
+.tl-benefits { border: 1px solid rgba(0, 0, 0, 0.12); border-radius: 8px; padding: 16px; margin: 16px 0; }
+.tl-benefits__title { margin: 0 0 12px; font-size: 1.05em; }
+.tl-benefits__row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 0; border-top: 1px solid rgba(0, 0, 0, 0.06); }
+.tl-benefits__row:first-child { border-top: 0; }
+.tl-benefits__text { min-width: 0; }
+.tl-benefits__label { font-weight: 600; }
+.tl-benefits__muted { opacity: 0.7; font-size: 0.9em; margin: 2px 0 0; }
+.tl-benefits__btn { flex: none; cursor: pointer; padding: 8px 14px; border: 1px solid currentColor; border-radius: 4px; background: transparent; color: inherit; font: inherit; text-decoration: none; display: inline-block; }
+.tl-benefits__btn[disabled] { opacity: 0.5; cursor: default; }
+.tl-benefits__msg { margin: 8px 0 0; font-size: 0.9em; }
+.tl-benefits__msg:empty { display: none; }

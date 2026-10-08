@@ -51,6 +51,7 @@ const { log } = require('../../core/logger');
 const serialization     = require('./index');
 const creditInstruments = require('../adjustments/credit_instruments');
 const { isCadAdvanceOnly } = require('../adjustments/cad_advance');
+const loyaltyEarn = require('../loyalty/earn');
 
 // Single-flight guard for order numbering, the order-side twin of processingDrafts in
 // modules/after-sales. One staff action produces SEVERAL orders/updated deliveries, because this
@@ -221,6 +222,10 @@ app.post('/api/serial/order-serial', async (req, res) => {
 
   // Post-tax voucher freeze — runs regardless of serial flags (only touches orders with a VCH code).
   freezeOnlineVoucher(order, token).catch(e => console.error(`[voucher-freeze] order ${order.id}:`, e.message));
+
+  // Loyalty: the order earns points, and a LOY- code on it is settled. Coalesced across the burst of
+  // deliveries for one order; no-op unless LOYALTY_ENABLED. See src/modules/loyalty/earn.js.
+  loyaltyEarn.onOrderWebhook(order);
 
   // Payment recompute — the order-side twin of the draft webhook's payment-sync step.
   //

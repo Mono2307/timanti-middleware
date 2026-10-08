@@ -126,6 +126,28 @@ const config = {
     rebuildHours:  String(process.env.LOOKBOOK_REBUILD_HOURS || '14,19'),
   },
 
+  // ── Loyalty programme (src/modules/loyalty) ───────────────────────────────
+  loyalty: {
+    /**
+     * Master switch for the whole loyalty module: earning on order webhooks, the draft step, the
+     * storefront proxy and the daily sweep. OFF unless set, so a deploy before the Supabase tables
+     * exist does nothing. The business switch (tiers, percentages, programme on/off) is the shop
+     * metafield loyalty.program_config, not this.
+     */
+    enabled:       flagOn(process.env.LOYALTY_ENABLED),
+    /**
+     * Secrets that may sign storefront app-proxy requests (/apps/loyalty/*). Shopify signs those
+     * with the client secret of the app that owns the proxy — the Metafield Manager app — so this
+     * reuses MFM_CLIENT_SECRET (comma-separated, any one may match) and SHOPIFY_CLIENT_SECRET.
+     */
+    proxySecrets:  [
+      ...String(process.env.MFM_CLIENT_SECRET || '').split(',').map(s => s.trim()),
+      process.env.SHOPIFY_CLIENT_SECRET,
+    ].filter(Boolean),
+    /** Client id of the Metafield Manager app, for verifying the staff panel's session token. */
+    mfmClientId:   process.env.MFM_CLIENT_ID || '3c0a0f5a2127842e19391c5b20ec49a0',
+  },
+
   /**
    * Shared operator secret for maintenance endpoints. Read directly from process.env by
    * serialization/routes.js since before this file existed; surfaced here so new code has one
