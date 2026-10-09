@@ -3,6 +3,7 @@ api_version = "2025-10"
 [[extensions]]
 name = "t:name"
 handle = "loyalty-account"
+uid = "8ea3c599-0904-df5e-db42-642a579c982e53dc2001"
 type = "ui_extension"
 
 # The customer's loyalty tier on their account Profile page (new customer accounts).
