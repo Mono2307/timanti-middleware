@@ -249,10 +249,16 @@ function primeBuyingRateTable(table) {
   _buyingTableAt = Date.now();
 }
 
-/** Buy-back rate for a (possibly fractional) karat: karat/24 × pure × (1 − haircut). */
+/**
+ * Buy-back rate for a (possibly fractional) karat. 14/18/22/24kt take that karat's sale rate
+ * (table.sale_rates); anything else is karat/24 × pure × (1 − haircut). Tables written before
+ * 2026-10-09 have no sale_rates and fall through to the old formula.
+ */
 function buyingRateFor(table, purity) {
   if (!table || !(purity > 0) || purity > 24) return null;
-  return +((purity / 24) * table.base_24k * (1 - table.haircut_pct / 100)).toFixed(2);
+  const sale = Number(table.sale_rates?.[String(purity)]);
+  if (sale > 0) return sale;
+  return +((purity / 24) * table.base_24k * (1 - (table.haircut_pct || 0) / 100)).toFixed(2);
 }
 
 module.exports = {

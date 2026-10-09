@@ -309,11 +309,22 @@ app.post('/api/trigger-price-update', async (req, res) => {
     return res.status(500).json({ success: false, error: 'Failed to save gold rate to Supabase' });
   }
 
-  // Build & store the old-gold buying rate table (9..24kt), derived from pure with a 5% haircut.
-  const BUYING_HAIRCUT = 0.05;
+  // Build & store the old-gold buying rate table (9..24kt). Old gold buys at 100% of the sale rate
+  // (founder, 2026-10-09; was a 5% haircut): 14/18/22/24kt at that karat's sale rate exactly as set
+  // here — the same figures the price job (orchestrator.py) writes onto variants, manual 18K/14K
+  // included — and every other purity pro-rata on 24kt. buyingRateFor reads sale_rates first.
+  const BUYING_HAIRCUT = 0;
+  const saleRates = {
+    14: +(calcMode === 'manual' ? manual14k : pure * 0.604).toFixed(2),
+    18: +(calcMode === 'manual' ? manual18k : pure * 0.771).toFixed(2),
+    22: +(pure * 0.9167).toFixed(2),
+    24: +pure.toFixed(2),
+  };
   const buyingRates = {};
-  for (let k = 9; k <= 24; k++) buyingRates[k] = +((k / 24) * pure * (1 - BUYING_HAIRCUT)).toFixed(2);
-  const buyingBlob = JSON.stringify({ base_24k: pure, haircut_pct: 5, set_at: setAt, rates: buyingRates });
+  for (let k = 9; k <= 24; k++) buyingRates[k] = saleRates[k] ?? +((k / 24) * pure * (1 - BUYING_HAIRCUT)).toFixed(2);
+  const buyingBlob = JSON.stringify({
+    base_24k: pure, haircut_pct: BUYING_HAIRCUT * 100, sale_rates: saleRates, set_at: setAt, rates: buyingRates,
+  });
   const { error: buyErr } = await supabase.from('config').upsert({
     key: 'buying_rate_table', value: buyingBlob, updated_at: setAt,
   });
