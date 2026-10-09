@@ -14,7 +14,7 @@ embedded_app_direct_api_access = true
 
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
-scopes = "read_draft_orders,write_draft_orders,read_orders,write_orders"
+scopes = "read_draft_orders,write_draft_orders,read_orders,write_orders,customer_read_customers"
 optional_scopes = [ ]
 use_legacy_install_flow = false
 
