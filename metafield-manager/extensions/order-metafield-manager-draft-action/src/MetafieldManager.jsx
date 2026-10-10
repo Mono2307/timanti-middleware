@@ -670,7 +670,7 @@ export default function MetafieldManager({ surface = "block" } = {}) {
   }
 
   // Manual auto diamond discount: drop an `apply-auto-dia` tag. The middleware checks each line's diamond
-  // share of taxable value, adds the diamond % discount where it falls in the band, and reprices. It leaves
+  // share of the line value, adds the diamond % discount for the matching band, and reprices. It leaves
   // `auto-dia-applied` or `auto-dia-invalid: <reason>` behind, which we read back to tell staff what happened.
   async function applyAutoDiamond() {
     if (!ownerId) return;
@@ -972,9 +972,9 @@ export default function MetafieldManager({ surface = "block" } = {}) {
         <s-section heading="Auto Diamond Discount">
           <s-stack direction="block" gap="base">
             <s-text tone="subdued">
-              If a line's diamond is 40–60% of its taxable value, a 15% diamond discount (pre-tax) is added
-              to that line. Lines that already have a diamond discount, and drafts with an order-level
-              discount or loyalty applied, are skipped.
+              Adds a pre-tax diamond discount based on the diamond's share of the line value: up to 20% → 5%,
+              20–40% → 10%, 40–60% → 15%, 60–80% → 20%. Lines that already have a diamond discount, and
+              drafts with an order-level discount or loyalty applied, are skipped.
             </s-text>
             <s-button
               onClick={applyAutoDiamond}
