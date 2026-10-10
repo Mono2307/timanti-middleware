@@ -114,14 +114,27 @@ async function setup() {
   // Seed the programme config on the shop if it is not there yet. Never overwrites an edited one.
   const shop = await graphql(`{ shop { id metafield(namespace: "${NAMESPACE}", key: "${KEY}") { value } } }`);
   let seeded = false;
+  let addedKeys = [];
+  let value = null;
   if (!shop.shop.metafield) {
+    value = DEFAULT_CONFIG;
+  } else {
+    // An existing config keeps every edit; only sections it does not have yet are added.
+    let cur = {};
+    try { cur = JSON.parse(shop.shop.metafield.value); } catch { cur = null; }
+    if (cur) {
+      addedKeys = Object.keys(DEFAULT_CONFIG).filter(k => !(k in cur));
+      if (addedKeys.length) value = { ...cur, ...Object.fromEntries(addedKeys.map(k => [k, DEFAULT_CONFIG[k]])) };
+    }
+  }
+  if (value) {
     const r = await graphql(`mutation($m: [MetafieldsSetInput!]!) { metafieldsSet(metafields: $m) { userErrors { message } } }`, {
-      m: [{ ownerId: shop.shop.id, namespace: NAMESPACE, key: KEY, type: 'json', value: JSON.stringify(DEFAULT_CONFIG) }],
+      m: [{ ownerId: shop.shop.id, namespace: NAMESPACE, key: KEY, type: 'json', value: JSON.stringify(value, null, 2) }],
     });
     seeded = !(r.metafieldsSet.userErrors || []).length;
   }
   _resetCache();
-  return { definitions: results, configSeeded: seeded };
+  return { definitions: results, configSeeded: seeded, configKeysAdded: addedKeys };
 }
 
 /**
@@ -297,7 +310,7 @@ function register(app /* , ctx */) {
       const refunded = Number(data.order && data.order.r && data.order.r.value) || 0;
       const { data: row } = await supabase.from('loyalty_ledger').select('*').eq('entry_key', `order:${id}`).maybeSingle();
       return res.json({ success: true, order: order.name, customerId: order.customer && order.customer.id,
-        earns: E.orderEarnValue(order, { amountRefunded: refunded }), ledger: row || null });
+        earns: E.earnPoints(order, await loadConfig(), { amountRefunded: refunded }), ledger: row || null });
     } catch (e) { return res.status(500).json({ success: false, error: e.message }); }
   });
 

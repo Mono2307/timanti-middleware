@@ -27,7 +27,7 @@ const { refreshCustomer } = require('./customer');
 
 let job = null;
 
-const FIELDS = 'id,name,created_at,cancelled_at,total_price,source_name,customer,line_items,discount_applications,discount_codes,refunds';
+const FIELDS = 'id,name,tags,created_at,cancelled_at,total_price,source_name,customer,line_items,discount_applications,discount_codes,refunds';
 
 /** Every order, oldest page first, following Shopify's page_info cursor. */
 async function* allOrders() {
@@ -68,7 +68,7 @@ async function run({ commit }) {
       job.ordersSeen++;
       const cid = o.customer && o.customer.id ? String(o.customer.id) : null;
       if (!cid) continue;
-      const points = isCadAdvanceOnly(o) ? 0 : E.orderEarnValue(o, { amountRefunded: refunded[String(o.id)] || 0 });
+      const points = isCadAdvanceOnly(o) ? 0 : E.earnPoints(o, cfg, { amountRefunded: refunded[String(o.id)] || 0 }).points;
       perOrder.push({ cid, orderId: String(o.id), name: o.name, points, channel: o.source_name === 'shopify_draft_order' ? 'store' : 'online' });
       const c = customers.get(cid) || {
         id: cid, name: [o.customer.first_name, o.customer.last_name].filter(Boolean).join(' '),

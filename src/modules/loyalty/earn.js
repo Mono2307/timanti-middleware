@@ -104,7 +104,7 @@ async function processOrder(order) {
 
   // A CAD-advance-only order is a receipt for money taken, not a sale; the sale that absorbs the
   // advance earns the points. Counting both would double them.
-  const points = isCadAdvanceOnly(order) ? 0 : E.orderEarnValue(order, { amountRefunded: await amountRefundedFor(order.id) });
+  const points = isCadAdvanceOnly(order) ? 0 : E.earnPoints(order, cfg, { amountRefunded: await amountRefundedFor(order.id) }).points;
   const channel = order.source_name === 'shopify_draft_order' ? 'store' : 'online';
   const { changed, previousCustomerId } = await ledger.upsertOrderEntry(supabase, {
     customerId, orderId: order.id, orderName: order.name, points, kind: 'earn', channel,

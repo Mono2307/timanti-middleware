@@ -246,6 +246,40 @@ function orderEarnValue(order, { amountRefunded = 0 } = {}) {
   return Math.max(0, Math.floor(total + voucherTender + exchangeTender - refunds));
 }
 
+/**
+ * Exchange notes ISSUED against this order — goods returned and turned into credit. Treated like a
+ * refund (founder, 2026-10-10): the source order stops earning on what was exchanged, and the order
+ * the note is spent on earns its full value instead. The source order carries the record in its own
+ * tags: `exc-given` plus `exc-val:<rupees>` (one per note).
+ */
+function exchangeIssuedValue(order) {
+  const tags = String((order && order.tags) || '').split(',').map(t => t.trim());
+  if (!tags.some(t => t.toLowerCase() === 'exc-given')) return 0;
+  return tags.filter(t => /^exc-val:/i.test(t))
+    .reduce((s, t) => s + (parseFloat(t.slice(t.indexOf(':') + 1)) || 0), 0);
+}
+
+/** The order's number, from its name ("#1057" → 1057). Null if the name carries none. */
+function orderNumber(order) {
+  const m = String((order && order.name) || '').match(/(\d+)/);
+  return m ? parseInt(m[1], 10) : null;
+}
+
+/**
+ * Points an order earns under the programme's rules: orderEarnValue, less exchange notes issued
+ * against it, and nothing at all for an order before the programme's first order or one the config
+ * marks as replaced by a later invoice. Returns { points, excluded: reason|'' }.
+ */
+function earnPoints(order, cfg, { amountRefunded = 0 } = {}) {
+  const e = (cfg && cfg.earning) || {};
+  const num = orderNumber(order);
+  if (e.min_order_number && num != null && num < e.min_order_number) return { points: 0, excluded: `before #${e.min_order_number}` };
+  const sup = (e.superseded_orders || {})[String(order.name || '')];
+  if (sup) return { points: 0, excluded: `replaced by ${sup}` };
+  const gross = orderEarnValue(order, { amountRefunded });
+  return { points: Math.max(0, Math.floor(gross - exchangeIssuedValue(order))), excluded: '' };
+}
+
 // ── Draft-order discount state ──────────────────────────────────────────────────────────────────
 
 /** Parse custom.loyalty_applied (JSON). Null when absent or unreadable. */
@@ -304,6 +338,6 @@ module.exports = {
   tierFor, sortedTiers,
   monthOf, istMonth, istDate, occasionBonus,
   lineEligibility, computeLoyalty, onlineAmount,
-  isExchangeLine, orderEarnValue,
+  isExchangeLine, orderEarnValue, exchangeIssuedValue, orderNumber, earnPoints,
   readApplied, otherDiscountOnDraft, withLoyaltyEntries,
 };

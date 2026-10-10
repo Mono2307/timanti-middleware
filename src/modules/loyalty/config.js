@@ -34,6 +34,10 @@ const DEFAULT_CONFIG = Object.freeze({
   },
   online: { code_prefix: 'LOY-', code_ttl_minutes: 120 },
   emails: { tier_change: false },
+  // Which orders earn. Orders before #1038 are pre-programme / test history (founder, 2026-10-10).
+  // superseded_orders: an invoice replaced by a later one with no exchange-note record linking them —
+  // the earlier one earns nothing. Vandana Reddy's #1052 was re-invoiced as #1057.
+  earning: { min_order_number: 1038, superseded_orders: { '#1052': '#1057' } },
 });
 
 /**
@@ -90,6 +94,13 @@ function normalizeConfig(raw) {
       code_ttl_minutes: Math.max(10, Number((raw.online || {}).code_ttl_minutes) || 120),
     },
     emails: { tier_change: !!(raw.emails || {}).tier_change },
+    // Missing from a config saved before this existed → the defaults, so the rules never silently lapse.
+    earning: (() => {
+      const er = raw.earning || DEFAULT_CONFIG.earning;
+      const sup = {};
+      for (const [k, v] of Object.entries(er.superseded_orders || {})) sup[String(k).trim()] = String(v).trim();
+      return { min_order_number: Math.max(0, parseInt(er.min_order_number, 10) || 0), superseded_orders: sup };
+    })(),
   };
 }
 

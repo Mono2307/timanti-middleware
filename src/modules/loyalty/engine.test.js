@@ -151,6 +151,29 @@ t('refunds come off — the larger of Shopify and the middleware record', () => 
   assert.strictEqual(E.orderEarnValue(order, { amountRefunded: 25000 }), 75000);
 });
 
+console.log('earning rules (founder, 2026-10-10)');
+t('orders before #1038 earn nothing', () => {
+  assert.deepStrictEqual(E.earnPoints({ name: '#1037', total_price: '50000' }, cfg), { points: 0, excluded: 'before #1038' });
+  assert.strictEqual(E.earnPoints({ name: '#1038', total_price: '50000' }, cfg).points, 50000);
+});
+t('an exchange note issued against an order comes off it, like a refund (Santosh #1060)', () => {
+  const o = { name: '#1060', total_price: '47041.90', tags: 'deposit:fully-paid, exc-given, exc-num:EXC27-KAHSR-0001, exc-val:47041.00, paid:Rs47041' };
+  assert.strictEqual(E.earnPoints(o, cfg).points, 0);
+});
+t('the order the note is spent on earns its full value (Santosh #1063)', () => {
+  const o = { name: '#1063', total_price: '44686.41', tags: 'exc-applied, exc-num:EXC27-KAHSR-0001, exc-original:#1060, exc-val:47041.00' };
+  assert.strictEqual(E.earnPoints(o, cfg).points, 44686, 'exc-val without exc-given is not an issued note');
+});
+t('a replaced invoice earns nothing (Vandana #1052 → #1057)', () => {
+  assert.deepStrictEqual(E.earnPoints({ name: '#1052', total_price: '546550.96' }, cfg), { points: 0, excluded: 'replaced by #1057' });
+  assert.strictEqual(E.earnPoints({ name: '#1057', total_price: '529924.86' }, cfg).points, 529924);
+});
+t('a config saved before the earning rules existed still applies them', () => {
+  const c = normalizeConfig({ tiers: DEFAULT_CONFIG.tiers });
+  assert.strictEqual(c.earning.min_order_number, 1038);
+  assert.strictEqual(c.earning.superseded_orders['#1052'], '#1057');
+});
+
 console.log('draft discount state');
 t('another code on the draft blocks loyalty', () => {
   assert.ok(E.otherDiscountOnDraft({ discount_rate: '5' }));
