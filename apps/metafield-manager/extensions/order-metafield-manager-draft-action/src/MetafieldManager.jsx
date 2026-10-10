@@ -75,6 +75,9 @@ const SECTION_ORDER = [
 const REQUIRED_FIELDS = [
   "order_type",
   "channel",
+  // The order-confirmation email branches on these three (pickup vs delivery copy, shipping row,
+  // address, timeline). Each is mirrored onto the draft as a ch:/ot:/ship: tag on save — see save().
+  "shipment",
   "state_code",
   "employee_name",
   // Last in the list on purpose: it is the question staff answer as they close the sale, and adding
@@ -98,11 +101,14 @@ const REQUIRED_SECTION = "Required Inputs";
 const FIELD_CONFIG = {
   order_type: { section: "Order Details", label: "Order Type", editable: true, applies: "both" },
   channel: { section: "Order Details", label: "Channel", editable: true, applies: "both" },
+  // Yes = we ship the piece to the customer; No = they collect it in store. Decides the delivery copy,
+  // shipping row and shipping address on the order-confirmation email.
+  shipment: { section: "Order Details", label: "Ship to Customer", editable: true, applies: "both" },
   employee_name: { section: "Order Details", label: "Sales Staff", editable: true, applies: "both" },
   // Yes/No, and the answer must be given BEFORE the draft is converted. Shopify emails the order
-  // confirmation the moment the order is created, and that email decides between "Download Tax
-  // Invoice" and a plain summary purely on the in-store-sale tag. Draft tags carry across at
-  // conversion; anything applied to the order afterwards arrives after the customer was emailed.
+  // confirmation the moment the order is created, and that email reads only TAGS — the in-store-sale
+  // tag plus the ch:/ot:/ship: routing tags. Draft tags carry across at conversion; metafields reach
+  // the order seconds later, after the customer was emailed.
   // Draft-only for the same reason — on an order it would be a control that can no longer change
   // anything.
   in_store_sale: { section: "Order Details", label: "Send Tax Invoice in Email", editable: true, applies: "draft", required: true },
@@ -882,6 +888,28 @@ export default function MetafieldManager({ surface = "block" } = {}) {
         try {
           await shopify.query(wantTag ? TAGS_ADD_MUTATION : TAGS_REMOVE_MUTATION,
             { variables: { id: ownerId, tags: ["in-store-sale"] } });
+        } catch { /* non-blocking */ }
+      }
+
+      // Same reasoning for the three routing fields the order-confirmation email branches on: Shopify
+      // sends it before any metafield reaches the order, so the email reads them as ch:/ot:/ship: tags
+      // that travel with the draft. Drop every value's tag for a changed field, then add the chosen one.
+      // Best-effort like in-store-sale; the middleware re-derives the same tags on its next draft pass.
+      const ROUTING_TAGS = { channel: "ch", order_type: "ot", shipment: "ship" };
+      const routingTag = (prefix, v) => `${prefix}:${String(v).trim().toLowerCase().replace(/\s+/g, "-")}`;
+      const routingChanged = changed.filter((k) => ROUTING_TAGS[k]);
+      if (routingChanged.length) {
+        const drop = [];
+        const add = [];
+        for (const key of routingChanged) {
+          for (const c of defs[key]?.choices ?? []) drop.push(routingTag(ROUTING_TAGS[key], c));
+          const raw = (editsRef.current[key] ?? "").trim();
+          if (raw && raw !== BLANK_CHOICE_LABEL) add.push(routingTag(ROUTING_TAGS[key], raw));
+        }
+        try {
+          const stale = drop.filter((t) => !add.includes(t));
+          if (stale.length) await shopify.query(TAGS_REMOVE_MUTATION, { variables: { id: ownerId, tags: stale } });
+          if (add.length) await shopify.query(TAGS_ADD_MUTATION, { variables: { id: ownerId, tags: add } });
         } catch { /* non-blocking */ }
       }
 

@@ -291,6 +291,7 @@ const {
   MAX_INSTALLMENTS, readInstallments, sumInstallments, installmentModes, installmentLegPatch,
   materializeLegacyLeg,
 } = require('./src/modules/payments/installments');
+const { isCommsTag, commsTagsFromMetafields } = require('./src/core/comms_tags');
 // Refunds — money OUT, a parallel dimension to the legs above. amount_paid is never written down;
 // paymentState is the single place the net-of-refund balance is derived, so the four call sites that
 // compute one cannot drift. See src/modules/payments/refunds.js.
@@ -2297,6 +2298,12 @@ function isPaymentDerivedTag(t) {
     t.startsWith('refunded:') || /^r[1-9]:/.test(t);
 }
 
+// Order-insensitive, case-insensitive tag-set equality — the change guard for every tag PUT here.
+function sameTagSet(a, b) {
+  const A = new Set(a.map(t => t.toLowerCase())), B = new Set(b.map(t => t.toLowerCase()));
+  return A.size === B.size && [...A].every(t => B.has(t));
+}
+
 async function applyPaymentTagsToOrder(orderId, token) {
   const headers = { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' };
 
@@ -2482,6 +2489,11 @@ async function applyPaymentTagsToDraftOrder(draftOrderId, token, { netOverride =
   // Legacy fallback covers drafts predating the migration, which carry only the two-slot pair.
   const mfMap = {};
   for (const m of (mfData.metafields || [])) if (m.namespace === 'custom') mfMap[m.key] = m.value;
+  // Order-confirmation routing tags (ch:/ot:/ship:), re-derived from the metafields on every pass. The
+  // admin panel writes them on save; this is the backstop for edits made anywhere else. They must be on
+  // the DRAFT, because Shopify emails the confirmation before any metafield reaches the order — see
+  // src/core/comms_tags.js. Written on unpaid drafts too: that is when staff set them.
+  const commsTags = commsTagsFromMetafields(mfMap);
   // Fold any pre-installment balance into its own leg before trusting the leg sum — otherwise a
   // document paid the old way has its balance written down by exactly the un-legged amount.
   const legsRaw     = readInstallments(mfMap);
@@ -2576,14 +2588,14 @@ async function applyPaymentTagsToDraftOrder(draftOrderId, token, { netOverride =
       // no-op fires no webhook, and every later save on the draft silently never recomputed (#D231).
       // Stale deposit:/paid:/iN:/refunded: tags would also keep printing removed money on the invoice.
       const existing = (draft.tags || '').split(',').map(t => t.trim()).filter(Boolean);
-      const kept = existing.filter(t => !isPaymentDerivedTag(t));
-      if (kept.length !== existing.length) {
+      const kept = [...existing.filter(t => !isPaymentDerivedTag(t) && !isCommsTag(t)), ...commsTags];
+      if (!sameTagSet(kept, existing)) {
         await axios.put(
           `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}.json`,
           { draft_order: { id: parseInt(draftOrderId), tags: kept.join(', ') } },
           { headers, timeout: 10000 }
         );
-        console.log(`Draft ${draftOrderId}: unpaid — cleared ${existing.length - kept.length} payment tag(s)`);
+        console.log(`Draft ${draftOrderId}: unpaid — payment tags cleared, routing tags [${commsTags.join(', ')}]`);
       }
       return false;   // no payment tags on an unpaid document — same as before
     }
@@ -2606,7 +2618,7 @@ async function applyPaymentTagsToDraftOrder(draftOrderId, token, { netOverride =
   const existingTags = (draft.tags || '').split(',').map(t => t.trim()).filter(Boolean);
   // Refund tags are rewritten from the metafields on every pass, exactly like the payment ones —
   // a stale refunded:/r1: left behind by an edited leg would print a refund that no longer exists.
-  const cleanedTags  = existingTags.filter(t => !isPaymentDerivedTag(t));
+  const cleanedTags  = existingTags.filter(t => !isPaymentDerivedTag(t) && !isCommsTag(t));
 
   const paymentTags = [
     isUnpaid ? 'deposit:refunded' : (isFull ? 'deposit:fully-paid' : 'deposit:partial'),
@@ -2631,7 +2643,7 @@ async function applyPaymentTagsToDraftOrder(draftOrderId, token, { netOverride =
     ...(modeFinal   ? [`pmode-final:${modeFinal}`]   : []),
   ];
 
-  const proposedTags = [...cleanedTags, ...paymentTags];
+  const proposedTags = [...cleanedTags, ...commsTags, ...paymentTags];
   const proposedSet  = new Set(proposedTags.map(t => t.toLowerCase()));
   const existingSet  = new Set(existingTags.map(t => t.toLowerCase()));
   const unchanged = proposedSet.size === existingSet.size && [...proposedSet].every(t => existingSet.has(t));
