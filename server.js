@@ -3846,8 +3846,7 @@ app.post('/api/form-reprice', async (req, res) => {
         jewelcode_diamond_carats:  String(diamondCarats  || '').trim(),
         jewelcode_gemstone_weight: String(gemstoneWeights|| '').trim(),
       });
-  const r = applyAutoDiamondDiscount(line, { recalc, diamondValue, manualDiscount, manualDiamondDiscount });
-   if (r.applied) { line.price = r.price; line.properties = r.properties; };
+  
       
       const lineItemsToSet = (draft.line_items || [])
         .filter(item => !((item.title || '').toLowerCase().includes('discount') && parseFloat(item.price) < 0))
