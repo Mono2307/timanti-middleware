@@ -48,9 +48,9 @@ function LoyaltyTier() {
   const gap = Number(data.next_tier_gap) || 0;
   return (
     <s-section heading="Timanti Loyalty">
-      <s-stack direction="block" gap="base">
+      <s-stack direction="block" gap="base" alignItems="center">
         {hasTier ? (
-          <s-stack direction="inline" gap="base">
+          <s-stack direction="inline" gap="base" justifyContent="center" alignItems="center">
             <s-badge>{data.tier_name}</s-badge>
             <s-text>{`${Number(data.discount_pct) || 0}% off the diamond value of eligible pieces`}</s-text>
           </s-stack>
