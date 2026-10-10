@@ -3330,6 +3330,7 @@ async function handleApplyDiscountTag(draft) {
 // ─────────────────────────────────────────
 // Staff click "Apply Auto Diamond Discount" in the Jewellery Workspace, which adds the `apply-auto-dia` tag.
 // share = diamond / (gold + diamond + making + gemstone), pre-tax and pre-discount, per line.
+// Each band is "above `from`, up to and including `to`", so boundaries never overlap.
 // A line inside a band gets a diamond-only % entry in custom.line_discounts, then `reprice` is queued.
 // Result tags the panel reads back: auto-dia-applied | auto-dia-invalid: <reason>
 const AUTO_DIA_BANDS = [
@@ -3344,6 +3345,7 @@ async function handleAutoDiamondDiscount(draft) {
     const draftOrderId = draft.id.toString();
     const tags = (draft.tags || '').split(',').map(t => t.trim()).filter(Boolean);
     if (!tags.some(t => t.toLowerCase() === 'apply-auto-dia')) return;
+    console.log(`[auto-dia] #${draft.name}: trigger received`);
 
     const base    = process.env.SHOPIFY_STORE_URL;
     const token   = await getShopifyToken();
@@ -3354,6 +3356,7 @@ async function handleAutoDiamondDiscount(draft) {
       const kept = tags.filter(t => t.toLowerCase() !== 'apply-auto-dia' && !/^auto-dia/i.test(t)).concat(extra);
       await axios.put(`${base}/admin/api/2024-01/draft_orders/${draftOrderId}.json`,
         { draft_order: { id: draft.id, tags: [...new Set(kept)].join(', ') } }, { headers, timeout: 10000 });
+      console.log(`[auto-dia] #${draft.name}: result -> ${extra.join(', ') || 'none'}`);
     };
 
     if (tags.some(t => t.toLowerCase() === loyaltyDraft.T_ON)) { await finish(['auto-dia-invalid: loyalty applied']); return; }
@@ -3391,7 +3394,7 @@ async function handleAutoDiamondDiscount(draft) {
       const sum = rs(item, 'Gold') + dia + (rs(item, 'Making') || rs(item, 'Making Charges')) + rs(item, 'Gemstone');
       if (!(dia > 0) || !(sum > 0)) return;
       const share = (dia / sum) * 100;
-      const band  = AUTO_DIA_BANDS.find(b => share >= b.from && share <= b.to);
+      const band  = AUTO_DIA_BANDS.find(b => share > b.from && share <= b.to);
       console.log(`[auto-dia] #${draft.name} line ${i + 1}: diamond share ${share.toFixed(2)}% -> ${band ? band.pct + '% off diamond' : 'no discount'}`);
       if (!band) return;
       if (next[i].some(e => e && String(e.t || '').toLowerCase() === 'dia')) { skippedExisting = true; return; }
