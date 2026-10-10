@@ -3363,8 +3363,13 @@ async function handleAutoDiamondDiscount(draft) {
       !((item.title || '').toLowerCase().includes('discount') && parseFloat(item.price) < 0) &&
       ((item.properties || []).some(p => p.name === 'Gold') || !!item.variant_id)
     );
-    if (!lines.length) return;
-    if (!lines.some(li => (li.properties || []).some(p => p.name === 'Taxable Value'))) return;
+        if (!lines.length) return;
+    // Needs the hydrated component props (Gold + Diamond). Hydrate writes them just after creation;
+    // until then this pass has nothing to measure and simply waits for the next webhook delivery.
+    const hasComponents = lines.some(li =>
+      (li.properties || []).some(p => p.name === 'Gold') &&
+      (li.properties || []).some(p => p.name === 'Diamond'));
+    if (!hasComponents) return;
 
     const base    = process.env.SHOPIFY_STORE_URL;
     const token   = await getShopifyToken();
