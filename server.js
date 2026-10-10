@@ -3333,8 +3333,10 @@ async function handleApplyDiscountTag(draft) {
 // A line inside a band gets a diamond-only % entry in custom.line_discounts, then `reprice` is queued.
 // Result tags the panel reads back: auto-dia-applied | auto-dia-invalid: <reason>
 const AUTO_DIA_BANDS = [
+  { from: 0,  to: 20, pct: 5  },
+  { from: 20, to: 40, pct: 10 },
   { from: 40, to: 60, pct: 15 },
-  // add more bands here, e.g. { from: 60.01, to: 100, pct: 10 }
+  { from: 60, to: 80, pct: 20 },
 ];
 
 async function handleAutoDiamondDiscount(draft) {
