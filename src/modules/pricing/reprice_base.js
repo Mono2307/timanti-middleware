@@ -1,11 +1,34 @@
 'use strict';
 
+/**
+ * The BASE a reprice prices off — the line's pre-tax, PRE-DISCOUNT value.
+ *
+ * WHY THIS FILE EXISTS
+ * The no-weights reprice branch used to infer the base from the line's current price
+ * (`price / 1.03`). That is the price AFTER the last run took the discount off, so re-running the
+ * engine subtracted the same discount from a base that already had it subtracted, and every pass
+ * cut the line again. #D218 lost Rs2,379.30 on one line per reprice — a 2,310 discount plus its 3%
+ * GST — while `Discount Applied` sat unchanged at 2,310, so nothing about the line looked wrong.
+ *
+ * It stayed invisible for two months because without a discount the old base is a true no-op:
+ * price / 1.03 * 1.03 is the price again. It became lossy only when per-line discounts landed.
+ *
+ * The rule here: NEVER derive the base from the current price. Build it bottom-up from the
+ * components (gold + diamond + making + gemstone), and where a line cannot be rebuilt, read the
+ * pre-discount figure the previous run already recorded in the `Gross Value` prop. Both are
+ * discount-free by construction, so repricing twice lands on the same number.
+ *
+ * Rounding deliberately mirrors the engine's own `r2` (Math.round, half-up on positives) rather
+ * than core/tax's epsilon-nudged one. A base that rounds differently from the Gross Value it is
+ * read back out of would drift a paisa per reprice — small, but the same class of bug.
+ */
 
 const GROSS_PROP = 'Gross Value';
-const TAX_MULT   = 1.03;  
+const TAX_MULT   = 1.03;   // jewellery GST, tax-inclusive convention — see core/tax.js
+
 const r2 = (v) => Math.round(v * 100) / 100;
 
-
+/** "Rs1,234.56" → 1234.56. Anything unparseable → 0. */
 function rupees(value) {
   if (value == null) return 0;
   const n = parseFloat(String(value).replace(/Rs/i, '').replace(/,/g, '').trim());
@@ -18,49 +41,27 @@ function propsOf(item) {
   return out;
 }
 
+/**
+ * The pre-tax, pre-discount base for one line, and where it came from.
+ *
+ * `recalc` is the component rebuild for this line ({ newPreTaxGross }) or null when the line
+ * carries no usable gold figure. `source` is returned for the log line and the tests — a line
+ * falling through to 'price' is the case worth knowing about, because it is the only one left that
+ * cannot prove it is discount-free.
+ */
 function preTaxBase(item, recalc) {
   if (recalc && Number.isFinite(recalc.newPreTaxGross) && recalc.newPreTaxGross > 0) {
     return { base: r2(recalc.newPreTaxGross), source: 'components' };
   }
+  // Recorded by the previous run as the PRE-discount, tax-inclusive line value. Reading it back is
+  // what keeps an unrebuildable line stable instead of compounding.
   const gross = rupees(propsOf(item)[GROSS_PROP]);
   if (gross > 0) return { base: r2(gross / TAX_MULT), source: 'gross-prop' };
+  // Last resort: a line the engine has never priced, so there is no discount baked into its price
+  // to subtract twice. The filter in handleRecalculatePriceTag admits a line only with a Gold prop
+  // or a variant_id, so in practice one of the two branches above answers first.
   const price = parseFloat(item && item.price);
   return { base: r2((Number.isFinite(price) ? price : 0) * (item.quantity || 1) / TAX_MULT), source: 'price' };
 }
 
-const AUTO_DIAMOND_TIERS = [
-  { upTo: 20, discountPct: 5  },
-  { upTo: 40, discountPct: 10 },
-  { upTo: 60, discountPct: 15 },
-  { upTo: 80, discountPct: 20 },
-];
-
-const AUTO_STACKS_WITH_MANUAL = true;
-
-function diamondShare(diamond, base) {
-  if (!(base > 0) || !(diamond > 0)) return 0;
-  return r2((diamond / base) * 100);
-}
-function autoDiamondDiscount({ diamond = 0, base = 0, alreadyOnDiamond = 0 } = {}) {
-  const share = diamondShare(diamond, base);
-  const tier  = share > 0 ? AUTO_DIAMOND_TIERS.find((t) => share <= t.upTo) : null;
-  const pct   = tier ? tier.discountPct : 0;
-  const room  = Math.max(0, diamond - Math.max(0, alreadyOnDiamond));
-  const amount = r2(Math.min(diamond * (pct / 100), room));
-  return { share, pct, amount };
-}
-function addAutoDiamond(d, { enabled = true, diamond = 0, base = 0 } = {}) {
-  const none = { ...d, auto: 0 };
-  if (!enabled) return none;
-  if (!AUTO_STACKS_WITH_MANUAL && d.total > 0) return none;
-  const a   = autoDiamondDiscount({ diamond, base, alreadyOnDiamond: d.dia });
-  // Never take the line below zero, even beside a whole-line (native) discount.
-  const add = r2(Math.min(a.amount, Math.max(0, base - d.total)));
-  if (!(add > 0)) return none;
-  return { total: r2(d.total + add), dia: r2(d.dia + add), mk: d.mk, tot: d.tot, auto: add };
-}
-
-module.exports = {
-  preTaxBase, rupees, GROSS_PROP, TAX_MULT,
-  autoDiamondDiscount, addAutoDiamond, diamondShare, AUTO_DIAMOND_TIERS, AUTO_STACKS_WITH_MANUAL,
-};
+module.exports = { preTaxBase, rupees, GROSS_PROP, TAX_MULT };
