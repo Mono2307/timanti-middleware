@@ -1538,10 +1538,6 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
     console.log(`handleRecalculatePriceTag: no ${tagToProcess} tag, skipping`);
     return;
   }
-  // Loyalty is an exclusive diamond-only % per eligible line. When it is applied this rewrites the
-  // in-memory map (order-level discount keys dropped, loyalty entries added to line_discounts) so the
-  // engine below prices it like any per-line discount. No-op otherwise. See src/modules/loyalty/draft.js.
-  loyaltyDraft.applyLoyaltyToPricingInputs(mfMap, draft);
 
   const draftOrderId = draft.id;
   const token = await getShopifyToken();
@@ -1557,6 +1553,10 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
   for (const mf of (mfData.metafields || [])) {
     if (mf.namespace === 'custom') mfMap[mf.key] = mf.value;
   }
+  // Loyalty is an exclusive diamond-only % per eligible line. When it is applied this rewrites the
+  // in-memory map (order-level discount keys dropped, loyalty entries added to line_discounts) so the
+  // engine below prices it like any per-line discount. No-op otherwise. See src/modules/loyalty/draft.js.
+  loyaltyDraft.applyLoyaltyToPricingInputs(mfMap, draft);
 
   // Draft metafield values can be comma-separated, positional per line item: "5.2, 3.8" → item[0]=5.2, item[1]=3.8
   const csvF = (key) => (mfMap[key] || '').split(',').map(s => { const f = parseFloat(s.trim()); return isNaN(f) ? null : f; });

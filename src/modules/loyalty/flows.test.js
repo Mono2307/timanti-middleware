@@ -268,6 +268,17 @@ t('app proxy: a correctly signed request passes, a tampered customer id does not
   assert.ok(!verifyProxySignature({ ...q, signature }, []), 'no secret configured is refused');
 });
 
+t('server.js: the pricing hook runs AFTER the draft metafields are read (regression, 2026-10-09)', async () => {
+  // A mis-applied patch once put the hook above `const mfMap = {}`, which threw on every reprice of
+  // every draft ("Cannot access 'mfMap' before initialization").
+  const src = require('fs').readFileSync(path.join(ROOT, 'server.js'), 'utf8');
+  const fn = src.slice(src.indexOf('async function handleRecalculatePriceTag'));
+  const decl = fn.indexOf('const mfMap = {}');
+  const hook = fn.indexOf('applyLoyaltyToPricingInputs(mfMap');
+  assert.ok(decl > 0 && hook > 0, 'hook or declaration missing');
+  assert.ok(hook > decl, 'loyalty hook is above the mfMap declaration');
+});
+
 (async () => {
   for (const [name, fn] of tests) { await fn(); n++; console.log('  ok  ' + name); }
   console.log(`\n${n} assertions passed`);
