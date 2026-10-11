@@ -26,7 +26,7 @@
     !!document.querySelector('[data-tl-benefits][data-logged-in="true"]');
   var LOGIN_URL = (cfgEl && cfgEl.getAttribute('data-login-url')) || '/account/login?return_url=/cart';
   var HEADING = (cfgEl && cfgEl.getAttribute('data-heading')) || 'My benefits';
-  var LOGGED_OUT_TEXT = (cfgEl && cfgEl.getAttribute('data-logged-out-text')) || 'Log in to see your loyalty benefit and vouchers.';
+  var LOGGED_OUT_TEXT = (cfgEl && cfgEl.getAttribute('data-logged-out-text')) || 'Your loyalty benefits & vouchers';
 
   function inr(v) { return '₹' + Math.round(Number(v) || 0).toLocaleString('en-IN'); }
   function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
@@ -60,15 +60,14 @@
   }
   function say(box, text) { var m = box.querySelector('.tl-benefits__msg'); if (m) m.textContent = text || ''; }
 
+  // One benefit = a short text and, optionally, a small pill button, laid out inline.
   function row(label, sub, btnText, onClick) {
-    var r = el('div', 'tl-benefits__row');
-    var t = el('div', 'tl-benefits__text');
-    t.appendChild(el('div', 'tl-benefits__label', label));
-    if (sub) t.appendChild(el('div', 'tl-benefits__muted', sub));
-    r.appendChild(t);
+    var r = el('span', 'tl-benefits__item');
+    r.appendChild(el('span', 'tl-benefits__text' + (btnText ? '' : ' tl-benefits__muted'), label));
     if (btnText) {
       var b = el('button', 'tl-benefits__btn', btnText);
       b.type = 'button';
+      if (sub) b.title = sub;
       b.addEventListener('click', function () { onClick(b); });
       r.appendChild(b);
     }
@@ -80,14 +79,16 @@
     var body = box.querySelector('.tl-benefits__body');
     if (!LOGGED_IN) {
       body.innerHTML = '';
-      body.appendChild(el('p', 'tl-benefits__muted', LOGGED_OUT_TEXT));
+      var it = el('span', 'tl-benefits__item');
+      it.appendChild(el('span', 'tl-benefits__text', LOGGED_OUT_TEXT));
       var a = el('a', 'tl-benefits__btn', 'Log in');
       a.href = LOGIN_URL;
-      body.appendChild(a);
+      it.appendChild(a);
+      body.appendChild(it);
       return;
     }
     body.innerHTML = '';
-    body.appendChild(el('p', 'tl-benefits__muted', 'Checking your benefits…'));
+    body.appendChild(el('span', 'tl-benefits__muted', 'Checking your benefits…'));
 
     function applyLoyalty(btn) {
       btn.disabled = true;
@@ -130,34 +131,34 @@
       body.innerHTML = '';
       if (!(cart.items || []).length) { box.style.display = 'none'; return; }
       box.style.display = '';
-      if (!b.found) { body.appendChild(el('p', 'tl-benefits__muted', 'Your benefits are not available right now.')); return; }
+      if (!b.found) { box.style.display = 'none'; return; }
       var loyOn = codes.filter(function (c) { return LOY.test(c); })[0];
       if (b.tier && b.enabled) {
-        var occ = b.occasion && b.occasion.length ? ' (incl. ' + b.occasion.join(' & ') + ' month bonus)' : '';
-        var label = b.tier.name + ' member: ' + b.rate + '% off the diamond value' + occ;
+        var occ = b.occasion && b.occasion.length ? ' (' + b.occasion.join(' & ') + ' bonus)' : '';
+        var label = b.tier.name + ' · ' + b.rate + '% off diamonds' + occ;
         body.appendChild(loyOn
-          ? row(label, 'Applied to this cart.', 'Remove', function (btn) { removeCode(loyOn, btn); })
-          : row(label, 'On eligible pieces in your cart.', 'Apply', applyLoyalty));
+          ? row(label + ' ✓', 'Applied to this cart', 'Remove', function (btn) { removeCode(loyOn, btn); })
+          : row(label, 'On eligible pieces in your cart', 'Apply', applyLoyalty));
       } else if (b.next) {
-        body.appendChild(row('Spend ' + inr(b.next.gap) + ' more to unlock ' + b.next.name, b.next.pct + '% off the diamond value of future purchases.', null));
+        body.appendChild(row(inr(b.next.gap) + ' more to unlock ' + b.next.name + ' (' + b.next.pct + '% off diamonds)', '', null));
       }
       (b.vouchers || []).forEach(function (v) {
         var on = codes.some(function (c) { return c.toUpperCase() === String(v.code).toUpperCase(); });
-        var exp = v.expires_at ? 'Valid till ' + new Date(v.expires_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '';
+        var exp = v.expires_at ? v.code + ' · valid till ' + new Date(v.expires_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : v.code;
         body.appendChild(on
-          ? row('Voucher ' + v.code + ' · ' + inr(v.value), 'Applied to this cart.', 'Remove', function (btn) { removeCode(v.code, btn); })
-          : row('Voucher ' + v.code + ' · ' + inr(v.value), exp, 'Apply', function (btn) { applyVoucher(v.code, btn); }));
+          ? row('Voucher ' + inr(v.value) + ' ✓', exp, 'Remove', function (btn) { removeCode(v.code, btn); })
+          : row('Voucher ' + inr(v.value), exp, 'Apply', function (btn) { applyVoucher(v.code, btn); }));
       });
-      if (!body.children.length) body.appendChild(el('p', 'tl-benefits__muted', 'No benefits to apply yet.'));
-    }).catch(function () { body.innerHTML = ''; body.appendChild(el('p', 'tl-benefits__muted', 'Your benefits could not be loaded.')); });
+      if (!body.children.length) box.style.display = 'none';
+    }).catch(function () { box.style.display = 'none'; });
   }
 
   function makeBox(inDrawer) {
     var box = el('div', 'tl-benefits' + (inDrawer ? ' tl-benefits--drawer' : ''));
     box.setAttribute('data-tl-mounted', 'true');
     box.setAttribute('data-tl-drawer', inDrawer ? 'true' : 'false');
-    box.appendChild(el('h3', 'tl-benefits__title', HEADING));
-    box.appendChild(el('div', 'tl-benefits__body'));
+    box.setAttribute('aria-label', HEADING);
+    box.appendChild(el('div', 'tl-benefits__body tl-benefits__line'));
     var msg = el('p', 'tl-benefits__msg');
     msg.setAttribute('role', 'status');
     msg.setAttribute('aria-live', 'polite');
@@ -185,8 +186,15 @@
     var anchor = null;
     for (var i = 0; i < ANCHORS.length && !anchor; i++) anchor = drawer.querySelector(ANCHORS[i]);
     if (!anchor) return;
-    // Insert above the whole button row so the box spans the drawer width.
+    // Insert ABOVE the footer row, never inside it: drawer footers lay totals and buttons out as one
+    // flex row, and a box placed in that row is squeezed into a narrow column. Climb out of every
+    // row-direction flex container first.
     var target = anchor.closest('.cart__ctas') || anchor;
+    while (target.parentElement && target.parentElement !== drawer) {
+      var cs = window.getComputedStyle(target.parentElement);
+      if (cs.display.indexOf('flex') === -1 || cs.flexDirection.indexOf('row') !== 0) break;
+      target = target.parentElement;
+    }
     var box = makeBox(true);
     target.parentNode.insertBefore(box, target);
     render(box);

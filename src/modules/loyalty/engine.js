@@ -119,11 +119,15 @@ function lineEligibility(line, cfg) {
   if (line.isNegativeDiscount) return { eligible: false, reason: 'discount line' };
 
   const sku = lc(line.sku);
+  // Catalogue SKUs are pipe-separated attribute strings ("SCOIN|S|999|NA|H|…"); a rule may name the
+  // whole SKU or just its leading design code ("SCOIN").
+  const skuCode = sku.split('|')[0].trim();
+  const skuHit = (list) => !!sku && (list.includes(sku) || list.includes(skuCode));
   const tags = listLc(line.tags);
   const cols = listLc(line.collections);
   const jc = lc(line.jewelCode);
 
-  if (sku && listLc(exc.skus).includes(sku)) return { eligible: false, reason: `SKU ${line.sku} excluded` };
+  if (skuHit(listLc(exc.skus))) return { eligible: false, reason: `SKU ${line.sku} excluded` };
   const exTag = listLc(exc.tags).find(t => tags.includes(t));
   if (exTag) return { eligible: false, reason: `tag ${exTag} excluded` };
   const exCol = listLc(exc.collections).find(c => cols.includes(c));
@@ -143,7 +147,7 @@ function lineEligibility(line, cfg) {
     const hit = incTypes.includes(lc(line.productType)) ||
       incTags.some(t => tags.includes(t)) ||
       incCols.some(c => cols.includes(c)) ||
-      (sku && incSkus.includes(sku));
+      skuHit(incSkus);
     if (!hit) return { eligible: false, reason: 'not in the included products' };
   }
 
