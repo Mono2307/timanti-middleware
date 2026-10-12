@@ -138,7 +138,7 @@ async function evaluateDraft(draft, mfMap) {
   const customerId = draft.customer && draft.customer.id;
   if (!customerId) return { ok: false, code: 'no customer', reason: 'Add the customer to the draft first.' };
   const mf = mfMap || {};
-  const other = E.otherDiscountOnDraft(mf) ||
+  const other = E.otherDiscountOnDraft(mf, { autoDiaTagged: hasTag(splitTags(draft.tags), 'auto-dia-applied') }) ||
     // A rupee discount_applied with no loyalty record and no rate is a legacy flat custom discount.
     (!E.readApplied(mf[APPLIED_KEY]) && !(Number(mf.discount_rate) > 0) &&
       Math.abs(parseFloat(mf.discount_applied || 0)) > 0 ? 'a discount is already applied' : '');
@@ -257,7 +257,7 @@ async function handleLoyaltyStep(draft) {
     await setDraftTags(draftId, tags.filter(t => t.toLowerCase() !== T_ON));
     return;
   }
-  const other = E.otherDiscountOnDraft(map);
+  const other = E.otherDiscountOnDraft(map, { autoDiaTagged: hasTag(tags, 'auto-dia-applied') });
   if (other) {
     await takeOff(draft, tags, all, {
       invalidCode: 'other discount added',

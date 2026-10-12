@@ -93,13 +93,13 @@ Afterwards, the UAT customer is put back to its real points, and its scratch dra
 
 | ID | Criterion | Expected on the draft |
 |---|---|---|
-| D1 | Apply loyalty (tier 2 customer) | For each eligible line: Discount on Diamond = rate × Diamond (±₹1), Discount Applied = Discount on Diamond, Taxable = Gross ÷ 1.03 − discount, GST = 3% of Taxable, price = Taxable + GST |
-| D2 | Excluded piece on the same draft | No discount on that line |
+| D1 | Apply loyalty (tier 2 customer) | For each eligible line: Discount on Diamond = (auto-diamond % + loyalty rate) × Diamond (±₹1). Loyalty **stacks** on the Auto Diamond Discount (founder, 2026-10-12), Discount Applied = Discount on Diamond, Taxable = Gross ÷ 1.03 − discount, GST = 3% of Taxable, price = Taxable + GST |
+| D2 | Excluded piece on the same draft | No loyalty on that line (only its auto-diamond %, if any) |
 | D3 | Preview vs result | The stored rate matches the panel preview. `discount_applied` = the sum of line discounts |
 | D4 | Add a piece after applying | Re-checked automatically. The new line is discounted correctly |
 | D5 | Staff try a discount code on a loyalty draft | Refused: tag `discount-invalid: loyalty applied`. No discount written |
 | D6 | A discount gets on anyway | Loyalty comes off. Tag `loyalty-invalid: other discount added`. Reason in the note |
-| D7 | Remove loyalty | No Discount on Diamond left on any line. No loyalty record or `discount_applied` |
+| D7 | Remove loyalty | Each line falls back to its auto-diamond % only. No loyalty record left |
 | D8 | Below-tier customer | Refused: tag `loyalty-invalid: below tier`. The note states the spend and the threshold |
 | D9 | Tag length | Every tag ≤ 40 characters |
 

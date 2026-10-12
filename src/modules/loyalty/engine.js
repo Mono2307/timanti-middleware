@@ -300,7 +300,7 @@ function readApplied(raw) {
  * Reads the draft's custom.* metafield map. Vouchers, exchange notes, old gold and CAD advances
  * are tender and do not count.
  */
-function otherDiscountOnDraft(mfMap = {}) {
+function otherDiscountOnDraft(mfMap = {}, { autoDiaTagged = false } = {}) {
   if (Number(mfMap.discount_rate) > 0) return 'a discount code is already applied';
   const code = String(mfMap.discount_code || '').trim();
   if (code) return `discount ${code} is already applied`;
@@ -310,7 +310,12 @@ function otherDiscountOnDraft(mfMap = {}) {
   } catch { /* unreadable list counts as none */ }
   try {
     const arr = mfMap.line_discounts ? JSON.parse(mfMap.line_discounts) : [];
-    if (Array.isArray(arr) && arr.some(e => Array.isArray(e) && e.some(x => x && x.src !== 'loyalty' && Number(x.v) > 0))) {
+    // The automatic diamond discount stacks with loyalty (founder, 2026-10-12), so its entries never
+    // block it. Older auto entries carry no src; on a draft tagged auto-dia-applied, an unmarked
+    // diamond % entry is taken to be the auto one.
+    const isAuto = (x) => x.src === 'auto-dia' ||
+      (autoDiaTagged && !x.src && String(x.t || 'dia').toLowerCase() === 'dia' && String(x.m || '').toLowerCase() === 'pct');
+    if (Array.isArray(arr) && arr.some(e => Array.isArray(e) && e.some(x => x && x.src !== 'loyalty' && !isAuto(x) && Number(x.v) > 0))) {
       return 'a per-line discount is already applied';
     }
   } catch { /* unreadable list counts as none */ }

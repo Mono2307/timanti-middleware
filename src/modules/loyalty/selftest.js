@@ -228,7 +228,22 @@ async function run(p) {
     await addTags(draftId, ['apply-loyalty']);
     return waitFor(async () => { const d = await getDraft(draftId); return settled(d) && d; }, { what: 'loyalty apply + reprice' });
   };
-  const checkLines = (d, rate) => {
+  // The automatic diamond discount stacks with loyalty, so a line's expected diamond cut is
+  // (auto % + loyalty %) of the diamond, capped at the diamond.
+  const autoPctByVariant = async (d) => {
+    const { map } = await draftMod.readDraftMetafields(draftId);
+    let arr = [];
+    try { arr = JSON.parse(map.line_discounts || '[]'); } catch { arr = []; }
+    const out = {};
+    draftMod.productLines(d).forEach((li, i) => {
+      out[String(li.variant_id)] = (Array.isArray(arr[i]) ? arr[i] : [])
+        .filter(e => e && e.src !== 'loyalty' && String(e.t || 'dia') === 'dia' && String(e.m) === 'pct')
+        .reduce((sum, e) => sum + Number(e.v || 0), 0);
+    });
+    return out;
+  };
+  const checkLines = async (d, rate) => {
+    const auto = await autoPctByVariant(d);
     const lines = d.line_items.filter(li => li.variant_id);
     const out = [];
     for (const li of lines) {
@@ -239,19 +254,21 @@ async function run(p) {
       const taxable = rs(prop(li, 'Taxable Value'));
       const gst = rs(prop(li, 'GST'));
       const isEligible = String(li.variant_id) === eligibleVariant || String(li.variant_id) === secondVariant;
+      const a = auto[String(li.variant_id)] || 0;
       if (isEligible) {
         assert(dia > 0, `line ${li.title}: no Diamond value`);
-        assert(near(disc, dia * rate / 100), `line ${li.title}: Discount on Diamond ${disc}, expected ${(dia * rate / 100).toFixed(2)}`);
+        const want = Math.min(dia, dia * (a + rate) / 100);
+        assert(near(disc, want), `line ${li.title}: Discount on Diamond ${disc}, expected ${want.toFixed(2)} (auto ${a}% + loyalty ${rate}%)`);
         assert(near(applied, disc), `line ${li.title}: Discount Applied ${applied} ≠ Discount on Diamond ${disc} (another component was discounted)`);
       } else {
-        assert(disc === 0, `excluded line ${li.title} carries Discount on Diamond ${disc}`);
+        assert(near(disc, dia * a / 100), `excluded line ${li.title}: Discount on Diamond ${disc}, expected only the auto ${a}%`);
       }
       if (gross > 0) {
         assert(near(taxable, gross / 1.03 - applied), `line ${li.title}: Taxable ${taxable} ≠ Gross/1.03 − discount ${(gross / 1.03 - applied).toFixed(2)}`);
         assert(near(gst, taxable * 0.03), `line ${li.title}: GST ${gst} ≠ 3% of taxable`);
         assert(near(Number(li.price) * li.quantity, taxable + gst, 2), `line ${li.title}: price ${li.price} ≠ taxable + GST`);
       }
-      out.push(`${li.title}: dia ${dia} − ${disc}`);
+      out.push(`${li.title}: dia ${dia} − ${disc} (auto ${a}%${isEligible ? ` + loyalty ${rate}%` : ''})`);
     }
     return out.join('; ');
   };
@@ -265,13 +282,14 @@ async function run(p) {
     appliedRate = ev.rate;
     const d = await applyAndSettle();
     assert(tagsOf(d).includes('loyalty-applied'), `tags: ${d.tags}`);
-    return `rate ${appliedRate}% — ` + checkLines(d, appliedRate);
+    return `rate ${appliedRate}% — ` + await checkLines(d, appliedRate);
   });
   await check('D2', 'Excluded piece on the same draft is not discounted', async () => {
     needDraft(); if (!excludedVariant) skip('excludedVariantId not given');
     const d = await getDraft(draftId);
     const li = d.line_items.find(x => String(x.variant_id) === excludedVariant);
-    assert(li && rs(prop(li, 'Discount on Diamond')) === 0, 'excluded line was discounted');
+    const a = (await autoPctByVariant(d))[excludedVariant] || 0;
+    assert(li && near(rs(prop(li, 'Discount on Diamond')), rs(prop(li, 'Diamond')) * a / 100), 'excluded line got loyalty');
   });
   await check('D3', 'Panel preview matches what was applied', async () => {
     needDraft();
@@ -299,7 +317,7 @@ async function run(p) {
       const li = x.line_items.find(l => String(l.variant_id) === secondVariant);
       return settled(x) && li && rs(prop(li, 'Discount on Diamond')) > 0 && x;
     }, { what: 'new line discounted', timeout: 120000 });
-    return checkLines(settledDraft, appliedRate);
+    return await checkLines(settledDraft, appliedRate);
   });
   await check('D5', 'A discount code on a loyalty draft is refused', async () => {
     needDraft();
@@ -333,10 +351,12 @@ async function run(p) {
     await applyAndSettle();
     await addTags(draftId, ['remove-loyalty']);
     const d = await waitFor(async () => { const x = await getDraft(draftId); return !tagsOf(x).includes('loyalty-applied') && settled(x) && x; }, { what: 'loyalty removed' });
-    const left = d.line_items.filter(li => rs(prop(li, 'Discount on Diamond')) > 0);
-    assert(!left.length, `still discounted: ${left.map(l => l.title).join(', ')}`);
+    const auto = await autoPctByVariant(d);
+    const left = d.line_items.filter(li => li.variant_id &&
+      !near(rs(prop(li, 'Discount on Diamond')), rs(prop(li, 'Diamond')) * (auto[String(li.variant_id)] || 0) / 100));
+    assert(!left.length, `loyalty still on: ${left.map(l => l.title).join(', ')}`);
     const { map } = await draftMod.readDraftMetafields(draftId);
-    assert(!map.loyalty_applied && !(Number(map.discount_applied) > 0), 'loyalty record or discount_applied left behind');
+    assert(!map.loyalty_applied, 'loyalty record left behind');
   });
   await check('D8', 'Below-tier customer is refused with the reason', async () => {
     needDraft();

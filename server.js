@@ -3416,7 +3416,8 @@ async function handleAutoDiamondDiscount(draft) {
       console.log(`[auto-dia] #${draft.name}: result -> ${extra.join(', ') || 'none'}`);
     };
 
-    if (tags.some(t => t.toLowerCase() === loyaltyDraft.T_ON)) { await finish(['auto-dia-invalid: loyalty applied']); return; }
+    // Loyalty STACKS on the auto diamond discount (founder, 2026-10-12): both are diamond-only per-line %,
+    // added together and capped at the diamond by resolveLineDiscount. So loyalty no longer blocks this.
 
     const lines = (live.line_items || []).filter(item =>
       !isExcLine(item) &&
@@ -3455,7 +3456,8 @@ async function handleAutoDiamondDiscount(draft) {
       console.log(`[auto-dia] #${draft.name} line ${i + 1}: diamond share ${share.toFixed(2)}% -> ${band ? band.pct + '% off diamond' : 'no discount'}`);
       if (!band) return;
       if (next[i].some(e => e && String(e.t || '').toLowerCase() === 'dia')) { skippedExisting = true; return; }
-      next[i].push({ t: 'dia', m: 'pct', v: band.pct });
+      // src marks it as the AUTO discount, so loyalty can tell it from a per-line discount staff typed in.
+      next[i].push({ t: 'dia', m: 'pct', v: band.pct, src: 'auto-dia' });
       changed = true;
     });
 

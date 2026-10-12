@@ -208,6 +208,23 @@ t('readApplied rejects junk', () => {
   assert.strictEqual(E.readApplied('{"rate":5,"tier":"T2"}').tier, 'T2');
 });
 
+console.log('stacking with the automatic diamond discount (founder, 2026-10-12)');
+t('an auto-dia entry does not block loyalty', () => {
+  assert.strictEqual(E.otherDiscountOnDraft({ line_discounts: '[[{"t":"dia","m":"pct","v":15,"src":"auto-dia"}]]' }), '');
+});
+t('an older unmarked auto entry does not block it on a draft tagged auto-dia-applied', () => {
+  const mf = { line_discounts: '[[{"t":"dia","m":"pct","v":15}]]' };
+  assert.strictEqual(E.otherDiscountOnDraft(mf, { autoDiaTagged: true }), '');
+  assert.ok(E.otherDiscountOnDraft(mf), 'without the tag it is a staff per-line discount and still blocks');
+});
+t('a staff making discount still blocks loyalty even beside auto-dia', () => {
+  assert.ok(E.otherDiscountOnDraft({ line_discounts: '[[{"t":"dia","m":"pct","v":15,"src":"auto-dia"},{"t":"mk","m":"pct","v":10}]]' }, { autoDiaTagged: true }));
+});
+t('loyalty is added beside the auto entry, so both reach the pricing engine', () => {
+  const out = E.withLoyaltyEntries([[{ t: 'dia', m: 'pct', v: 15, src: 'auto-dia' }]], [{ variant_id: 11 }], { rate: 5, eligible_variants: ['11'] });
+  assert.deepStrictEqual(out[0], [{ t: 'dia', m: 'pct', v: 15, src: 'auto-dia' }, { t: 'dia', m: 'pct', v: 5, src: 'loyalty' }]);
+});
+
 console.log('config validation');
 t('a percentage over 100 is refused', () => {
   assert.throws(() => normalizeConfig({ tiers: [{ key: 'T1', min: 1, pct: 150 }] }), /pct/);
