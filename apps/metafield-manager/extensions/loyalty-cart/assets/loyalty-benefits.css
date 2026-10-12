@@ -1,20 +1,14 @@
-/* "My benefits": one centred line — benefit text and a small action, wrapping cleanly on phones. */
-.tl-benefits { width: 100%; box-sizing: border-box; padding: 10px 0; margin: 8px 0; text-align: center;
-  border-top: 1px solid rgba(0, 0, 0, 0.08); border-bottom: 1px solid rgba(0, 0, 0, 0.08); font-size: 0.92em; line-height: 1.4; }
-.tl-benefits--drawer { flex: 0 0 100%; order: 0; }
-.tl-benefits__line { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 6px 14px; }
-.tl-benefits__item { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }
-.tl-benefits__item + .tl-benefits__item::before { content: "·"; opacity: 0.4; margin-right: 6px; }
-.tl-benefits__text { white-space: normal; }
-.tl-benefits__muted { opacity: 0.7; }
-.tl-benefits__btn { cursor: pointer; padding: 3px 12px; border: 1px solid currentColor; border-radius: 999px; background: transparent;
-  color: inherit; font: inherit; font-size: 0.92em; line-height: 1.4; text-decoration: none; display: inline-block; }
-.tl-benefits__btn[disabled] { opacity: 0.5; cursor: default; }
-.tl-benefits__btn--on { background: currentColor; }
-.tl-benefits__btn--on span { color: #fff; mix-blend-mode: difference; }
-.tl-benefits__msg { margin: 6px 0 0; font-size: 0.88em; }
-.tl-benefits__msg:empty { display: none; }
-@media (max-width: 480px) {
-  .tl-benefits { font-size: 0.86em; padding: 8px 0; }
-  .tl-benefits__line { gap: 6px 10px; }
-}
+/* Timanti Loyalty bar: one quiet centred line that inherits the theme's type and colours. */
+.tl-loyalty { width: 100%; box-sizing: border-box; margin: 10px 0; padding: 10px 12px; text-align: center;
+  background: rgba(0, 0, 0, 0.035); font-size: 13px; line-height: 1.5; letter-spacing: 0.02em; }
+.tl-loyalty[hidden] { display: none; }
+.tl-loyalty--drawer { flex: 0 0 100%; }
+.tl-loyalty__line { margin: 0; }
+.tl-loyalty__brand,
+.tl-loyalty__strong { font-weight: 600; }
+.tl-loyalty__muted { opacity: 0.65; }
+.tl-loyalty__sep { opacity: 0.4; margin: 0 6px; }
+.tl-loyalty__action { display: inline; padding: 0; margin: 0; border: 0; background: none; color: inherit; font: inherit;
+  font-weight: 600; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+.tl-loyalty__action[disabled] { opacity: 0.5; cursor: default; }
+@media (max-width: 480px) { .tl-loyalty { font-size: 12px; padding: 9px 10px; } }

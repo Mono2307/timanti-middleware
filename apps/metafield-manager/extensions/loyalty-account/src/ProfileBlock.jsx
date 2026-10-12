@@ -48,25 +48,20 @@ function LoyaltyTier() {
   const gap = Number(data.next_tier_gap) || 0;
   return (
     <s-section heading="Timanti Loyalty">
-      <s-stack direction="block" gap="base" alignItems="center">
+      <s-stack direction="block" gap="small-200" alignItems="center">
         {hasTier ? (
-          <s-stack direction="inline" gap="base" justifyContent="center" alignItems="center">
-            <s-badge>{data.tier_name}</s-badge>
+          <>
+            <s-text type="strong">{`${data.tier_name} member`}</s-text>
             <s-text>{`${Number(data.discount_pct) || 0}% off the diamond value of eligible pieces`}</s-text>
-          </s-stack>
+          </>
         ) : (
-          <s-text>You are a Timanti member. Your first loyalty tier unlocks a discount on diamonds.</s-text>
+          <s-text type="strong">Your first loyalty tier unlocks a discount on diamonds</s-text>
         )}
-        <s-text>{`Lifetime purchases: ${inr(data.points)}`}</s-text>
+        <s-text>{`Lifetime purchases ${inr(data.points)}`}</s-text>
         {data.next_tier_name && data.next_tier_name !== "-" && gap > 0 ? (
-          <s-text>{`Spend ${inr(gap)} more to reach ${data.next_tier_name}.`}</s-text>
+          <s-text>{`${inr(gap)} more to reach ${data.next_tier_name}`}</s-text>
         ) : null}
-        {hasTier ? (
-          <s-text tone="subdued">
-            You get an extra 2% in your birthday and anniversary months. Online, use "My benefits" in your
-            cart; in store, just let us know.
-          </s-text>
-        ) : null}
+        {hasTier ? <s-text>Extra 2% in your birthday and anniversary months</s-text> : null}
       </s-stack>
     </s-section>
   );
