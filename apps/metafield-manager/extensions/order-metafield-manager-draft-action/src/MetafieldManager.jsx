@@ -633,6 +633,9 @@ export default function MetafieldManager({ surface = "block" } = {}) {
   const [lineRows, setLineRows] = useState([]); // [{ id, title, discounts:[{ t, m, v }] }]
   const [lineBusy, setLineBusy] = useState(false);
   const [lineNote, setLineNote] = useState("");
+  // "Apply Auto Diamond Discount" button state (Per-Line Discounts card).
+  const [autoDiaBusy, setAutoDiaBusy] = useState(false);
+  const [autoDiaNote, setAutoDiaNote] = useState("");
   const baselineRef = useRef({});
   const editsRef = useRef({});
 
@@ -1212,6 +1215,44 @@ export default function MetafieldManager({ surface = "block" } = {}) {
     }
   }
 
+  // Apply Auto Diamond Discount: drop an `apply-auto-dia` tag. The middleware reads each line's diamond
+  // share of its pre-tax value (gold + diamond + making + gemstone), adds the band discount (up to 20% -> 5%,
+  // 20-40% -> 10%, 40-60% -> 15%, 60-80% -> 20%) as a diamond-only entry in custom.line_discounts, and
+  // reprices. It leaves `auto-dia-applied` or `auto-dia-invalid: <reason>` on the draft, which we read back.
+  async function applyAutoDiamond() {
+    if (!ownerId) return;
+    setAutoDiaBusy(true);
+    setAutoDiaNote("");
+    try {
+      const res = await shopify.query(TAGS_ADD_MUTATION, { variables: { id: ownerId, tags: ["apply-auto-dia"] } });
+      const errs = collectErrors(res, "tagsAdd");
+      if (errs.length) throw new Error(errs.join("; "));
+      setAutoDiaNote("Checking each line's diamond share and adding the discount… this takes a few seconds.");
+      setTimeout(async () => {
+        try {
+          const r = await shopify.query(
+            `query AutoDiaResult($id: ID!) { ${ctx.resourceField}(id: $id) { tags } }`,
+            { variables: { id: ownerId } },
+          );
+          const t = r?.data?.[ctx.resourceField]?.tags ?? [];
+          const invalid = t.find((x) => String(x).toLowerCase().startsWith("auto-dia-invalid"));
+          if (t.some((x) => String(x).toLowerCase() === "auto-dia-applied")) {
+            setAutoDiaNote("Auto diamond discount applied. Prices and balance are refreshing.");
+          } else if (invalid) {
+            setAutoDiaNote(`Not applied — ${invalid.split(":").slice(1).join(":").trim()}.`);
+          } else {
+            setAutoDiaNote("Still processing… reopen this panel in a moment to see the result.");
+          }
+        } catch { setAutoDiaNote("Request sent. Reopen this panel to see the result."); }
+        setRefreshTick((n) => n + 1);
+      }, 4000);
+    } catch (e) {
+      setAutoDiaNote(`Couldn't apply: ${e?.message || e}`);
+    } finally {
+      setAutoDiaBusy(false);
+    }
+  }
+
   const renderExcApply = () => (
     <s-section heading="Apply an Exchange Note">
       <s-stack direction="block" gap="base">
@@ -1521,6 +1562,14 @@ export default function MetafieldManager({ surface = "block" } = {}) {
               </s-button>
             </s-stack>
           ))}
+          <s-button
+            onClick={applyAutoDiamond}
+            loading={Boolean(autoDiaBusy)}
+            disabled={Boolean(autoDiaBusy || lineBusy)}
+          >
+            Apply Auto Diamond Discount
+          </s-button>
+          {autoDiaNote ? <s-text>{autoDiaNote}</s-text> : null}
           <s-button
             variant="primary"
             onClick={applyLinePricing}
