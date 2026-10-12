@@ -1436,9 +1436,11 @@ async function wipeStalePositionalPricing(draft) {
   if (reapplyAutoDia && !has('apply-auto-dia')) add.push('apply-auto-dia');
   if (!add.length) return;
 
+  const joinedTags = [...new Set([...tags, ...add])].join(', ');
   await axios.put(`${base}/admin/api/2024-01/draft_orders/${draftOrderId}.json`,
-    { draft_order: { id: draftOrderId, tags: [...new Set([...tags, ...add])].join(', ') } },
+    { draft_order: { id: draftOrderId, tags: joinedTags } },
     { headers, timeout: 10000 });
+  draft.tags = joinedTags;   // in-memory draft in step, so the auto-dia and reprice steps below run in THIS pass
   if (reapplyAutoDia) console.log(`[stale-pricing] #${draft.name}: auto diamond discount re-queued for the new line-up`);
 }
 
@@ -3367,8 +3369,10 @@ async function queueAutoDiamond(draft) {
     const tags = (live.tags || '').split(',').map(t => t.trim()).filter(Boolean);
     const has  = (n) => tags.some(t => t.toLowerCase() === n);
     if (has('auto-dia-off') || has('apply-auto-dia')) return;
+    const joined = [...tags, 'apply-auto-dia'].join(', ');
     await axios.put(`${base}/admin/api/2024-01/draft_orders/${draftOrderId}.json`,
-      { draft_order: { id: live.id, tags: [...tags, 'apply-auto-dia'].join(', ') } }, { headers, timeout: 10000 });
+      { draft_order: { id: live.id, tags: joined } }, { headers, timeout: 10000 });
+    draft.tags = joined;   // in-memory draft in step, so the handler below runs in THIS pass
     console.log(`[auto-dia] #${draft.name}: queued after hydration`);
   } catch (e) {
     console.error(`[auto-dia] queue failed for draft ${draft?.id}:`, e.message);
@@ -3385,25 +3389,36 @@ const AUTO_DIA_BANDS = [
 async function handleAutoDiamondDiscount(draft) {
   try {
     const draftOrderId = draft.id.toString();
-    const tags = (draft.tags || '').split(',').map(t => t.trim()).filter(Boolean);
-    if (!tags.some(t => t.toLowerCase() === 'apply-auto-dia')) return;
+    const trigger = (draft.tags || '').split(',').map(t => t.trim()).filter(Boolean);
+    if (!trigger.some(t => t.toLowerCase() === 'apply-auto-dia')) return;
     console.log(`[auto-dia] #${draft.name}: trigger received`);
 
     const base    = process.env.SHOPIFY_STORE_URL;
     const token   = await getShopifyToken();
     const headers = { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' };
 
+    // Work from the LIVE draft, never the webhook payload. When a product has just been added, the payload
+    // is stale: its new line carries no Gold / Diamond props yet (hydration wrote them after the payload
+    // was sent) and its tags pre-date the stale-pricing wipe. Reading the payload is what left multi-product
+    // drafts with no discount on the new line.
+    const { data: liveData } = await axios.get(`${base}/admin/api/2024-01/draft_orders/${draftOrderId}.json`, { headers, timeout: 10000 });
+    const live = liveData?.draft_order || draft;
+    const tags = (live.tags || '').split(',').map(t => t.trim()).filter(Boolean);
+    if (!tags.some(t => t.toLowerCase() === 'apply-auto-dia')) return;   // another pass already handled it
+
     // Strip the trigger and any previous result tag, add the new result. One PUT.
     const finish = async (extra = []) => {
       const kept = tags.filter(t => t.toLowerCase() !== 'apply-auto-dia' && !/^auto-dia/i.test(t)).concat(extra);
+      const joined = [...new Set(kept)].join(', ');
       await axios.put(`${base}/admin/api/2024-01/draft_orders/${draftOrderId}.json`,
-        { draft_order: { id: draft.id, tags: [...new Set(kept)].join(', ') } }, { headers, timeout: 10000 });
+        { draft_order: { id: draft.id, tags: joined } }, { headers, timeout: 10000 });
+      draft.tags = joined;   // keep this pass's in-memory draft in step, so the reprice that follows sees the new tags
       console.log(`[auto-dia] #${draft.name}: result -> ${extra.join(', ') || 'none'}`);
     };
 
     if (tags.some(t => t.toLowerCase() === loyaltyDraft.T_ON)) { await finish(['auto-dia-invalid: loyalty applied']); return; }
 
-    const lines = (draft.line_items || []).filter(item =>
+    const lines = (live.line_items || []).filter(item =>
       !isExcLine(item) &&
       !((item.title || '').toLowerCase().includes('discount') && parseFloat(item.price) < 0) &&
       ((item.properties || []).some(p => p.name === 'Gold') || !!item.variant_id)
@@ -3674,6 +3689,7 @@ async function runDraftUpdateHandlers(draft) {
   // are pointing at the wrong products and must be gone before anything prices off them.
   await step('stale-pricing',    () => wipeStalePositionalPricing(draft));
   if (needsHydration) await step('auto-dia-queue', () => queueAutoDiamond(draft)); // a product was just added and hydrated: discount it (after the wipe, so it survives)
+  await step('auto-diamond-discount', () => handleAutoDiamondDiscount(draft));       // BEFORE the reprice below: writes the per-line diamond % and queues `reprice`, so ONE reprice prices every line with its discount
   await step('send-link',        () => handleSendLinkTag(draft));
   await step('cash-payment',     () => handleCashPaymentTag(draft));
   await step('recalc-price',     () => handleRecalculatePriceTag(draft, { force: false }));
@@ -3692,7 +3708,6 @@ async function runDraftUpdateHandlers(draft) {
   await step('repairs',          () => handleRepairDraftUpdate(draft, getShopifyToken, assignRepairSerial));
   await step('document-serial',  () => handleDocumentSerialTags(draft));   // PO/memo/transfer tags added after creation
   await step('loyalty',          () => loyaltyDraft.handleLoyaltyStep(draft)); // apply-loyalty / remove-loyalty / keep it correct as lines change (drops reprice)
-  await step('auto-diamond-discount', () => handleAutoDiamondDiscount(draft)); // button: apply-auto-dia → per-line diamond % by diamond share (drops reprice)
   // Balance ordering matters: net-to-collect must be recomputed AFTER every adjustment above
   // (voucher / advance / exchange / old-gold), and amount_pending is DERIVED off that fresh net —
   // so the payment sync runs LAST. (Previously it ran before the adjustments, leaving pending stale.)
