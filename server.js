@@ -1418,17 +1418,28 @@ async function wipeStalePositionalPricing(draft) {
   const cleared = doomed.map(m => m.key);
   const why = lineAdded ? 'a line item was added or re-added' : `basis ${stored} -> ${current}`;
   console.log(`[stale-pricing] #${draft.name}: line composition changed (${why}) — ${cleared.length ? 'cleared ' + cleared.join(', ') : 'no overrides were set'}`);
-  if (!cleared.length) return;
 
-  // Deleting a metafield does NOT fire the draft webhook, so without the tag below the draft would
-  // keep the prices those cleared overrides produced. The tag fires one more update, and by then the
-  // basis already matches, so this guard no-ops on that pass instead of looping.
   const tags = (draft.tags || '').split(',').map(t => t.trim()).filter(Boolean);
-  if (!tags.some(t => t.toLowerCase() === 'reprice')) {
-    await axios.put(`${base}/admin/api/2024-01/draft_orders/${draftOrderId}.json`,
-      { draft_order: { id: draftOrderId, tags: [...new Set([...tags, 'reprice'])].join(', ') } },
-      { headers, timeout: 10000 });
-  }
+  const has  = (name) => tags.some(t => t.toLowerCase() === name);
+
+  // The wipe above just removed custom.line_discounts, so every line (old and newly added) lost its
+  // discount. Queue the auto diamond discount again so the next pass re-discounts all lines against the
+  // new line-up. Opt out with the `auto-dia-off` tag.
+  const reapplyAutoDia = !has('auto-dia-off');
+  if (!cleared.length && !reapplyAutoDia) return;
+
+  // Deleting a metafield does NOT fire the draft webhook, so without a tag the draft would keep the
+  // prices those cleared overrides produced. The tag fires one more update, and by then the basis
+  // already matches, so this guard no-ops on that pass instead of looping.
+  const add = [];
+  if (cleared.length && !has('reprice')) add.push('reprice');
+  if (reapplyAutoDia && !has('apply-auto-dia')) add.push('apply-auto-dia');
+  if (!add.length) return;
+
+  await axios.put(`${base}/admin/api/2024-01/draft_orders/${draftOrderId}.json`,
+    { draft_order: { id: draftOrderId, tags: [...new Set([...tags, ...add])].join(', ') } },
+    { headers, timeout: 10000 });
+  if (reapplyAutoDia) console.log(`[stale-pricing] #${draft.name}: auto diamond discount re-queued for the new line-up`);
 }
 
 // Per-line, stackable discounts entered per line item. Stored on the draft as custom.line_discounts —
@@ -3325,19 +3336,45 @@ async function handleApplyDiscountTag(draft) {
     console.error(`[apply-discount] failed for draft ${draft?.id}:`, e.message);
   }
 }
+
 // ─────────────────────────────────────────
-// Auto diamond discount (button + sticky)
+// Auto diamond discount (AUTOMATIC after hydration; the `apply-auto-dia` tag also works by hand)
 // ─────────────────────────────────────────
-// Staff click "Add Auto Diamond Discount" in the Jewellery Workspace, which adds the `apply-auto-dia` tag.
+// Nobody clicks anything. Right after the hydrate step has stamped Gold / Diamond / Making on the lines
+// (on draft creation, and whenever a product is added), queueAutoDiamond() adds the `apply-auto-dia` tag.
+// Adding that tag by hand does the same thing. Add the tag `auto-dia-off` to a draft to opt it out.
 // share = diamond / (gold + diamond + making + gemstone), pre-tax and pre-discount, per line.
 // Each band is "above `from`, up to and including `to`", so boundaries never overlap.
 // A line inside a band gets a diamond-only % entry in custom.line_discounts, then `reprice` is queued.
 // Result tags the panel reads back: auto-dia-applied | auto-dia-invalid: <reason>
 //
-// STICKY: `auto-dia-applied` stays on the draft. When a product is added later, wipeStalePositionalPricing
-// clears every positional override (custom.line_discounts included) because the line positions moved —
-// it then re-queues `apply-auto-dia` so ALL lines, old and new, are discounted again on the next pass.
-// Remove the `auto-dia-applied` tag to opt a draft out.
+// When a product is added later, wipeStalePositionalPricing clears every positional override
+// (custom.line_discounts included) because the line positions moved — it then re-queues `apply-auto-dia`
+// so ALL lines, old and new, are discounted again on the next pass.
+// Adds the trigger tag to a draft that has just been hydrated. Reads the LIVE tags (the webhook payload
+// is stale by now — hydration and the stale-pricing wipe have both written to the draft since it was
+// sent), so it never overwrites a tag another step just added. Never throws.
+async function queueAutoDiamond(draft) {
+  try {
+    const draftOrderId = String(draft?.id || '');
+    if (!draftOrderId) return;
+    const base    = process.env.SHOPIFY_STORE_URL;
+    const token   = await getShopifyToken();
+    const headers = { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' };
+    const { data } = await axios.get(`${base}/admin/api/2024-01/draft_orders/${draftOrderId}.json`, { headers, timeout: 10000 });
+    const live = data?.draft_order;
+    if (!live) return;
+    const tags = (live.tags || '').split(',').map(t => t.trim()).filter(Boolean);
+    const has  = (n) => tags.some(t => t.toLowerCase() === n);
+    if (has('auto-dia-off') || has('apply-auto-dia')) return;
+    await axios.put(`${base}/admin/api/2024-01/draft_orders/${draftOrderId}.json`,
+      { draft_order: { id: live.id, tags: [...tags, 'apply-auto-dia'].join(', ') } }, { headers, timeout: 10000 });
+    console.log(`[auto-dia] #${draft.name}: queued after hydration`);
+  } catch (e) {
+    console.error(`[auto-dia] queue failed for draft ${draft?.id}:`, e.message);
+  }
+}
+
 const AUTO_DIA_BANDS = [
   { from: 0,  to: 20, pct: 5  },
   { from: 20, to: 40, pct: 10 },
@@ -3427,6 +3464,7 @@ async function handleAutoDiamondDiscount(draft) {
     console.error(`[auto-dia] failed for draft ${draft?.id}:`, e.message);
   }
 }
+
 // ─────────────────────────────────────────
 // Pricing Engine — routes
 // ─────────────────────────────────────────
@@ -3450,6 +3488,7 @@ app.post('/api/shopify-draft-updated', async (req, res) => {
     // Auto-hydrate line item properties from variant metafields on creation
     if ((req.headers['x-shopify-topic'] || '') === 'draft_orders/create') {
       await step('hydrate',          () => handleDraftCreated(draft));
+      await step('auto-dia-queue',   () => queueAutoDiamond(draft));          // auto diamond discount, once Gold / Diamond / Making are stamped
       await step('weighted-reprice', () => handleWeightedDocReprice(draft));  // memo-custom / transfer weighted pricing (before serial + net-to-collect)
       await step('document-serial',  () => handleDocumentSerialTags(draft));  // PO/memo/transfer present at creation
       // Unconditional and LAST: a draft that reaches staff with no amount_to_be_collected at all is
@@ -3634,6 +3673,7 @@ async function runDraftUpdateHandlers(draft) {
   // FIRST, ahead of every reprice below: if the line composition moved, the positional overrides
   // are pointing at the wrong products and must be gone before anything prices off them.
   await step('stale-pricing',    () => wipeStalePositionalPricing(draft));
+  if (needsHydration) await step('auto-dia-queue', () => queueAutoDiamond(draft)); // a product was just added and hydrated: discount it (after the wipe, so it survives)
   await step('send-link',        () => handleSendLinkTag(draft));
   await step('cash-payment',     () => handleCashPaymentTag(draft));
   await step('recalc-price',     () => handleRecalculatePriceTag(draft, { force: false }));
@@ -3652,10 +3692,10 @@ async function runDraftUpdateHandlers(draft) {
   await step('repairs',          () => handleRepairDraftUpdate(draft, getShopifyToken, assignRepairSerial));
   await step('document-serial',  () => handleDocumentSerialTags(draft));   // PO/memo/transfer tags added after creation
   await step('loyalty',          () => loyaltyDraft.handleLoyaltyStep(draft)); // apply-loyalty / remove-loyalty / keep it correct as lines change (drops reprice)
+  await step('auto-diamond-discount', () => handleAutoDiamondDiscount(draft)); // button: apply-auto-dia → per-line diamond % by diamond share (drops reprice)
   // Balance ordering matters: net-to-collect must be recomputed AFTER every adjustment above
   // (voucher / advance / exchange / old-gold), and amount_pending is DERIVED off that fresh net —
   // so the payment sync runs LAST. (Previously it ran before the adjustments, leaving pending stale.)
-  await step('auto-diamond-discount', () => handleAutoDiamondDiscount(draft));
   await step('sync-net',         () => syncAmountToCollect(draft));        // recompute net-to-collect after ALL adjustments above
   // Refunds must land BETWEEN the two: amount_refunded is written off the fresh net, and
   // payment-sync then derives amount_pending from paid AND refunded. Reversed, the balance would
