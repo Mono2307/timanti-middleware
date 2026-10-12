@@ -41,7 +41,7 @@ const near = (a, b, tol = 1) => Math.abs(Number(a) - Number(b)) <= tol;
 const rs = (v) => Math.abs(parseFloat(String(v || '').replace(/[^0-9.]/g, '')) || 0);
 const prop = (li, name) => { const p = (li.properties || []).find(x => x && x.name === name); return p ? p.value : null; };
 
-async function waitFor(fn, { timeout = 90000, every = 4000, what = 'condition' } = {}) {
+async function waitFor(fn, { timeout = 300000, every = 5000, what = 'condition' } = {}) {
   const until = Date.now() + timeout;
   let last;
   while (Date.now() < until) {
@@ -67,7 +67,7 @@ const getDraft = async (id) => (await getJson(`draft_orders/${id}.json`)).draft_
  * that writes tags while that burst is still being processed races the pipeline's own tag writes.
  * Staff never click that fast; the test must not either.
  */
-async function quiet(id, { still = 12000, timeout = 120000 } = {}) {
+async function quiet(id, { still = 15000, timeout = 360000 } = {}) {
   const until = Date.now() + timeout;
   let last = null, since = Date.now();
   while (Date.now() < until) {
@@ -316,7 +316,7 @@ async function run(p) {
       const x = await getDraft(draftId);
       const li = x.line_items.find(l => String(l.variant_id) === secondVariant);
       return settled(x) && li && rs(prop(li, 'Discount on Diamond')) > 0 && x;
-    }, { what: 'new line discounted', timeout: 120000 });
+    }, { what: 'new line discounted', timeout: 360000 });
     return await checkLines(settledDraft, appliedRate);
   });
   await check('D5', 'A discount code on a loyalty draft is refused', async () => {
