@@ -110,6 +110,13 @@ async function describeDraftLines(draft) {
   });
 }
 
+function hasLineEntries(mf) {
+  try {
+    const arr = mf.line_discounts ? JSON.parse(mf.line_discounts) : [];
+    return Array.isArray(arr) && arr.some(e => Array.isArray(e) && e.length);
+  } catch { return false; }
+}
+
 async function readDraftMetafields(draftId) {
   const data = await getJson(`draft_orders/${draftId}/metafields.json`);
   const all = data.metafields || [];
@@ -139,8 +146,10 @@ async function evaluateDraft(draft, mfMap) {
   if (!customerId) return { ok: false, code: 'no customer', reason: 'Add the customer to the draft first.' };
   const mf = mfMap || {};
   const other = E.otherDiscountOnDraft(mf, { autoDiaTagged: hasTag(splitTags(draft.tags), 'auto-dia-applied') }) ||
-    // A rupee discount_applied with no loyalty record and no rate is a legacy flat custom discount.
-    (!E.readApplied(mf[APPLIED_KEY]) && !(Number(mf.discount_rate) > 0) &&
+    // A rupee discount_applied with no loyalty record, no rate and NO per-line entries is a legacy flat
+    // custom discount. With per-line entries (e.g. the auto diamond discount) it is just their resolved
+    // total, already judged by otherDiscountOnDraft above.
+    (!E.readApplied(mf[APPLIED_KEY]) && !(Number(mf.discount_rate) > 0) && !hasLineEntries(mf) &&
       Math.abs(parseFloat(mf.discount_applied || 0)) > 0 ? 'a discount is already applied' : '');
   if (other) return { ok: false, code: 'other discount', reason: `Loyalty cannot be combined with another discount: ${other}. Remove it first.` };
 

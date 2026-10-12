@@ -258,6 +258,15 @@ t('online: the LOY code is settled and the order credited to whoever asked for i
   assert.deepStrictEqual(shop.discountsDeleted, ['gid://shopify/DiscountCodeNode/1']);
 });
 
+t('auto diamond discount on the draft: loyalty still applies (stacks), not refused', async () => {
+  shop.draftMf[DRAFT_ID] = { line_discounts: '[[{"t":"dia","m":"pct","v":15,"src":"auto-dia"}],[]]', discount_applied: '2865.00' };
+  await draftMod.handleLoyaltyStep(makeDraft('apply-loyalty, auto-dia-applied'));
+  assert.ok(E.readApplied(shop.draftMf[DRAFT_ID].loyalty_applied), 'loyalty was refused: ' + shop.draftMf[DRAFT_ID].loyalty_note);
+  const mfMap = { ...shop.draftMf[DRAFT_ID] };
+  draftMod.applyLoyaltyToPricingInputs(mfMap, makeDraft('loyalty-applied, auto-dia-applied'));
+  assert.deepStrictEqual(JSON.parse(mfMap.line_discounts)[0], [{ t: 'dia', m: 'pct', v: 15, src: 'auto-dia' }, { t: 'dia', m: 'pct', v: 5, src: 'loyalty' }]);
+});
+
 t('app proxy: a correctly signed request passes, a tampered customer id does not', async () => {
   const { verifyProxySignature } = require('./online');
   const crypto = require('crypto');
