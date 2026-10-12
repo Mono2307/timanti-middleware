@@ -315,9 +315,14 @@ async function run(p) {
     const settledDraft = await waitFor(async () => {
       const x = await getDraft(draftId);
       const li = x.line_items.find(l => String(l.variant_id) === secondVariant);
-      return settled(x) && li && rs(prop(li, 'Discount on Diamond')) > 0 && x;
+      if (!(settled(x) && li && rs(prop(li, 'Discount on Diamond')) > 0)) return false;
+      // The auto discount lands first; loyalty re-checks the new piece a pass later. Wait for that.
+      const { map } = await draftMod.readDraftMetafields(draftId);
+      const ap = E.readApplied(map.loyalty_applied);
+      return ap && (ap.eligible_variants || []).includes(secondVariant) && x;
     }, { what: 'new line discounted', timeout: 360000 });
-    return await checkLines(settledDraft, appliedRate);
+    await quiet(draftId);
+    return await checkLines(await getDraft(draftId), appliedRate);
   });
   await check('D5', 'A discount code on a loyalty draft is refused', async () => {
     needDraft();
