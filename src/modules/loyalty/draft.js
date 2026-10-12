@@ -192,7 +192,7 @@ function appliedRecord(draft, ev) {
 /** Tag set after a refusal: drop our trigger tags, record one short invalid tag. */
 function refusedTags(tags, code) {
   return [...tags.filter(t => !/^loyalty-invalid/i.test(t) && ![T_APPLY, T_REMOVE].includes(t.toLowerCase())),
-    `${T_INVALID}: ${code}`.slice(0, 40)];
+    `${T_INVALID}: ${String(code).replace(/,/g, ' -')}`.slice(0, 40)];
 }
 
 async function takeOff(draft, tags, all, { invalidCode = null, note = null } = {}) {
@@ -203,7 +203,7 @@ async function takeOff(draft, tags, all, { invalidCode = null, note = null } = {
   if (note) await updateDraftOrderMetafields(draft.id, { [NOTE_KEY]: note });
   else await deleteDraftMetafield(draft.id, all, NOTE_KEY);
   let next = tags.filter(t => ![T_APPLY, T_REMOVE, T_ON].includes(t.toLowerCase()) && !/^loyalty-invalid/i.test(t));
-  if (invalidCode) next.push(`${T_INVALID}: ${invalidCode}`.slice(0, 40));
+  if (invalidCode) next.push(`${T_INVALID}: ${String(invalidCode).replace(/,/g, ' -')}`.slice(0, 40));
   next.push('reprice');
   await setDraftTags(draft.id, next);
 }
@@ -260,7 +260,7 @@ async function handleLoyaltyStep(draft) {
   const other = E.otherDiscountOnDraft(map);
   if (other) {
     await takeOff(draft, tags, all, {
-      invalidCode: 'removed, other discount',
+      invalidCode: 'other discount added',
       note: `Loyalty was taken off because ${other}. Loyalty cannot be combined with other discounts.`,
     });
     log.info('loyalty', `draft ${draft.name || draftId}: loyalty removed — ${other}`);

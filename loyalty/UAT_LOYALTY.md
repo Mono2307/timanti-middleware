@@ -98,7 +98,7 @@ Afterwards, the UAT customer is put back to its real points, and its scratch dra
 | D3 | Preview vs result | The stored rate matches the panel preview. `discount_applied` = the sum of line discounts |
 | D4 | Add a piece after applying | Re-checked automatically. The new line is discounted correctly |
 | D5 | Staff try a discount code on a loyalty draft | Refused: tag `discount-invalid: loyalty applied`. No discount written |
-| D6 | A discount gets on anyway | Loyalty comes off. Tag `loyalty-invalid: removed, other discount`. Reason in the note |
+| D6 | A discount gets on anyway | Loyalty comes off. Tag `loyalty-invalid: other discount added`. Reason in the note |
 | D7 | Remove loyalty | No Discount on Diamond left on any line. No loyalty record or `discount_applied` |
 | D8 | Below-tier customer | Refused: tag `loyalty-invalid: below tier`. The note states the spend and the threshold |
 | D9 | Tag length | Every tag ≤ 40 characters |

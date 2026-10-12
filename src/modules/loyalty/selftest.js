@@ -61,8 +61,27 @@ async function graphqlAt(version, query, variables) {
 }
 
 const getDraft = async (id) => (await getJson(`draft_orders/${id}.json`)).draft_order;
+
+/**
+ * Wait until the draft stops changing. One edit produces a burst of webhook deliveries, and a step
+ * that writes tags while that burst is still being processed races the pipeline's own tag writes.
+ * Staff never click that fast; the test must not either.
+ */
+async function quiet(id, { still = 12000, timeout = 120000 } = {}) {
+  const until = Date.now() + timeout;
+  let last = null, since = Date.now();
+  while (Date.now() < until) {
+    const d = await getDraft(id);
+    const sig = `${d.updated_at}|${d.tags}`;
+    if (sig !== last) { last = sig; since = Date.now(); }
+    else if (Date.now() - since >= still && settled(d)) return d;
+    await sleep(3000);
+  }
+  throw new Error('draft never went quiet');
+}
 const tagsOf = (d) => String(d.tags || '').split(',').map(t => t.trim()).filter(Boolean);
 async function addTags(id, extra) {
+  await quiet(id);
   const d = await getDraft(id);
   await putJson(`draft_orders/${id}.json`, { draft_order: { id, tags: [...new Set([...tagsOf(d), ...extra])].join(', ') } });
 }
@@ -296,7 +315,7 @@ async function run(p) {
     await updateDraftOrderMetafields(draftId, { discount_rate: '5' });
     await addTags(draftId, ['uat-ping']);
     const d = await waitFor(async () => { const x = await getDraft(draftId); return !tagsOf(x).includes('loyalty-applied') && settled(x) && x; }, { what: 'loyalty taken off' });
-    assert(tagsOf(d).some(t => /^loyalty-invalid: removed/.test(t)), `tags: ${d.tags}`);
+    assert(tagsOf(d).some(t => /^loyalty-invalid: other discount added/.test(t)), `tags: ${d.tags}`);
     const { map, all } = await draftMod.readDraftMetafields(draftId);
     assert(/taken off/.test(map.loyalty_note || ''), 'no explanation in custom.loyalty_note');
     // Clean the sneaked-in discount AND what the reprice resolved from it, then reprice back to clean.

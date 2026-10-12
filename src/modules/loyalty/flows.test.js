@@ -167,7 +167,7 @@ t('a discount code added on top takes loyalty off and says why', async () => {
   await draftMod.handleLoyaltyStep(makeDraft('loyalty-applied'));
   assert.strictEqual(shop.draftMf[DRAFT_ID].loyalty_applied, undefined);
   const tags = shop.draftTags[DRAFT_ID];
-  assert.ok(/loyalty-invalid: removed, other discount/.test(tags));
+  assert.ok(/loyalty-invalid: other discount added/.test(tags));
   assert.ok(!/loyalty-applied/.test(tags));
   assert.ok(/Loyalty was taken off/.test(shop.draftMf[DRAFT_ID].loyalty_note));
   delete shop.draftMf[DRAFT_ID].discount_codes;
@@ -196,7 +196,9 @@ t('apply is refused with no customer on the draft', async () => {
 
 t('every tag written fits Shopify\'s 40-character limit', async () => {
   for (const tag of String(shop.draftTags[DRAFT_ID]).split(', ')) assert.ok(tag.length <= 40, tag);
-  assert.ok('loyalty-invalid: removed, other discount'.length <= 40);
+  // Shopify splits tags on commas: a comma inside one of ours would leave a stray tag behind.
+  assert.ok(!/,/.test(require('./draft').T_ON) && !/,/.test('loyalty-invalid: other discount added'));
+  assert.ok('loyalty-invalid: other discount added'.length <= 40);
 });
 
 t('remove-loyalty clears the record and the stale discount_applied', async () => {
