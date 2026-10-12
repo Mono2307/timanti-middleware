@@ -1,14 +1,28 @@
-/* Timanti Loyalty bar: one quiet centred line that inherits the theme's type and colours. */
-.tl-loyalty { width: 100%; box-sizing: border-box; margin: 10px 0; padding: 10px 12px; text-align: center;
-  background: rgba(0, 0, 0, 0.035); font-size: 13px; line-height: 1.5; letter-spacing: 0.02em; }
-.tl-loyalty[hidden] { display: none; }
-.tl-loyalty--drawer { flex: 0 0 100%; }
-.tl-loyalty__line { margin: 0; }
-.tl-loyalty__brand,
-.tl-loyalty__strong { font-weight: 600; }
-.tl-loyalty__muted { opacity: 0.65; }
-.tl-loyalty__sep { opacity: 0.4; margin: 0 6px; }
-.tl-loyalty__action { display: inline; padding: 0; margin: 0; border: 0; background: none; color: inherit; font: inherit;
-  font-weight: 600; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
-.tl-loyalty__action[disabled] { opacity: 0.5; cursor: default; }
-@media (max-width: 480px) { .tl-loyalty { font-size: 12px; padding: 9px 10px; } }
+/* "Your Benefits" card. In the drawer it borrows .cart-drawer__price-breakdown* from the theme; the
+   rules below only fill gaps and give the cart page (which lacks those classes) the same look. */
+.tl-card { box-sizing: border-box; }
+.tl-card[hidden] { display: none; }
+.tl-card:not(.tl-card--drawer) { border: 1px solid rgba(0, 0, 0, 0.1); padding: 12px; margin: 20px 0; }
+.tl-card:not(.tl-card--drawer) .tl-card__title { margin: 0 0 14px; padding: 0 0 12px; border-bottom: 1px solid rgba(0, 0, 0, 0.1); font-size: 14px; font-weight: 600; }
+.tl-card__body { display: flex; flex-direction: column; gap: 10px; }
+.tl-card__row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.tl-card__label { min-width: 0; }
+.tl-card__btn { flex: none; width: 88px; min-width: 88px; min-height: 34px; height: 34px; padding: 0; font-size: 12px; text-decoration: none; display: inline-flex; align-items: center; justify-content: center; }
+.tl-card__btn--outline { background: #fff; color: #000; box-shadow: inset 0 0 0 1px #000; }
+.tl-card__btn--outline::after, .tl-card__btn--outline::before { display: none; }
+.tl-card__code { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 4px 0 0; }
+.tl-card__field { flex: 1 1 auto; max-width: 220px; margin: 0; }
+.tl-card__field .field__input { height: 34px; min-height: 34px; padding: 0 10px; font-size: 12px; letter-spacing: 0.4px; }
+.tl-card__field .field__label { font-size: 12px; top: 50%; transform: translateY(-50%); left: 10px; }
+.tl-card__field .field__input:focus ~ .field__label,
+.tl-card__field .field__input:not(:placeholder-shown) ~ .field__label { display: none; }
+.tl-card__field .field__input::placeholder { opacity: 0; }
+.tl-card__link { padding: 0; border: 0; background: none; color: inherit; font: inherit; font-size: 12px; letter-spacing: 0.6px;
+  text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+.tl-card__link[disabled] { opacity: 0.5; cursor: default; }
+.tl-card__toggle { align-self: flex-start; text-decoration: none; opacity: 0.75; }
+.tl-card__offers { display: flex; flex-direction: column; gap: 8px; padding-top: 2px; }
+.tl-card__offers[hidden] { display: none; }
+.tl-card__msg { margin: 10px 0 0; font-size: 12px; letter-spacing: 0.6px; opacity: 0.8; }
+.tl-card__msg:empty { display: none; }
+@media (max-width: 400px) { .tl-card__field { max-width: none; } }

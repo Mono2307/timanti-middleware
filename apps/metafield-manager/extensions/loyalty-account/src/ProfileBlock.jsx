@@ -16,7 +16,9 @@ export default async () => {
 
 const KEYS = ["tier", "tier_name", "points", "discount_pct", "next_tier_name", "next_tier_gap"];
 
-const inr = (v) => "₹" + Math.round(Number(v) || 0).toLocaleString("en-IN");
+const MIDDLEWARE = "https://timanti-middleware.fly.dev";
+
+const inr = (v) =>"₹" + Math.round(Number(v) || 0).toLocaleString("en-IN");
 
 function LoyaltyTier() {
   const [data, setData] = useState(null);
@@ -46,21 +48,20 @@ function LoyaltyTier() {
 
   const hasTier = data.tier && data.tier !== "none";
   const gap = Number(data.next_tier_gap) || 0;
+  const points = Math.max(0, Math.floor(Number(data.points) || 0));
+  // The tier in its own colour and the Silver → Gold → Platinum track with thresholds. Drawn by the
+  // middleware, because customer-account extensions only allow Shopify's built-in colour tones.
+  const graphic = `${MIDDLEWARE}/api/loyalty/tier.svg?p=${points}`;
+  const toNext = data.next_tier_name && data.next_tier_name !== "-" && gap > 0
+    ? `${inr(gap)} more to reach ${data.next_tier_name}` : "";
   return (
     <s-section heading="Timanti Loyalty">
-      <s-stack direction="block" gap="small-200" alignItems="center">
-        {hasTier ? (
-          <>
-            <s-text type="strong">{`${data.tier_name} member`}</s-text>
-            <s-text>{`${Number(data.discount_pct) || 0}% off the diamond value of eligible pieces`}</s-text>
-          </>
-        ) : (
-          <s-text type="strong">Your first loyalty tier unlocks a discount on diamonds</s-text>
-        )}
-        <s-text>{`Lifetime purchases ${inr(data.points)}`}</s-text>
-        {data.next_tier_name && data.next_tier_name !== "-" && gap > 0 ? (
-          <s-text>{`${inr(gap)} more to reach ${data.next_tier_name}`}</s-text>
-        ) : null}
+      <s-stack direction="block" gap="base" alignItems="center">
+        <s-image src={graphic} alt={hasTier ? `${data.tier_name} member` : "Timanti Loyalty"} inlineSize="fill" />
+        <s-text type="strong">
+          {hasTier ? `${Number(data.discount_pct) || 0}% off the diamond value of eligible pieces` : "Your first tier unlocks a discount on diamonds"}
+        </s-text>
+        <s-text>{`Lifetime purchases ${inr(points)}${toNext ? ` · ${toNext}` : ""}`}</s-text>
         {hasTier ? <s-text>Extra 2% in your birthday and anniversary months</s-text> : null}
       </s-stack>
     </s-section>

@@ -177,6 +177,17 @@ function register(app /* , ctx */) {
     catch (e) { log.error('loyalty', `apply for ${cid}: ${e.message}`); return res.status(500).json({ ok: false, reason: 'We could not apply your benefit just now.' }); }
   });
 
+  // ── Customer account: the tier graphic (public; it draws only the points number it is given) ─
+  app.get('/api/loyalty/tier.svg', requireEnabled, async (req, res) => {
+    try {
+      const svg = require('./tier_graphic').tierSvg(Number(req.query.p) || 0, await loadConfig());
+      res.set('Content-Type', 'image/svg+xml');
+      res.set('Cache-Control', 'public, max-age=300');
+      res.set('Access-Control-Allow-Origin', '*');
+      return res.send(svg);
+    } catch (e) { return res.status(500).send(''); }
+  });
+
   // ── Staff panel ───────────────────────────────────────────────────────────────────────────────
   app.get('/api/loyalty/draft-preview', requireEnabled, requireStaffSession, async (req, res) => {
     const draftId = String(req.query.draft || '').replace(/\D/g, '');
