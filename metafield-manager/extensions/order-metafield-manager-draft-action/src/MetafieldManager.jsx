@@ -390,6 +390,9 @@ export default function MetafieldManager({ surface = "block" } = {}) {
   const [discountMode, setDiscountMode] = useState("pct"); // "pct" | "flat"
   const [discountBusy, setDiscountBusy] = useState(false);
   const [discountNote, setDiscountNote] = useState("");
+  // Manual "Auto Diamond Discount" button state.
+  const [autoDiaBusy, setAutoDiaBusy] = useState(false);
+  const [autoDiaNote, setAutoDiaNote] = useState("");
   const [refreshTick, setRefreshTick] = useState(0); // bumped after a save to re-pull server-recomputed values
   const [recalcNote, setRecalcNote] = useState(""); // transient "recalculating…" hint after a trigger tag
   // Per-line pricing editor (draft scope): one row per line item, each with a flat making override and a
@@ -666,6 +669,43 @@ export default function MetafieldManager({ surface = "block" } = {}) {
     }
   }
 
+  // Manual auto diamond discount: drop an `apply-auto-dia` tag. The middleware checks each line's diamond
+  // share of the line value, adds the diamond % discount for the matching band, and reprices. It leaves
+  // `auto-dia-applied` or `auto-dia-invalid: <reason>` behind, which we read back to tell staff what happened.
+  async function applyAutoDiamond() {
+    if (!ownerId) return;
+    setAutoDiaBusy(true);
+    setAutoDiaNote("");
+    try {
+      const res = await shopify.query(TAGS_ADD_MUTATION, { variables: { id: ownerId, tags: ["apply-auto-dia"] } });
+      const errs = collectErrors(res, "tagsAdd");
+      if (errs.length) throw new Error(errs.join("; "));
+      setAutoDiaNote("Checking each line's diamond share and adding the discount… this takes a few seconds.");
+      setTimeout(async () => {
+        try {
+          const r = await shopify.query(
+            `query AutoDiaResult($id: ID!) { ${ctx.resourceField}(id: $id) { tags } }`,
+            { variables: { id: ownerId } },
+          );
+          const t = r?.data?.[ctx.resourceField]?.tags ?? [];
+          const invalid = t.find((x) => x.toLowerCase().startsWith("auto-dia-invalid"));
+          if (t.some((x) => x.toLowerCase() === "auto-dia-applied")) {
+            setAutoDiaNote("Auto diamond discount applied. Prices and balance are refreshing.");
+          } else if (invalid) {
+            setAutoDiaNote(`Not applied — ${invalid.split(":").slice(1).join(":").trim()}.`);
+          } else {
+            setAutoDiaNote("Still processing… reopen this panel in a moment to see the result.");
+          }
+        } catch { setAutoDiaNote("Request sent. Reopen this panel to see the result."); }
+        setRefreshTick((n) => n + 1);
+      }, 4000);
+    } catch (e) {
+      setAutoDiaNote(`Couldn't apply: ${e?.message || e}`);
+    } finally {
+      setAutoDiaBusy(false);
+    }
+  }
+
   // Per-line pricing editor mutations.
   const setRowMaking = (i, val) =>
     setLineRows((rows) => rows.map((r, j) => (j === i ? { ...r, making: val } : r)));
@@ -931,6 +971,34 @@ export default function MetafieldManager({ surface = "block" } = {}) {
     </>
   );
 
+  // Standalone "Auto Diamond Discount" button — its own section, shown at the top of BOTH the inline
+  // block and the "Show all fields" panel (drafts only). Adds the `apply-auto-dia` tag; the middleware
+  // applies the band discount per line and the result is read back into the note below the button.
+  const renderAutoDiamondButton = () => {
+    if (!creditsAllowed) return null;
+    return (
+      <s-section heading="Auto Diamond Discount">
+        <s-stack direction="block" gap="base">
+          <s-text tone="subdued">
+            Adds a pre-tax diamond discount based on the diamond's share of the line value: up to 20% → 5%,
+            20–40% → 10%, 40–60% → 15%, 60–80% → 20%. Lines that already have a diamond discount, and
+            drafts with an order-level discount or loyalty applied, are skipped. Once added, products you
+            add later are discounted automatically too.
+          </s-text>
+          <s-button
+            variant="primary"
+            onClick={applyAutoDiamond}
+            loading={autoDiaBusy ? "" : undefined}
+            disabled={autoDiaBusy ? "" : undefined}
+          >
+            Add Auto Diamond Discount
+          </s-button>
+          {autoDiaNote ? <s-text>{autoDiaNote}</s-text> : null}
+        </s-stack>
+      </s-section>
+    );
+  };
+
   const sections = buildSections(ctx.scope);
 
   // Rendered fresh in each location (inline card + modal) so vnodes aren't shared.
@@ -999,6 +1067,7 @@ export default function MetafieldManager({ surface = "block" } = {}) {
       <s-admin-action heading="Jewellery Workspace — all fields">
         <s-stack direction="block" gap="large-100">
           {renderBanners()}
+          {renderAutoDiamondButton()}
           {renderAdjustmentSelector()}
           {renderSections()}
         </s-stack>
@@ -1031,6 +1100,7 @@ export default function MetafieldManager({ surface = "block" } = {}) {
       <s-stack direction="block" gap="large-100">
         {renderBanners()}
         <s-button onClick={showAllFields}>Show all fields</s-button>
+        {renderAutoDiamondButton()}
         {renderSections()}
         <s-stack direction="inline" gap="base" alignItems="center">
           {renderSaveButton()}
@@ -1099,4 +1169,3 @@ function renderEditable(field, type, choices, value, setField, saving) {
   }
   return <s-text-field key={field.key} label={label} value={value} disabled={disabled} onChange={onChange} />;
 }
-
