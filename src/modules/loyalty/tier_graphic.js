@@ -1,12 +1,14 @@
 'use strict';
 
 /**
- * The tier graphic on the customer-account profile block: the member's tier in its own colour and a
- * quiet progress track Silver → Gold → Platinum with each threshold underneath.
+ * The slim tier timeline on the customer-account profile block: a hairline track from ₹0 through
+ * Silver → Gold → Platinum, filled to the member's lifetime spend, with each stage's name and
+ * threshold in small type underneath and the current stage in its tier colour.
  *
- * Customer-account extensions only allow Shopify's own colour tones, so a gold "Gold" and a branded
- * track cannot be drawn there. The block shows this SVG instead (GET /api/loyalty/tier.svg?p=<points>).
- * It carries no customer data beyond the points number the block itself passes in.
+ * Customer-account extensions only allow Shopify's own colour tones, so the gold fill and gold label
+ * cannot be drawn there; the block shows this SVG instead (GET /api/loyalty/tier.svg?p=<points>).
+ * It is deliberately about one line of text tall (600×40) so the block barely grows. It carries no
+ * customer data beyond the points number the block passes in.
  */
 
 const TIER_COLOURS = {
@@ -14,9 +16,10 @@ const TIER_COLOURS = {
   T2: '#B08D57',   // gold
   T3: '#6F6A75',   // platinum
 };
-const TRACK = '#E7E1D8';
-const INK = '#1A1A1A';
-const MUTED = '#8A857D';
+const TRACK = '#E4DED4';
+const INK = '#3A3A3A';
+const MUTED = '#9A948B';
+const FONT = "-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif";
 
 const esc = (s) => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const lakh = (v) => {
@@ -32,11 +35,10 @@ const lakh = (v) => {
 function tierSvg(points, cfg) {
   const tiers = (cfg.tiers || []).slice(0, 3);
   const pts = Math.max(0, Number(points) || 0);
-  const W = 560, H = 132, x0 = 36, x1 = W - 36, y = 70;
-  // Stops: start, then each tier evenly spaced, so the path reads as steps rather than raw rupees.
+  const W = 600, H = 40, x0 = 8, x1 = W - 8, y = 9;
+  // Stages evenly spaced (₹0, then each tier), so the track reads as steps rather than raw rupees.
   const stops = [{ min: 0 }].concat(tiers);
   const xAt = (i) => x0 + (x1 - x0) * (i / (stops.length - 1));
-  // Progress: linear inside the segment the points fall in.
   let px = x0;
   for (let i = 0; i < stops.length - 1; i++) {
     const a = stops[i].min, b = stops[i + 1].min;
@@ -46,27 +48,28 @@ function tierSvg(points, cfg) {
   }
   let current = null;
   for (const t of tiers) if (pts >= t.min) current = t;
-  const accent = current ? (TIER_COLOURS[current.key] || TIER_COLOURS.T2) : TIER_COLOURS.T2;
-  const title = current ? `${current.name} Member` : 'Member';
+  const fill = current ? (TIER_COLOURS[current.key] || TIER_COLOURS.T2) : TIER_COLOURS.T2;
 
-  const markers = tiers.map((t, i) => {
+  const marks = tiers.map((t, i) => {
     const cx = xAt(i + 1);
     const reached = pts >= t.min;
-    const colour = TIER_COLOURS[t.key] || accent;
     const isCurrent = current && current.key === t.key;
-    return `
-    <circle cx="${cx}" cy="${y}" r="${isCurrent ? 6 : 4.5}" fill="${reached ? colour : '#FFFFFF'}" stroke="${reached ? colour : '#CFC7BA'}" stroke-width="1.5"/>
-    <text x="${cx}" y="${y + 26}" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-size="13" letter-spacing="1" fill="${isCurrent ? colour : INK}" ${isCurrent ? 'font-weight="600"' : ''}>${esc(t.name)}</text>
-    <text x="${cx}" y="${y + 44}" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="11" letter-spacing="0.6" fill="${MUTED}">${esc(lakh(t.min))} · ${esc(t.pct)}%</text>`;
+    const colour = TIER_COLOURS[t.key] || fill;
+    // Last label right-aligned so it never runs off the edge.
+    const anchor = i === tiers.length - 1 ? 'end' : 'middle';
+    const lx = i === tiers.length - 1 ? x1 : cx;
+    return `<circle cx="${cx}" cy="${y}" r="${isCurrent ? 4.5 : 3.5}" fill="${reached ? colour : '#FFFFFF'}" stroke="${reached ? colour : '#CDC5B8'}" stroke-width="1.25"/>`
+      + `<text x="${lx}" y="${y + 23}" text-anchor="${anchor}" font-family="${FONT}" font-size="12" letter-spacing="0.4">`
+      + `<tspan fill="${isCurrent ? colour : INK}" font-weight="${isCurrent ? 600 : 400}">${esc(t.name)}</tspan>`
+      + `<tspan fill="${MUTED}"> ${esc(lakh(t.min))}</tspan></text>`;
   }).join('');
 
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(title)}">
-  <text x="${W / 2}" y="30" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-size="20" letter-spacing="3" fill="${accent}">${esc(title.toUpperCase())}</text>
-  <line x1="${x0}" y1="${y}" x2="${x1}" y2="${y}" stroke="${TRACK}" stroke-width="2" stroke-linecap="round"/>
-  <line x1="${x0}" y1="${y}" x2="${px}" y2="${y}" stroke="${accent}" stroke-width="2" stroke-linecap="round"/>
-  <circle cx="${x0}" cy="${y}" r="3" fill="${pts > 0 ? accent : TRACK}"/>${markers}
-</svg>`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(current ? current.name + ' member' : 'Timanti Loyalty')}">`
+    + `<line x1="${x0}" y1="${y}" x2="${x1}" y2="${y}" stroke="${TRACK}" stroke-width="1.5" stroke-linecap="round"/>`
+    + (px > x0 ? `<line x1="${x0}" y1="${y}" x2="${px}" y2="${y}" stroke="${fill}" stroke-width="1.5" stroke-linecap="round"/>` : '')
+    + `<circle cx="${x0}" cy="${y}" r="2.5" fill="${pts > 0 ? fill : TRACK}"/>`
+    + marks
+    + `</svg>`;
 }
 
 module.exports = { tierSvg, TIER_COLOURS };

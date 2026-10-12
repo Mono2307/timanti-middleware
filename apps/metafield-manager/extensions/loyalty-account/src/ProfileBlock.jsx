@@ -49,20 +49,23 @@ function LoyaltyTier() {
   const hasTier = data.tier && data.tier !== "none";
   const gap = Number(data.next_tier_gap) || 0;
   const points = Math.max(0, Math.floor(Number(data.points) || 0));
-  // The tier in its own colour and the Silver → Gold → Platinum track with thresholds. Drawn by the
-  // middleware, because customer-account extensions only allow Shopify's built-in colour tones.
+  // Slim Silver → Gold → Platinum timeline (600×40, about one line tall) with the current stage in its
+  // tier colour. Drawn by the middleware: customer-account extensions only allow Shopify's own tones.
   const graphic = `${MIDDLEWARE}/api/loyalty/tier.svg?p=${points}`;
   const toNext = data.next_tier_name && data.next_tier_name !== "-" && gap > 0
-    ? `${inr(gap)} more to reach ${data.next_tier_name}` : "";
+    ? `${inr(gap)} to ${data.next_tier_name}` : "";
+  const details = [`Lifetime purchases ${inr(points)}`, toNext, hasTier ? "+2% in birthday and anniversary months" : ""]
+    .filter(Boolean).join(" · ");
   return (
     <s-section heading="Timanti Loyalty">
-      <s-stack direction="block" gap="base" alignItems="center">
-        <s-image src={graphic} alt={hasTier ? `${data.tier_name} member` : "Timanti Loyalty"} inlineSize="fill" />
+      <s-stack direction="block" gap="small-200">
         <s-text type="strong">
-          {hasTier ? `${Number(data.discount_pct) || 0}% off the diamond value of eligible pieces` : "Your first tier unlocks a discount on diamonds"}
+          {hasTier
+            ? `${data.tier_name} member · ${Number(data.discount_pct) || 0}% off the diamond value of eligible pieces`
+            : "Your first tier unlocks a discount on diamonds"}
         </s-text>
-        <s-text>{`Lifetime purchases ${inr(points)}${toNext ? ` · ${toNext}` : ""}`}</s-text>
-        {hasTier ? <s-text>Extra 2% in your birthday and anniversary months</s-text> : null}
+        <s-image src={graphic} alt={hasTier ? `${data.tier_name} member` : "Timanti Loyalty"} inlineSize="fill" aspectRatio="15" />
+        <s-text type="small" color="subdued">{details}</s-text>
       </s-stack>
     </s-section>
   );
