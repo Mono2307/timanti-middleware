@@ -1418,28 +1418,17 @@ async function wipeStalePositionalPricing(draft) {
   const cleared = doomed.map(m => m.key);
   const why = lineAdded ? 'a line item was added or re-added' : `basis ${stored} -> ${current}`;
   console.log(`[stale-pricing] #${draft.name}: line composition changed (${why}) — ${cleared.length ? 'cleared ' + cleared.join(', ') : 'no overrides were set'}`);
+  if (!cleared.length) return;
 
+  // Deleting a metafield does NOT fire the draft webhook, so without the tag below the draft would
+  // keep the prices those cleared overrides produced. The tag fires one more update, and by then the
+  // basis already matches, so this guard no-ops on that pass instead of looping.
   const tags = (draft.tags || '').split(',').map(t => t.trim()).filter(Boolean);
-  const has  = (name) => tags.some(t => t.toLowerCase() === name);
-
-  // The auto diamond discount is sticky: the draft carries `auto-dia-applied`, and the wipe above just
-  // removed custom.line_discounts, so every line (old and newly added) lost its discount. Queue the
-  // apply again so the next pass re-discounts all lines against the new line-up.
-  const reapplyAutoDia = has('auto-dia-applied');
-  if (!cleared.length && !reapplyAutoDia) return;
-
-  // Deleting a metafield does NOT fire the draft webhook, so without a tag the draft would keep the
-  // prices those cleared overrides produced. The tag fires one more update, and by then the basis
-  // already matches, so this guard no-ops on that pass instead of looping.
-  const add = [];
-  if (cleared.length && !has('reprice')) add.push('reprice');
-  if (reapplyAutoDia && !has('apply-auto-dia')) add.push('apply-auto-dia');
-  if (!add.length) return;
-
-  await axios.put(`${base}/admin/api/2024-01/draft_orders/${draftOrderId}.json`,
-    { draft_order: { id: draftOrderId, tags: [...new Set([...tags, ...add])].join(', ') } },
-    { headers, timeout: 10000 });
-  if (reapplyAutoDia) console.log(`[stale-pricing] #${draft.name}: auto diamond discount re-queued for the new line-up`);
+  if (!tags.some(t => t.toLowerCase() === 'reprice')) {
+    await axios.put(`${base}/admin/api/2024-01/draft_orders/${draftOrderId}.json`,
+      { draft_order: { id: draftOrderId, tags: [...new Set([...tags, 'reprice'])].join(', ') } },
+      { headers, timeout: 10000 });
+  }
 }
 
 // Per-line, stackable discounts entered per line item. Stored on the draft as custom.line_discounts —
@@ -3336,7 +3325,6 @@ async function handleApplyDiscountTag(draft) {
     console.error(`[apply-discount] failed for draft ${draft?.id}:`, e.message);
   }
 }
-
 // ─────────────────────────────────────────
 // Auto diamond discount (button + sticky)
 // ─────────────────────────────────────────
@@ -3439,7 +3427,6 @@ async function handleAutoDiamondDiscount(draft) {
     console.error(`[auto-dia] failed for draft ${draft?.id}:`, e.message);
   }
 }
-
 // ─────────────────────────────────────────
 // Pricing Engine — routes
 // ─────────────────────────────────────────
@@ -3665,10 +3652,10 @@ async function runDraftUpdateHandlers(draft) {
   await step('repairs',          () => handleRepairDraftUpdate(draft, getShopifyToken, assignRepairSerial));
   await step('document-serial',  () => handleDocumentSerialTags(draft));   // PO/memo/transfer tags added after creation
   await step('loyalty',          () => loyaltyDraft.handleLoyaltyStep(draft)); // apply-loyalty / remove-loyalty / keep it correct as lines change (drops reprice)
-  await step('auto-diamond-discount', () => handleAutoDiamondDiscount(draft)); // button: apply-auto-dia → per-line diamond % by diamond share (drops reprice)
   // Balance ordering matters: net-to-collect must be recomputed AFTER every adjustment above
   // (voucher / advance / exchange / old-gold), and amount_pending is DERIVED off that fresh net —
   // so the payment sync runs LAST. (Previously it ran before the adjustments, leaving pending stale.)
+  await step('auto-diamond-discount', () => handleAutoDiamondDiscount(draft));
   await step('sync-net',         () => syncAmountToCollect(draft));        // recompute net-to-collect after ALL adjustments above
   // Refunds must land BETWEEN the two: amount_refunded is written off the fresh net, and
   // payment-sync then derives amount_pending from paid AND refunded. Reversed, the balance would
