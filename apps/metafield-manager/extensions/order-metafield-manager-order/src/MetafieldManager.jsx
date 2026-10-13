@@ -597,6 +597,7 @@ export default function MetafieldManager({ surface = "block" } = {}) {
   const [loyaltyErr, setLoyaltyErr] = useState("");
   const [loyaltyBusy, setLoyaltyBusy] = useState(false);
   const [loyaltyNote, setLoyaltyNote] = useState("");
+  const [offerBusy, setOfferBusy] = useState("");
   const [refundEmailBusy, setRefundEmailBusy] = useState(false);
   const [refundEmailNote, setRefundEmailNote] = useState("");
   // Repair class selector: the document's live tags (so the panel reports what the workflow actually
@@ -1291,7 +1292,52 @@ export default function MetafieldManager({ surface = "block" } = {}) {
     }
   }
 
+  // "Use" on one of the customer's open vouchers / exchange notes: the same trigger tags as typing the
+  // code under Apply an Adjustment, so the middleware's checks and maths are unchanged.
+  async function useOffer(o) {
+    if (!ownerId) return;
+    setOfferBusy(o.code);
+    setLoyaltyNote("");
+    try {
+      const tag = o.type === "voucher" ? `apply-voucher:${o.code}` : `apply-exc:${o.code}`;
+      const res = await shopify.query(TAGS_ADD_MUTATION, { variables: { id: ownerId, tags: [tag] } });
+      const errs = collectErrors(res, "tagsAdd");
+      if (errs.length) throw new Error(errs.join("; "));
+      setLoyaltyNote(`Applying ${o.code}… the balance updates in a few seconds.`);
+      setTimeout(() => setRefreshTick((t) => t + 1), 6000);
+    } catch (e) {
+      setLoyaltyNote(`Couldn't apply ${o.code}: ${e?.message || e}`);
+    } finally {
+      setOfferBusy("");
+    }
+  }
+
   const inr = (v) => "₹" + Math.round(Number(v) || 0).toLocaleString("en-IN");
+  const shortDate = (iso) => {
+    try { return new Date(iso).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" }); }
+    catch { return ""; }
+  };
+
+  const renderOffers = () => {
+    const offers = loyalty?.offers || [];
+    if (!loyalty?.preview?.customer) return null;
+    return (
+      <s-stack direction="block" gap="small-200">
+        <s-text type="strong">Available offers for this customer</s-text>
+        {!offers.length ? <s-text tone="subdued">No open vouchers or exchange notes.</s-text> : null}
+        {offers.map((o) => (
+          <s-stack key={o.code} direction="inline" gap="small-200" alignItems="center">
+            <s-badge tone={o.type === "voucher" ? "info" : "neutral"}>{o.type === "voucher" ? "Voucher" : "Exchange note"}</s-badge>
+            <s-text>{`${o.code} · ${inr(o.value)}${o.expires_at ? ` · valid till ${shortDate(o.expires_at)}` : ""}`}</s-text>
+            {o.applied
+              ? <s-badge tone="success">On this draft</s-badge>
+              : <s-button onClick={() => useOffer(o)} loading={offerBusy === o.code} disabled={Boolean(offerBusy)}>Use</s-button>}
+          </s-stack>
+        ))}
+        <s-text tone="subdued">Vouchers and exchange notes are taken off after GST and can be used with loyalty.</s-text>
+      </s-stack>
+    );
+  };
 
   const renderLoyalty = () => {
     if (ctx.scope !== "draft") return null;
@@ -1317,7 +1363,7 @@ export default function MetafieldManager({ surface = "block" } = {}) {
         : `Lifetime spend ${inr(p.points)} · top tier reached`;
     const timeline = hasStanding ? `${MIDDLEWARE_BASE_URL}/api/loyalty/tier.svg?p=${Math.max(0, Math.floor(Number(p.points) || 0))}` : "";
     return (
-      <s-section heading="Loyalty">
+      <s-section heading="Loyalty & offers">
         <s-stack direction="block" gap="base">
           {loyaltyErr ? <s-text tone="subdued">{loyaltyErr}</s-text> : null}
           {!loyalty && !loyaltyErr ? <s-text tone="subdued">Checking the customer's loyalty tier…</s-text> : null}
@@ -1366,6 +1412,7 @@ export default function MetafieldManager({ surface = "block" } = {}) {
               </s-button>
             ) : null}
           </s-stack>
+          {renderOffers()}
           {loyaltyNote ? <s-text>{loyaltyNote}</s-text> : null}
         </s-stack>
       </s-section>

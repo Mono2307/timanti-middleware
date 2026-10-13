@@ -64,6 +64,31 @@ function requireProxy(req, res, next) {
   return next();
 }
 
+/**
+ * The draft customer's open vouchers and exchange notes, so staff can see what the customer can use
+ * without asking for codes. Each says whether it is already on this draft. Never fails the preview.
+ */
+async function draftOffers(draft, map) {
+  const customerId = draft.customer && draft.customer.id;
+  if (!customerId) return [];
+  try {
+    const open = await creditInstruments.listOpenForCustomer(supabase, { customerId });
+    const onDraft = [map.voucher_code, map.exchange_note_code].filter(Boolean).map(c => String(c).toUpperCase());
+    return open
+      .filter(r => r.instrument_type === 'voucher' || r.instrument_type === 'exchange_note')
+      .map(r => ({
+        type: r.instrument_type === 'voucher' ? 'voucher' : 'exchange',
+        code: r.serial_code,
+        value: Number(r.value) || 0,
+        expires_at: r.expires_at || null,
+        applied: onDraft.includes(String(r.serial_code).toUpperCase()),
+      }));
+  } catch (e) {
+    log.warn('loyalty', `offers for draft ${draft.id}: ${e.message}`);
+    return [];
+  }
+}
+
 function requireStaffSession(req, res, next) {
   try {
     const h = String(req.headers.authorization || '');
@@ -200,7 +225,7 @@ function register(app /* , ctx */) {
       const evMap = { ...map };
       if (applied) delete evMap.discount_applied;
       const ev = await evaluateDraft(draft, evMap);
-      return res.json({ success: true, applied, note: map[NOTE_KEY] || '', preview: ev });
+      return res.json({ success: true, applied, note: map[NOTE_KEY] || '', preview: ev, offers: await draftOffers(draft, map) });
     } catch (e) {
       log.error('loyalty', `draft-preview ${draftId}: ${e.message}`);
       return res.status(500).json({ success: false, error: e.message });
