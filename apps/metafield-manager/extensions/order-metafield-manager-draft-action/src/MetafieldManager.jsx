@@ -1297,9 +1297,19 @@ export default function MetafieldManager({ surface = "block" } = {}) {
     if (ctx.scope !== "draft") return null;
     const p = loyalty?.preview;
     const applied = loyalty?.applied;
-    const occ = p?.occasion?.occasions?.length ? ` + ${p.occasion.pct}% (${p.occasion.occasions.join(" & ")} month)` : "";
     const hasStanding = Boolean(p?.customer);
-    const tierPct = p?.tier ? `${p.tier.pct}% off diamond${occ}` : "";
+    const tierPct = p?.tier ? `${p.tier.pct}% off diamond` : "";
+    // Birthday / anniversary month: called out on its own line so staff can tell the customer.
+    const occNames = p?.occasion?.occasions || [];
+    const occLine = p?.tier && occNames.length
+      ? `${occNames.map((n) => n[0].toUpperCase() + n.slice(1)).join(" & ")} month: +${p.occasion.pct}% extra, ${p.rate}% off diamond in total this month`
+      : "";
+    const appliedBreakdown = (a) => {
+      const extra = a.occ ? Number(a.rate) - Number(p?.tier?.pct || a.rate) : 0;
+      return a.occ && extra > 0
+        ? `${a.name} ${Number(a.rate) - extra}% + ${extra}% ${String(a.occ).replace("+", " & ")} month = ${a.rate}%`
+        : `${a.name} ${a.rate}%`;
+    };
     // Progress toward the next tier, so staff can tell the customer how close they are.
     const progressLine = !hasStanding ? ""
       : p.next
@@ -1319,11 +1329,12 @@ export default function MetafieldManager({ surface = "block" } = {}) {
                 {tierPct ? <s-text>{tierPct}</s-text> : null}
               </s-stack>
               <s-image src={timeline} alt={p.tier ? `${p.tier.name} member` : "Loyalty progress"} inlineSize="fill" aspectRatio="15" />
+              {occLine ? <s-badge tone="info">{occLine}</s-badge> : null}
               <s-text tone="subdued">{progressLine}</s-text>
             </s-stack>
           ) : null}
           {applied ? (
-            <s-text>{`Applied: ${applied.name} ${applied.rate}% off the diamond value of ${(applied.eligible_variants || []).length} piece(s). Other discounts are blocked while loyalty is on.`}</s-text>
+            <s-text>{`Applied: ${appliedBreakdown(applied)} off the diamond value of ${(applied.eligible_variants || []).length} piece(s). Other discounts are blocked while loyalty is on.`}</s-text>
           ) : null}
           {p && p.ok ? (
             <s-stack direction="block" gap="small-200">
@@ -1332,7 +1343,7 @@ export default function MetafieldManager({ surface = "block" } = {}) {
                   {l.eligible ? `${l.title}: ${inr(l.discount)} off diamond ${inr(l.diamond)}` : `${l.title}: not eligible (${l.reason})`}
                 </s-text>
               ))}
-              <s-text>{`Estimated saving: ${inr(p.total)} before GST (${p.rate}% of the diamond value)`}</s-text>
+              <s-text>{`Estimated loyalty saving: ${inr(p.total)} before GST (${p.rate}% of the diamond value${occNames.length ? `, incl. +${p.occasion.pct}% ${occNames.join(" & ")} month` : ""})`}</s-text>
             </s-stack>
           ) : null}
           {p && !p.ok && !applied && p.code !== "below tier" ? <s-text tone="subdued">{p.reason}</s-text> : null}
