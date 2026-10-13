@@ -23,6 +23,8 @@ const E = require('./engine');
 const ledger = require('./ledger');
 const { loadConfig } = require('./config');
 const { deleteDiscountNode } = require('./online');
+const { sendEmail } = require('../../integrations/email');
+const { buildLoyaltyOccasionHtml } = require('../../integrations/email/templates');
 
 const OCCASION_TAG = 'loyalty-occasion-month';
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -42,12 +44,12 @@ async function occasionTags({ dryRun = false } = {}) {
   const cfg = await loadConfig();
   const query = `tag:'${OCCASION_TAG}' OR tag:TYPEFORM OR ${cfg.tiers.map(t => `tag:'loyalty-${t.key}'`).join(' OR ')}`;
   let after = null;
-  let added = 0, removed = 0, seen = 0;
+  let added = 0, removed = 0, seen = 0, emailed = 0;
   for (let page = 0; page < 200; page++) {
     const data = await graphql(`query($q: String!, $after: String) {
         customers(first: 100, after: $after, query: $q) {
           pageInfo { hasNextPage endCursor }
-          nodes { id tags
+          nodes { id tags email firstName
             birthday:    metafield(namespace: "custom", key: "birthday")    { value }
             anniversary: metafield(namespace: "custom", key: "anniversary") { value } } } }`,
       { q: query, after });
@@ -60,7 +62,11 @@ async function occasionTags({ dryRun = false } = {}) {
         [c.birthday, c.anniversary].some(m => m && E.monthOf(m.value) === E.istMonth());
       const has = (c.tags || []).includes(OCCASION_TAG);
       if (inMonth && !has) {
-        if (!dryRun) await graphql(`mutation($id: ID!, $t: [String!]!) { tagsAdd(id: $id, tags: $t) { userErrors { message } } }`, { id: c.id, t: [OCCASION_TAG] });
+        if (!dryRun) {
+          await graphql(`mutation($id: ID!, $t: [String!]!) { tagsAdd(id: $id, tags: $t) { userErrors { message } } }`, { id: c.id, t: [OCCASION_TAG] });
+          // The tag goes on once a month, so this is also the once-a-month send.
+          if (await sendOccasionEmail(c, occ, cfg)) emailed++;
+        }
         added++;
       } else if (!inMonth && has) {
         if (!dryRun) await graphql(`mutation($id: ID!, $t: [String!]!) { tagsRemove(id: $id, tags: $t) { userErrors { message } } }`, { id: c.id, t: [OCCASION_TAG] });
@@ -70,13 +76,50 @@ async function occasionTags({ dryRun = false } = {}) {
     if (!conn.pageInfo.hasNextPage) break;
     after = conn.pageInfo.endCursor;
   }
-  return { seen, added, removed };
+  return { seen, added, removed, emailed };
+}
+
+/** Last day of the current IST month, e.g. "31 October". */
+function monthEndLabel(now = new Date()) {
+  const ist = new Date(now.getTime() + 5.5 * 60 * 60 * 1000);
+  const last = new Date(Date.UTC(ist.getUTCFullYear(), ist.getUTCMonth() + 1, 0));
+  return last.toLocaleDateString('en-IN', { day: 'numeric', month: 'long', timeZone: 'UTC' });
+}
+
+/**
+ * "Happy birthday month" email for a tier member whose bonus is live this month. Off unless
+ * emails.occasion is on. Customers below the first tier get no bonus, so no email.
+ */
+async function sendOccasionEmail(c, occ, cfg) {
+  if (!cfg.emails.occasion || !c.email || !occ.occasions.length) return false;
+  const tier = cfg.tiers.find(t => (c.tags || []).includes(`loyalty-${t.key}`));
+  if (!tier) return false;
+  const occasion = occ.occasions.includes('birthday') ? 'birthday' : 'anniversary';
+  try {
+    await sendEmail({
+      to: c.email,
+      subject: occasion === 'birthday' ? 'Happy birthday month from Timanti' : 'Happy anniversary month from Timanti',
+      html: buildLoyaltyOccasionHtml({
+        firstName: c.firstName,
+        occasion,
+        totalPct: Number(tier.pct) + occ.pct,
+        bonusPct: occ.pct,
+        monthEnd: monthEndLabel(),
+        inStoreOnly: !cfg.emails.online_live,
+      }),
+    });
+    log.info('loyalty', `occasion email (${occasion}) sent to customer ${c.id}`);
+    return true;
+  } catch (e) {
+    log.error('loyalty', `occasion email to ${c.id} failed: ${e.message}`);
+    return false;
+  }
 }
 
 async function runLoyaltySweep({ dryRun = false } = {}) {
   const expired = dryRun ? 0 : await expireCodes().catch(e => { log.error('loyalty', `code expiry failed: ${e.message}`); return 0; });
   const tags = await occasionTags({ dryRun }).catch(e => { log.error('loyalty', `occasion tags failed: ${e.message}`); return null; });
-  log.info('loyalty', `sweep${dryRun ? ' (dry run)' : ''}: ${expired} code(s) expired; occasion tag ${tags ? `+${tags.added} −${tags.removed} of ${tags.seen}` : 'failed'}`);
+  log.info('loyalty', `sweep${dryRun ? ' (dry run)' : ''}: ${expired} code(s) expired; occasion tag ${tags ? `+${tags.added} −${tags.removed} of ${tags.seen}, ${tags.emailed} emailed` : 'failed'}`);
   return { expired, tags };
 }
 
@@ -88,4 +131,4 @@ function startLoyaltySweep() {
   setInterval(kick, DAY_MS);
 }
 
-module.exports = { OCCASION_TAG, runLoyaltySweep, startLoyaltySweep, expireCodes, occasionTags };
+module.exports = { OCCASION_TAG, runLoyaltySweep, startLoyaltySweep, expireCodes, occasionTags, monthEndLabel, sendOccasionEmail };

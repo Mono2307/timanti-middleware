@@ -720,7 +720,50 @@ function buildCadAdvanceExpiryHtml({ advanceValue, expiryDate, originalOrder, cu
     + foot();
 }
 
+// ═════════════════════════════════════════════════════════════════════════════
+// LOYALTY
+// ═════════════════════════════════════════════════════════════════════════════
+// Top half kept to a heading, one sentence and one grey line; the standard footer does the rest.
+// inStoreOnly: until the online cart benefit is live, both emails point to the store only.
+
+function loyaltyHowTo(inStoreOnly) {
+  return inStoreOnly
+    ? 'Just let us know at our store when you buy.'
+    : 'Online, log in and tap Apply in your cart. In store, just let us know.';
+}
+
+function buildLoyaltyTierUpHtml({ firstName, tierName, pct, nextName, nextPct, nextGap, inStoreOnly = true }) {
+  const next = nextName && nextGap > 0
+    ? `<br>${money(nextGap)} more to ${esc(nextName)} (${esc(nextPct)}% off).`
+    : '';
+  return head()
+    + contentBlock({
+        heading: `Welcome to ${esc(tierName)}${firstName ? ', ' + esc(firstName) : ''}`,
+        body: `You now get <strong>${esc(pct)}% off the diamond value</strong> on every purchase.`,
+        buttonsHtml: button('Browse New Arrivals', CATALOGUE_URL),
+        timelineHtml: timeline(`${loyaltyHowTo(inStoreOnly)}${next}`),
+      })
+    + standardFooter()
+    + foot();
+}
+
+function buildLoyaltyOccasionHtml({ firstName, occasion, totalPct, bonusPct, monthEnd, inStoreOnly = true }) {
+  const label = occasion === 'anniversary' ? 'anniversary' : 'birthday';
+  return head()
+    + contentBlock({
+        heading: `Happy ${label} month${firstName ? ', ' + esc(firstName) : ''}`,
+        body: `This month you get <strong>${esc(totalPct)}% off the diamond value</strong>, ${esc(bonusPct)}% more than usual.`,
+        buttonsHtml: button('Browse New Arrivals', CATALOGUE_URL),
+        storeLinkHtml: storeLink('or visit our HSR Layout store', STORE_MAP_URL),
+        timelineHtml: timeline(`Valid until ${esc(monthEnd)}. ${loyaltyHowTo(inStoreOnly)}`),
+      })
+    + standardFooter()
+    + foot();
+}
+
 module.exports = {
+  buildLoyaltyTierUpHtml,
+  buildLoyaltyOccasionHtml,
   buildCadAdvanceDigestHtml,
   buildCadAdvanceExpiryHtml,
   buildRepairReceivedHtml,

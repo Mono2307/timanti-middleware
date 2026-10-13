@@ -23,6 +23,7 @@ const { graphql } = require('../../core/shopify');
 const { supabase } = require('../../core/supabase');
 const { log } = require('../../core/logger');
 const { sendEmail } = require('../../integrations/email');
+const { buildLoyaltyTierUpHtml } = require('../../integrations/email/templates');
 const E = require('./engine');
 const ledger = require('./ledger');
 const { loadConfig } = require('./config');
@@ -127,29 +128,24 @@ async function refreshCustomer(customerId, { notify = false } = {}) {
   return { customerId, points, tier: info.tier, changed: true, tierChanged, wentUp };
 }
 
-const inr = (v) => '₹' + Math.round(Number(v) || 0).toLocaleString('en-IN');
-
-function tierEmailHtml(customer, info) {
-  const t = info.tier;
-  const next = info.next
-    ? `<p style="margin:0 0 12px">Spend ${inr(info.gapToNext)} more to reach <b>${info.next.name}</b> and ${info.next.pct}% off.</p>`
-    : '';
-  return `<div style="font-family:Georgia,serif;max-width:520px;margin:0 auto;color:#222;line-height:1.5">
-    <h2 style="font-weight:normal;margin:0 0 16px">Welcome to ${t.name}, ${customer.firstName || 'there'}</h2>
-    <p style="margin:0 0 12px">Thank you for choosing Timanti. Your purchases with us have reached ${inr(info.points)},
-      which makes you a <b>${t.name}</b> member.</p>
-    <p style="margin:0 0 12px">From today you get <b>${t.pct}% off the diamond value</b> of eligible pieces,
-      online and in our stores, with an extra 2% in your birthday and anniversary months.</p>
-    ${next}
-    <p style="margin:0 0 12px">Online, log in to your account and use the "My benefits" box in your cart. In store, just let us know.</p>
-    <p style="margin:24px 0 0;color:#777;font-size:13px">Team Timanti</p></div>`;
+function tierEmailHtml(customer, info, cfg = {}) {
+  return buildLoyaltyTierUpHtml({
+    firstName: customer.firstName,
+    tierName: info.tier.name,
+    pct: info.tier.pct,
+    nextName: info.next ? info.next.name : null,
+    nextPct: info.next ? info.next.pct : null,
+    nextGap: info.next ? Math.ceil(info.gapToNext) : 0,
+    inStoreOnly: !((cfg.emails || {}).online_live),
+  });
 }
 
 async function sendTierEmail(customer, info) {
+  const cfg = await loadConfig();
   await sendEmail({
     to: customer.email,
     subject: `You're now a Timanti ${info.tier.name} member`,
-    html: tierEmailHtml(customer, info),
+    html: tierEmailHtml(customer, info, cfg),
   });
   log.info('loyalty', `tier email sent to customer ${customer.id} (${info.tier.key})`);
 }

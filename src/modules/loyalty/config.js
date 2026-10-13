@@ -33,7 +33,9 @@ const DEFAULT_CONFIG = Object.freeze({
     require_diamond_value: true,
   },
   online: { code_prefix: 'LOY-', code_ttl_minutes: 120 },
-  emails: { tier_change: false },
+  // Customer emails, all off until the founder signs off the copy. online_live switches the "how to
+  // use it" line from store-only to cart + store once the online benefit is live.
+  emails: { tier_change: false, occasion: false, online_live: false },
   // Which orders earn. Orders before #1038 are pre-programme / test history (founder, 2026-10-10).
   // superseded_orders: an invoice replaced by a later one with no exchange-note record linking them —
   // the earlier one earns nothing. Vandana Reddy's #1052 was re-invoiced as #1057.
@@ -93,7 +95,11 @@ function normalizeConfig(raw) {
       code_prefix: String((raw.online || {}).code_prefix || 'LOY-'),
       code_ttl_minutes: Math.max(10, Number((raw.online || {}).code_ttl_minutes) || 120),
     },
-    emails: { tier_change: !!(raw.emails || {}).tier_change },
+    emails: {
+      tier_change: !!(raw.emails || {}).tier_change,
+      occasion: !!(raw.emails || {}).occasion,
+      online_live: !!(raw.emails || {}).online_live,
+    },
     // Missing from a config saved before this existed → the defaults, so the rules never silently lapse.
     earning: (() => {
       const er = raw.earning || DEFAULT_CONFIG.earning;
