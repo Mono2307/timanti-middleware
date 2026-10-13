@@ -1298,15 +1298,30 @@ export default function MetafieldManager({ surface = "block" } = {}) {
     const p = loyalty?.preview;
     const applied = loyalty?.applied;
     const occ = p?.occasion?.occasions?.length ? ` + ${p.occasion.pct}% (${p.occasion.occasions.join(" & ")} month)` : "";
-    const tierLine = p?.tier
-      ? `${p.tier.name} member · lifetime spend ${inr(p.points)} · ${p.basePct}% off diamond${occ}`
-      : p ? `No tier yet · lifetime spend ${inr(p.points)}${p.next ? ` · ${inr(p.gapToNext)} to ${p.next.name}` : ""}` : "";
+    const hasStanding = Boolean(p?.customer);
+    const tierPct = p?.tier ? `${p.tier.pct}% off diamond${occ}` : "";
+    // Progress toward the next tier, so staff can tell the customer how close they are.
+    const progressLine = !hasStanding ? ""
+      : p.next
+        ? `Lifetime spend ${inr(p.points)} · ${inr(p.gapToNext)} more to ${p.next.name} (${p.next.pct}% off diamond) · ${p.progressPct ?? 0}% of the way`
+        : `Lifetime spend ${inr(p.points)} · top tier reached`;
+    const timeline = hasStanding ? `${MIDDLEWARE_BASE_URL}/api/loyalty/tier.svg?p=${Math.max(0, Math.floor(Number(p.points) || 0))}` : "";
     return (
       <s-section heading="Loyalty">
         <s-stack direction="block" gap="base">
           {loyaltyErr ? <s-text tone="subdued">{loyaltyErr}</s-text> : null}
           {!loyalty && !loyaltyErr ? <s-text tone="subdued">Checking the customer's loyalty tier…</s-text> : null}
-          {p?.customer ? <s-text>{`${p.customer.name}: ${tierLine}`}</s-text> : null}
+          {hasStanding ? (
+            <s-stack direction="block" gap="small-200">
+              <s-stack direction="inline" gap="small-200" alignItems="center">
+                <s-text type="strong">{p.customer.name}</s-text>
+                <s-badge tone={p.tier ? "success" : "neutral"}>{p.tier ? `${p.tier.name} member` : "No tier yet"}</s-badge>
+                {tierPct ? <s-text>{tierPct}</s-text> : null}
+              </s-stack>
+              <s-image src={timeline} alt={p.tier ? `${p.tier.name} member` : "Loyalty progress"} inlineSize="fill" aspectRatio="15" />
+              <s-text tone="subdued">{progressLine}</s-text>
+            </s-stack>
+          ) : null}
           {applied ? (
             <s-text>{`Applied: ${applied.name} ${applied.rate}% off the diamond value of ${(applied.eligible_variants || []).length} piece(s). Other discounts are blocked while loyalty is on.`}</s-text>
           ) : null}
@@ -1320,7 +1335,8 @@ export default function MetafieldManager({ surface = "block" } = {}) {
               <s-text>{`Estimated saving: ${inr(p.total)} before GST (${p.rate}% of the diamond value)`}</s-text>
             </s-stack>
           ) : null}
-          {p && !p.ok && !applied ? <s-text tone="subdued">{p.reason}</s-text> : null}
+          {p && !p.ok && !applied && p.code !== "below tier" ? <s-text tone="subdued">{p.reason}</s-text> : null}
+          {p && p.code === "below tier" && !applied ? <s-text tone="subdued">Loyalty discount starts at {p.next?.name || "the first tier"}.</s-text> : null}
           {loyalty?.note ? <s-text tone="subdued">{loyalty.note}</s-text> : null}
           <s-stack direction="inline" gap="base">
             <s-button

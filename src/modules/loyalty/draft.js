@@ -137,6 +137,22 @@ async function setDraftTags(draftId, tags) {
 }
 
 /**
+ * Tier ladder and progress for the staff panel: every tier with whether it is reached, the previous
+ * and next thresholds, and the share of the way from one to the other (100 at the top tier).
+ */
+function tierProgress(t, cfg) {
+  const tiers = [...(cfg.tiers || [])].sort((a, b) => a.min - b.min);
+  const from = t.tier ? t.tier.min : 0;
+  const progressPct = t.next
+    ? Math.max(0, Math.min(100, Math.floor(((t.points - from) / (t.next.min - from)) * 100)))
+    : 100;
+  return {
+    points: t.points, tier: t.tier, next: t.next, gapToNext: t.gapToNext, progressPct,
+    ladder: tiers.map(x => ({ key: x.key, name: x.name, min: x.min, pct: x.pct, reached: t.points >= x.min })),
+  };
+}
+
+/**
  * Evaluate loyalty for a draft without writing anything. Used by the apply path and by the panel's
  * preview, so what staff see before pressing Apply is exactly what Apply will do.
  */
@@ -144,15 +160,6 @@ async function evaluateDraft(draft, mfMap) {
   const cfg = await loadConfig();
   const customerId = draft.customer && draft.customer.id;
   if (!customerId) return { ok: false, code: 'no customer', reason: 'Add the customer to the draft first.' };
-  const mf = mfMap || {};
-  const other = E.otherDiscountOnDraft(mf, { autoDiaTagged: hasTag(splitTags(draft.tags), 'auto-dia-applied') }) ||
-    // A rupee discount_applied with no loyalty record, no rate and NO per-line entries is a legacy flat
-    // custom discount. With per-line entries (e.g. the auto diamond discount) it is just their resolved
-    // total, already judged by otherDiscountOnDraft above.
-    (!E.readApplied(mf[APPLIED_KEY]) && !(Number(mf.discount_rate) > 0) && !hasLineEntries(mf) &&
-      Math.abs(parseFloat(mf.discount_applied || 0)) > 0 ? 'a discount is already applied' : '');
-  if (other) return { ok: false, code: 'other discount', reason: `Loyalty cannot be combined with another discount: ${other}. Remove it first.` };
-
   const customer = await readCustomer(customerId);
   if (!customer) return { ok: false, code: 'no customer', reason: 'The customer on this draft could not be found.' };
   let points = 0;
@@ -162,10 +169,23 @@ async function evaluateDraft(draft, mfMap) {
     log.error('loyalty', `ledger read failed for ${customerId}, using customer metafield: ${e.message}`);
     points = Number(customer.points) || 0;
   }
+  // The customer's standing on its own (tier, spend, progress), shown to staff even when Apply is
+  // refused, so the counter always knows who they are serving.
+  const t = E.tierFor(points, cfg);
+  const standing = { customer: { id: String(customerId), name: customer.name }, ...tierProgress(t, cfg) };
+  const mf = mfMap || {};
+  const other = E.otherDiscountOnDraft(mf, { autoDiaTagged: hasTag(splitTags(draft.tags), 'auto-dia-applied') }) ||
+    // A rupee discount_applied with no loyalty record, no rate and NO per-line entries is a legacy flat
+    // custom discount. With per-line entries (e.g. the auto diamond discount) it is just their resolved
+    // total, already judged by otherDiscountOnDraft above.
+    (!E.readApplied(mf[APPLIED_KEY]) && !(Number(mf.discount_rate) > 0) && !hasLineEntries(mf) &&
+      Math.abs(parseFloat(mf.discount_applied || 0)) > 0 ? 'a discount is already applied' : '');
+  if (other) return { ...standing, ok: false, code: 'other discount', reason: `Loyalty cannot be combined with another discount: ${other}. Remove it first.` };
+
   const lines = await describeDraftLines(draft);
   const r = E.computeLoyalty({ points, birthday: customer.birthday, anniversary: customer.anniversary, lines, cfg });
   const base = {
-    customer: { id: String(customerId), name: customer.name },
+    ...standing,
     points: r.points, tier: r.tier, next: r.next, gapToNext: r.gapToNext,
     rate: r.rate, basePct: r.basePct, occasion: r.occasion, total: r.total,
     lines: lines.map((l, i) => ({
