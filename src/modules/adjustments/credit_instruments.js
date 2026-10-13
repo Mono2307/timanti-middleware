@@ -7,6 +7,17 @@
 
 const TABLE = 'credit_instruments';
 
+// Listeners told after an instrument is marked redeemed (loyalty re-checks the order the credit was
+// issued against). Fire-and-forget: a listener can never fail or slow a redemption.
+const redeemedListeners = [];
+function onRedeemed(fn) { if (typeof fn === 'function') redeemedListeners.push(fn); }
+function notifyRedeemed(p) {
+  for (const fn of redeemedListeners) {
+    try { Promise.resolve(fn({ instrumentType: p.instrumentType, serialCode: p.serialCode })).catch(() => {}); }
+    catch (e) { /* never let a listener break the ledger write */ }
+  }
+}
+
 // Record an ISSUED instrument. Idempotent — no-op if (instrument_type, serial_code) already exists.
 async function upsertIssued(supabase, p) {
   const row = {
@@ -41,7 +52,7 @@ async function redeem(supabase, p) {
   const { data, error } = await supabase.from(TABLE).update(patch)
     .eq('instrument_type', p.instrumentType).eq('serial_code', p.serialCode).select('id');
   if (error) throw new Error(`redeem ${p.serialCode}: ${error.message}`);
-  if (data && data.length) return true;
+  if (data && data.length) { notifyRedeemed(p); return true; }
 
   // No issued row — insert a redeemed one (value must be > 0 per the check constraint).
   const value = Number(p.value) > 0 ? Number(p.value) : null;
@@ -58,6 +69,7 @@ async function redeem(supabase, p) {
     updated_at:        now,
   });
   if (insErr) throw new Error(`redeem-insert ${p.serialCode}: ${insErr.message}`);
+  notifyRedeemed(p);
   return true;
 }
 
@@ -98,8 +110,9 @@ async function promoteApplied(supabase, { targetDraftId, targetOrderId, targetOr
   if (targetOrderId)   patch.target_order_id   = String(targetOrderId);
   if (targetOrderName) patch.target_order_name = targetOrderName;
   const { data, error } = await supabase.from(TABLE).update(patch)
-    .eq('status', 'applied').eq('target_draft_id', String(targetDraftId)).select('serial_code');
+    .eq('status', 'applied').eq('target_draft_id', String(targetDraftId)).select('serial_code, instrument_type');
   if (error) throw new Error(`promoteApplied draft ${targetDraftId}: ${error.message}`);
+  for (const r of data || []) notifyRedeemed({ instrumentType: r.instrument_type, serialCode: r.serial_code });
   return (data || []).map(r => r.serial_code);
 }
 
@@ -255,4 +268,4 @@ function effectiveStatus(row, nowMs) {
   return row.status;
 }
 
-module.exports = { upsertIssued, apply, promoteApplied, revertApplied, reopen, redeem, voidInstrument, getBySerial, listOpenForCustomer, fetchAll, effectiveStatus, rekey, expireOverdue, listExpiringBetween, closeInstrument };
+module.exports = { onRedeemed, upsertIssued, apply, promoteApplied, revertApplied, reopen, redeem, voidInstrument, getBySerial, listOpenForCustomer, fetchAll, effectiveStatus, rekey, expireOverdue, listExpiringBetween, closeInstrument };

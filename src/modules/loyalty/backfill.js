@@ -24,6 +24,7 @@ const E = require('./engine');
 const ledger = require('./ledger');
 const { loadConfig } = require('./config');
 const { refreshCustomer } = require('./customer');
+const afterSales = require('./after_sales');
 
 let job = null;
 
@@ -60,6 +61,7 @@ const csvCell = (v) => {
 
 async function run({ commit }) {
   const cfg = await loadConfig();
+  const redeemed = await afterSales.redeemedAgainstMap(supabase);
   const perOrder = [];
   const customers = new Map();
   for await (const orders of allOrders()) {
@@ -68,7 +70,7 @@ async function run({ commit }) {
       job.ordersSeen++;
       const cid = o.customer && o.customer.id ? String(o.customer.id) : null;
       if (!cid) continue;
-      const points = isCadAdvanceOnly(o) ? 0 : E.earnPoints(o, cfg, { amountRefunded: refunded[String(o.id)] || 0 }).points;
+      const points = isCadAdvanceOnly(o) ? 0 : E.earnPoints(o, cfg, { amountRefunded: refunded[String(o.id)] || 0, redeemedAgainst: redeemed[o.name] || 0 }).points;
       perOrder.push({ cid, orderId: String(o.id), name: o.name, points, channel: o.source_name === 'shopify_draft_order' ? 'store' : 'online' });
       const c = customers.get(cid) || {
         id: cid, name: [o.customer.first_name, o.customer.last_name].filter(Boolean).join(' '),

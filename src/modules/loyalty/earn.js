@@ -24,6 +24,8 @@ const E = require('./engine');
 const ledger = require('./ledger');
 const { refreshCustomer } = require('./customer');
 const { deleteDiscountNode } = require('./online');
+const afterSales = require('./after_sales');
+const creditInstruments = require('../adjustments/credit_instruments');
 
 // Shopify sends several deliveries per order within seconds. Coalesce them: keep the newest
 // payload per order and process it once the burst has gone quiet.
@@ -104,7 +106,11 @@ async function processOrder(order) {
 
   // A CAD-advance-only order is a receipt for money taken, not a sale; the sale that absorbs the
   // advance earns the points. Counting both would double them.
-  const points = isCadAdvanceOnly(order) ? 0 : E.earnPoints(order, cfg, { amountRefunded: await amountRefundedFor(order.id) }).points;
+  // Redeemed vouchers / exchange notes issued against this order come off it. A ledger read failure
+  // throws: earning without the deduction would over-credit, so the order is left for the next pass.
+  const redeemedAgainst = await afterSales.redeemedAgainst(supabase, order.name);
+  const points = isCadAdvanceOnly(order) ? 0
+    : E.earnPoints(order, cfg, { amountRefunded: await amountRefundedFor(order.id), redeemedAgainst }).points;
   const channel = order.source_name === 'shopify_draft_order' ? 'store' : 'online';
   const { changed, previousCustomerId } = await ledger.upsertOrderEntry(supabase, {
     customerId, orderId: order.id, orderName: order.name, points, kind: 'earn', channel,
@@ -117,4 +123,27 @@ async function processOrder(order) {
   }
 }
 
-module.exports = { onOrderWebhook, processOrder, settleOnlineCode };
+/** Re-earn one order by its name ("#1060"): fetched fresh, then through the normal coalesced path. */
+async function reearnOrderByName(name, { now = false } = {}) {
+  if (!name || !/^#?\d+$/.test(String(name).trim())) return false; // drafts (#D…) never earn
+  const { getJson } = require('../../core/shopify');
+  const q = encodeURIComponent(String(name).startsWith('#') ? name : '#' + name);
+  const { orders } = await getJson(`orders.json?name=${q}&status=any&limit=1`);
+  const order = (orders || []).find(o => o.name === (String(name).startsWith('#') ? name : '#' + name));
+  if (!order) return false;
+  // now: run in line (the nightly sweep goes one order at a time, so it never bursts the API).
+  if (now) await processOrder(order); else onOrderWebhook(order);
+  return true;
+}
+
+// When a voucher / exchange note is redeemed, the order it was issued against earns less. That order
+// gets no webhook of its own, so re-earn it here.
+creditInstruments.onRedeemed(async ({ instrumentType, serialCode }) => {
+  if (!config.loyalty.enabled) return;
+  try {
+    const source = await afterSales.redeemedSource(supabase, { instrumentType, serialCode });
+    if (source && await reearnOrderByName(source)) log.info('loyalty', `${serialCode} redeemed → re-checking ${source}`);
+  } catch (e) { log.error('loyalty', `re-check after ${serialCode} redeemed: ${e.message}`); }
+});
+
+module.exports = { onOrderWebhook, processOrder, settleOnlineCode, reearnOrderByName };

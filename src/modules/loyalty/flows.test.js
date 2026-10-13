@@ -76,6 +76,15 @@ stub('src/core/metafields.js', {
   updateMetafields: async () => {},
 });
 stub('src/integrations/email/index.js', { sendEmail: async () => {}, withStoreCc: () => [] });
+// Redeemed vouchers / exchange notes per source order (the credit-instrument ledger).
+const redeemedBySource = {};
+stub('src/modules/loyalty/after_sales.js', {
+  redeemedAgainst: async (_sb, name) => redeemedBySource[name] || 0,
+  redeemedAgainstMap: async () => ({ ...redeemedBySource }),
+  sourceOrdersWithRedemptions: async () => Object.keys(redeemedBySource),
+  redeemedSource: async () => null,
+  TYPES: ['voucher', 'exchange_note'],
+});
 
 // ── fake ledger ─────────────────────────────────────────────────────────────────────────────────
 const db = { ledger: {}, redemptions: [] };
@@ -229,6 +238,13 @@ t('earning: an in-store order lifts the customer from Gold to Platinum and tags 
   assert.strictEqual(db.ledger['order:7001'].points, 400000);
   assert.strictEqual(shop.customers['501'].tier, 'T3');
   assert.deepStrictEqual(shop.customers['501'].tags, ['loyalty-T3']);
+});
+
+t('earning: a redeemed exchange note against an order takes its value off that order', async () => {
+  redeemedBySource['#1101'] = 100000;
+  await earn.processOrder({ id: 7002, name: '#1101', total_price: '150000', source_name: 'shopify_draft_order', customer: { id: 502 }, line_items: [{ title: 'Ring', price: '150000', quantity: 1 }] });
+  assert.strictEqual(db.ledger['order:7002'].points, 50000);
+  delete redeemedBySource['#1101'];
 });
 
 t('earning: a duplicate delivery changes nothing', async () => {

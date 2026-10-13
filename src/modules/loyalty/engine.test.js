@@ -158,9 +158,16 @@ t('orders before #1038 earn nothing', () => {
   assert.deepStrictEqual(E.earnPoints({ name: '#1037', total_price: '50000' }, cfg), { points: 0, excluded: 'before #1038' });
   assert.strictEqual(E.earnPoints({ name: '#1038', total_price: '50000' }, cfg).points, 50000);
 });
-t('an exchange note issued against an order comes off it, like a refund (Santosh #1060)', () => {
+t('a REDEEMED exchange note issued against an order comes off it, like a refund (Santosh #1060)', () => {
   const o = { name: '#1060', total_price: '47041.90', tags: 'deposit:fully-paid, exc-given, exc-num:EXC27-KAHSR-0001, exc-val:47041.00, paid:Rs47041' };
-  assert.strictEqual(E.earnPoints(o, cfg).points, 0);
+  assert.strictEqual(E.earnPoints(o, cfg, { redeemedAgainst: 47041 }).points, 0);
+});
+t('exchange tags alone change nothing: only a redemption in the ledger counts', () => {
+  const o = { name: '#1060', total_price: '47041.90', tags: 'exc-given, exc-val:47041.00' };
+  assert.strictEqual(E.earnPoints(o, cfg).points, 47041);
+});
+t('a redeemed voucher issued for a return comes off its source order too', () => {
+  assert.strictEqual(E.earnPoints({ name: '#1073', total_price: '100000' }, cfg, { redeemedAgainst: 13664 }).points, 86336);
 });
 t('the order the note is spent on earns its full value (Santosh #1063)', () => {
   const o = { name: '#1063', total_price: '44686.41', tags: 'exc-applied, exc-num:EXC27-KAHSR-0001, exc-original:#1060, exc-val:47041.00' };

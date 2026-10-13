@@ -116,11 +116,37 @@ async function sendOccasionEmail(c, occ, cfg) {
   }
 }
 
+/**
+ * Nightly safety net: re-earn every order touched in the last 90 days (an in-store refund recorded
+ * without a webhook) and every order with redeemed after-sales credit against it. Each goes through
+ * the normal earning path, which only writes when the figure actually changed.
+ */
+const RECHECK_DAYS = 90;
+async function recheckOrders() {
+  const { getJson } = require('../../core/shopify');
+  const afterSales = require('./after_sales');
+  const { reearnOrderByName } = require('./earn');
+  const since = new Date(Date.now() - RECHECK_DAYS * DAY_MS).toISOString();
+  const names = new Set(await afterSales.sourceOrdersWithRedemptions(supabase).catch(() => []));
+  let url = `orders.json?status=any&limit=250&updated_at_min=${encodeURIComponent(since)}&fields=name`;
+  for (let page = 0; page < 20 && url; page++) {
+    const body = await getJson(url);
+    for (const o of body.orders || []) names.add(o.name);
+    url = null; // one page of 250 covers the store's volume; widen here if that ever changes
+  }
+  let n = 0;
+  for (const name of names) {
+    try { if (await reearnOrderByName(name, { now: true })) n++; } catch (e) { log.warn('loyalty', `re-check ${name}: ${e.message}`); }
+  }
+  return n;
+}
+
 async function runLoyaltySweep({ dryRun = false } = {}) {
   const expired = dryRun ? 0 : await expireCodes().catch(e => { log.error('loyalty', `code expiry failed: ${e.message}`); return 0; });
   const tags = await occasionTags({ dryRun }).catch(e => { log.error('loyalty', `occasion tags failed: ${e.message}`); return null; });
-  log.info('loyalty', `sweep${dryRun ? ' (dry run)' : ''}: ${expired} code(s) expired; occasion tag ${tags ? `+${tags.added} −${tags.removed} of ${tags.seen}, ${tags.emailed} emailed` : 'failed'}`);
-  return { expired, tags };
+  const rechecked = dryRun ? 0 : await recheckOrders().catch(e => { log.error('loyalty', `order re-check failed: ${e.message}`); return 0; });
+  log.info('loyalty', `sweep${dryRun ? ' (dry run)' : ''}: ${expired} code(s) expired; occasion tag ${tags ? `+${tags.added} −${tags.removed} of ${tags.seen}, ${tags.emailed} emailed` : 'failed'}; ${rechecked} order(s) re-checked`);
+  return { expired, tags, rechecked };
 }
 
 /** Once shortly after boot, then daily. No-op unless LOYALTY_ENABLED. */
