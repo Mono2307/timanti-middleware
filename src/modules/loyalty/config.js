@@ -29,7 +29,7 @@ const DEFAULT_CONFIG = Object.freeze({
   occasion_bonus_stacks: false,
   eligibility: {
     include: { product_types: [], tags: [], collections: [], skus: [] },
-    exclude: { skus: ['SCOIN'], tags: ['no-loyalty'], collections: [], product_types: [], jewel_code_prefixes: [] },
+    exclude: { skus: ['SCOIN', 'GCOIN'], tags: ['no-loyalty'], collections: [], product_types: [], jewel_code_prefixes: [] },
     require_diamond_value: true,
   },
   online: { code_prefix: 'LOY-', code_ttl_minutes: 120 },

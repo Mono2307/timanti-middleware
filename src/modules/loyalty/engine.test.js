@@ -61,7 +61,8 @@ t('a bare date is never shifted by timezone', () => {
 console.log('eligibility');
 const line = (o = {}) => ({ sku: 'R100', productType: 'Ring', tags: [], collections: [], jewelCode: 'R100', diamond: 50000, ...o });
 t('an ordinary diamond piece is eligible', () => assert.ok(E.lineEligibility(line(), cfg).eligible));
-t('excluded SKU (gold coin) is not', () => assert.ok(!E.lineEligibility(line({ sku: 'SCOIN' }), cfg).eligible));
+t('excluded SKU (silver coin) is not', () => assert.ok(!E.lineEligibility(line({ sku: 'SCOIN' }), cfg).eligible));
+t('gold coin (GCOIN) is excluded even with a diamond value', () => assert.ok(!E.lineEligibility(line({ sku: 'GCOIN|Y|24|NA|H|NA|NA|NA', diamond: 500 }), cfg).eligible));
 t('excluded by design code inside the full catalogue SKU', () => assert.ok(!E.lineEligibility(line({ sku: 'SCOIN|S|999|NA|H|NA|NA|NA', diamond: 500 }), cfg).eligible));
 t('no-loyalty tag is not', () => assert.ok(!E.lineEligibility(line({ tags: ['No-Loyalty'] }), cfg).eligible));
 t('no diamond value is not', () => assert.ok(!E.lineEligibility(line({ diamond: 0 }), cfg).eligible));
