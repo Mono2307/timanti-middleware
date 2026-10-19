@@ -176,6 +176,10 @@ const FIELD_CONFIG = {
   repair_order_reference: { section: "Repair", label: "Linked Repair Order", editable: true, applies: "draft" },
   repair_intake_at: { section: "Repair", label: "Repair Intake At", editable: false, applies: "draft" },
   repair_estimate_sent_at: { section: "Repair", label: "Estimate Sent At", editable: false, applies: "draft" },
+  // Written by the middleware when a repair estimate is approved: "customer" (they clicked the
+  // approve-at-store link) or "staff" (someone pressed "Confirm repair on customer's behalf").
+  repair_approved_by: { section: "Repair", label: "Repair Approved By", editable: false, applies: "draft" },
+  repair_approved_at: { section: "Repair", label: "Repair Approved At", editable: false, applies: "draft" },
   repair_completed_at: { section: "Repair", label: "Repair Completed At", editable: false, applies: "draft" },
   repair_store_pickup: { section: "Repair", label: "Store Pickup", editable: false, applies: "draft" },
 
@@ -348,6 +352,11 @@ const RECOMPUTE_TRIGGER_KEYS = [
   "exchange_note_value", "voucher_value", "advance", "advance_ref",
 ];
 
+// A repair draft that has already been decided one way or another: approved at the store (by the
+// customer or by staff), paid online, or complimentary. Once any of these is on the draft the
+// "confirm on customer's behalf" button has nothing left to do, so it is replaced by a status line.
+const REPAIR_DECIDED_TAGS = ["repair-store-approved", "repair-paid", "repair-free", "free-repair"];
+
 function collectErrors(result, mutationField) {
   const errs = (result?.errors ?? []).map((e) => e.message);
   for (const e of result?.data?.[mutationField]?.userErrors ?? []) {
@@ -397,6 +406,11 @@ export default function MetafieldManager({ surface = "block" } = {}) {
   const [lineRows, setLineRows] = useState([]); // [{ id, title, making, discounts:[{ t, m, v }] }]
   const [lineBusy, setLineBusy] = useState(false);
   const [lineNote, setLineNote] = useState("");
+  // Repair approval (draft scope): the draft's current tags drive whether the "confirm on the
+  // customer's behalf" button shows, and a two-step confirm guards against a mis-click.
+  const [draftTags, setDraftTags] = useState([]);
+  const [approveStep, setApproveStep] = useState("idle"); // "idle" | "confirm" | "busy"
+  const [approveNote, setApproveNote] = useState("");
   const baselineRef = useRef({});
   const editsRef = useRef({});
 
@@ -464,6 +478,19 @@ export default function MetafieldManager({ surface = "block" } = {}) {
         } catch { /* non-blocking — the editor just shows no rows */ }
       }
 
+      // The draft's tags, for the repair approval button (draft scope only). Best-effort: if this
+      // fails the button simply stays hidden rather than showing in the wrong state.
+      let tagsInit = [];
+      if (ctx.scope === "draft" && ownerId) {
+        try {
+          const tRes = await shopify.query(
+            `query DraftTags($id: ID!) { draftOrder(id: $id) { tags } }`,
+            { variables: { id: ownerId } },
+          );
+          tagsInit = tRes?.data?.draftOrder?.tags ?? [];
+        } catch { /* non-blocking */ }
+      }
+
       const todayISO = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
       const editable = {};
       for (const key of fieldsForScope(ctx.scope)) {
@@ -478,6 +505,7 @@ export default function MetafieldManager({ surface = "block" } = {}) {
       setDefs(defsByKey);
       setValues(valuesByKey);
       setLineRows(lineRowsInit);
+      setDraftTags(tagsInit);
       // On a post-save refresh the user may have started typing again — keep those in-progress edits and
       // don't clobber them; adopt fresh server values as the new baseline for everything else.
       const priorEdits = editsRef.current || {};
@@ -663,6 +691,30 @@ export default function MetafieldManager({ surface = "block" } = {}) {
       setDiscountNote(`Couldn't apply: ${e?.message || e}`);
     } finally {
       setDiscountBusy(false);
+    }
+  }
+
+  // Approve a repair estimate on the customer's behalf: the customer got the estimate email but never
+  // confirmed. We drop a `repair-staff-approve` tag; the middleware checks an estimate was sent and the
+  // repair is not already decided, then applies the same outcome as the customer's own approve-at-store
+  // click — recorded as staff-made — and emails the customer and the store. On refusal it leaves a
+  // `repair-approve-invalid: <reason>` tag, which renderRepairApprove shows after the refresh.
+  async function approveRepairForCustomer() {
+    if (!ownerId) return;
+    setApproveStep("busy");
+    setApproveNote("");
+    try {
+      const res = await shopify.query(TAGS_ADD_MUTATION, {
+        variables: { id: ownerId, tags: ["repair-staff-approve"] },
+      });
+      const errs = collectErrors(res, "tagsAdd");
+      if (errs.length) throw new Error(errs.join("; "));
+      setApproveNote("Approval sent. The customer is being emailed and the store gets the Mark-Complete link in a few seconds.");
+      setTimeout(() => setRefreshTick((t) => t + 1), 3000);
+    } catch (e) {
+      setApproveNote(`Couldn't approve: ${e?.message || e}`);
+    } finally {
+      setApproveStep("idle");
     }
   }
 
@@ -895,6 +947,69 @@ export default function MetafieldManager({ surface = "block" } = {}) {
     );
   };
 
+  // Repair approval — draft scope only, and only once the estimate email has gone out. Three states:
+  //   • estimate sent, nothing decided yet → the "confirm on the customer's behalf" button (two-step)
+  //   • already approved / paid / complimentary → a one-line status instead of a button
+  //   • no estimate sent yet → nothing at all
+  // The middleware is the authority: it re-checks both conditions and answers a refusal with a
+  // `repair-approve-invalid: <reason>` tag, which is surfaced here.
+  const renderRepairApprove = () => {
+    if (ctx.scope !== "draft") return null;
+    const has = (t) => draftTags.some((x) => String(x).toLowerCase() === t);
+    if (!has("repair-estimate-sent") && !REPAIR_DECIDED_TAGS.some(has)) return null;
+
+    if (REPAIR_DECIDED_TAGS.some(has)) {
+      const who = has("repair-approved-by-staff") ? " (confirmed by staff)" : "";
+      let status = `Repair approved — payment at collection${who}.`;
+      if (has("repair-paid")) status = "Customer paid the estimate online.";
+      else if (has("repair-free") || has("free-repair")) status = "Complimentary repair — no approval needed.";
+      return (
+        <s-section heading="Repair Approval">
+          <s-text tone="subdued">{status}</s-text>
+        </s-section>
+      );
+    }
+
+    const invalid = draftTags.find((t) => /^repair-approve-invalid/i.test(String(t)));
+
+    return (
+      <s-section heading="Repair Approval">
+        <s-stack direction="block" gap="base">
+          <s-text tone="subdued">
+            The estimate was emailed but the customer hasn't approved or paid. Use this only after you have
+            confirmed with the customer. It records the approval as made by staff and emails the customer a
+            "charges confirmed — pay at store" notice.
+          </s-text>
+          {invalid ? (
+            <s-text tone="critical">
+              {`Couldn't approve: ${String(invalid).replace(/^repair-approve-invalid:?\s*/i, "")}`}
+            </s-text>
+          ) : null}
+          {approveStep === "idle" ? (
+            <s-button onClick={() => setApproveStep("confirm")}>Confirm repair on customer's behalf</s-button>
+          ) : (
+            <s-stack direction="inline" gap="base" alignItems="center">
+              <s-button
+                variant="primary"
+                onClick={approveRepairForCustomer}
+                loading={approveStep === "busy" ? "" : undefined}
+              >
+                Yes, confirm
+              </s-button>
+              <s-button
+                onClick={() => setApproveStep("idle")}
+                disabled={approveStep === "busy" ? "" : undefined}
+              >
+                Cancel
+              </s-button>
+            </s-stack>
+          )}
+          {approveNote ? <s-text>{approveNote}</s-text> : null}
+        </s-stack>
+      </s-section>
+    );
+  };
+
   // Credit instruments go on DRAFTS ONLY. A converted order has a final invoice and a settled GST
   // position; deducting a voucher afterwards would put the printed invoice and the system out of
   // step. The server enforces this too — the apply-* tag handlers run only on the draft webhook, so
@@ -977,6 +1092,11 @@ export default function MetafieldManager({ surface = "block" } = {}) {
       if (section.title === "Pricing") {
         const lp = renderLinePricing();
         if (lp) return [block, <s-stack key="line-pricing" direction="block">{lp}</s-stack>];
+      }
+      // The repair approval button belongs WITH the Repair section, right after it.
+      if (section.title === "Repair") {
+        const ra = renderRepairApprove();
+        if (ra) return [block, <s-stack key="repair-approve" direction="block">{ra}</s-stack>];
       }
       return [block];
     });
@@ -1099,4 +1219,3 @@ function renderEditable(field, type, choices, value, setField, saving) {
   }
   return <s-text-field key={field.key} label={label} value={value} disabled={disabled} onChange={onChange} />;
 }
-
