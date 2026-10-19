@@ -32,7 +32,7 @@ const { verifySessionToken, peekClaims } = require('./session_token');
 // Public identifier of the Metafield Manager app (it ships in shopify.app.*.toml), used as the
 // expected `aud` on a session token. Overridable by env so a second install does not need a code
 // change; the SECRET half is env-only and has no default, so the route fails closed without it.
-const MFM_CLIENT_ID = '3c0a0f5a2127842e19391c5b20ec49a0';
+const MFM_CLIENT_ID = '';
 // Test override: when set, EVERY repair email — customer and internal — is redirected here and the
 // store copy is dropped. It was left hardcoded to a personal address after a test round, which meant
 // no customer, no store and no HQ received a single repair email for as long as it stood. Empty is
@@ -822,6 +822,44 @@ async function processRepairDraftUpdate(incomingDraft, getShopifyToken, assignRe
     await fetchAndCopyOriginalOrderSpecs(draft, token);
     console.log(`✅ Free repair confirmed: ${draft.name}`);
     return;
+  }
+
+  // ── Trigger 0b-2: staff approves on the customer's behalf ──────────────────
+  // For when the customer received the estimate email but forgot to confirm. Staff press the
+  // "Confirm repair on customer's behalf" button in the Jewellery Workspace, which adds the
+  // repair-staff-approve tag. The outcome is identical to the customer's own approve-store click
+  // (the repair-store-approved tag), but it is recorded as staff-made: a repair-approved-by-staff
+  // tag plus the repair_approved_by / repair_approved_at metafields.
+  //
+  // This block does NOT return on success: it falls straight through to Trigger 0c below, which
+  // emails the customer ("charges confirmed — pay at store") and sends the store/HQ the
+  // Mark-Complete link. It refuses (and says why in a short tag the panel displays) when no
+  // estimate was ever sent, or when the repair was already approved / paid / complimentary.
+  if (tags.includes('repair-staff-approve')) {
+    const token = await getShopifyToken();
+    const decided = ['repair-store-approved', 'repair-paid', 'repair-free', 'free-repair']
+      .some(t => tags.includes(t));
+    const hadEstimate = tags.includes('repair-estimate-sent');
+    // Always consume the trigger, and any stale refusal note from an earlier attempt.
+    tags = tags.filter(t => t !== 'repair-staff-approve' && !/^repair-approve-invalid/.test(t));
+
+    if (!hadEstimate || decided) {
+      // Reasons are kept short deliberately — Shopify rejects a tag over 40 characters, and a 422
+      // would take the whole PUT with it, including the trigger this is trying to strip.
+      tags.push(decided ? 'repair-approve-invalid: decided' : 'repair-approve-invalid: no estimate');
+      await updateDraftOrderTags(draft.id, tags, token);
+      console.warn(`⛔ Staff approve refused for ${draft.name} (${decided ? 'already decided' : 'no estimate sent'})`);
+      return;
+    }
+
+    tags.push('repair-store-approved', 'repair-approved-by-staff');
+    await updateDraftOrderTags(draft.id, tags, token);
+    await writeDraftOrderMetafields(draft.id, {
+      repair_approved_by: 'staff',
+      repair_approved_at: new Date().toISOString()
+    }, token);
+    console.log(`✅ Staff approved repair on customer's behalf: ${draft.name}`);
+    // No return — Trigger 0c below now fires on repair-store-approved.
   }
 
   // ── Trigger 0c: customer approved store payment ────────────────────────────
@@ -1791,6 +1829,18 @@ h2{margin:0 0 12px;font-size:20px;}p{color:#555;font-size:14px;line-height:1.6;}
           { draft_order: { id: Number(draftId), tags: [...currentTags, 'repair-store-approved'].join(', ') } },
           { headers: shopifyHeaders(shopifyToken), timeout: 10000 }
         );
+        // Record WHO approved, so a customer click and a staff approval (Trigger 0b-2) leave the
+        // same audit trail. Only on the first approval: a second click on the link must not
+        // overwrite an earlier staff-made record. Best-effort — a failed audit write must not stop
+        // the customer seeing their confirmation page.
+        try {
+          await writeDraftOrderMetafields(draft.id, {
+            repair_approved_by: 'customer',
+            repair_approved_at: new Date().toISOString()
+          }, shopifyToken);
+        } catch (auditErr) {
+          console.warn(`⚠️  approve-store audit write failed for ${draft.name}: ${auditErr.message}`);
+        }
       }
 
       console.log(`✅ Repair store-approval confirmed by customer: ${draft.name}`);
