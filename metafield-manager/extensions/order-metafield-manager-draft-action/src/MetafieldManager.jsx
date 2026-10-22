@@ -1,3 +1,4 @@
+
 /** @jsxImportSource preact */
 import { useEffect, useRef, useState } from "preact/hooks";
 
@@ -1099,4 +1100,3 @@ function renderEditable(field, type, choices, value, setField, saving) {
   }
   return <s-text-field key={field.key} label={label} value={value} disabled={disabled} onChange={onChange} />;
 }
-
