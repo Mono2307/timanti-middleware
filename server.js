@@ -17,6 +17,7 @@ const { handlePoAction }  = require('./src/modules/procurement/action');
 const { syncDraftOrderToSheet, syncOrderToSheet, syncAllDraftOrders, syncAllOrders, removeDraftFromSheet, pruneOrphans } = require('./src/modules/procurement/sync');
 const { batchRaisePo } = require('./src/modules/procurement/batch');
 const { createPaymentLink: createGokwikLink, cancelPaymentLink: cancelGokwikLink } = require('./src/integrations/gokwik');
+const { captureGokwikWebhook } = require('./src/integrations/gokwik/capture');
 const { sendSMS } = require('./src/integrations/sms');
 const { registerRepairRoutes, handleRepairPayment, handleRepairDraftUpdate } = require('./src/modules/after-sales');
 const serialization = require('./src/modules/serialization');
@@ -4195,6 +4196,9 @@ app.post('/api/cancel-active-link', async (req, res) => {
 
 app.post('/api/gokwik-webhook', async (req, res) => {
   res.status(200).json({ success: true });
+  // Store the raw delivery first: payload + signing are being verified before the buy plan records
+  // money off this webhook. Observation only - see src/integrations/gokwik/capture.js.
+  await captureGokwikWebhook(supabase, req);
   try {
     const { status, gokwik_oid, transaction_id, gateway_reference_id } = req.body;
     // merchant_reference_id is "{draftOrderId}-{timestamp}" — strip the suffix
