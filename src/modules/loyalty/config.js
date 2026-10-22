@@ -24,9 +24,15 @@ const DEFAULT_CONFIG = Object.freeze({
     { key: 'T2', name: 'Gold',     min: 500000,  pct: 5 },
     { key: 'T3', name: 'Platinum', min: 1000000, pct: 7 },
   ],
+  // A tier is granted this % short of its threshold: ₹1,98,000 is Silver (founder, 2026-10-21).
+  tier_tolerance_pct: 1,
   birthday:    { pct: 2, window: 'month' },
   anniversary: { pct: 2, window: 'month' },
   occasion_bonus_stacks: false,
+  // The campaign the automatic diamond discount runs under. LABEL ONLY: it names the "Campaign" row of
+  // the staff discount breakup ("Dussehra 2026 (21/10/26-08/11/26)") and is stamped on each auto entry
+  // when it is applied. It does not switch the auto discount on or off. Dates are YYYY-MM-DD, IST.
+  campaign: { name: 'Dussehra 2026', start: '2026-10-21', end: '2026-11-08' },
   eligibility: {
     include: { product_types: [], tags: [], collections: [], skus: [] },
     exclude: { skus: ['SCOIN', 'GCOIN'], tags: ['no-loyalty'], collections: [], product_types: [], jewel_code_prefixes: [] },
@@ -75,6 +81,17 @@ function normalizeConfig(raw) {
     birthday: pctOf(raw.birthday),
     anniversary: pctOf(raw.anniversary),
     occasion_bonus_stacks: !!raw.occasion_bonus_stacks,
+    // Missing from a config saved before these existed → the defaults.
+    tier_tolerance_pct: (() => {
+      const v = raw.tier_tolerance_pct == null ? DEFAULT_CONFIG.tier_tolerance_pct : Number(raw.tier_tolerance_pct);
+      if (!(v >= 0 && v <= 10)) throw new Error('tier_tolerance_pct must be between 0 and 10');
+      return v;
+    })(),
+    campaign: (() => {
+      const c = raw.campaign || DEFAULT_CONFIG.campaign;
+      const d = (x) => (/^\d{4}-\d{2}-\d{2}$/.test(String(x || '')) ? String(x) : '');
+      return { name: String(c.name || '').trim(), start: d(c.start), end: d(c.end) };
+    })(),
     eligibility: {
       include: {
         product_types: arr((el.include || {}).product_types),

@@ -551,6 +551,9 @@ const REFUND_TRIGGER_KEYS = [
   "refund_2_value", "refund_2_mode", "refund_2_date", "refund_2_ref",
 ];
 
+// The middleware leaves `auto-dia-invalid: <reason>` on a draft the automatic diamond discount skipped.
+const autoDiaReason = (tag) => String(tag).split(":").slice(1).join(":").trim() || "no reason given";
+
 function collectErrors(result, mutationField) {
   const errs = (result?.errors ?? []).map((e) => e.message);
   for (const e of result?.data?.[mutationField]?.userErrors ?? []) {
@@ -626,6 +629,10 @@ export default function MetafieldManager({ surface = "block" } = {}) {
   const [discountCode, setDiscountCode] = useState("");
   const [discountBusy, setDiscountBusy] = useState(false);
   const [discountNote, setDiscountNote] = useState("");
+  // "Apply Auto Diamond Discount" (Apply a Discount card): a by-hand run of the automatic diamond
+  // discount, for the drafts it did not land on. Disabled while the draft carries `auto-dia-applied`.
+  const [autoDiaBusy, setAutoDiaBusy] = useState(false);
+  const [autoDiaNote, setAutoDiaNote] = useState("");
   const [refreshTick, setRefreshTick] = useState(0); // bumped after a save to re-pull server-recomputed values
   const [recalcNote, setRecalcNote] = useState(""); // transient "recalculating…" hint after a trigger tag
   // Per-line discount editor (draft scope): one row per line item carrying a stack of discounts,
@@ -695,7 +702,7 @@ export default function MetafieldManager({ surface = "block" } = {}) {
             id: n.id,
             title: n.title || n.name || `Line ${i + 1}`,
             discounts: Array.isArray(lineDisc[i])
-              ? lineDisc[i].map((e) => ({ t: e.t || "dia", m: e.m || "pct", v: String(e.v ?? "") }))
+              ? lineDisc[i].map((e) => ({ ...e, t: e.t || "dia", m: e.m || "pct", v: String(e.v ?? "") }))
               : [],
           }));
         } catch { /* non-blocking — the editor just shows no rows */ }
@@ -1076,6 +1083,61 @@ export default function MetafieldManager({ surface = "block" } = {}) {
     }
   }
 
+  // The automatic diamond discount, by hand. The middleware applies it on its own (on creation and
+  // whenever a product is added), so on most drafts this is disabled: the result tag `auto-dia-applied`
+  // is already on the draft. It is for the rest, where the draft carries `auto-dia-invalid: <reason>`
+  // (an order discount was on, no line fell in a band, no diamond value yet...) or no result at all.
+  // We drop the `apply-auto-dia` tag; the middleware reads each line's diamond share of its pre-tax
+  // value (gold + diamond + making + gemstone), adds the band discount (up to 20% -> 5%, 20-40% -> 10%,
+  // 40-60% -> 15%, 60-80% -> 20%) as a diamond-only entry in custom.line_discounts, reprices, and leaves
+  // a fresh result tag, which we read back. Busy stays on until that read, so the button cannot be
+  // pressed twice while the first run is still landing.
+  async function applyAutoDiamond() {
+    if (!ownerId) return;
+    setAutoDiaBusy(true);
+    setAutoDiaNote("");
+    try {
+      const res = await shopify.query(TAGS_ADD_MUTATION, { variables: { id: ownerId, tags: ["apply-auto-dia"] } });
+      const errs = collectErrors(res, "tagsAdd");
+      if (errs.length) throw new Error(errs.join("; "));
+      setAutoDiaNote("Checking each line's diamond share and adding the discount... this takes a few seconds.");
+      setTimeout(async () => {
+        try {
+          const r = await shopify.query(
+            `query AutoDiaResult($id: ID!) { ${ctx.resourceField}(id: $id) { tags } }`,
+            { variables: { id: ownerId } },
+          );
+          const t = (r?.data?.[ctx.resourceField]?.tags ?? []).map((x) => String(x));
+          const invalid = t.find((x) => x.toLowerCase().startsWith("auto-dia-invalid"));
+          if (t.some((x) => x.toLowerCase() === "auto-dia-applied")) {
+            setAutoDiaNote("Auto diamond discount applied. Line prices, GST and the balance are refreshing.");
+          } else if (invalid) {
+            setAutoDiaNote(`Not applied: ${autoDiaReason(invalid)}.`);
+          } else {
+            setAutoDiaNote("Still processing... reopen this panel in a moment to see the result.");
+          }
+        } catch { setAutoDiaNote("Request sent. Reopen this panel to see the result."); }
+        setRefreshTick((n) => n + 1);
+        setAutoDiaBusy(false);
+      }, 4000);
+    } catch (e) {
+      setAutoDiaNote(`Couldn't apply: ${e?.message || e}`);
+      setAutoDiaBusy(false);
+    }
+  }
+
+  // What the automatic diamond discount did to this draft, read off its result tags.
+  const autoDiaState = () => {
+    const low = docTags.map((t) => String(t).toLowerCase());
+    const applied = low.includes("auto-dia-applied");
+    const invalid = docTags.find((t) => String(t).toLowerCase().startsWith("auto-dia-invalid"));
+    let status = "";
+    if (applied) status = "Auto diamond discount is on: applied automatically from each line's diamond share.";
+    else if (invalid) status = `Auto diamond discount did not apply: ${autoDiaReason(invalid)}. Fix the cause, then apply it by hand.`;
+    else if (low.includes("auto-dia-off")) status = "Auto diamond discount is switched off on this draft (auto-dia-off tag). Applying by hand still works.";
+    return { applied, status };
+  };
+
   // Start (or correct) a repair by writing its class tag. The middleware watches the draft for
   // exactly these tags; everything downstream -- which emails go out, whether an estimate is ever
   // quoted, and whether the finished job takes a TS or an FS serial -- follows from this one choice.
@@ -1186,7 +1248,9 @@ export default function MetafieldManager({ surface = "block" } = {}) {
         lineRows.map((r) =>
           (r.discounts || [])
             .filter((d) => parseFloat(d.v) > 0)
-            .map((d) => ({ t: d.t, m: d.m, v: parseFloat(d.v) })),
+            // Keep every other key: `src` is how the middleware tells the automatic diamond discount and
+            // loyalty's entry from a cut staff typed in. Dropping it here turned both into "staff" discounts.
+            .map((d) => ({ ...d, t: d.t, m: d.m, v: parseFloat(d.v) })),
         ),
       );
       // Definitions drive namespace/type; fall back to the known custom/* shape if a definition is absent
@@ -1313,6 +1377,7 @@ export default function MetafieldManager({ surface = "block" } = {}) {
   }
 
   const inr = (v) => "₹" + Math.round(Number(v) || 0).toLocaleString("en-IN");
+  const inr2 = (v) => "₹" + (Number(v) || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const shortDate = (iso) => {
     try { return new Date(iso).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" }); }
     catch { return ""; }
@@ -1339,6 +1404,40 @@ export default function MetafieldManager({ surface = "block" } = {}) {
     );
   };
 
+  // Discount breakup (staff only): which scheme each rupee of the discount came from — the campaign's
+  // automatic diamond discount, manual cuts, loyalty. Written by the middleware's reprice into
+  // custom.discount_breakup and returned with the loyalty preview. Pre-GST, like Discount Applied.
+  const renderBreakup = () => {
+    if (ctx.scope !== "draft") return null;
+    const b = loyalty?.breakup;
+    if (!b || !(Number(b.total) > 0)) return null;
+    const a = loyalty?.applied;
+    const rows = [
+      [`Campaign${b.campaign?.label ? `: ${b.campaign.label}` : ""}`, b.campaign?.amount],
+      ["Manual discount", b.manual],
+      [`Loyalty${a ? ` (${a.name} ${a.rate}%${a.occ ? ` incl. ${String(a.occ).replace("+", " & ")} month` : ""})` : ""}`, b.loyalty],
+    ];
+    if (Number(b.other) > 0) rows.push(["Shopify discount", b.other]);
+    if (Number(b.code) > 0) rows.push(["Discount code", b.code]);
+    return (
+      <s-section heading="Discount breakup">
+        <s-stack direction="block" gap="small-200">
+          {rows.map(([label, amt]) => (
+            <s-stack key={label} direction="inline" gap="base" justifyContent="space-between">
+              <s-text tone={Number(amt) > 0 ? undefined : "subdued"}>{label}</s-text>
+              <s-text tone={Number(amt) > 0 ? undefined : "subdued"}>{inr2(amt)}</s-text>
+            </s-stack>
+          ))}
+          <s-stack direction="inline" gap="base" justifyContent="space-between">
+            <s-text type="strong">Total discount</s-text>
+            <s-text type="strong">{inr2(b.total)}</s-text>
+          </s-stack>
+          <s-text tone="subdued">Before GST. Staff only; not printed for the customer.</s-text>
+        </s-stack>
+      </s-section>
+    );
+  };
+
   const renderLoyalty = () => {
     if (ctx.scope !== "draft") return null;
     const p = loyalty?.preview;
@@ -1349,6 +1448,11 @@ export default function MetafieldManager({ surface = "block" } = {}) {
     const occNames = p?.occasion?.occasions || [];
     const occLine = p?.tier && occNames.length
       ? `${occNames.map((n) => n[0].toUpperCase() + n.slice(1)).join(" & ")} month: +${p.occasion.pct}% extra, ${p.rate}% off diamond in total this month`
+      : "";
+    // The +2% is good for one transaction a month; once it has gone on another order, say where.
+    const occUsed = p?.occasion?.used;
+    const occUsedLine = p?.tier && occUsed
+      ? `${(occUsed.occasions || []).map((n) => n[0].toUpperCase() + n.slice(1)).join(" & ")} month bonus already used this month${occUsed.by?.order_name ? ` on ${occUsed.by.order_name}` : occUsed.by?.channel === "online" ? " online" : ""}. Tier rate only on this draft.`
       : "";
     const appliedBreakdown = (a) => {
       const extra = a.occ ? Number(a.rate) - Number(p?.tier?.pct || a.rate) : 0;
@@ -1376,11 +1480,12 @@ export default function MetafieldManager({ surface = "block" } = {}) {
               </s-stack>
               <s-image src={timeline} alt={p.tier ? `${p.tier.name} member` : "Loyalty progress"} inlineSize="fill" aspectRatio="15" />
               {occLine ? <s-badge tone="info">{occLine}</s-badge> : null}
+              {occUsedLine ? <s-text tone="subdued">{occUsedLine}</s-text> : null}
               <s-text tone="subdued">{progressLine}</s-text>
             </s-stack>
           ) : null}
           {applied ? (
-            <s-text>{`Applied: ${appliedBreakdown(applied)} off the diamond value of ${(applied.eligible_variants || []).length} piece(s). Other discounts are blocked while loyalty is on.`}</s-text>
+            <s-text>{`Applied: ${appliedBreakdown(applied)} off the diamond value of ${(applied.eligible_variants || []).length} piece(s). Stacks with the campaign and manual discounts; an order-level discount code cannot be used with it.`}</s-text>
           ) : null}
           {p && p.ok ? (
             <s-stack direction="block" gap="small-200">
@@ -1520,7 +1625,9 @@ export default function MetafieldManager({ surface = "block" } = {}) {
   // on different orders to the same decision. A real Shopify code is created once, deliberately, and
   // every draft that carries it is traceable back to it. The middleware still accepts
   // `apply-discount:custom:<v>:<pct|flat>` for anything that already went out that way.
-  const renderDiscountApply = () => (
+  const renderDiscountApply = () => {
+    const autoDia = autoDiaState();
+    return (
     <s-section heading="Apply a Discount">
       <s-stack direction="block" gap="base">
         <s-text tone="subdued">
@@ -1534,17 +1641,31 @@ export default function MetafieldManager({ surface = "block" } = {}) {
           disabled={Boolean(discountBusy)}
           onChange={(e) => setDiscountCode(e.target.value ?? "")}
         />
-        <s-button
-          onClick={applyDiscount}
-          loading={Boolean(discountBusy)}
-          disabled={Boolean(!discountCode.trim() || discountBusy)}
-        >
-          Apply Discount
-        </s-button>
+        <s-stack direction="inline" gap="base">
+          <s-button
+            onClick={applyDiscount}
+            loading={Boolean(discountBusy)}
+            disabled={Boolean(!discountCode.trim() || discountBusy)}
+          >
+            Apply Discount
+          </s-button>
+          {ctx.scope === "draft" ? (
+            <s-button
+              onClick={applyAutoDiamond}
+              loading={Boolean(autoDiaBusy)}
+              disabled={Boolean(autoDiaBusy || autoDia.applied)}
+            >
+              Apply Auto Diamond Discount
+            </s-button>
+          ) : null}
+        </s-stack>
         {discountNote ? <s-text>{discountNote}</s-text> : null}
+        {ctx.scope === "draft" && autoDia.status ? <s-text tone="subdued">{autoDia.status}</s-text> : null}
+        {autoDiaNote ? <s-text>{autoDiaNote}</s-text> : null}
       </s-stack>
     </s-section>
-  );
+    );
+  };
 
   // Per-line discount editor — draft scope only (reprice runs on the draft webhook). One card per
   // line item: a stack of discounts, each targeting Diamond, Making, or the whole product (%/₹).
@@ -1913,6 +2034,7 @@ export default function MetafieldManager({ surface = "block" } = {}) {
       // written from either; custom.making under Repricing is its only channel.
       if (section.title === "Discounts") {
         const extras = [
+          surface === "action" ? <s-stack key="breakup" direction="block">{renderBreakup()}</s-stack> : null,
           surface === "action" ? <s-stack key="loyalty" direction="block">{renderLoyalty()}</s-stack> : null,
           surface === "action" ? <s-stack key="discount-apply" direction="block">{renderDiscountApply()}</s-stack> : null,
         ];

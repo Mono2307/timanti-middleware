@@ -1,0 +1,573 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:Arial,sans-serif;background:#fff;padding:20px;font-size:11px;}
+
+.title{font-size:15px;font-weight:700;color:#111;margin-bottom:3px;}
+.subtitle{font-size:10px;color:#888;margin-bottom:16px;}
+
+.legend{display:flex;gap:14px;margin-bottom:16px;flex-wrap:wrap;align-items:center;padding:10px 14px;background:#fafafa;border-radius:4px;border:1px solid #eee;}
+.leg{display:flex;align-items:center;gap:6px;font-size:10px;color:#444;}
+.ld{width:10px;height:10px;border-radius:2px;flex-shrink:0;}
+
+.sec{padding:5px 10px;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:#fff;margin-top:12px;margin-bottom:0;border-radius:2px;}
+.sec-online {background:#1e3a5f;}
+.sec-walkin {background:#4b0082;}
+.sec-istock {background:#155e75;}
+.sec-mto    {background:#7a3500;}
+
+.jrow{display:flex;align-items:flex-start;border-bottom:1px solid #f0f0f0;padding:8px 0;}
+.jrow:last-child{border-bottom:none;}
+.jlabel{width:148px;min-width:148px;padding-right:10px;border-right:2px solid #eee;display:flex;flex-direction:column;gap:2px;padding-top:4px;}
+.jname{font-size:9.5px;font-weight:700;color:#111;line-height:1.4;}
+.jsub{font-size:8px;color:#aaa;line-height:1.4;}
+
+.jflow{display:flex;align-items:flex-start;padding-left:10px;flex-wrap:nowrap;gap:0;overflow-x:auto;min-height:76px;padding-top:4px;}
+
+.nd{display:flex;flex-direction:column;align-items:center;flex-shrink:0;}
+.nb{border-radius:4px;padding:6px 5px 5px 5px;text-align:center;width:94px;}
+.nc {font-size:7px;text-transform:uppercase;letter-spacing:0.4px;font-weight:600;margin-bottom:2px;}
+.nsub{font-size:6.5px;font-style:italic;line-height:1.3;margin-bottom:3px;border-top:1px solid rgba(255,255,255,0.2);padding-top:3px;opacity:0.9;}
+.nt {font-size:8.5px;font-weight:700;line-height:1.3;margin-bottom:2px;}
+.ndoc{font-size:7.5px;line-height:1.3;}
+
+/* colour themes */
+.e  {background:#111;}
+.e  .nc,.e .nsub,.e .nt,.e .ndoc{color:#fff;}
+.s  {background:#f97316;}
+.s  .nc,.s .nt,.s .ndoc{color:#fff;}
+.wa {background:#b45309;}
+.wa .nc,.wa .nt,.wa .ndoc{color:#fff;}
+.g  {background:#f5f5f5;border:1.5px dashed #ddd;}
+.g  .nt{color:#bbb;font-weight:400;font-size:8.5px;}
+.g  .ndoc{color:#ccc;}
+
+.nm{font-size:7px;margin-top:4px;padding:2px 5px;border-radius:2px;display:inline-block;white-space:nowrap;}
+.mauto {background:#dcfce7;color:#166534;}
+.mman  {background:#fef3c7;color:#92400e;}
+.mstaff{background:#fee2e2;color:#991b1b;}
+
+.arr {font-size:13px;color:#ccc;margin:0 3px;flex-shrink:0;padding-top:18px;line-height:1;}
+.arrw{display:flex;flex-direction:column;align-items:center;flex-shrink:0;margin:0 3px;}
+.arrg{font-size:13px;color:#ccc;padding-top:18px;line-height:1;}
+.arrl{font-size:7.5px;color:#aaa;white-space:nowrap;text-align:center;margin-top:2px;}
+.arrl.warn{color:#dc2626;}
+
+.fnote {font-size:9px;color:#555;background:#fffbeb;border-left:3px solid #b45309;padding:5px 9px;margin:5px 0 3px 0;border-radius:0 3px 3px 0;line-height:1.5;}
+.finput{font-size:9px;color:#4c1d95;background:#ede9fe;border-left:3px solid #7c3aed;padding:5px 9px;margin:5px 0 3px 0;border-radius:0 3px 3px 0;line-height:1.5;}
+
+.key{margin-top:18px;padding-top:12px;border-top:1px solid #eee;}
+.key-title{font-size:10px;font-weight:700;color:#111;margin-bottom:7px;}
+.key-row{display:flex;align-items:flex-start;gap:8px;margin-bottom:5px;font-size:9px;color:#555;line-height:1.5;}
+.key-badge{flex-shrink:0;padding:2px 7px;border-radius:2px;font-size:8px;font-weight:700;}
+</style>
+</head>
+<body>
+
+<div class="title">Timanti — Customer Communication Touchpoints</div>
+<div class="subtitle">Current state &nbsp;·&nbsp; All order journeys</div>
+
+<div class="legend">
+  <div class="leg"><div class="ld" style="background:#111"></div>Shopify Email</div>
+  <div class="leg"><div class="ld" style="background:#f97316"></div>GoKwik SMS (auto)</div>
+  <div class="leg"><div class="ld" style="background:#b45309"></div>WhatsApp (staff)</div>
+  <div class="leg"><div class="ld" style="background:#f5f5f5;border:1.5px dashed #ddd"></div>No comm / silence</div>
+  <div class="leg"><div class="ld" style="background:#dcfce7;border:1px solid #166534"></div>Auto</div>
+  <div class="leg"><div class="ld" style="background:#fee2e2;border:1px solid #991b1b"></div>Staff must act</div>
+  <div class="leg"><div class="ld" style="background:#ede9fe;border:1px solid #7c3aed"></div>Tag input required</div>
+</div>
+
+<!-- ══════════ ONLINE ══════════ -->
+<div class="sec sec-online">Online</div>
+
+<!-- Online In-Stock -->
+<div class="jrow">
+  <div class="jlabel"><div class="jname">In-Stock</div><div class="jsub">Full pay at checkout. Ships 3–5 days.</div></div>
+  <div class="jflow">
+    <div class="nd">
+      <div class="nb e"><div class="nc">Shopify Email</div><div class="nsub">Sub: "[Order] confirmed — payment receipt attached"</div><div class="nt">Thank you for your purchase!</div><div class="ndoc">Payment Receipt (PDF)</div></div>
+      <div class="nm mauto">Auto at checkout</div>
+    </div>
+    <div class="arrw"><div class="arrg">→</div><div class="arrl">3–5 days</div></div>
+    <div class="nd">
+      <div class="nb e"><div class="nc">Shopify Email</div><div class="nsub">Sub: "Your order is on the way | tax invoice + tracking"</div><div class="nt">Your order is on the way</div><div class="ndoc">Tax Invoice (PDF) + Tracking link</div></div>
+      <div class="nm mstaff">Staff: fulfil + send notification</div>
+    </div>
+  </div>
+</div>
+
+<!-- Online MTO -->
+<div class="jrow">
+  <div class="jlabel"><div class="jname">MTO</div><div class="jsub">Full pay at checkout. Ships after 15–21 business days.</div></div>
+  <div class="jflow">
+    <div class="nd">
+      <div class="nb e"><div class="nc">Shopify Email</div><div class="nsub">Sub: "[Order] confirmed — payment receipt attached"</div><div class="nt">Thank you for your purchase!</div><div class="ndoc">Payment Receipt (PDF)</div></div>
+      <div class="nm mauto">Auto at checkout</div>
+    </div>
+    <div class="arrw"><div class="arrg">→</div><div class="arrl warn">15–21d · no comm</div></div>
+    <div class="nd"><div class="nb g"><div class="nt">No comm</div><div class="ndoc">In production</div></div></div>
+    <div class="arrw"><div class="arrg">→</div><div class="arrl">&nbsp;</div></div>
+    <div class="nd">
+      <div class="nb e"><div class="nc">Shopify Email</div><div class="nsub">Sub: "Your order is on the way | tax invoice + tracking"</div><div class="nt">Your order is on the way</div><div class="ndoc">Tax Invoice (PDF) + Tracking link</div></div>
+      <div class="nm mstaff">Staff: fulfil + send notification</div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════ OFFLINE WALK-IN ══════════ -->
+<div class="sec sec-walkin">Offline — Walk-In (full payment, takes home same visit)</div>
+<div class="finput">INPUT: Staff must add tag <strong>in-store-sale</strong> to the Shopify order before finalizing. Switches PDF from Payment Receipt to Tax Invoice and suppresses shipping sections.</div>
+
+<div class="jrow">
+  <div class="jlabel"><div class="jname">In-Stock Walk-In</div><div class="jsub">POS only. Customer takes home same day.</div></div>
+  <div class="jflow">
+    <div class="nd">
+      <div class="nb e"><div class="nc">Shopify Email</div><div class="nsub">Sub: "[Order] confirmed — tax invoice attached"</div><div class="nt">Thank you for your purchase!</div><div class="ndoc">Tax Invoice (PDF)</div></div>
+      <div class="nm mauto">Auto — requires in-store-sale tag</div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════ OFFLINE IN-STOCK ══════════ -->
+<div class="sec sec-istock">Offline — In-Stock — All Scenarios</div>
+<div class="fnote">Scenarios 1–2: Remote advance via GoKwik, balance collected in-store via POS. &nbsp;|&nbsp; Scenarios 3–4: Full payment via GoKwik remotely — no advance/balance split.</div>
+
+<!-- Scenario 1: GoKwik adv · POS bal · Collect -->
+<div class="jrow">
+  <div class="jlabel"><div class="jname">1. Adv GoKwik · Bal POS · Collect</div><div class="jsub">Partial payment. Customer collects in-store.</div></div>
+  <div class="jflow">
+    <div class="nd">
+      <div class="nb s"><div class="nc">GoKwik SMS</div><div class="nt">Link Generated</div><div class="ndoc">Advance link</div></div>
+      <div class="nm mauto">Auto</div>
+    </div>
+    <div class="arr">→</div>
+    <div class="nd">
+      <div class="nb wa"><div class="nc">WhatsApp · Staff</div><div class="nt">Payment follow-up</div><div class="ndoc">Resend link, confirm</div></div>
+      <div class="nm mman">Staff sends</div>
+    </div>
+    <div class="arr">→</div>
+    <div class="nd">
+      <div class="nb s"><div class="nc">GoKwik SMS</div><div class="nt">Payment Success</div><div class="ndoc">Advance confirmed</div></div>
+      <div class="nm mauto">Auto</div>
+    </div>
+    <div class="arr">→</div>
+    <div class="nd">
+      <div class="nb e"><div class="nc">Shopify Email</div><div class="nsub">Sub: "Advance confirmed for [Order]"</div><div class="nt">Your advance payment is confirmed</div><div class="ndoc">Payment Receipt (PDF) + balance due</div></div>
+      <div class="nm mstaff">Staff: Send invoice in Shopify</div>
+    </div>
+    <div class="arrw"><div class="arrg">→</div><div class="arrl">days · bal via POS</div></div>
+    <div class="nd">
+      <div class="nb e"><div class="nc">Shopify Email</div><div class="nsub">Sub: "[Order] confirmed — tax invoice attached"</div><div class="nt">Thank you for your purchase!</div><div class="ndoc">Tax Invoice (PDF)</div></div>
+      <div class="nm mauto">Auto on balance</div>
+    </div>
+  </div>
+</div>
+
+<!-- Scenario 2: GoKwik adv · POS bal · Delivery -->
+<div class="jrow">
+  <div class="jlabel"><div class="jname">2. Adv GoKwik · Bal POS · Delivery</div><div class="jsub">Partial payment. Order dispatched after balance.</div></div>
+  <div class="jflow">
+    <div class="nd">
+      <div class="nb s"><div class="nc">GoKwik SMS</div><div class="nt">Link Generated</div><div class="ndoc">Advance link</div></div>
+      <div class="nm mauto">Auto</div>
+    </div>
+    <div class="arr">→</div>
+    <div class="nd">
+      <div class="nb wa"><div class="nc">WhatsApp · Staff</div><div class="nt">Payment follow-up</div><div class="ndoc">Resend link, confirm</div></div>
+      <div class="nm mman">Staff sends</div>
+    </div>
+    <div class="arr">→</div>
+    <div class="nd">
+      <div class="nb s"><div class="nc">GoKwik SMS</div><div class="nt">Payment Success</div><div class="ndoc">Advance confirmed</div></div>
+      <div class="nm mauto">Auto</div>
+    </div>
+    <div class="arr">→</div>
+    <div class="nd">
+      <div class="nb e"><div class="nc">Shopify Email</div><div class="nsub">Sub: "Advance confirmed for [Order]"</div><div class="nt">Your advance payment is confirmed</div><div class="ndoc">Payment Receipt (PDF) + balance due</div></div>
+      <div class="nm mstaff">Staff: Send invoice in Shopify</div>
+    </div>
+    <div class="arrw"><div class="arrg">→</div><div class="arrl">days · bal via POS</div></div>
+    <div class="nd">
+      <div class="nb e"><div class="nc">Shopify Email</div><div class="nsub">Sub: "[Order] confirmed — tax invoice attached"</div><div class="nt">Thank you for your purchase!</div><div class="ndoc">Tax Invoice (PDF)</div></div>
+      <div class="nm mauto">Auto on balance</div>
+    </div>
+    <div class="arr">→</div>
+    <div class="nd">
+      <div class="nb e"><div class="nc">Shopify Email</div><div class="nsub">Sub: "Your order is on the way | tracking details"</div><div class="nt">Your order is on the way</div><div class="ndoc">Tracking link only</div></div>
+      <div class="nm mstaff">Staff: fulfil + send notification</div>
+    </div>
+  </div>
+</div>
+
+<!-- Scenario 3: Full GoKwik · Collect -->
+<div class="jrow">
+  <div class="jlabel"><div class="jname">3. Full GoKwik · Collect</div><div class="jsub">Full payment via GoKwik remotely. Customer collects in-store.</div></div>
+  <div class="jflow">
+    <div class="nd">
+      <div class="nb s"><div class="nc">GoKwik SMS</div><div class="nt">Link Generated</div><div class="ndoc">Full payment link</div></div>
+      <div class="nm mauto">Auto</div>
+    </div>
+    <div class="arr">→</div>
+    <div class="nd">
+      <div class="nb wa"><div class="nc">WhatsApp · Staff</div><div class="nt">Payment follow-up</div><div class="ndoc">Resend link, confirm</div></div>
+      <div class="nm mman">Staff sends</div>
+    </div>
+    <div class="arr">→</div>
+    <div class="nd">
+      <div class="nb s"><div class="nc">GoKwik SMS</div><div class="nt">Payment Success</div><div class="ndoc">Payment confirmed</div></div>
+      <div class="nm mauto">Auto</div>
+    </div>
+    <div class="arr">→</div>
+    <div class="nd">
+      <div class="nb e"><div class="nc">Shopify Email</div><div class="nsub">Sub: "[Order] confirmed — tax invoice attached"</div><div class="nt">Your payment is received ⚠</div><div class="ndoc">Tax Invoice (PDF)</div></div>
+      <div class="nm mauto">Auto on full payment</div>
+    </div>
+    <div class="arrw"><div class="arrg">→</div><div class="arrl">Customer collects</div></div>
+  </div>
+</div>
+
+<!-- Scenario 4: Full GoKwik · Delivery -->
+<div class="jrow">
+  <div class="jlabel"><div class="jname">4. Full GoKwik · Delivery</div><div class="jsub">Full payment via GoKwik remotely. Order dispatched.</div></div>
+  <div class="jflow">
+    <div class="nd">
+      <div class="nb s"><div class="nc">GoKwik SMS</div><div class="nt">Link Generated</div><div class="ndoc">Full payment link</div></div>
+      <div class="nm mauto">Auto</div>
+    </div>
+    <div class="arr">→</div>
+    <div class="nd">
+      <div class="nb wa"><div class="nc">WhatsApp · Staff</div><div class="nt">Payment follow-up</div><div class="ndoc">Resend link, confirm</div></div>
+      <div class="nm mman">Staff sends</div>
+    </div>
+    <div class="arr">→</div>
+    <div class="nd">
+      <div class="nb s"><div class="nc">GoKwik SMS</div><div class="nt">Payment Success</div><div class="ndoc">Payment confirmed</div></div>
+      <div class="nm mauto">Auto</div>
+    </div>
+    <div class="arr">→</div>
+    <div class="nd">
+      <div class="nb e"><div class="nc">Shopify Email</div><div class="nsub">Sub: "[Order] confirmed — tax invoice attached"</div><div class="nt">Your payment is received ⚠</div><div class="ndoc">Tax Invoice (PDF)</div></div>
+      <div class="nm mauto">Auto on full payment</div>
+    </div>
+    <div class="arr">→</div>
+    <div class="nd">
+      <div class="nb e"><div class="nc">Shopify Email</div><div class="nsub">Sub: "Your order is on the way | tracking details"</div><div class="nt">Your order is on the way</div><div class="ndoc">Tracking link only</div></div>
+      <div class="nm mstaff">Staff: fulfil + send notification</div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════ OFFLINE MTO PARTIAL ══════════ -->
+<div class="sec sec-mto">Offline — MTO — Partial Payment &nbsp;(always advance + balance · production 15–21 business days)</div>
+<div class="fnote">Advance payment locks the order into production. No communication during production wait. Balance is triggered once the piece arrives at store — staff reaches out to customer.</div>
+
+<!-- MTO Row 1: Adv POS · Bal POS · Collect -->
+<div class="jrow">
+  <div class="jlabel"><div class="jname">Adv POS · Bal POS · Collect</div><div class="jsub">Production wait 15–21d</div></div>
+  <div class="jflow">
+    <div class="nd">
+      <div class="nb e"><div class="nc">Shopify Email</div><div class="nsub">Sub: "Advance confirmed for [Order]"</div><div class="nt">Your advance payment is confirmed</div><div class="ndoc">Payment Receipt (PDF) + balance due</div></div>
+      <div class="nm mstaff">Staff: Send invoice in Shopify</div>
+    </div>
+    <div class="arrw"><div class="arrg">→</div><div class="arrl warn">15–21d · no comm</div></div>
+    <div class="nd"><div class="nb g"><div class="nt">No comm</div><div class="ndoc">In production</div></div></div>
+    <div class="arrw"><div class="arrg">→</div><div class="arrl">&nbsp;</div></div>
+    <div class="nd">
+      <div class="nb e"><div class="nc">Shopify Email</div><div class="nsub">Sub: "[Order] confirmed — tax invoice attached"</div><div class="nt">Thank you for your purchase!</div><div class="ndoc">Tax Invoice (PDF)</div></div>
+      <div class="nm mauto">Auto on balance</div>
+    </div>
+  </div>
+</div>
+
+<!-- MTO Row 2: Adv POS · Bal POS · Delivery -->
+<div class="jrow">
+  <div class="jlabel"><div class="jname">Adv POS · Bal POS · Delivery</div><div class="jsub">Production wait 15–21d</div></div>
+  <div class="jflow">
+    <div class="nd">
+      <div class="nb e"><div class="nc">Shopify Email</div><div class="nsub">Sub: "Advance confirmed for [Order]"</div><div class="nt">Your advance payment is confirmed</div><div class="ndoc">Payment Receipt (PDF) + balance due</div></div>
+      <div class="nm mstaff">Staff: Send invoice in Shopify</div>
+    </div>
+    <div class="arrw"><div class="arrg">→</div><div class="arrl warn">15–21d · no comm</div></div>
+    <div class="nd"><div class="nb g"><div class="nt">No comm</div><div class="ndoc">In production</div></div></div>
+    <div class="arrw"><div class="arrg">→</div><div class="arrl">&nbsp;</div></div>
+    <div class="nd">
+      <div class="nb e"><div class="nc">Shopify Email</div><div class="nsub">Sub: "[Order] confirmed — tax invoice attached"</div><div class="nt">Thank you for your purchase!</div><div class="ndoc">Tax Invoice (PDF)</div></div>
+      <div class="nm mauto">Auto on balance</div>
+    </div>
+    <div class="arr">→</div>
+    <div class="nd">
+      <div class="nb e"><div class="nc">Shopify Email</div><div class="nsub">Sub: "Your order is on the way | tracking details"</div><div class="nt">Your order is on the way</div><div class="ndoc">Tracking link only</div></div>
+      <div class="nm mstaff">Staff: fulfil + send notification</div>
+    </div>
+  </div>
+</div>
+
+<!-- MTO Row 3: Adv GoKwik · Bal POS · Collect -->
+<div class="jrow">
+  <div class="jlabel"><div class="jname">Adv GoKwik · Bal POS · Collect</div><div class="jsub">Production wait 15–21d</div></div>
+  <div class="jflow">
+    <div class="nd">
+      <div class="nb s"><div class="nc">GoKwik SMS</div><div class="nt">Link Generated</div><div class="ndoc">Advance link</div></div>
+      <div class="nm mauto">Auto</div>
+    </div>
+    <div class="arr">→</div>
+    <div class="nd">
+      <div class="nb wa"><div class="nc">WhatsApp · Staff</div><div class="nt">Payment follow-up</div><div class="ndoc">Resend link, confirm</div></div>
+      <div class="nm mman">Staff sends</div>
+    </div>
+    <div class="arr">→</div>
+    <div class="nd">
+      <div class="nb s"><div class="nc">GoKwik SMS</div><div class="nt">Payment Success</div><div class="ndoc">Advance confirmed</div></div>
+      <div class="nm mauto">Auto</div>
+    </div>
+    <div class="arr">→</div>
+    <div class="nd">
+      <div class="nb e"><div class="nc">Shopify Email</div><div class="nsub">Sub: "Advance confirmed for [Order]"</div><div class="nt">Your advance payment is confirmed</div><div class="ndoc">Payment Receipt (PDF) + balance due</div></div>
+      <div class="nm mstaff">Staff: Send invoice in Shopify</div>
+    </div>
+    <div class="arrw"><div class="arrg">→</div><div class="arrl warn">15–21d · no comm</div></div>
+    <div class="nd"><div class="nb g"><div class="nt">No comm</div><div class="ndoc">In production</div></div></div>
+    <div class="arrw"><div class="arrg">→</div><div class="arrl">&nbsp;</div></div>
+    <div class="nd">
+      <div class="nb e"><div class="nc">Shopify Email</div><div class="nsub">Sub: "[Order] confirmed — tax invoice attached"</div><div class="nt">Thank you for your purchase!</div><div class="ndoc">Tax Invoice (PDF)</div></div>
+      <div class="nm mauto">Auto on balance</div>
+    </div>
+  </div>
+</div>
+
+<!-- MTO Row 4: Adv GoKwik · Bal POS · Delivery -->
+<div class="jrow">
+  <div class="jlabel"><div class="jname">Adv GoKwik · Bal POS · Delivery</div><div class="jsub">Production wait 15–21d</div></div>
+  <div class="jflow">
+    <div class="nd">
+      <div class="nb s"><div class="nc">GoKwik SMS</div><div class="nt">Link Generated</div><div class="ndoc">Advance link</div></div>
+      <div class="nm mauto">Auto</div>
+    </div>
+    <div class="arr">→</div>
+    <div class="nd">
+      <div class="nb wa"><div class="nc">WhatsApp · Staff</div><div class="nt">Payment follow-up</div><div class="ndoc">Resend link, confirm</div></div>
+      <div class="nm mman">Staff sends</div>
+    </div>
+    <div class="arr">→</div>
+    <div class="nd">
+      <div class="nb s"><div class="nc">GoKwik SMS</div><div class="nt">Payment Success</div><div class="ndoc">Advance confirmed</div></div>
+      <div class="nm mauto">Auto</div>
+    </div>
+    <div class="arr">→</div>
+    <div class="nd">
+      <div class="nb e"><div class="nc">Shopify Email</div><div class="nsub">Sub: "Advance confirmed for [Order]"</div><div class="nt">Your advance payment is confirmed</div><div class="ndoc">Payment Receipt (PDF) + balance due</div></div>
+      <div class="nm mstaff">Staff: Send invoice in Shopify</div>
+    </div>
+    <div class="arrw"><div class="arrg">→</div><div class="arrl warn">15–21d · no comm</div></div>
+    <div class="nd"><div class="nb g"><div class="nt">No comm</div><div class="ndoc">In production</div></div></div>
+    <div class="arrw"><div class="arrg">→</div><div class="arrl">&nbsp;</div></div>
+    <div class="nd">
+      <div class="nb e"><div class="nc">Shopify Email</div><div class="nsub">Sub: "[Order] confirmed — tax invoice attached"</div><div class="nt">Thank you for your purchase!</div><div class="ndoc">Tax Invoice (PDF)</div></div>
+      <div class="nm mauto">Auto on balance</div>
+    </div>
+    <div class="arr">→</div>
+    <div class="nd">
+      <div class="nb e"><div class="nc">Shopify Email</div><div class="nsub">Sub: "Your order is on the way | tracking details"</div><div class="nt">Your order is on the way</div><div class="ndoc">Tracking link only</div></div>
+      <div class="nm mstaff">Staff: fulfil + send notification</div>
+    </div>
+  </div>
+</div>
+
+<!-- MTO Row 5: Adv POS · Bal GoKwik · Collect -->
+<div class="jrow">
+  <div class="jlabel"><div class="jname">Adv POS · Bal GoKwik · Collect</div><div class="jsub">Production wait 15–21d</div></div>
+  <div class="jflow">
+    <div class="nd">
+      <div class="nb e"><div class="nc">Shopify Email</div><div class="nsub">Sub: "Advance confirmed for [Order]"</div><div class="nt">Your advance payment is confirmed</div><div class="ndoc">Payment Receipt (PDF) + balance due</div></div>
+      <div class="nm mstaff">Staff: Send invoice in Shopify</div>
+    </div>
+    <div class="arrw"><div class="arrg">→</div><div class="arrl warn">15–21d · no comm</div></div>
+    <div class="nd"><div class="nb g"><div class="nt">No comm</div><div class="ndoc">In production</div></div></div>
+    <div class="arrw"><div class="arrg">→</div><div class="arrl">&nbsp;</div></div>
+    <div class="nd">
+      <div class="nb s"><div class="nc">GoKwik SMS</div><div class="nt">Link Generated</div><div class="ndoc">Balance link</div></div>
+      <div class="nm mauto">Auto</div>
+    </div>
+    <div class="arr">→</div>
+    <div class="nd">
+      <div class="nb wa"><div class="nc">WhatsApp · Staff</div><div class="nt">Payment follow-up</div><div class="ndoc">Resend link, confirm</div></div>
+      <div class="nm mman">Staff sends</div>
+    </div>
+    <div class="arr">→</div>
+    <div class="nd">
+      <div class="nb s"><div class="nc">GoKwik SMS</div><div class="nt">Payment Success</div><div class="ndoc">Balance confirmed</div></div>
+      <div class="nm mauto">Auto</div>
+    </div>
+    <div class="arr">→</div>
+    <div class="nd">
+      <div class="nb e"><div class="nc">Shopify Email</div><div class="nsub">Sub: "[Order] confirmed — tax invoice attached"</div><div class="nt">Thank you for your purchase!</div><div class="ndoc">Tax Invoice (PDF)</div></div>
+      <div class="nm mauto">Auto on balance</div>
+    </div>
+  </div>
+</div>
+
+<!-- MTO Row 6: Adv POS · Bal GoKwik · Delivery -->
+<div class="jrow">
+  <div class="jlabel"><div class="jname">Adv POS · Bal GoKwik · Delivery</div><div class="jsub">Production wait 15–21d</div></div>
+  <div class="jflow">
+    <div class="nd">
+      <div class="nb e"><div class="nc">Shopify Email</div><div class="nsub">Sub: "Advance confirmed for [Order]"</div><div class="nt">Your advance payment is confirmed</div><div class="ndoc">Payment Receipt (PDF) + balance due</div></div>
+      <div class="nm mstaff">Staff: Send invoice in Shopify</div>
+    </div>
+    <div class="arrw"><div class="arrg">→</div><div class="arrl warn">15–21d · no comm</div></div>
+    <div class="nd"><div class="nb g"><div class="nt">No comm</div><div class="ndoc">In production</div></div></div>
+    <div class="arrw"><div class="arrg">→</div><div class="arrl">&nbsp;</div></div>
+    <div class="nd">
+      <div class="nb s"><div class="nc">GoKwik SMS</div><div class="nt">Link Generated</div><div class="ndoc">Balance link</div></div>
+      <div class="nm mauto">Auto</div>
+    </div>
+    <div class="arr">→</div>
+    <div class="nd">
+      <div class="nb wa"><div class="nc">WhatsApp · Staff</div><div class="nt">Payment follow-up</div><div class="ndoc">Resend link, confirm</div></div>
+      <div class="nm mman">Staff sends</div>
+    </div>
+    <div class="arr">→</div>
+    <div class="nd">
+      <div class="nb s"><div class="nc">GoKwik SMS</div><div class="nt">Payment Success</div><div class="ndoc">Balance confirmed</div></div>
+      <div class="nm mauto">Auto</div>
+    </div>
+    <div class="arr">→</div>
+    <div class="nd">
+      <div class="nb e"><div class="nc">Shopify Email</div><div class="nsub">Sub: "[Order] confirmed — tax invoice attached"</div><div class="nt">Thank you for your purchase!</div><div class="ndoc">Tax Invoice (PDF)</div></div>
+      <div class="nm mauto">Auto on balance</div>
+    </div>
+    <div class="arr">→</div>
+    <div class="nd">
+      <div class="nb e"><div class="nc">Shopify Email</div><div class="nsub">Sub: "Your order is on the way | tracking details"</div><div class="nt">Your order is on the way</div><div class="ndoc">Tracking link only</div></div>
+      <div class="nm mstaff">Staff: fulfil + send notification</div>
+    </div>
+  </div>
+</div>
+
+<!-- MTO Row 7: Adv GoKwik · Bal GoKwik · Collect -->
+<div class="jrow">
+  <div class="jlabel"><div class="jname">Adv GoKwik · Bal GoKwik · Collect</div><div class="jsub">Production wait 15–21d</div></div>
+  <div class="jflow">
+    <div class="nd">
+      <div class="nb s"><div class="nc">GoKwik SMS</div><div class="nt">Link Generated</div><div class="ndoc">Advance link</div></div>
+      <div class="nm mauto">Auto</div>
+    </div>
+    <div class="arr">→</div>
+    <div class="nd">
+      <div class="nb wa"><div class="nc">WhatsApp · Staff</div><div class="nt">Payment follow-up</div><div class="ndoc">Resend link, confirm</div></div>
+      <div class="nm mman">Staff sends</div>
+    </div>
+    <div class="arr">→</div>
+    <div class="nd">
+      <div class="nb s"><div class="nc">GoKwik SMS</div><div class="nt">Payment Success</div><div class="ndoc">Advance confirmed</div></div>
+      <div class="nm mauto">Auto</div>
+    </div>
+    <div class="arr">→</div>
+    <div class="nd">
+      <div class="nb e"><div class="nc">Shopify Email</div><div class="nsub">Sub: "Advance confirmed for [Order]"</div><div class="nt">Your advance payment is confirmed</div><div class="ndoc">Payment Receipt (PDF) + balance due</div></div>
+      <div class="nm mstaff">Staff: Send invoice in Shopify</div>
+    </div>
+    <div class="arrw"><div class="arrg">→</div><div class="arrl warn">15–21d · no comm</div></div>
+    <div class="nd"><div class="nb g"><div class="nt">No comm</div><div class="ndoc">In production</div></div></div>
+    <div class="arrw"><div class="arrg">→</div><div class="arrl">&nbsp;</div></div>
+    <div class="nd">
+      <div class="nb s"><div class="nc">GoKwik SMS</div><div class="nt">Link Generated</div><div class="ndoc">Balance link</div></div>
+      <div class="nm mauto">Auto</div>
+    </div>
+    <div class="arr">→</div>
+    <div class="nd">
+      <div class="nb wa"><div class="nc">WhatsApp · Staff</div><div class="nt">Payment follow-up</div><div class="ndoc">Resend link, confirm</div></div>
+      <div class="nm mman">Staff sends</div>
+    </div>
+    <div class="arr">→</div>
+    <div class="nd">
+      <div class="nb s"><div class="nc">GoKwik SMS</div><div class="nt">Payment Success</div><div class="ndoc">Balance confirmed</div></div>
+      <div class="nm mauto">Auto</div>
+    </div>
+    <div class="arr">→</div>
+    <div class="nd">
+      <div class="nb e"><div class="nc">Shopify Email</div><div class="nsub">Sub: "[Order] confirmed — tax invoice attached"</div><div class="nt">Thank you for your purchase!</div><div class="ndoc">Tax Invoice (PDF)</div></div>
+      <div class="nm mauto">Auto on balance</div>
+    </div>
+  </div>
+</div>
+
+<!-- MTO Row 8: Adv GoKwik · Bal GoKwik · Delivery -->
+<div class="jrow">
+  <div class="jlabel"><div class="jname">Adv GoKwik · Bal GoKwik · Delivery</div><div class="jsub">Production wait 15–21d</div></div>
+  <div class="jflow">
+    <div class="nd">
+      <div class="nb s"><div class="nc">GoKwik SMS</div><div class="nt">Link Generated</div><div class="ndoc">Advance link</div></div>
+      <div class="nm mauto">Auto</div>
+    </div>
+    <div class="arr">→</div>
+    <div class="nd">
+      <div class="nb wa"><div class="nc">WhatsApp · Staff</div><div class="nt">Payment follow-up</div><div class="ndoc">Resend link, confirm</div></div>
+      <div class="nm mman">Staff sends</div>
+    </div>
+    <div class="arr">→</div>
+    <div class="nd">
+      <div class="nb s"><div class="nc">GoKwik SMS</div><div class="nt">Payment Success</div><div class="ndoc">Advance confirmed</div></div>
+      <div class="nm mauto">Auto</div>
+    </div>
+    <div class="arr">→</div>
+    <div class="nd">
+      <div class="nb e"><div class="nc">Shopify Email</div><div class="nsub">Sub: "Advance confirmed for [Order]"</div><div class="nt">Your advance payment is confirmed</div><div class="ndoc">Payment Receipt (PDF) + balance due</div></div>
+      <div class="nm mstaff">Staff: Send invoice in Shopify</div>
+    </div>
+    <div class="arrw"><div class="arrg">→</div><div class="arrl warn">15–21d · no comm</div></div>
+    <div class="nd"><div class="nb g"><div class="nt">No comm</div><div class="ndoc">In production</div></div></div>
+    <div class="arrw"><div class="arrg">→</div><div class="arrl">&nbsp;</div></div>
+    <div class="nd">
+      <div class="nb s"><div class="nc">GoKwik SMS</div><div class="nt">Link Generated</div><div class="ndoc">Balance link</div></div>
+      <div class="nm mauto">Auto</div>
+    </div>
+    <div class="arr">→</div>
+    <div class="nd">
+      <div class="nb wa"><div class="nc">WhatsApp · Staff</div><div class="nt">Payment follow-up</div><div class="ndoc">Resend link, confirm</div></div>
+      <div class="nm mman">Staff sends</div>
+    </div>
+    <div class="arr">→</div>
+    <div class="nd">
+      <div class="nb s"><div class="nc">GoKwik SMS</div><div class="nt">Payment Success</div><div class="ndoc">Balance confirmed</div></div>
+      <div class="nm mauto">Auto</div>
+    </div>
+    <div class="arr">→</div>
+    <div class="nd">
+      <div class="nb e"><div class="nc">Shopify Email</div><div class="nsub">Sub: "[Order] confirmed — tax invoice attached"</div><div class="nt">Thank you for your purchase!</div><div class="ndoc">Tax Invoice (PDF)</div></div>
+      <div class="nm mauto">Auto on balance</div>
+    </div>
+    <div class="arr">→</div>
+    <div class="nd">
+      <div class="nb e"><div class="nc">Shopify Email</div><div class="nsub">Sub: "Your order is on the way | tracking details"</div><div class="nt">Your order is on the way</div><div class="ndoc">Tracking link only</div></div>
+      <div class="nm mstaff">Staff: fulfil + send notification</div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════ STAFF ACTION KEY ══════════ -->
+<div class="key">
+  <div class="key-title">Staff Action Reference</div>
+  <div class="key-row">
+    <span class="key-badge" style="background:#ede9fe;color:#4c1d95;">TAG</span>
+    <span><strong>in-store-sale</strong> — Add to the Shopify order before finalizing a walk-in payment. Controls email content and suppresses shipping sections.</span>
+  </div>
+  <div class="key-row">
+    <span class="key-badge" style="background:#fee2e2;color:#991b1b;">SEND</span>
+    <span><strong>Draft Order Invoice (advance receipt)</strong> — Not automatic. After GoKwik payment success, open the Shopify draft order → click <em>Send invoice</em>.</span>
+  </div>
+  <div class="key-row">
+    <span class="key-badge" style="background:#fee2e2;color:#991b1b;">SEND</span>
+    <span><strong>Shipping Confirmation</strong> — Not automatic. When marking fulfilled in Shopify, check <em>Send shipment details to customer now</em> before clicking Fulfill.</span>
+  </div>
+  <div class="key-row">
+    <span class="key-badge" style="background:#fef3c7;color:#92400e;">WA</span>
+    <span><strong>WhatsApp follow-up</strong> — Sent manually between GoKwik link generation and payment. Resend the link and ask for confirmation. Use the WhatsApp template on file.</span>
+  </div>
+</div>
+
+</body>
+</html>

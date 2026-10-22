@@ -1,0 +1,539 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Timanti — All After-Sales Emails</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; background: #d8d8d8; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+
+.topnav { position: fixed; top: 0; left: 0; right: 0; z-index: 100; background: #111;
+          display: flex; align-items: stretch; height: 52px; padding: 0 16px; overflow-x: auto; }
+.nav-section { display: flex; align-items: center; padding-right: 14px; margin-right: 10px; border-right: 1px solid #2a2a2a; }
+.nav-section:last-child { border-right: none; }
+.nav-label { font-size: 9px; letter-spacing: 2px; text-transform: uppercase; color: #555; padding-right: 10px; white-space: nowrap; }
+.tab-btn { background: none; border: none; color: #888; font-size: 12px; font-weight: 500; padding: 7px 12px;
+           cursor: pointer; border-radius: 3px; white-space: nowrap; }
+.tab-btn:hover { background: #222; color: #ddd; }
+.tab-btn.active { background: #b45309; color: #fff; }
+.tab-btn.cr.active { background: #047857; }
+.tab-btn.rf.active { background: #1e3a5f; }
+
+.lw { max-width: 600px; margin: 0 auto; border: 1px solid #fed7aa; border-bottom: none; border-radius: 6px 6px 0 0; overflow: hidden; }
+.lw-header { display: flex; align-items: center; gap: 10px; padding: 10px 14px; background: #fff7ed; }
+.lw-badge { font-size: 9px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase; padding: 3px 8px; border-radius: 3px; background: #b45309; color: #fff; flex-shrink: 0; }
+.lw-header strong { font-size: 13px; color: #111; }
+.lw-table { width: 100%; border-collapse: collapse; background: #fff; }
+.lw-table tr { border-top: 1px solid #eee; }
+.lw-key { padding: 8px 14px; font-size: 10px; font-weight: 700; letter-spacing: 0.8px; text-transform: uppercase; color: #888;
+          white-space: nowrap; width: 96px; background: #fafafa; vertical-align: top; border-right: 1px solid #eee; }
+.lw-val { padding: 8px 14px; font-size: 12px; color: #333; vertical-align: top; line-height: 1.55; }
+.lw-val code { background: #f0f0f0; padding: 1px 5px; border-radius: 3px; font-family: 'Menlo','Courier New',monospace; font-size: 11px; color: #c7254e; }
+.lw-subject { max-width: 600px; margin: 0 auto; display: flex; align-items: center; gap: 12px; padding: 9px 14px;
+              background: #fff; border: 1px solid #fed7aa; border-top: 2px solid #b45309; border-bottom: none; }
+.lw-s-label { font-size: 9px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase; color: #aaa; flex-shrink: 0; }
+.lw-s-text { font-size: 14px; font-weight: 600; color: #111; }
+
+.preview { margin-top: 60px; padding: 30px 16px 60px; }
+.panel { display: none; } .panel.active { display: block; }
+
+/* ══ v2 EMAIL CHROME ══ */
+.email { max-width: 600px; margin: 0 auto; background: #fff; border: 1px solid #ccc;
+         font-family: 'Helvetica Neue', Arial, sans-serif; font-size: 14px; line-height: 1.6; color: #333; }
+.e-header { background: #fff; padding: 18px 40px 14px; text-align: center; }
+.e-header img { max-width: 120px; height: auto; }
+.e-content { background: #fff; padding: 24px 40px 18px; text-align: center; }
+.e-orderref { font-size: 13px; color: #999; margin-bottom: 5px; }
+.e-h2 { font-size: 22px; font-weight: 600; color: #111; margin: 0 0 12px 0; }
+.e-body { font-size: 14px; color: #555; line-height: 1.65; margin: 0 0 18px 0; }
+.e-body strong { color: #111; }
+.e-btnzone { text-align: center; padding: 6px 0 6px; }
+.e-btn { display: inline-block; background: #000; color: #fff !important; text-decoration: none; font-size: 14px; font-weight: 500; padding: 13px 26px; border-radius: 4px; margin: 5px 4px; cursor: default; }
+.e-btn.alt { background: #444; }
+.e-store-link { font-size: 14px; margin-top: 8px; } .e-store-link a { color: #fc7d27; text-decoration: none; }
+.e-timeline { background: #f6f6f6; margin: 14px auto 0; max-width: 460px; padding: 12px 16px; border-radius: 4px; font-size: 12px; color: #888; line-height: 1.5; }
+.e-section { background: #fff; border-top: 8px solid #f5f5f5; }
+.e-section-inner { padding: 20px 40px; }
+.e-section h3 { font-size: 15px; font-weight: 600; color: #111; margin-bottom: 14px; }
+.e-item { display: flex; gap: 14px; align-items: flex-start; padding: 12px 0; border-bottom: 1px solid #f0f0f0; }
+.e-item:last-of-type { border-bottom: none; }
+.e-item-img { width: 60px; height: 60px; background: #f8f2ea; border-radius: 4px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; }
+.e-item-img svg { width: 26px; height: 26px; fill: #c9a96e; }
+.e-item-detail { flex: 1; text-align: left; }
+.e-item-title { font-weight: 600; color: #111; font-size: 15px; }
+.e-item-qty { font-size: 14px; color: #555; margin-top: 1px; }
+.e-item-variant { font-size: 13px; color: #888; }
+.e-summary { margin-top: 14px; }
+.e-sumwrap { margin-left: 45%; }
+.e-sumrow { display: flex; justify-content: space-between; padding: 3px 0; }
+.e-sumrow span:first-child { font-size: 15px; color: #999; }
+.e-sumrow span:last-child { font-size: 16px; color: #333; font-weight: 500; }
+.e-sumrow.total { border-top: 2px solid #e5e5e5; margin-top: 4px; padding-top: 8px; }
+.e-sumrow.total span:first-child { font-size: 15px; color: #333; font-weight: 600; }
+.e-sumrow.total span:last-child { font-size: 16px; color: #111; font-weight: 600; }
+.e-sumrow.refund span:last-child { color: #16a34a; }
+.e-sumrow.due span:last-child { color: #dc2626; }
+.e-note { font-size: 12px; color: #666; line-height: 1.5; margin: 14px 0 0; text-align: left; }
+/* T&C block */
+.e-tcs { text-align: left; }
+.e-tcs ol { margin: 0 0 0 18px; padding: 0; }
+.e-tcs li { font-size: 12.5px; color: #555; line-height: 1.6; margin-bottom: 8px; }
+.e-tcs li:last-child { margin-bottom: 0; }
+.e-tcs li strong { color: #111; font-weight: 600; }
+.e-tclead { font-size: 12.5px; color: #888; margin-bottom: 12px; line-height: 1.55; }
+/* standard footer */
+.e-support { background: #fff; border: 1px solid #e6d8cc; border-radius: 8px; padding: 20px; text-align: center; }
+.e-support h3 { font-size: 16px; margin-bottom: 8px; font-weight: 500; }
+.e-support > p { font-size: 14px; color: #666; margin: 0 auto 16px; max-width: 460px; }
+.e-help-col { padding: 0 18px; text-align: center; vertical-align: top; }
+.e-help-col img { display: block; margin: 0 auto 6px; }
+.e-help-col strong { color: #000; font-size: 13px; }
+.e-help-col a { color: #fc7d27; font-weight: 600; text-decoration: underline; font-size: 13px; }
+.e-social { background: #f6f6f6; border-radius: 8px; padding: 20px; text-align: center; }
+.e-social h3 { font-size: 16px; font-weight: 600; color: #000; margin: 0 0 10px 0; }
+.e-social > p { font-size: 13px; color: #444; margin: 0 auto 16px; max-width: 440px; line-height: 1.6; }
+.e-social-btns { display: flex; justify-content: center; gap: 10px; flex-wrap: wrap; }
+.e-social-btn { text-decoration: none; }
+.e-social-btn-inner { display: inline-block; border-radius: 6px; padding: 9px 14px; background: #fff; border: 1.5px solid #000; }
+.e-social-btn-inner img { vertical-align: middle; }
+.e-social-btn-inner span { color: #000; font-size: 13px; font-weight: 600; vertical-align: middle; }
+.e-wa-link a { color: #fc7d27; font-weight: 600; text-decoration: underline; font-size: 13px; }
+.e-social-note { font-size: 10px; color: #bbb; max-width: 340px; line-height: 1.5; }
+/* WhatsApp opt-in + unsubscribe grouped, set well below the review buttons */
+.e-wa-group { margin: 34px auto 0; padding-top: 18px; border-top: 1px solid #e4e4e4; max-width: 400px; }
+.e-wa-group .e-wa-link { margin: 0; }
+.e-wa-group .e-social-note { margin: 9px auto 0; }
+/* refund option bullets */
+.e-bullets { text-align: left; max-width: 430px; margin: 16px auto 0; padding-left: 20px; }
+.e-bullets li { font-size: 14px; color: #444; line-height: 1.75; margin-bottom: 6px; }
+.e-bullets li:last-child { margin-bottom: 0; }
+.e-bullets a { color: #fc7d27; font-weight: 600; text-decoration: underline; }
+.e-bullets .muted { color: #999; font-size: 12.5px; }
+/* shipment line — plain text until an AWB exists */
+.e-ship-plain { color: #888; }
+.e-promisebox { background: #F6F6F6; border-radius: 8px; padding: 18px; display: flex; justify-content: center; gap: 26px; text-align: center; }
+.e-promise { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.e-promise img { width: 44px; height: 44px; object-fit: contain; }
+.e-promise span { font-size: 12px; color: #333; line-height: 1.4; }
+.e-footer { background: #F6F6F6; padding: 16px 40px; text-align: center; }
+.e-footer a { color: #fc7d27; text-decoration: none; font-size: 14px; }
+
+.variants { max-width: 600px; margin: 14px auto 0; display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; }
+.vbtn { background: #fff; border: 1px solid #ccc; color: #666; font-size: 11px; padding: 5px 11px; border-radius: 3px; cursor: pointer; }
+.vbtn.on { background: #111; border-color: #111; color: #fff; }
+.vpanel { display: none; } .vpanel.on { display: block; }
+</style>
+</head>
+<body>
+
+<div class="topnav">
+  <div class="nav-section">
+    <span class="nav-label">Repairs</span>
+    <button class="tab-btn active" onclick="show('r1',this)">1 · Received</button>
+    <button class="tab-btn" onclick="show('r2',this)">2 · Estimate</button>
+    <button class="tab-btn" onclick="show('r3',this)">3 · Confirmed</button>
+    <button class="tab-btn" onclick="show('r4',this)">4 · Ready + Final</button>
+  </div>
+  <div class="nav-section">
+    <span class="nav-label">Credits</span>
+    <button class="tab-btn cr" onclick="show('v1',this)">Voucher</button>
+    <button class="tab-btn cr" onclick="show('v2',this)">Voucher Expiry</button>
+    <button class="tab-btn cr" onclick="show('e1',this)">Exchange Note</button>
+  </div>
+  <div class="nav-section">
+    <span class="nav-label">Refund</span>
+    <button class="tab-btn rf" onclick="show('f1',this)">Return Confirmed</button>
+  </div>
+</div>
+
+<div class="preview">
+
+<!-- 1 REPAIR RECEIVED -->
+<div id="r1" class="panel active">
+<div class="lw"><div class="lw-header"><span class="lw-badge">Repair 1</span><strong>Jewellery Received for Repair</strong></div>
+<table class="lw-table">
+<tr><td class="lw-key">Trigger</td><td class="lw-val">Tag <code>repair-intake</code> on the repair draft order.</td></tr>
+<tr><td class="lw-key">Copy</td><td class="lw-val">No customer name, no fault description, no timeline. Deliberately vague — nothing here can be contradicted later.</td></tr>
+</table></div>
+<div class="lw-subject"><span class="lw-s-label">Subject</span><span class="lw-s-text">We've received your jewellery for repair</span></div>
+<div class="email">
+  <div class="e-header"><img src="https://cdn.shopify.com/s/files/1/0775/8322/0993/files/WhatsApp_Image_2026-04-23_at_10.42.47_AM.jpg?v=1777029219" alt="TIMANTI"></div>
+  <div class="e-content">
+    <p class="e-orderref">Repair ID: #D1042</p>
+    <h2 class="e-h2">We've received your jewellery for repair</h2>
+    <p class="e-body">Our team will review your request and send the estimate soon.</p>
+  </div>
+  <div class="e-section"><div class="e-section-inner">
+    <h3 style="margin:0 0 12px;">Repair summary</h3>
+    <div class="e-item"><div class="e-item-img"><svg viewBox="0 0 24 24"><path d="M12 2l2.4 7.4H22l-6.2 4.5 2.4 7.4L12 17l-6.2 4.3 2.4-7.4L2 9.4h7.6z"/></svg></div>
+    <div class="e-item-detail"><div class="e-item-title">Aabha Halo Necklace</div><div class="e-item-qty">Qty: 1</div><div class="e-item-variant">14K / WG / 16"</div></div></div>
+  </div></div>
+  <div class="stdfoot"></div>
+</div>
+</div>
+
+<!-- 2 ESTIMATE -->
+<div id="r2" class="panel">
+<div class="lw"><div class="lw-header"><span class="lw-badge">Repair 2</span><strong>Estimated Repair Charges</strong></div>
+<table class="lw-table">
+<tr><td class="lw-key">Trigger</td><td class="lw-val">HQ submits the estimate form → tag <code>repair-estimate-ready</code> → GoKwik link → this email.</td></tr>
+<tr><td class="lw-key">Key line</td><td class="lw-val">"approximate and may vary" — this is what licenses email 4 to revise the number.</td></tr>
+<tr><td class="lw-key">Open</td><td class="lw-val">Turnaround days and GST basis both need confirming before send.</td></tr>
+</table></div>
+<div class="lw-subject"><span class="lw-s-label">Subject</span><span class="lw-s-text">Your estimated repair charges</span></div>
+<div class="email">
+  <div class="e-header"><img src="https://cdn.shopify.com/s/files/1/0775/8322/0993/files/WhatsApp_Image_2026-04-23_at_10.42.47_AM.jpg?v=1777029219" alt="TIMANTI"></div>
+  <div class="e-content">
+    <p class="e-orderref">Repair ID: #D1042</p>
+    <h2 class="e-h2">Your estimated repair charges</h2>
+    <p class="e-body">Please review the estimated charges below. These figures are approximate and may vary depending on the materials and labour required. Rest assured, our skilled artisans will handle your repair with care and expertise.</p>
+    <div class="e-btnzone"><a class="e-btn">Approve &amp; Pay Now</a><a class="e-btn alt">Approve &amp; Pay at Store</a></div>
+    <div class="e-store-link"><a href="#">Ask a question on WhatsApp</a></div>
+    <div class="e-timeline">We aim to complete repairs within 10 to 15 days. This payment link is valid for 30 days.</div>
+  </div>
+  <div class="e-section"><div class="e-section-inner">
+    <h3 style="margin:0 0 12px;">Repair summary</h3>
+    <div class="e-item"><div class="e-item-img"><svg viewBox="0 0 24 24"><path d="M12 2l2.4 7.4H22l-6.2 4.5 2.4 7.4L12 17l-6.2 4.3 2.4-7.4L2 9.4h7.6z"/></svg></div>
+    <div class="e-item-detail"><div class="e-item-title">Aabha Halo Necklace</div><div class="e-item-qty">Qty: 1</div><div class="e-item-variant">14K / WG / 16"</div></div></div>
+    <div class="e-summary"><div class="e-sumwrap"><div class="e-sumrow total"><span>Estimated charges</span><span>INR 3,500</span></div></div></div>
+  </div></div>
+  <div class="stdfoot"></div>
+</div>
+</div>
+
+<!-- 3 CONFIRMED -->
+<div id="r3" class="panel">
+<div class="lw"><div class="lw-header"><span class="lw-badge">Repair 3</span><strong>Repair Charges Confirmed</strong></div>
+<table class="lw-table">
+<tr><td class="lw-key">Trigger</td><td class="lw-val">GoKwik payment webhook, or tag <code>repair-store-approved</code>.</td></tr>
+<tr><td class="lw-key">Why</td><td class="lw-val">The two paths diverge here. Path A holds the customer's money; Path B holds none. Everything in email 4 follows from which fired.</td></tr>
+</table></div>
+<div class="variants">
+  <button class="vbtn on" onclick="vshow('c-paid',this)">Path A · Paid online</button>
+  <button class="vbtn" onclick="vshow('c-store',this)">Path B · Pay at store</button>
+</div>
+<div id="c-paid" class="vpanel on" style="margin-top:14px;">
+<div class="lw-subject"><span class="lw-s-label">Subject</span><span class="lw-s-text">Your repair charges have been confirmed</span></div>
+<div class="email">
+  <div class="e-header"><img src="https://cdn.shopify.com/s/files/1/0775/8322/0993/files/WhatsApp_Image_2026-04-23_at_10.42.47_AM.jpg?v=1777029219" alt="TIMANTI"></div>
+  <div class="e-content">
+    <p class="e-orderref">Repair ID: #D1042</p>
+    <h2 class="e-h2">Your repair charges have been confirmed</h2>
+    <p class="e-body">Thank you for confirming your estimated repair charges. Our team has begun work on your jewellery.</p>
+    <div class="e-timeline">We aim to complete repairs within 10 to 15 days.</div>
+  </div>
+  <div class="e-section"><div class="e-section-inner">
+    <h3 style="margin:0 0 12px;">Repair summary</h3>
+    <div class="e-item"><div class="e-item-img"><svg viewBox="0 0 24 24"><path d="M12 2l2.4 7.4H22l-6.2 4.5 2.4 7.4L12 17l-6.2 4.3 2.4-7.4L2 9.4h7.6z"/></svg></div>
+    <div class="e-item-detail"><div class="e-item-title">Aabha Halo Necklace</div><div class="e-item-qty">Qty: 1</div><div class="e-item-variant">14K / WG / 16"</div></div></div>
+    <div class="e-summary"><div class="e-sumwrap"><div class="e-sumrow total"><span>Amount received</span><span>INR 3,500</span></div></div></div>
+    <p class="e-note">Please note these charges could be higher or lower depending on the nature of the repair.</p>
+  </div></div>
+  <div class="stdfoot"></div>
+</div>
+</div>
+<div id="c-store" class="vpanel" style="margin-top:14px;">
+<div class="lw-subject"><span class="lw-s-label">Subject</span><span class="lw-s-text">Your repair charges have been confirmed</span></div>
+<div class="email">
+  <div class="e-header"><img src="https://cdn.shopify.com/s/files/1/0775/8322/0993/files/WhatsApp_Image_2026-04-23_at_10.42.47_AM.jpg?v=1777029219" alt="TIMANTI"></div>
+  <div class="e-content">
+    <p class="e-orderref">Repair ID: #D1042</p>
+    <h2 class="e-h2">Your repair charges have been confirmed</h2>
+    <p class="e-body">Thank you for confirming your estimated repair charges. Our team has begun work on your jewellery.</p>
+    <div class="e-timeline">We aim to complete repairs within 10 to 15 days. Payment will be collected when you pick up your piece.</div>
+  </div>
+  <div class="e-section"><div class="e-section-inner">
+    <h3 style="margin:0 0 12px;">Repair summary</h3>
+    <div class="e-item"><div class="e-item-img"><svg viewBox="0 0 24 24"><path d="M12 2l2.4 7.4H22l-6.2 4.5 2.4 7.4L12 17l-6.2 4.3 2.4-7.4L2 9.4h7.6z"/></svg></div>
+    <div class="e-item-detail"><div class="e-item-title">Aabha Halo Necklace</div><div class="e-item-qty">Qty: 1</div><div class="e-item-variant">14K / WG / 16"</div></div></div>
+    <div class="e-summary"><div class="e-sumwrap"><div class="e-sumrow total"><span>Estimated charges</span><span>INR 3,500</span></div></div></div>
+    <p class="e-note">Please note these charges could be higher or lower depending on the nature of the repair.</p>
+  </div></div>
+  <div class="stdfoot"></div>
+</div>
+</div>
+</div>
+
+<!-- 4 READY + FINAL -->
+<div id="r4" class="panel">
+<div class="lw"><div class="lw-header"><span class="lw-badge">Repair 4 · MERGED</span><strong>Ready for Collection + Final Charges</strong></div>
+<table class="lw-table">
+<tr><td class="lw-key">Merged</td><td class="lw-val">The existing "repair is ready" email now carries the final charges. Not a fifth email.</td></tr>
+<tr><td class="lw-key">Trigger</td><td class="lw-val">HQ enters <strong>Final Repair Cost</strong> on the Mark Complete form. <span style="color:#166534;font-weight:600;">Field is built — writes <code>repair_final_cost</code>.</span></td></tr>
+<tr><td class="lw-key">Refund</td><td class="lw-val">The button <strong>captures a request only</strong>. No money moves. Settlement route (GoKwik API or voucher) decided separately.</td></tr>
+</table></div>
+<div class="variants">
+  <button class="vbtn on" onclick="vshow('f-ref',this)">A · Prepaid, lower → refund request</button>
+  <button class="vbtn" onclick="vshow('f-due',this)">B · Higher → balance</button>
+  <button class="vbtn" onclick="vshow('f-str',this)">C · Pay at store</button>
+</div>
+<div id="f-ref" class="vpanel on" style="margin-top:14px;">
+<div class="lw-subject"><span class="lw-s-label">Subject</span><span class="lw-s-text">Your jewellery is repaired and ready for collection</span></div>
+<div class="email">
+  <div class="e-header"><img src="https://cdn.shopify.com/s/files/1/0775/8322/0993/files/WhatsApp_Image_2026-04-23_at_10.42.47_AM.jpg?v=1777029219" alt="TIMANTI"></div>
+  <div class="e-content">
+    <p class="e-orderref">Repair ID: #D1042</p>
+    <h2 class="e-h2">Your jewellery is repaired and ready for collection</h2>
+  </div>
+  <div class="e-section"><div class="e-section-inner">
+    <h3 style="margin:0 0 12px;">Repair summary</h3>
+    <div class="e-item"><div class="e-item-img"><svg viewBox="0 0 24 24"><path d="M12 2l2.4 7.4H22l-6.2 4.5 2.4 7.4L12 17l-6.2 4.3 2.4-7.4L2 9.4h7.6z"/></svg></div>
+    <div class="e-item-detail"><div class="e-item-title">Aabha Halo Necklace</div><div class="e-item-qty">Qty: 1</div><div class="e-item-variant">14K / WG / 16"</div></div></div>
+    <div class="e-summary"><div class="e-sumwrap">
+      <div class="e-sumrow"><span>Estimated charges</span><span>INR 3,500</span></div>
+      <div class="e-sumrow"><span>Final charges</span><span>INR 2,630</span></div>
+      <div class="e-sumrow total refund"><span>Refund due to you</span><span>INR 870</span></div>
+    </div></div>
+  </div></div>
+  <div class="e-section"><div class="e-section-inner">
+    <h3 style="margin:0 0 10px;">How would you like your refund of INR 870?</h3>
+    <ul class="e-bullets">
+      <li><a href="#">Refund to my Timanti wallet</a> — issued as a voucher, usually within a day <span class="muted">(available now)</span></li>
+      <li><a href="#">Refund to my original payment method</a> — back to the account you paid from <span class="muted">(subject to bank timelines)</span></li>
+    </ul>
+  </div></div>
+  <div class="e-section"><div class="e-section-inner">
+    <h3 style="margin:0 0 10px;">Collection or delivery</h3>
+    <p class="e-note" style="margin:0;">You can collect your piece from our store at 17th Cross, 19th Main Rd, HSR Layout Sec 2, Bengaluru – 560102, quoting <strong>#D1042</strong> — or track your shipment here: <a href="#" style="color:#fc7d27;font-weight:600;text-decoration:underline;">SQ987654321IN</a>.</p>
+  </div></div>
+  <div class="stdfoot"></div>
+</div>
+</div>
+<div id="f-due" class="vpanel" style="margin-top:14px;">
+<div class="lw-subject"><span class="lw-s-label">Subject</span><span class="lw-s-text">Your jewellery is repaired and ready for collection</span></div>
+<div class="email">
+  <div class="e-header"><img src="https://cdn.shopify.com/s/files/1/0775/8322/0993/files/WhatsApp_Image_2026-04-23_at_10.42.47_AM.jpg?v=1777029219" alt="TIMANTI"></div>
+  <div class="e-content">
+    <p class="e-orderref">Repair ID: #D1042</p>
+    <h2 class="e-h2">Your jewellery is repaired and ready for collection</h2>
+  </div>
+  <div class="e-section"><div class="e-section-inner">
+    <h3 style="margin:0 0 12px;">Repair summary</h3>
+    <div class="e-item"><div class="e-item-img"><svg viewBox="0 0 24 24"><path d="M12 2l2.4 7.4H22l-6.2 4.5 2.4 7.4L12 17l-6.2 4.3 2.4-7.4L2 9.4h7.6z"/></svg></div>
+    <div class="e-item-detail"><div class="e-item-title">Aabha Halo Necklace</div><div class="e-item-qty">Qty: 1</div><div class="e-item-variant">14K / WG / 16"</div></div></div>
+    <div class="e-summary"><div class="e-sumwrap">
+      <div class="e-sumrow"><span>Estimated charges</span><span>INR 3,500</span></div>
+      <div class="e-sumrow"><span>Final charges</span><span>INR 4,150</span></div>
+      <div class="e-sumrow total due"><span>Balance payable</span><span>INR 650</span></div>
+    </div></div>
+  </div></div>
+  <div class="e-section"><div class="e-section-inner">
+    <h3 style="margin:0 0 10px;">Settling the balance of INR 650</h3>
+    <ul class="e-bullets">
+      <li><a href="#">Pay INR 650 now</a> — secure payment link</li>
+      <li>Or pay when you collect your piece at the store</li>
+    </ul>
+  </div></div>
+  <div class="e-section"><div class="e-section-inner">
+    <h3 style="margin:0 0 10px;">Collection or delivery</h3>
+    <p class="e-note" style="margin:0;">You can collect your piece from our store at 17th Cross, 19th Main Rd, HSR Layout Sec 2, Bengaluru – 560102, quoting <strong>#D1042</strong> — or track your shipment here: <span class="e-ship-plain">tracking details will follow once dispatched</span>.</p>
+  </div></div>
+  <div class="stdfoot"></div>
+</div>
+</div>
+<div id="f-str" class="vpanel" style="margin-top:14px;">
+<div class="lw-subject"><span class="lw-s-label">Subject</span><span class="lw-s-text">Your jewellery is repaired and ready for collection</span></div>
+<div class="email">
+  <div class="e-header"><img src="https://cdn.shopify.com/s/files/1/0775/8322/0993/files/WhatsApp_Image_2026-04-23_at_10.42.47_AM.jpg?v=1777029219" alt="TIMANTI"></div>
+  <div class="e-content">
+    <p class="e-orderref">Repair ID: #D1042</p>
+    <h2 class="e-h2">Your jewellery is repaired and ready for collection</h2>
+  </div>
+  <div class="e-section"><div class="e-section-inner">
+    <h3 style="margin:0 0 12px;">Repair summary</h3>
+    <div class="e-item"><div class="e-item-img"><svg viewBox="0 0 24 24"><path d="M12 2l2.4 7.4H22l-6.2 4.5 2.4 7.4L12 17l-6.2 4.3 2.4-7.4L2 9.4h7.6z"/></svg></div>
+    <div class="e-item-detail"><div class="e-item-title">Aabha Halo Necklace</div><div class="e-item-qty">Qty: 1</div><div class="e-item-variant">14K / WG / 16"</div></div></div>
+    <div class="e-summary"><div class="e-sumwrap">
+      <div class="e-sumrow"><span>Estimated charges</span><span>INR 3,500</span></div>
+      <div class="e-sumrow total"><span>Payable on collection</span><span>INR 2,630</span></div>
+    </div></div>
+  </div></div>
+  <div class="e-section"><div class="e-section-inner">
+    <h3 style="margin:0 0 10px;">Collection or delivery</h3>
+    <p class="e-note" style="margin:0;">You can collect your piece from our store at 17th Cross, 19th Main Rd, HSR Layout Sec 2, Bengaluru – 560102, quoting <strong>#D1042</strong> — or track your shipment here: <span class="e-ship-plain">tracking details will follow once dispatched</span>.</p>
+  </div></div>
+  <div class="stdfoot"></div>
+</div>
+</div>
+</div>
+
+<!-- VOUCHER -->
+<div id="v1" class="panel">
+<div class="lw"><div class="lw-header"><span class="lw-badge" style="background:#047857;">Credit</span><strong>Voucher Issued</strong></div>
+<table class="lw-table">
+<tr><td class="lw-key">Trigger</td><td class="lw-val">Staff runs <em>Create Voucher &amp; Tag Order</em> from the Exchange Calculator → <code>POST /api/cn-email</code>.</td></tr>
+<tr><td class="lw-key">T&amp;Cs</td><td class="lw-val">All eight printed terms, verbatim, original numbering — email and printed voucher now identical.</td></tr>
+</table></div>
+<div class="lw-subject"><span class="lw-s-label">Subject</span><span class="lw-s-text">Your Timanti Voucher — Rs.28,400 | Code: VCH-2026-0044</span></div>
+<div class="email">
+  <div class="e-header"><img src="https://cdn.shopify.com/s/files/1/0775/8322/0993/files/WhatsApp_Image_2026-04-23_at_10.42.47_AM.jpg?v=1777029219" alt="TIMANTI"></div>
+  <div class="e-content">
+    <p class="e-orderref">Original Order #1042</p>
+    <h2 class="e-h2">Your Timanti Voucher</h2>
+    <p class="e-body">Your store-credit voucher is ready. Use the code below on your next purchase, online or in store.</p>
+    <div class="e-timeline">Enter <strong>VCH-2026-0044</strong> in the discount field at checkout on <a href="https://www.timanti.in" style="color:#fc7d27;font-weight:600;text-decoration:underline;">www.timanti.in</a>, or show this email to our consultant in store.</div>
+  </div>
+  <div class="e-section"><div class="e-section-inner">
+    <h3 style="margin:0 0 12px;">Voucher details</h3>
+    <div class="e-summary"><div class="e-sumwrap">
+      <div class="e-sumrow"><span>Voucher code</span><span>VCH-2026-0044</span></div>
+      <div class="e-sumrow"><span>Valid until</span><span>27 July 2027</span></div>
+      <div class="e-sumrow total"><span>Voucher value</span><span>INR 28,400</span></div>
+    </div></div>
+  </div></div>
+  <div class="e-section"><div class="e-section-inner e-tcs">
+    <h3>Terms &amp; Conditions</h3>
+    <p class="e-tclead">Reproduced in full from the terms printed on your voucher document.</p>
+    <ol>
+      <li>This voucher may only be redeemed against a purchase of value <strong>equal to or higher than</strong> the voucher value of INR 28,400.</li>
+      <li>This voucher is valid for <strong>365 days</strong> from the date of issue and expires on <strong>27-07-2027</strong>. The validity period cannot be extended under any circumstances.</li>
+      <li>Valid for <strong>one-time use only</strong>. Any unused balance remaining after redemption is forfeited and will not be re-credited.</li>
+      <li><strong>Non-transferable</strong> — this voucher may only be redeemed by the customer named on this document. It cannot be gifted, sold, or assigned to any third party.</li>
+      <li><strong>Cannot be combined</strong> with any other discount code, coupon, or promotional offer active on the store at the time of redemption.</li>
+      <li><strong>Applicable on all products</strong> listed on www.timanti.in, subject to product availability at the time of redemption. Timanti does not guarantee the availability of any specific item.</li>
+      <li>This voucher is issued under <strong>Section 34 of the CGST Act, 2017</strong>, against an exchange transaction on the order referenced above.</li>
+      <li>The voucher value is based on prevailing market rates for gold and diamonds applicable to the product at the time this exchange was processed. No adjustments will be made for subsequent rate changes.</li>
+      <li>Auracarat Private Limited reserves the right to cancel or void this voucher if the original order is found to be fraudulent, disputed, or returned outside policy.</li>
+    </ol>
+  </div></div>
+  <div class="stdfoot"></div>
+</div>
+</div>
+
+<!-- VOUCHER EXPIRY -->
+<div id="v2" class="panel">
+<div class="lw"><div class="lw-header"><span class="lw-badge" style="background:#047857;">Credit · New</span><strong>Voucher Expiry Reminder — 30 Days</strong></div>
+<table class="lw-table">
+<tr><td class="lw-key">Trigger</td><td class="lw-val">Daily sweep, 30 days before the <code>cn-exp:</code> date, unredeemed. Guard tag <code>vch-expiry-reminded</code> — fires once.</td></tr>
+<tr><td class="lw-key">Status</td><td class="lw-val" style="color:#166534;font-weight:600;">Copy approved. Needs the daily sweep loop before it can fire.</td></tr>
+<tr><td class="lw-key">Shorter</td><td class="lw-val">7-day and final-week nudges go to WhatsApp, not email.</td></tr>
+</table></div>
+<div class="lw-subject"><span class="lw-s-label">Subject</span><span class="lw-s-text">Your Timanti Voucher expires in 30 days — VCH-2026-0044</span></div>
+<div class="email">
+  <div class="e-header"><img src="https://cdn.shopify.com/s/files/1/0775/8322/0993/files/WhatsApp_Image_2026-04-23_at_10.42.47_AM.jpg?v=1777029219" alt="TIMANTI"></div>
+  <div class="e-content">
+    <p class="e-orderref">Original Order #1042</p>
+    <h2 class="e-h2">Your voucher expires in 30 days</h2>
+    <p class="e-body">A reminder that your Timanti voucher of <strong>INR 28,400</strong> expires on <strong>27 July 2027</strong>.</p>
+    <div class="e-btnzone"><a class="e-btn">Browse New Arrivals</a></div>
+    <div class="e-store-link"><a href="https://maps.app.goo.gl/" target="_blank">or visit our HSR Layout store</a></div>
+    <div class="e-timeline">Enter <strong>VCH-2026-0044</strong> in the discount field at checkout on <a href="https://www.timanti.in" style="color:#fc7d27;font-weight:600;text-decoration:underline;">www.timanti.in</a>, or show this email to our consultant in store.</div>
+  </div>
+  <div class="e-section"><div class="e-section-inner">
+    <h3 style="margin:0 0 12px;">Voucher details</h3>
+    <div class="e-summary"><div class="e-sumwrap">
+      <div class="e-sumrow"><span>Voucher code</span><span>VCH-2026-0044</span></div>
+      <div class="e-sumrow"><span>Expires on</span><span>27 July 2027</span></div>
+      <div class="e-sumrow total"><span>Voucher value</span><span>INR 28,400</span></div>
+    </div></div>
+  </div></div>
+  <div class="stdfoot"></div>
+</div>
+</div>
+
+<!-- EXCHANGE NOTE -->
+<div id="e1" class="panel">
+<div class="lw"><div class="lw-header"><span class="lw-badge" style="background:#047857;">Credit</span><strong>Exchange Note Applied</strong></div>
+<table class="lw-table">
+<tr><td class="lw-key">Trigger</td><td class="lw-val"><code>POST /api/exc-email</code> after the note is applied to the new draft.</td></tr>
+<tr><td class="lw-key">Confirmed</td><td class="lw-val">Applied in full at generation. Cannot be retained or used later — the terms are written to reflect that.</td></tr>
+</table></div>
+<div class="lw-subject"><span class="lw-s-label">Subject</span><span class="lw-s-text">Your Timanti Exchange Note — Rs.28,400 applied | EXC-2026-0031</span></div>
+<div class="email">
+  <div class="e-header"><img src="https://cdn.shopify.com/s/files/1/0775/8322/0993/files/WhatsApp_Image_2026-04-23_at_10.42.47_AM.jpg?v=1777029219" alt="TIMANTI"></div>
+  <div class="e-content">
+    <p class="e-orderref">Exchanged Item — Order #1042</p>
+    <h2 class="e-h2">Your Exchange Note</h2>
+    <p class="e-body">Your exchange has been applied directly to your new purchase. No action is needed.</p>
+    <div class="e-timeline">This exchange value has already been deducted from your new invoice. It is not a credit for future use.</div>
+  </div>
+  <div class="e-section"><div class="e-section-inner">
+    <h3 style="margin:0 0 12px;">Exchange details</h3>
+    <div class="e-summary"><div class="e-sumwrap">
+      <div class="e-sumrow"><span>Exchange note</span><span>EXC-2026-0031</span></div>
+      <div class="e-sumrow"><span>Applied to</span><span>#D1188</span></div>
+      <div class="e-sumrow total refund"><span>Value deducted</span><span>INR 28,400</span></div>
+    </div></div>
+  </div></div>
+  <div class="e-section"><div class="e-section-inner e-tcs">
+    <h3>Exchange Note Conditions &amp; Terms</h3>
+    <p class="e-tclead">This exchange note has been applied in full to the order shown above at the time of issue. It cannot be retained, transferred, or used at a later date. The conditions below govern that application — please keep this email with your invoice.</p>
+    <ol>
+      <li><strong>One-time use only.</strong> This exchange note is valid for a single application, against a purchase of value <strong>equal to or higher than</strong> the exchange note value. It has been applied to the order shown above and cannot be used again.</li>
+      <li><strong>No residual balance.</strong> Any unused balance remaining after application is forfeited. It will not be carried forward, re-credited, or refunded in any form.</li>
+      <li><strong>Non-transferable.</strong> This exchange note may only be held and used by the customer named above. It cannot be gifted, sold, or assigned to any third party.</li>
+      <li><strong>Cannot be combined.</strong> It cannot be used together with any other discount code, coupon code, or promotional offer active at the time of application.</li>
+      <li><strong>Subject to availability.</strong> Applicable only to products available at the time of application. Timanti does not guarantee the availability of any specific item.</li>
+      <li><strong>Rate basis.</strong> The exchange value is based on the prevailing market rates for gold and diamonds applicable to the product at the time this exchange was processed. No adjustment will be made for any subsequent change in those rates.</li>
+      <li><strong>Record on your invoice.</strong> The final tax invoice for the purchase against which this exchange note has been applied carries the full details of this transaction.</li>
+      <li><strong>Acknowledgement.</strong> An acknowledgement is created at the time this exchange note is generated and forms part of your transaction record.</li>
+      <li><strong>Right to void.</strong> Auracarat Private Limited reserves the right to cancel or void this exchange note if the original order is found to be fraudulent, disputed, or returned outside policy.</li>
+    </ol>
+  </div></div>
+  <div class="stdfoot"></div>
+</div>
+</div>
+
+<!-- REFUND -->
+<div id="f1" class="panel">
+<div class="lw"><div class="lw-header"><span class="lw-badge" style="background:#1e3a5f;">Refund</span><strong>Return Confirmed</strong></div>
+<table class="lw-table">
+<tr><td class="lw-key">System</td><td class="lw-val">Shopify native refund notification on <code>refund-confirmation.liquid</code>. Not Resend.</td></tr>
+<tr><td class="lw-key">Changed</td><td class="lw-val" style="color:#166534;font-weight:600;">Heading → "Refund request confirmation" with order number · black button removed · body rewritten to the refund · timeline box removed, replaced by the generic 4-week line · item table kept · "Visit our online store" added · "View order" removed · standard footer.</td></tr>
+</table></div>
+<div class="lw-subject"><span class="lw-s-label">Subject</span><span class="lw-s-text">Refund request confirmation — #1042</span></div>
+<div class="email">
+  <div class="e-header"><img src="https://cdn.shopify.com/s/files/1/0775/8322/0993/files/WhatsApp_Image_2026-04-23_at_10.42.47_AM.jpg?v=1777029219" alt="TIMANTI"></div>
+  <div class="e-content">
+    <p class="e-orderref">Order #1042</p>
+    <h2 class="e-h2">Refund request confirmation</h2>
+    <p class="e-body">Your refund has been processed to your original payment method.</p>
+    <div class="e-store-link"><a href="#">Visit our online store</a></div>
+  </div>
+  <div class="e-section"><div class="e-section-inner">
+    <h3 style="margin:0 0 12px;">Items returned</h3>
+    <div class="e-item"><div class="e-item-img"><svg viewBox="0 0 24 24"><path d="M12 2l2.4 7.4H22l-6.2 4.5 2.4 7.4L12 17l-6.2 4.3 2.4-7.4L2 9.4h7.6z"/></svg></div>
+    <div class="e-item-detail"><div class="e-item-title">Aabha Halo Necklace</div><div class="e-item-qty">Qty: 1</div><div class="e-item-variant">14K / WG / 16"</div></div></div>
+    <div class="e-summary"><div class="e-sumwrap">
+      <div class="e-sumrow"><span>Refund method</span><span>UPI</span></div>
+      <div class="e-sumrow total refund"><span>Total refund</span><span>INR 42,800</span></div>
+    </div></div>
+    <p class="e-note">It can take up to 4 weeks for the refund to reflect in your bank account.</p>
+  </div></div>
+  <div class="stdfoot"></div>
+</div>
+</div>
+
+</div>
+
+<template id="stdfoot-tpl">
+  <div class="e-section"><div class="e-section-inner"><div class="e-support"><h3>Need help?</h3><p>For any help with your order, please call or WhatsApp us on the number below, or reply to this email with your query and our customer team will get back to you.</p><table align="center" style="margin:0 auto;"><tr><td class="e-help-col"><img src="https://cdn.simpleicons.org/whatsapp/25D366" width="26" height="26"><strong>Call / WhatsApp</strong><br><a href="#">+91 7710968305</a></td><td class="e-help-col"><img src="https://api.iconify.design/mdi/email-outline.svg?color=%23333333" width="26" height="26"><strong>Email us</strong><br><a href="#">hello@timanti.in</a></td></tr></table></div></div></div>
+  <div class="e-section"><div class="e-section-inner"><div class="e-social"><h3>We hope you loved the experience so far!</h3><p>Please follow us on Instagram and leave us a review on Google. It would mean the world to us.</p><div class="e-social-btns"><a class="e-social-btn" href="#"><span class="e-social-btn-inner"><img src="https://cdn.simpleicons.org/instagram/E4405F" width="14" height="14"><span>&nbsp;Follow @timanti.official</span></span></a><a class="e-social-btn" href="#"><span class="e-social-btn-inner"><img src="https://api.iconify.design/logos/google-icon.svg" width="14" height="14"><span>&nbsp;Review us on Google</span></span></a></div><div class="e-wa-group"><p class="e-wa-link"><a href="#">Get WhatsApp updates on new collections &amp; offers</a></p><p class="e-social-note">By joining WhatsApp updates you consent to receive marketing messages. Unsubscribe anytime.</p></div></div></div></div>
+  <div class="e-section"><div class="e-section-inner"><div class="e-promisebox"><div class="e-promise"><img src="https://cdn.shopify.com/s/files/1/0775/8322/0993/files/icon1_10925c66-b900-4920-a93c-49753bce74cf.png?v=1770206196" onerror="this.style.display='none'"><span>BIS Hallmarked<br>Gold</span></div><div class="e-promise"><img src="https://cdn.shopify.com/s/files/1/0775/8322/0993/files/icon6.png" onerror="this.style.display='none'"><span>IGI Certified<br>Diamonds</span></div><div class="e-promise"><img src="https://cdn.shopify.com/s/files/1/0775/8322/0993/files/icon2_1d5faa97-53c3-44c7-9b2a-04ca57696e11.png?v=1770206090" onerror="this.style.display='none'"><span>Lifetime<br>Exchange</span></div></div></div></div>
+  <div class="e-footer"><a href="#">Return &amp; Refund Policy</a> &nbsp;|&nbsp; <a href="#">Lifetime Exchange &amp; Upgrade</a></div>
+</template>
+
+<script>
+// One footer definition, injected into every email — guarantees they stay identical.
+document.querySelectorAll('.stdfoot').forEach(function(slot){
+  slot.appendChild(document.getElementById('stdfoot-tpl').content.cloneNode(true));
+});
+function show(id,btn){
+  document.querySelectorAll('.panel').forEach(function(p){p.classList.remove('active');});
+  document.querySelectorAll('.tab-btn').forEach(function(b){b.classList.remove('active');});
+  document.getElementById(id).classList.add('active');
+  btn.classList.add('active');
+  window.scrollTo(0,0);
+}
+function vshow(id,btn){
+  var panel = btn.closest('.panel');
+  panel.querySelectorAll('.vpanel').forEach(function(p){p.classList.remove('on');});
+  panel.querySelectorAll('.vbtn').forEach(function(b){b.classList.remove('on');});
+  document.getElementById(id).classList.add('on');
+  btn.classList.add('on');
+}
+</script>
+</body>
+</html>

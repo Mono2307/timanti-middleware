@@ -612,6 +612,63 @@
   "47017995403521": {
    "status": "deleted",
    "code": 404
+  },
+  "50157321945345": {
+   "status": "ok",
+   "sku": "ER00054A|W|14|VVS-VS-EFG|H|NA|0.63|NA",
+   "product_id": 9121802617089,
+   "variant": {
+    "net_metal_weight_g": "0.834",
+    "gold_rate": "8831.0",
+    "price_breakup_diamond": "25200.0",
+    "price_breakup_gold": "7365.05"
+   }
+  }
+ },
+ "_products_note": "Products whose SOLD variant id now 404s. Verified 2026-09-30/10-01 via the admin API and /api/metafields/inspect. 9121815953665 (#1050) variant list not captured (token rotated) — offline it falls back to the product weight only.",
+ "products": {
+  "9121802617089": {
+   "status": "ok",
+   "metafields": {
+    "net_metal_weight_g": "0.834",
+    "totaldiamondweight": "0.63",
+    "gati_id": "ER00054A"
+   },
+   "variants": [
+    {
+     "id": 50157321912577,
+     "sku": "ER00054A|P|14|VVS-VS-EFG|H|NA|0.63|NA"
+    },
+    {
+     "id": 50157321945345,
+     "sku": "ER00054A|W|14|VVS-VS-EFG|H|NA|0.63|NA"
+    },
+    {
+     "id": 50157321978113,
+     "sku": "ER00054A|Y|14|VVS-VS-EFG|H|NA|0.63|NA"
+    },
+    {
+     "id": 50157322010881,
+     "sku": "ER00054A|P|18|VVS-VS-EFG|H|NA|0.63|NA"
+    },
+    {
+     "id": 50157322043649,
+     "sku": "ER00054A|W|18|VVS-VS-EFG|H|NA|0.63|NA"
+    },
+    {
+     "id": 50157322076417,
+     "sku": "ER00054A|Y|18|VVS-VS-EFG|H|NA|0.63|NA"
+    }
+   ]
+  },
+  "9121815953665": {
+   "status": "ok",
+   "metafields": {
+    "net_metal_weight_g": "2.766",
+    "totaldiamondweight": "0.47",
+    "gati_id": "RG00088A"
+   },
+   "variants": []
   }
  }
 }

@@ -129,7 +129,9 @@ function makeEnv() {
         if (key === 'gold_rate') return env.noRates ? resp(200, []) : resp(200, [{ value: JSON.stringify(rateCfg) }]);
         return resp(200, []);
       }
-      if ((opts.method || 'get') !== 'get') { env.posts.push(url); return resp(500, {}); }
+      // Writes are refused (nothing here may create a voucher); the one read-only POST is the
+      // GraphQL catalogue search.
+      if ((opts.method || 'get') !== 'get' && !/\/graphql\.json$/.test(url)) { env.posts.push(url); return resp(500, {}); }
       const ep = url.replace(/^.*\/admin\/api\/[^/]+\//, '');
       let m;
       if ((m = ep.match(/^orders\.json\?name=%23(\d+)/))) {
@@ -146,7 +148,22 @@ function makeEnv() {
         if (!v || v.status !== 'ok') return resp(404, {});
         return resp(200, { metafields: Object.entries(v.variant).map(([k, val]) => ({ namespace: 'custom', key: k, value: val })) });
       }
-      if (/^products\/\d+\/metafields\.json/.test(ep)) return resp(200, { metafields: [] });
+      if ((m = ep.match(/^products\/(\d+)\/metafields\.json/))) {
+        const p = (cat.products || {})[m[1]];
+        return resp(200, { metafields: p ? Object.entries(p.metafields).map(([k, val]) => ({ namespace: 'custom', key: k, value: val })) : [] });
+      }
+      if ((m = ep.match(/^products\/(\d+)\.json/))) {
+        const p = (cat.products || {})[m[1]];
+        return p ? resp(200, { product: { id: Number(m[1]), variants: p.variants } }) : resp(404, {});
+      }
+      if (ep === 'graphql.json') {
+        // productVariants(query:"sku:CODE*") over the snapshot's live variants
+        const q = (JSON.parse(opts.payload).query.match(/sku:([^*"\\]+)\*/) || [])[1] || '';
+        const nodes = Object.entries(cat.variants)
+          .filter(([, v]) => v.status === 'ok' && v.sku && v.sku.toUpperCase().startsWith(q.toUpperCase()))
+          .map(([id, v]) => ({ legacyResourceId: id, sku: v.sku, product: { legacyResourceId: String(v.product_id) } }));
+        return resp(200, { data: { productVariants: { nodes } } });
+      }
       throw new Error('unmocked fetch: ' + url);
     },
   };
@@ -172,7 +189,7 @@ function makeEnv() {
   vm.runInContext(fs.readFileSync(path.join(DIR, 'EXCHANGE-CALCULATOR-FULL.gs.txt'), 'utf8') +
     '\n;this.__x = { handleEdit, applySkuSelection, exchangeGate_, refreshFinalIssueValue_, buildCalcTable_, healCalcLabels_, ' +
     'ORDER_NUM_CELL, SKU_CELL, SOURCE_CELL, EXCHTYPE_CELL, DOCTYPE_CELL, WEIGHED_NETWT_CELL, OVERRIDE_REASON_CELL, ' +
-    'FINAL_ISSUE_CELL, CHECKS_CELL, NET_WT_CELL, CUSTOM_DED_CELL, INVOICE_CELL, OG_WEIGHT_CELL };', ctx);
+    'FINAL_ISSUE_CELL, CHECKS_CELL, NET_WT_CELL, CUSTOM_DED_CELL, OG_WEIGHT_CELL };', ctx);
   env.x = ctx.__x;
   env.ui = ui;
   env.scriptProps = scriptProps;
@@ -240,6 +257,30 @@ scenario('#1060 already exchanged — blocked in both modes', () => {
   check('refusal says why', /already exchanged/.test(e.lastAlert().body));
 });
 
+scenario('#1045 looked up by the OLD script, then switched to Full Value — re-checks instead of showing 0', () => {
+  const e = makeEnv();
+  // What the old script leaves behind: order and SKU filled in, no checks stored, no "charged" figure.
+  e.set(e.x.ORDER_NUM_CELL, '#1045');
+  e.set(e.x.SKU_CELL, 'PD00021|Y|14|VVSVSEFG|H|NA|1.18|NA');
+  e.edit(e.x.EXCHTYPE_CELL, 'Full Value');
+  check('value to issue = ₹40,500, not 0', near(e.val(e.x.FINAL_ISSUE_CELL), 40500), e.val(e.x.FINAL_ISSUE_CELL));
+  const g = e.gate();
+  check('and it can be issued', g && near(g.value, 40500), g && g.value);
+});
+
+scenario('#1050 Full Value with no breakup on the order — issues the ₹58,865.89 charged, even if the display cell is blank', () => {
+  const e = makeEnv();
+  e.edit(e.x.ORDER_NUM_CELL, '#1050');
+  e.edit(e.x.EXCHTYPE_CELL, 'Full Value');
+  check('value to issue = ₹58,865.89', near(e.val(e.x.FINAL_ISSUE_CELL), 58865.89), e.val(e.x.FINAL_ISSUE_CELL));
+  check('nothing is written to row 36 (a merged header on the live sheet) or B39',
+        e.val('B36') === '' && e.val('B39') === '', 'B36=' + e.val('B36') + ' B39=' + e.val('B39'));
+  check('Value to Issue reads no cell for the amount', !/B36|B39/.test(e.calc.cells[e.x.FINAL_ISSUE_CELL].f || ''),
+        e.calc.cells[e.x.FINAL_ISSUE_CELL].f);
+  const g = e.gate();
+  check('and it issues', g && near(g.value, 58865.89), g && g.value);
+});
+
 scenario('#1056 discount split unknown — stone taken at the least it could have cost, no sign-off', () => {
   const e = makeEnv();
   e.edit(e.x.ORDER_NUM_CELL, '#1056');
@@ -264,6 +305,30 @@ scenario('#1041 no breakup, catalogue says 8.4 g on a ₹58,942 bangle — credi
   check('a custom deduction still comes off the limited value', near(e.val(e.x.FINAL_ISSUE_CELL), 55225.22), e.val(e.x.FINAL_ISSUE_CELL));
 });
 
+scenario('#1050 sold variant id gone — a listing with the SAME code (RG00088) wins over RG00088A', () => {
+  // Synthetic: the snapshot does not hold the live RG00088 listing (token rotated before it could be
+  // read), so one is added here, alongside an RG00088A decoy on the order's own product.
+  const add = {
+    '90000000000001': { status: 'ok', sku: 'RG00088A|Y|18|VS-EF|H|20|0.47|NA', product_id: 9121815953665,
+                        variant: { net_metal_weight_g: '2.766', gold_rate: '11355.0', price_breakup_diamond: '14100.0' } },
+    '90000000000002': { status: 'ok', sku: 'RG00088|Y|18|VS-EF|H|20|0.44|NA', product_id: 9100000000002,
+                        variant: { net_metal_weight_g: '2.900', gold_rate: '11355.0', price_breakup_diamond: '13200.0' } },
+  };
+  Object.assign(cat.variants, add);
+  const prod = cat.products['9121815953665'], before = prod.variants;
+  prod.variants = [{ id: 90000000000001, sku: add['90000000000001'].sku }];
+  try {
+    const e = makeEnv();
+    e.edit(e.x.ORDER_NUM_CELL, '#1050');
+    const msgs = e.alerts.map((a) => a.body).join(' ');
+    check('the RG00088 listing is used, not RG00088A', /same code \(RG00088\|/.test(msgs) && !/RG00088A/.test(msgs), msgs.slice(0, 160));
+    check('its weight (2.9 g) drives the gold value', /2\.9 g/.test(msgs));
+  } finally {
+    prod.variants = before;
+    Object.keys(add).forEach((k) => delete cat.variants[k]);
+  }
+});
+
 scenario('Lost draft-order label (as found on the live sheet) — restored on open', () => {
   const e = makeEnv();
   e.calc.getRange('A6').clearContent();
@@ -272,19 +337,26 @@ scenario('Lost draft-order label (as found on the live sheet) — restored on op
   e.calc.getRange('A6').setValue('Draft # (renamed by hand)');
   e.x.healCalcLabels_(e.calc);
   check('a hand-edited label is left alone', e.val('A6') === 'Draft # (renamed by hand)');
+  e.calc.getRange('A36').setValue('Charged for this item (tax incl.)');   // written by the previous version
+  e.calc.getRange('A39').setValue('Deduction limit (no breakup on order)');
+  e.x.healCalcLabels_(e.calc);
+  check('the labels the previous version put in rows 36 and 39 are removed', e.val('A36') === '' && e.val('A39') === '');
 });
 
-scenario('#1044 deleted listing, weight never recorded — blocked until weighed, then valued', () => {
+scenario('#1044 sold variant id gone, product live — valued off the product\'s current listing', () => {
   const e = makeEnv();
   e.edit(e.x.ORDER_NUM_CELL, '#1044');
-  check('Deduction blocked', e.gate() === null);
-  check('refusal tells staff to weigh the piece', /Weigh the piece/.test(e.lastAlert().body));
+  check('value = 0.834 g × 8,831 (ER00054A 14K WG) + diamond capped at the ₹12,967.84 paid',
+        near(e.val(e.x.FINAL_ISSUE_CELL), 7365.05 + 12967.84), e.val(e.x.FINAL_ISSUE_CELL));
+  const g0 = e.gate();
+  check('issues after confirming the stand-in listing', g0 && /ER00054A/.test(g0.note));
   e.edit(e.x.WEIGHED_NETWT_CELL, 1.1);
   check('weighed weight without a reason is still blocked', e.gate() === null);
   check('…and says the reason is needed', /reason/.test(e.lastAlert().body));
   e.edit(e.x.OVERRIDE_REASON_CELL, 'weighed at counter, 1.25 g gross − 0.15 g stones');
-  const want = 1.1 * 8831 + 12967.84 * 0.8;
-  check('value = 1.1 g × 8,831 + 80% of the ₹12,967.84 charged for the stone', near(e.val(e.x.FINAL_ISSUE_CELL), want), e.val(e.x.FINAL_ISSUE_CELL));
+  // Diamond: 80% of the current listing's ₹25,200 = ₹20,160, capped at the ₹12,967.84 actually paid.
+  const want = 1.1 * 8831 + 12967.84;
+  check('value = weighed 1.1 g × 8,831 + diamond capped at the ₹12,967.84 paid', near(e.val(e.x.FINAL_ISSUE_CELL), want), e.val(e.x.FINAL_ISSUE_CELL));
   const g = e.gate();
   check('gate passes after confirmation', g && near(g.value, want));
   check('log note records the weighed override', g && /weighed/.test(g.note));
@@ -303,15 +375,15 @@ scenario('#1055 seventeen coins on one line — two coins exchanged, not sevente
   check('gate passes', !!e.gate());
 });
 
-scenario('#1055 silver coin — Deduction refused, Full Value allowed', () => {
+scenario('#1055 silver coin — Deduction is 100% of the metal at today\'s catalogue silver price', () => {
   const e = makeEnv();
   const o = snap.orders.find((x) => x.name === '#1055');
   e.set(e.x.ORDER_NUM_CELL, '#1055');
   e.scriptProps.setProperty('_PENDING_LINE_ITEMS', JSON.stringify(o.line_items));
   e.scriptProps.setProperty('_PENDING_ORDER', JSON.stringify(Object.assign({}, o, { line_items: undefined })));
   e.x.applySkuSelection([17]);                            // first silver coin
-  check('Deduction refused', e.gate() === null);
-  check('…because silver has no live rate', /silver/.test(e.lastAlert().body));
+  const g0 = e.gate();
+  check('Deduction = 5 g × ₹290 = ₹1,450, no making, no GST', g0 && near(g0.value, 1450), g0 && g0.value);
   e.edit(e.x.EXCHTYPE_CELL, 'Full Value');
   const g = e.gate();
   check('Full Value = ₹1,519.25', g && near(g.value, 1519.25), g && g.value);

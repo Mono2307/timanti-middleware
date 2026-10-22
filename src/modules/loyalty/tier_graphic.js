@@ -11,6 +11,8 @@
  * customer data beyond the points number the block passes in.
  */
 
+const E = require('./engine');
+
 const TIER_COLOURS = {
   T1: '#8E9298',   // silver
   T2: '#B08D57',   // gold
@@ -46,13 +48,18 @@ function tierSvg(points, cfg) {
     px = xAt(i) + (xAt(i + 1) - xAt(i)) * Math.max(0, (pts - a) / (b - a));
     break;
   }
-  let current = null;
-  for (const t of tiers) if (pts >= t.min) current = t;
+  // Same rule as the badge (engine.tierFor, tolerance included), so a customer ₹2,000 short of
+  // Silver is drawn at Silver rather than just before it.
+  const current = E.tierFor(pts, cfg).tier;
+  if (current) {
+    const ci = tiers.findIndex(t => t.key === current.key);
+    if (ci >= 0) px = Math.max(px, xAt(ci + 1));
+  }
   const fill = current ? (TIER_COLOURS[current.key] || TIER_COLOURS.T2) : TIER_COLOURS.T2;
 
   const marks = tiers.map((t, i) => {
     const cx = xAt(i + 1);
-    const reached = pts >= t.min;
+    const reached = !!current && current.min >= t.min;
     const isCurrent = current && current.key === t.key;
     const colour = TIER_COLOURS[t.key] || fill;
     // Last label right-aligned so it never runs off the edge.

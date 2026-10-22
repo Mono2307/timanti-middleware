@@ -285,7 +285,8 @@ function repairItemRows({ items, item }) {
 
 // 1 — Jewellery received. Deliberately vague: no customer name, no fault
 // description, no timeline. Nothing here can be contradicted by the estimate.
-function buildRepairReceivedHtml({ draftRef, item, items }) {
+// extraHtml: sections appended after the summary (outside pieces: inspection record + terms).
+function buildRepairReceivedHtml({ draftRef, item, items, extraHtml = '' }) {
   return head()
     + contentBlock({
         ref: `Repair ID: ${draftRef}`,
@@ -293,13 +294,15 @@ function buildRepairReceivedHtml({ draftRef, item, items }) {
         body: 'Our team will review your request and send the estimate soon.'
       })
     + section(h3('Repair summary') + repairItemRows({ items, item }))
+    + extraHtml
     + standardFooter()
     + foot();
 }
 
 // 2 — Estimated charges. The "approximate and may vary" line is what licenses
 // the final email to revise the number; do not remove it.
-function buildRepairEstimateV2Html({ draftRef, item, items, amount, paymentUrl, approveStoreUrl, whatsappUrl }) {
+// breakdown: optional itemised rows [{label, amount}] printed above the total; they sum to it.
+function buildRepairEstimateV2Html({ draftRef, item, items, amount, paymentUrl, approveStoreUrl, whatsappUrl, breakdown = [], extraHtml = '' }) {
   const btns = button(`Approve & Pay Now`, paymentUrl) + button('Approve & Pay at Store', approveStoreUrl, true);
   return head()
     + contentBlock({
@@ -313,8 +316,12 @@ function buildRepairEstimateV2Html({ draftRef, item, items, amount, paymentUrl, 
     + section(
         h3('Repair summary')
         + repairItemRows({ items, item })
-        + summary([{ label: 'Estimated charges', value: money(amount), total: true }])
+        + summary([
+            ...breakdown.map(l => ({ label: l.label, value: money(l.amount) })),
+            { label: 'Estimated charges', value: money(amount), total: true },
+          ])
       )
+    + extraHtml
     + standardFooter()
     + foot();
 }
@@ -357,7 +364,8 @@ function buildRepairReadyFinalHtml({
   draftRef, item, items, mode,
   estimateAmount, finalAmount, delta,
   refundWalletUrl, refundSourceUrl, payBalanceUrl,
-  trackingId, trackingUrl
+  trackingId, trackingUrl,
+  extraHtml = ''
 }) {
   let rows;
   let actionSection = '';
@@ -430,6 +438,7 @@ function buildRepairReadyFinalHtml({
         h3('Collection or delivery')
         + `<p style="font-size:12px; color:#666666; line-height:1.5; margin:0; text-align:left;">You can collect your piece from our store at ${STORE_ADDRESS}, quoting <strong>${esc(draftRef)}</strong> — or track your shipment here: ${shipmentFragment}.</p>`
       )
+    + extraHtml
     + standardFooter()
     + foot();
 }
@@ -776,5 +785,5 @@ module.exports = {
   buildRefundConfirmationHtml,
   buildDraftRefundHtml,
   // exposed for reuse / testing
-  standardFooter, itemRow, summary, section, REPAIR_TURNAROUND
+  standardFooter, itemRow, summary, section, h3, termsSection, REPAIR_TURNAROUND
 };

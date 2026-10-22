@@ -10,8 +10,11 @@
  * THE PROGRAMME (founder's spec, 2026-10-07 — loyalty/planning/LOYALTY_PLAN_A_MIDDLEWARE.md)
  *   ₹1 of order value = 1 point. Points only measure lifetime spend toward a tier; they are never
  *   spent. Tiers (editable in config): ₹2L → 3%, ₹5L → 5%, ₹10L → 7%, off the DIAMOND value only.
- *   +2% in the birthday or anniversary month (once, even if both fall in the same month).
- *   Loyalty never combines with another discount; vouchers and exchange notes are tender, not
+ *   +2% in the birthday or anniversary month (once, even if both fall in the same month), on ONE
+ *   transaction that month; the tier rate itself has no cap (founder, 2026-10-21).
+ *   A tier is reached 1% short of its threshold (₹1,98,000 is Silver) — config tier_tolerance_pct.
+ *   Loyalty stacks with the campaign (automatic diamond) discount and with manual per-line cuts;
+ *   only an order-level discount code blocks it. Vouchers and exchange notes are tender, not
  *   discounts, and are unaffected.
  *
  * UNITS
@@ -32,8 +35,18 @@ function sortedTiers(cfg) {
 }
 
 /**
+ * Points at which a tier is actually granted: its threshold less the tolerance (1% by default, so
+ * ₹2,000 short of Silver, ₹5,000 of Gold, ₹10,000 of Platinum still qualifies).
+ */
+function qualifyingMin(tier, cfg) {
+  const tol = Math.max(0, Number(cfg && cfg.tier_tolerance_pct) || 0);
+  return Math.ceil(tier.min * (1 - tol / 100));
+}
+
+/**
  * The tier a lifetime points total qualifies for, or null below the first threshold.
- * Also reports the next tier and the gap to it, for the account page and the panel.
+ * Also reports the next tier and the gap to it, for the account page and the panel. The gap is to
+ * the published threshold, not the tolerance line: the tolerance is a quiet grace, not the target.
  */
 function tierFor(points, cfg) {
   const pts = Math.max(0, Math.floor(Number(points) || 0));
@@ -41,7 +54,7 @@ function tierFor(points, cfg) {
   let current = null;
   let next = null;
   for (const t of tiers) {
-    if (pts >= t.min) current = t;
+    if (pts >= qualifyingMin(t, cfg)) current = t;
     else { next = t; break; }
   }
   return {
@@ -72,6 +85,11 @@ function monthOf(value) {
 function istMonth(now = new Date()) {
   const ist = new Date(now.getTime() + 330 * 60 * 1000);
   return ist.getUTCMonth() + 1;
+}
+
+/** First instant of the current IST month, as an ISO string — the birthday/anniversary window. */
+function istMonthStartIso(now = new Date()) {
+  return `${istDate(now).slice(0, 7)}-01T00:00:00+05:30`;
 }
 
 /** Today's date in IST as YYYY-MM-DD. */
@@ -163,12 +181,15 @@ function lineEligibility(line, cfg) {
  * Everything loyalty gives this customer on these lines today.
  *
  * input: { points, birthday, anniversary, lines: [{ ...lineEligibility fields, diamond (pre-tax Rs,
- *          already × quantity) }], now, cfg }
+ *          already × quantity) }], now, cfg, occasionUsed }
+ *   occasionUsed: the redemption that already took this month's birthday/anniversary bonus
+ *   ({ order_name, channel }), or null. When set the bonus is withheld and reported as
+ *   occasion.used, so the panel can say where it went.
  * Returns { ok, reason, tier, rate, basePct, occasion, perLine: [{ idx, eligible, reason, diamond,
  *           discount }], total }
  *   discount is PRE-TAX rupees, capped at the line's diamond value.
  */
-function computeLoyalty({ points, birthday, anniversary, lines = [], now = new Date(), cfg } = {}) {
+function computeLoyalty({ points, birthday, anniversary, lines = [], now = new Date(), cfg, occasionUsed = null } = {}) {
   const t = tierFor(points, cfg);
   const empty = (reason) => ({
     ok: false, reason, tier: t.tier, next: t.next, gapToNext: t.gapToNext, points: t.points,
@@ -177,7 +198,9 @@ function computeLoyalty({ points, birthday, anniversary, lines = [], now = new D
   if (!cfg || cfg.enabled === false) return empty('loyalty programme is switched off');
   if (!t.tier) return empty('below the first tier');
 
-  const occasion = occasionBonus({ birthday, anniversary }, now, cfg);
+  let occasion = occasionBonus({ birthday, anniversary }, now, cfg);
+  // One transaction a month gets the bonus (founder, 2026-10-21); the tier rate itself is uncapped.
+  if (occasion.pct > 0 && occasionUsed) occasion = { pct: 0, occasions: [], used: { occasions: occasion.occasions, by: occasionUsed } };
   const rate = Number(t.tier.pct) + occasion.pct;
   const perLine = lines.map((line, idx) => {
     const e = lineEligibility(line, cfg);
@@ -285,28 +308,22 @@ function readApplied(raw) {
 }
 
 /**
- * Does the draft carry any OTHER discount? Loyalty is exclusive, so this is the gate both ways.
- * Reads the draft's custom.* metafield map. Vouchers, exchange notes, old gold and CAD advances
- * are tender and do not count.
+ * Does the draft carry a discount loyalty cannot sit beside? Only an ORDER-LEVEL code (FNF5 and the
+ * like): the reprice drops an order-level code on every line that carries per-line entries, and
+ * loyalty is a per-line entry, so the two together would silently lose the code.
+ *
+ * Per-line discounts stack with loyalty (founder, 2026-10-21): the campaign's automatic diamond
+ * discount (src auto-dia) and cuts staff type in by hand. Vouchers, exchange notes, old gold and
+ * CAD advances are tender and never count. The autoDiaTagged option is accepted and ignored, for
+ * callers written when the auto discount was the one per-line entry allowed through.
  */
-function otherDiscountOnDraft(mfMap = {}, { autoDiaTagged = false } = {}) {
+function otherDiscountOnDraft(mfMap = {}) {
   if (Number(mfMap.discount_rate) > 0) return 'a discount code is already applied';
   const code = String(mfMap.discount_code || '').trim();
   if (code) return `discount ${code} is already applied`;
   try {
     const codes = mfMap.discount_codes ? JSON.parse(mfMap.discount_codes) : [];
     if (Array.isArray(codes) && codes.length) return 'a discount code is already applied';
-  } catch { /* unreadable list counts as none */ }
-  try {
-    const arr = mfMap.line_discounts ? JSON.parse(mfMap.line_discounts) : [];
-    // The automatic diamond discount stacks with loyalty (founder, 2026-10-12), so its entries never
-    // block it. Older auto entries carry no src; on a draft tagged auto-dia-applied, an unmarked
-    // diamond % entry is taken to be the auto one.
-    const isAuto = (x) => x.src === 'auto-dia' ||
-      (autoDiaTagged && !x.src && String(x.t || 'dia').toLowerCase() === 'dia' && String(x.m || '').toLowerCase() === 'pct');
-    if (Array.isArray(arr) && arr.some(e => Array.isArray(e) && e.some(x => x && x.src !== 'loyalty' && !isAuto(x) && Number(x.v) > 0))) {
-      return 'a per-line discount is already applied';
-    }
   } catch { /* unreadable list counts as none */ }
   return '';
 }
@@ -333,8 +350,8 @@ function withLoyaltyEntries(lineDiscArr, productItems, applied) {
 
 module.exports = {
   GST_FACTOR,
-  tierFor, sortedTiers,
-  monthOf, istMonth, istDate, occasionBonus,
+  tierFor, sortedTiers, qualifyingMin,
+  monthOf, istMonth, istDate, istMonthStartIso, occasionBonus,
   lineEligibility, computeLoyalty, onlineAmount,
   isExchangeLine, orderEarnValue, orderNumber, earnPoints,
   readApplied, otherDiscountOnDraft, withLoyaltyEntries,

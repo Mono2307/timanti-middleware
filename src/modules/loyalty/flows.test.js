@@ -103,6 +103,10 @@ stub('src/modules/loyalty/ledger.js', {
   storeRedemptionForDraft: async (_s, d) => db.redemptions.find(r => r.channel === 'store' && r.draft_id === String(d)) || null,
   customerEntries: async () => [], addAdjustment: async () => {}, pendingCodesFor: async () => [],
   expiredPendingCodes: async () => [], codesIssuedSince: async () => 0,
+  // Same rule as the real query: a used or still-live redemption with an occasion this month, not this draft.
+  occasionRedemptionSince: async (_s, cid, since, { excludeDraftId } = {}) => db.redemptions.find(r =>
+    r.customer_id === String(cid) && r.occasion && (r.used_at || r.created_at || '') >= since &&
+    ['used', 'pending'].includes(r.status) && String(r.draft_id) !== String(excludeDraftId)) || null,
 });
 
 const draftMod = require('./draft');
@@ -180,6 +184,34 @@ t('a discount code added on top takes loyalty off and says why', async () => {
   assert.ok(!/loyalty-applied/.test(tags));
   assert.ok(/Loyalty was taken off/.test(shop.draftMf[DRAFT_ID].loyalty_note));
   delete shop.draftMf[DRAFT_ID].discount_codes;
+});
+
+t('a manual per-line discount on the draft: loyalty applies beside it (stacks)', async () => {
+  shop.draftMf[DRAFT_ID] = { line_discounts: '[[{"t":"mk","m":"pct","v":10}],[]]' };
+  await draftMod.handleLoyaltyStep(makeDraft('apply-loyalty'));
+  assert.ok(E.readApplied(shop.draftMf[DRAFT_ID].loyalty_applied), 'loyalty was refused: ' + shop.draftMf[DRAFT_ID].loyalty_note);
+  const mfMap = { ...shop.draftMf[DRAFT_ID] };
+  draftMod.applyLoyaltyToPricingInputs(mfMap, makeDraft('loyalty-applied'));
+  assert.deepStrictEqual(JSON.parse(mfMap.line_discounts)[0], [{ t: 'mk', m: 'pct', v: 10 }, { t: 'dia', m: 'pct', v: 5, src: 'loyalty' }]);
+});
+
+t('birthday month: +2% on the first draft, not on a second once the first is recorded', async () => {
+  shop.customers['501'].birthday = '1990-' + new Date(Date.now() + 330 * 60000).toISOString().slice(5, 7) + '-05';
+  try {
+    shop.draftMf[DRAFT_ID] = {};
+    await draftMod.handleLoyaltyStep(makeDraft('apply-loyalty'));
+    assert.strictEqual(E.readApplied(shop.draftMf[DRAFT_ID].loyalty_applied).rate, 7, 'first transaction gets 5% + 2%');
+    db.redemptions.push({ id: 99, channel: 'store', status: 'used', customer_id: '501', draft_id: '7777', order_name: '#1101',
+      occasion: 'birthday', used_at: new Date().toISOString() });
+    shop.draftMf[DRAFT_ID] = {};
+    await draftMod.handleLoyaltyStep(makeDraft('apply-loyalty'));
+    assert.strictEqual(E.readApplied(shop.draftMf[DRAFT_ID].loyalty_applied).rate, 5, 'second transaction: tier rate only');
+    const ev = await draftMod.evaluateDraft(makeDraft(''), {});
+    assert.strictEqual(ev.occasion.used.by.order_name, '#1101');
+  } finally {
+    shop.customers['501'].birthday = null;
+    db.redemptions = db.redemptions.filter(r => r.id !== 99);
+  }
 });
 
 t('apply is refused while another discount is on the draft', async () => {

@@ -29,6 +29,8 @@ const { handleTypeformWebhook } = require('./src/integrations/typeform');
 const pine = require('./src/integrations/pine');
 // Loyalty programme: tiers on lifetime spend, diamond-only discount online and in-store.
 const loyaltyDraft = require('./src/modules/loyalty/draft');
+const { loadConfig: loadLoyaltyConfig } = require('./src/modules/loyalty/config');
+const discountBreakup = require('./src/modules/pricing/discount_breakup');
 const { startLoyaltySweep } = require('./src/modules/loyalty/sweep');
 
 const app = express();
@@ -1469,11 +1471,20 @@ function parseLineDiscounts(raw) {
 // price) are divided by 1.03 to reach pre-tax, matching every downstream reader. Returns null when the
 // line carries no entries, signalling the caller to use the order-level discount instead.
 //   base: { diamond, making, grossIncl } — PRE-discount component values, and the tax-inclusive line total.
-// Returns { total, diaPortion, mkPortion, totalPortion } in pre-tax Rs.
+// Returns { total, diaPortion, mkPortion, totalPortion, bySrc, campaigns } in pre-tax Rs. bySrc is the
+// same total split by scheme (campaign / manual / loyalty / other) for the staff breakup — see
+// src/modules/pricing/discount_breakup.js; campaigns lists the auto entries' campaign labels.
 function resolveLineDiscount(entries, { diamond = 0, making = 0, grossIncl = 0 }) {
   if (!Array.isArray(entries) || entries.length === 0) return null;
   const taxable = grossIncl / 1.03;
   let diaCut = 0, mkCut = 0, totCut = 0;
+  const raw = { dia: {}, mk: {}, tot: {} };
+  const campaigns = [];
+  const note = (part, e, rs) => {
+    const src = discountBreakup.sourceOf(e);
+    raw[part][src] = (raw[part][src] || 0) + rs;
+    if (src === 'campaign' && e.camp && !campaigns.includes(e.camp)) campaigns.push(e.camp);
+  };
   for (const e of entries) {
     if (!e) continue;
     const v = Math.abs(parseFloat(e.v) || 0);
@@ -1481,12 +1492,15 @@ function resolveLineDiscount(entries, { diamond = 0, making = 0, grossIncl = 0 }
     const pct    = String(e.m || 'flat').toLowerCase() === 'pct';
     const target = String(e.t || 'dia').toLowerCase();
     if (target === 'mk' || target === 'making') {
-      mkCut  += pct ? (v / 100) * making  : v;
+      const rs = pct ? (v / 100) * making : v;
+      mkCut  += rs; note('mk', e, rs);
     } else if (target === 'total' || target === 'line' || target === 'native') {
       // On the tax-inclusive product price → convert the resulting rupees to pre-tax.
-      totCut += (pct ? (v / 100) * grossIncl : v) / 1.03;
+      const rs = (pct ? (v / 100) * grossIncl : v) / 1.03;
+      totCut += rs; note('tot', e, rs);
     } else {
-      diaCut += pct ? (v / 100) * diamond : v;
+      const rs = pct ? (v / 100) * diamond : v;
+      diaCut += rs; note('dia', e, rs);
     }
   }
   const diaPortion   = Math.min(diaCut, Math.max(0, diamond));
@@ -1494,7 +1508,25 @@ function resolveLineDiscount(entries, { diamond = 0, making = 0, grossIncl = 0 }
   const totalPortion = Math.min(totCut, Math.max(0, taxable));
   // Final clamp: component + whole-line discounts together can't exceed the line's taxable value.
   const total = Math.min(diaPortion + mkPortion + totalPortion, Math.max(0, taxable));
-  return { total, diaPortion, mkPortion, totalPortion };
+  const bySrc = discountBreakup.splitBySource(raw, { dia: diaPortion, mk: mkPortion, tot: totalPortion, total });
+  return { total, diaPortion, mkPortion, totalPortion, bySrc, campaigns };
+}
+
+// Publish the staff discount breakup (campaign / manual / loyalty) in custom.discount_breakup, from the
+// per-line results the reprice just priced with. Written only when it changed; a draft that loses all
+// its discounts gets an all-zero record, so the panel stops showing the old one. Never throws.
+//   perLine: [{ bySrc, campaigns }] as resolveLineDiscount returns them (order-level code lines: { bySrc: { code } }).
+async function publishDiscountBreakup(draftOrderId, mfMap, perLine) {
+  try {
+    const cfg = await loadLoyaltyConfig();
+    const b = discountBreakup.buildBreakup(perLine, { fallbackCampaign: discountBreakup.campaignLabel(cfg.campaign) });
+    const prior = mfMap['discount_breakup'] || '';
+    const json = b ? discountBreakup.breakupJson(b)
+      : (prior ? JSON.stringify({ campaign: { label: '', amount: 0 }, manual: 0, loyalty: 0, other: 0, code: 0, total: 0 }) : '');
+    if (json && json !== prior) await updateDraftOrderMetafields(draftOrderId, { discount_breakup: json });
+  } catch (e) {
+    console.error(`Draft ${draftOrderId}: discount breakup not written — ${e.message}`);
+  }
 }
 
 // The rupee BREAKUP of a line's discount, split by the component it landed on.
@@ -1776,9 +1808,9 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
       const pl = resolveLineDiscount(lineDiscArr[idx], {
         diamond: diaArr[idx] || 0, making: makingBaseArr[idx] || 0, grossIncl: r2(preTaxArr[idx] * 1.03),
       });
-      if (pl) return { total: pl.total, dia: pl.diaPortion, mk: pl.mkPortion, tot: pl.totalPortion };
+      if (pl) return { total: pl.total, dia: pl.diaPortion, mk: pl.mkPortion, tot: pl.totalPortion, bySrc: pl.bySrc, campaigns: pl.campaigns };
       const ol = disc.perLine[idx] || 0;   // order-level fallback is diamond-only
-      return { total: ol, dia: ol, mk: 0, tot: 0 };
+      return { total: ol, dia: ol, mk: 0, tot: 0, bySrc: { code: ol } };
     });
 
     const hydratedItems = productItems.map((item, idx) => {
@@ -1839,6 +1871,7 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
         console.log(`Draft ${draftOrderId}: discount re-resolved — was Rs${prior.toFixed(2)}, now Rs${appliedDiscountTotal.toFixed(2)}`);
       }
     }
+    await publishDiscountBreakup(draftOrderId, mfMap, discFinalByIdx);
     return;
   }
 
@@ -2001,9 +2034,9 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
     const pl = resolveLineDiscount(lineDiscArr[r.idx], {
       diamond: r.newDiamondValue || 0, making: r.newMakingValue || 0, grossIncl: r.newGrossValue || 0,
     });
-    if (pl) return [r.idx, { total: pl.total, dia: pl.diaPortion, mk: pl.mkPortion, tot: pl.totalPortion }];
+    if (pl) return [r.idx, { total: pl.total, dia: pl.diaPortion, mk: pl.mkPortion, tot: pl.totalPortion, bySrc: pl.bySrc, campaigns: pl.campaigns }];
     const ol = disc.perLine[i] || 0;   // order-level fallback is diamond-only
-    return [r.idx, { total: ol, dia: ol, mk: 0, tot: 0 }];
+    return [r.idx, { total: ol, dia: ol, mk: 0, tot: 0, bySrc: { code: ol } }];
   }));
 
   const allJewelData = [];
@@ -2138,6 +2171,7 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
       console.log(`Draft ${draftOrderId}: discount re-resolved — was Rs${prior.toFixed(2)}, now Rs${appliedDiscountTotal.toFixed(2)}`);
     }
   }
+  await publishDiscountBreakup(draftOrderId, mfMap, [...discByIdx.values()]);
 
   if (allJewelData.length > 0) {
     const mfValue = allJewelData.length === 1
@@ -3409,7 +3443,8 @@ async function handleAutoDiamondDiscount(draft) {
 
     // Strip the trigger and any previous result tag, add the new result. One PUT.
     const finish = async (extra = []) => {
-      const kept = tags.filter(t => t.toLowerCase() !== 'apply-auto-dia' && !/^auto-dia/i.test(t)).concat(extra);
+      // Only the trigger and the result tags go. `auto-dia-off` is staff's opt-out and survives a manual run.
+      const kept = tags.filter(t => t.toLowerCase() !== 'apply-auto-dia' && !/^auto-dia-(applied|invalid)/i.test(t)).concat(extra);
       const joined = [...new Set(kept)].join(', ');
       await axios.put(`${base}/admin/api/2024-01/draft_orders/${draftOrderId}.json`,
         { draft_order: { id: draft.id, tags: joined } }, { headers, timeout: 10000 });
@@ -3437,16 +3472,24 @@ async function handleAutoDiamondDiscount(draft) {
     for (const m of mfs) if (m.namespace === 'custom') mfMap[m.key] = m.value;
 
     // An order-level discount (code / custom) is already set — don't stack a second one on top.
-    if (readDiscountIntent(mfMap)) { await finish(['auto-dia-invalid: order discount set']); return; }
+    // custom.discount_applied on its own is NOT that: the reprice writes the resolved total of the per-line
+    // entries (loyalty, a per-line cut staff typed) there too, and readDiscountIntent would read it back as
+    // a legacy flat discount and refuse, on exactly the drafts the panel's manual button exists for.
+    const intent   = readDiscountIntent(mfMap);
+    const existing = parseLineDiscounts(mfMap['line_discounts']);
+    const hasLineEntries = existing.some(e => Array.isArray(e) && e.length > 0);
+    if (intent && !(intent.legacy && hasLineEntries)) { await finish(['auto-dia-invalid: order discount set']); return; }
 
     const rs = (item, name) => {
       const p = (item.properties || []).find(x => x.name === name);
       return p ? (parseFloat(String(p.value).replace(/Rs/i, '').replace(/,/g, '').trim()) || 0) : 0;
     };
 
-    const existing = parseLineDiscounts(mfMap['line_discounts']);
     const next     = lines.map((_, i) => (Array.isArray(existing[i]) ? existing[i].map(e => ({ ...e })) : []));
     let changed = false, skippedExisting = false;
+    // The campaign this run applies under, stamped on each entry so the staff breakup keeps naming the
+    // campaign the customer actually got, even after the config moves on to the next one.
+    const camp = discountBreakup.campaignLabel((await loadLoyaltyConfig()).campaign);
 
     lines.forEach((item, i) => {
       const dia = rs(item, 'Diamond');
@@ -3456,9 +3499,11 @@ async function handleAutoDiamondDiscount(draft) {
       const band  = AUTO_DIA_BANDS.find(b => share > b.from && share <= b.to);
       console.log(`[auto-dia] #${draft.name} line ${i + 1}: diamond share ${share.toFixed(2)}% -> ${band ? band.pct + '% off diamond' : 'no discount'}`);
       if (!band) return;
-      if (next[i].some(e => e && String(e.t || '').toLowerCase() === 'dia')) { skippedExisting = true; return; }
+      // A diamond cut staff typed in (or an earlier auto run) means leave the line alone. Loyalty's own
+      // entry does not: loyalty stacks on this discount, whichever of the two landed first.
+      if (next[i].some(e => e && e.src !== 'loyalty' && String(e.t || '').toLowerCase() === 'dia')) { skippedExisting = true; return; }
       // src marks it as the AUTO discount, so loyalty can tell it from a per-line discount staff typed in.
-      next[i].push({ t: 'dia', m: 'pct', v: band.pct, src: 'auto-dia' });
+      next[i].push({ t: 'dia', m: 'pct', v: band.pct, src: 'auto-dia', camp });
       changed = true;
     });
 

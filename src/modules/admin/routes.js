@@ -64,6 +64,7 @@ const { MAX_REFUNDS, readRefunds, sumRefunds, paymentState } = require('../payme
 const { CAD_ADVANCE_MODE } = require('../adjustments/cad_advance');
 
 let _priceUpdateRunning = false;
+let _priceUpdateStartedAt = null;   // read by GET /api/price-update-status — the deploy lock
 const PRICE_UPDATE_FLAG = '/app/Outputs/price_update.running';
 
 /**
@@ -114,6 +115,13 @@ app.get('/api/price-update-diag', (req, res) => {
   });
 });
 
+// Is a reprice running right now? Read by both deploy workflows, which refuse to deploy while it
+// is: a deploy restarts the machine and kills the child mid-run (2026-10-09, twice). Public and
+// read-only on purpose — the workflow has no secret to send, and the answer leaks nothing.
+app.get('/api/price-update-status', (req, res) => {
+  res.json({ running: _priceUpdateRunning, startedAt: _priceUpdateStartedAt });
+});
+
 // ─────────────────────────────────────────
 // Price Update Trigger
 // ─────────────────────────────────────────
@@ -139,10 +147,12 @@ function _spawnPriceUpdate(extraArgs = []) {
 
   const release = () => {
     _priceUpdateRunning = false;
+    _priceUpdateStartedAt = null;
     try { fs.unlinkSync(PRICE_UPDATE_FLAG); } catch (_) {}
   };
 
   _priceUpdateRunning = true;
+  _priceUpdateStartedAt = new Date().toISOString();
   try { fs.writeFileSync(PRICE_UPDATE_FLAG, String(process.pid)); } catch (_) {}
 
   let proc;

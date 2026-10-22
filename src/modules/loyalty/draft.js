@@ -6,9 +6,9 @@
  * HOW IT WORKS
  *   Staff press "Apply loyalty" in the panel → the panel adds the tag `apply-loyalty`.
  *   handleLoyaltyStep (a step in server.js runDraftUpdateHandlers) then:
- *     - checks there is a customer, they have reached a tier, and NO other discount is on the
- *       draft (loyalty is exclusive; vouchers / exchange notes / old gold / advances are tender and
- *       are fine);
+ *     - checks there is a customer, they have reached a tier, and no ORDER-LEVEL discount code is
+ *       on the draft. The campaign's automatic diamond discount and manual per-line cuts stack with
+ *       loyalty (founder, 2026-10-21); vouchers / exchange notes / old gold / advances are tender;
  *     - works out which product lines are eligible and the rate (tier % + occasion bonus);
  *     - stores that decision in custom.loyalty_applied and adds the tags `loyalty-applied` and
  *       `reprice`.
@@ -22,8 +22,11 @@
  *   positional-pricing wipe that follows a line change cannot lose it; this step re-checks the line
  *   set on every pass and re-evaluates when it changes.
  *
- *   `remove-loyalty` takes it off. If another discount is put on a draft that carries loyalty, this
- *   step takes loyalty off and says so — two discounts never sit together silently.
+ *   `remove-loyalty` takes it off. If an order-level code is put on a draft that carries loyalty,
+ *   this step takes loyalty off and says so — the code would otherwise be silently dropped.
+ *
+ *   The birthday/anniversary +2% is good for one transaction a month: a draft only gets it when no
+ *   other redemption has taken it this IST month (ledger.occasionRedemptionSince).
  *
  * TAGS ARE ≤ 40 CHARACTERS (Shopify limit), so failures are tagged with a short code
  * (`loyalty-invalid: below tier`) and the full sentence goes to custom.loyalty_note for the panel.
@@ -174,16 +177,17 @@ async function evaluateDraft(draft, mfMap) {
   const t = E.tierFor(points, cfg);
   const standing = { customer: { id: String(customerId), name: customer.name }, ...tierProgress(t, cfg) };
   const mf = mfMap || {};
-  const other = E.otherDiscountOnDraft(mf, { autoDiaTagged: hasTag(splitTags(draft.tags), 'auto-dia-applied') }) ||
+  const other = E.otherDiscountOnDraft(mf) ||
     // A rupee discount_applied with no loyalty record, no rate and NO per-line entries is a legacy flat
     // custom discount. With per-line entries (e.g. the auto diamond discount) it is just their resolved
     // total, already judged by otherDiscountOnDraft above.
     (!E.readApplied(mf[APPLIED_KEY]) && !(Number(mf.discount_rate) > 0) && !hasLineEntries(mf) &&
       Math.abs(parseFloat(mf.discount_applied || 0)) > 0 ? 'a discount is already applied' : '');
-  if (other) return { ...standing, ok: false, code: 'other discount', reason: `Loyalty cannot be combined with another discount: ${other}. Remove it first.` };
+  if (other) return { ...standing, ok: false, code: 'other discount', reason: `Loyalty cannot be combined with an order-level discount code: ${other}. Remove it first.` };
 
   const lines = await describeDraftLines(draft);
-  const r = E.computeLoyalty({ points, birthday: customer.birthday, anniversary: customer.anniversary, lines, cfg });
+  const occasionUsed = await occasionUsedThisMonth(customerId, draft.id);
+  const r = E.computeLoyalty({ points, birthday: customer.birthday, anniversary: customer.anniversary, lines, cfg, occasionUsed });
   const base = {
     ...standing,
     points: r.points, tier: r.tier, next: r.next, gapToNext: r.gapToNext,
@@ -204,6 +208,20 @@ async function evaluateDraft(draft, mfMap) {
     return { ...base, ok: false, code, reason };
   }
   return { ...base, ok: true, code: '', reason: '' };
+}
+
+/**
+ * The redemption that already took this month's birthday/anniversary bonus, other than this
+ * draft's own, or null. A ledger outage gives the bonus rather than refusing it at the counter.
+ */
+async function occasionUsedThisMonth(customerId, draftId) {
+  try {
+    const r = await ledger.occasionRedemptionSince(supabase, customerId, E.istMonthStartIso(), { excludeDraftId: draftId });
+    return r ? { order_name: r.order_name || null, channel: r.channel } : null;
+  } catch (e) {
+    log.error('loyalty', `occasion-use read failed for ${customerId}: ${e.message}`);
+    return null;
+  }
 }
 
 /** custom.loyalty_applied — compact, it is stored as a text metafield. */
@@ -286,11 +304,11 @@ async function handleLoyaltyStep(draft) {
     await setDraftTags(draftId, tags.filter(t => t.toLowerCase() !== T_ON));
     return;
   }
-  const other = E.otherDiscountOnDraft(map, { autoDiaTagged: hasTag(tags, 'auto-dia-applied') });
+  const other = E.otherDiscountOnDraft(map);
   if (other) {
     await takeOff(draft, tags, all, {
       invalidCode: 'other discount added',
-      note: `Loyalty was taken off because ${other}. Loyalty cannot be combined with other discounts.`,
+      note: `Loyalty was taken off because ${other}. Loyalty cannot be combined with an order-level discount code.`,
     });
     log.info('loyalty', `draft ${draft.name || draftId}: loyalty removed — ${other}`);
     return;
@@ -339,7 +357,8 @@ async function recordStoreRedemption(draft, orderId, orderName) {
 }
 
 // Draft custom.* keys that carry an ORDER-LEVEL discount. While loyalty is on they are ignored by
-// the reprice (loyalty is exclusive), so a stale value can never add a second discount.
+// the reprice (an order-level code cannot sit beside loyalty), so a stale value never adds one.
+// Per-line entries — the campaign's auto discount, manual cuts — are kept and stack with loyalty.
 const ORDER_LEVEL_KEYS = ['discount_rate', 'discount_kind', 'discount_mode', 'discount_code', 'discount_codes', 'discount_applied'];
 
 /**
@@ -365,5 +384,5 @@ module.exports = {
   applyLoyaltyToPricingInputs,
   APPLIED_KEY, NOTE_KEY, T_APPLY, T_REMOVE, T_ON,
   handleLoyaltyStep, evaluateDraft, describeDraftLines, recordStoreRedemption, productLines,
-  readDraftMetafields,
+  readDraftMetafields, occasionUsedThisMonth,
 };

@@ -225,7 +225,10 @@ function register(app /* , ctx */) {
       const evMap = { ...map };
       if (applied) delete evMap.discount_applied;
       const ev = await evaluateDraft(draft, evMap);
-      return res.json({ success: true, applied, note: map[NOTE_KEY] || '', preview: ev, offers: await draftOffers(draft, map) });
+      // The staff discount breakup the reprice wrote (campaign / manual / loyalty), shown in the panel.
+      let breakup = null;
+      try { breakup = map.discount_breakup ? JSON.parse(map.discount_breakup) : null; } catch { breakup = null; }
+      return res.json({ success: true, applied, note: map[NOTE_KEY] || '', preview: ev, breakup, offers: await draftOffers(draft, map) });
     } catch (e) {
       log.error('loyalty', `draft-preview ${draftId}: ${e.message}`);
       return res.status(500).json({ success: false, error: e.message });

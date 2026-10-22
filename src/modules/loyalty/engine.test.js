@@ -15,11 +15,30 @@ const cfg = normalizeConfig(DEFAULT_CONFIG);
 const MARCH = new Date('2026-03-15T06:30:00Z');
 
 console.log('tiers');
-t('below the first threshold has no tier', () => {
-  const r = E.tierFor(199999, cfg);
+t('below the first threshold (and its 1% tolerance) has no tier', () => {
+  const r = E.tierFor(197999, cfg);
   assert.strictEqual(r.tier, null);
   assert.strictEqual(r.next.key, 'T1');
-  assert.strictEqual(r.gapToNext, 1);
+  assert.strictEqual(r.gapToNext, 2001, 'the gap is to the published ₹2L, not the tolerance line');
+});
+t('1% tolerance: ₹2,000 / ₹5,000 / ₹10,000 short still qualifies (founder, 2026-10-21)', () => {
+  assert.strictEqual(E.tierFor(198000, cfg).tier.key, 'T1');
+  assert.strictEqual(E.tierFor(495000, cfg).tier.key, 'T2');
+  assert.strictEqual(E.tierFor(494999, cfg).tier.key, 'T1');
+  assert.strictEqual(E.tierFor(990000, cfg).tier.key, 'T3');
+  assert.strictEqual(E.tierFor(989999, cfg).tier.key, 'T2');
+});
+t('inside the tolerance the next tier is the one after', () => {
+  const r = E.tierFor(496000, cfg);
+  assert.strictEqual(r.next.key, 'T3');
+  assert.strictEqual(r.gapToNext, 504000);
+});
+t('tolerance 0 restores the strict thresholds; a config without the key gets 1%', () => {
+  const strict = normalizeConfig({ ...DEFAULT_CONFIG, tier_tolerance_pct: 0 });
+  assert.strictEqual(E.tierFor(199999, strict).tier, null);
+  const { tier_tolerance_pct, ...old } = DEFAULT_CONFIG;
+  assert.strictEqual(normalizeConfig(old).tier_tolerance_pct, 1);
+  assert.throws(() => normalizeConfig({ ...DEFAULT_CONFIG, tier_tolerance_pct: 50 }), /tolerance/);
 });
 t('exactly on a threshold qualifies', () => {
   assert.strictEqual(E.tierFor(200000, cfg).tier.key, 'T1');
@@ -52,6 +71,19 @@ t('month is read in IST: 31 Mar 20:00 UTC is already April in India', () => {
   const lateMarchUtc = new Date('2026-03-31T20:00:00Z');
   assert.strictEqual(E.istMonth(lateMarchUtc), 4);
   assert.strictEqual(E.occasionBonus({ birthday: '2000-04-10' }, lateMarchUtc, cfg).pct, 2);
+});
+t('bonus is withheld once this month\'s has been used, the tier rate is not', () => {
+  const lines = [{ sku: 'R1', diamond: 10000 }];
+  const fresh = E.computeLoyalty({ points: 620000, birthday: '1990-03-02', lines, now: MARCH, cfg });
+  assert.strictEqual(fresh.rate, 7);
+  const used = E.computeLoyalty({ points: 620000, birthday: '1990-03-02', lines, now: MARCH, cfg, occasionUsed: { order_name: '#1101', channel: 'store' } });
+  assert.strictEqual(used.rate, 5);
+  assert.strictEqual(used.occasion.pct, 0);
+  assert.deepStrictEqual(used.occasion.used, { occasions: ['birthday'], by: { order_name: '#1101', channel: 'store' } });
+});
+t('the IST month starts at midnight IST on the 1st', () => {
+  assert.strictEqual(E.istMonthStartIso(new Date('2026-03-31T20:00:00Z')), '2026-04-01T00:00:00+05:30');
+  assert.strictEqual(E.istMonthStartIso(MARCH), '2026-03-01T00:00:00+05:30');
 });
 t('a bare date is never shifted by timezone', () => {
   assert.strictEqual(E.monthOf('1990-01-01'), 1);
@@ -184,10 +216,13 @@ t('a config saved before the earning rules existed still applies them', () => {
 });
 
 console.log('draft discount state');
-t('another code on the draft blocks loyalty', () => {
+t('an order-level code on the draft blocks loyalty', () => {
   assert.ok(E.otherDiscountOnDraft({ discount_rate: '5' }));
   assert.ok(E.otherDiscountOnDraft({ discount_codes: '[{"code":"FNF5"}]' }));
-  assert.ok(E.otherDiscountOnDraft({ line_discounts: '[[{"t":"dia","m":"pct","v":3}]]' }));
+});
+t('a manual per-line discount does NOT block loyalty: they stack (founder, 2026-10-21)', () => {
+  assert.strictEqual(E.otherDiscountOnDraft({ line_discounts: '[[{"t":"dia","m":"pct","v":3}]]' }), '');
+  assert.strictEqual(E.otherDiscountOnDraft({ line_discounts: '[[{"t":"mk","m":"pct","v":10}]]' }), '');
 });
 t('vouchers and exchange notes do not block it', () => {
   assert.strictEqual(E.otherDiscountOnDraft({ voucher_value: '5000', exchange_note_value: '2000' }), '');
@@ -220,13 +255,8 @@ console.log('stacking with the automatic diamond discount (founder, 2026-10-12)'
 t('an auto-dia entry does not block loyalty', () => {
   assert.strictEqual(E.otherDiscountOnDraft({ line_discounts: '[[{"t":"dia","m":"pct","v":15,"src":"auto-dia"}]]' }), '');
 });
-t('an older unmarked auto entry does not block it on a draft tagged auto-dia-applied', () => {
-  const mf = { line_discounts: '[[{"t":"dia","m":"pct","v":15}]]' };
-  assert.strictEqual(E.otherDiscountOnDraft(mf, { autoDiaTagged: true }), '');
-  assert.ok(E.otherDiscountOnDraft(mf), 'without the tag it is a staff per-line discount and still blocks');
-});
-t('a staff making discount still blocks loyalty even beside auto-dia', () => {
-  assert.ok(E.otherDiscountOnDraft({ line_discounts: '[[{"t":"dia","m":"pct","v":15,"src":"auto-dia"},{"t":"mk","m":"pct","v":10}]]' }, { autoDiaTagged: true }));
+t('auto-dia plus a staff making discount does not block it either', () => {
+  assert.strictEqual(E.otherDiscountOnDraft({ line_discounts: '[[{"t":"dia","m":"pct","v":15,"src":"auto-dia"},{"t":"mk","m":"pct","v":10}]]' }), '');
 });
 t('loyalty is added beside the auto entry, so both reach the pricing engine', () => {
   const out = E.withLoyaltyEntries([[{ t: 'dia', m: 'pct', v: 15, src: 'auto-dia' }]], [{ variant_id: 11 }], { rate: 5, eligible_variants: ['11'] });

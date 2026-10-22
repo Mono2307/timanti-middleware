@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Timanti — Full Email Preview v3 (Latest)</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; background: #d8d8d8; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+.topnav { position: fixed; top: 0; left: 0; right: 0; z-index: 100; background: #111; display: flex; align-items: stretch; height: 52px; padding: 0 16px; overflow-x: auto; }
+.nav-section { display: flex; align-items: center; padding-right: 14px; margin-right: 10px; border-right: 1px solid #2a2a2a; }
+.nav-section:last-child { border-right: none; }
+.nav-label { font-size: 9px; letter-spacing: 2px; text-transform: uppercase; color: #555; padding-right: 10px; white-space: nowrap; }
+.tab-btn { background: none; border: none; color: #888; font-size: 12px; font-weight: 500; padding: 7px 12px; cursor: pointer; border-radius: 3px; white-space: nowrap; transition: all 0.12s; }
+.tab-btn:hover { background: #222; color: #ddd; }
+.tab-btn.active  { background: #b45309; color: #fff; }
+.tab-btn.oc.active { background: #1d4ed8; }
+.tab-btn.sc.active { background: #047857; }
+.lw { max-width: 600px; margin: 0 auto; border-radius: 6px 6px 0 0; overflow: hidden; border: 1px solid; border-bottom: none; }
+.lw.doi { border-color: #fed7aa; } .lw.oc { border-color: #bfdbfe; } .lw.sc { border-color: #bbf7d0; }
+.lw-header { display: flex; align-items: center; gap: 10px; padding: 10px 14px; }
+.lw-header.doi { background: #fff7ed; } .lw-header.oc { background: #eff6ff; } .lw-header.sc { background: #f0fdf4; }
+.lw-badge { font-size: 9px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase; padding: 3px 8px; border-radius: 3px; flex-shrink: 0; }
+.lw-badge.doi { background: #b45309; color: #fff; } .lw-badge.oc { background: #1d4ed8; color: #fff; } .lw-badge.sc { background: #047857; color: #fff; }
+.lw-header strong { font-size: 13px; color: #111; }
+.lw-table { width: 100%; border-collapse: collapse; background: #fff; }
+.lw-table tr { border-top: 1px solid #eee; }
+.lw-key { padding: 8px 14px; font-size: 10px; font-weight: 700; letter-spacing: 0.8px; text-transform: uppercase; color: #888; white-space: nowrap; width: 90px; background: #fafafa; vertical-align: top; border-right: 1px solid #eee; }
+.lw-val { padding: 8px 14px; font-size: 12px; color: #333; vertical-align: top; line-height: 1.55; }
+.lw-val code { background: #f0f0f0; padding: 1px 5px; border-radius: 3px; font-family: 'Menlo','Courier New',monospace; font-size: 11px; color: #c7254e; }
+.lw-subject { max-width: 600px; margin: 0 auto; display: flex; align-items: center; gap: 12px; padding: 9px 14px; background: #fff; border: 1px solid; border-top: 2px solid; border-bottom: none; }
+.lw-subject.doi { border-color: #fed7aa; border-top-color: #b45309; } .lw-subject.oc { border-color: #bfdbfe; border-top-color: #1d4ed8; } .lw-subject.sc { border-color: #bbf7d0; border-top-color: #047857; }
+.lw-s-label { font-size: 9px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase; color: #aaa; flex-shrink: 0; }
+.lw-s-text { font-size: 14px; font-weight: 600; color: #111; }
+.preview { margin-top: 60px; padding: 32px 16px 60px; }
+.panel { display: none; } .panel.active { display: block; }
+.email { max-width: 600px; margin: 0 auto; background: #f5f5f5; font-family: 'Helvetica Neue', Arial, sans-serif; font-size: 14px; line-height: 1.6; color: #333; border: 1px solid #ccc; }
+.e-header { background: #fff; padding: 24px 40px 14px; text-align: center; border-bottom: 1px solid #eee; }
+.e-header img { max-width: 120px; height: auto; }
+.e-content { background: #fff; padding: 24px 40px 18px; text-align: center; }
+.e-orderref { font-size: 13px; color: #999; margin-bottom: 5px; }
+.e-h2 { font-size: 22px; font-weight: 600; color: #111; margin: 0 0 12px 0; }
+.e-body { font-size: 14px; color: #555; line-height: 1.65; margin: 0 0 18px 0; }
+.e-body strong { color: #111; }
+.e-btnzone { text-align: center; padding: 6px 0 6px; }
+.e-btn { display: inline-block; background: #000; color: #fff !important; text-decoration: none; font-size: 14px; font-weight: 500; padding: 13px 26px; border-radius: 4px; margin: 5px 4px; cursor: default; }
+.e-store-link { font-size: 14px; margin-top: 8px; } .e-store-link a { color: #fc7d27; text-decoration: none; }
+.e-timeline { background: #f6f6f6; margin: 14px auto 0; max-width: 460px; padding: 12px 16px; border-radius: 4px; font-size: 12px; color: #888; line-height: 1.5; }
+.e-track { font-size: 14px; color: #333; margin: 18px auto 4px; max-width: 520px; line-height: 1.6; }
+.e-track a { color: #fc7d27; font-weight: 600; text-decoration: underline; }
+.e-section { background: #fff; border-top: 8px solid #f5f5f5; }
+.e-section-inner { padding: 20px 40px; }
+.e-section h3 { font-size: 15px; font-weight: 600; color: #111; margin-bottom: 14px; }
+.e-sumhead { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+.e-sumhead h3 { margin: 0; } .e-sumhead a { font-size: 12px; color: #fc7d27; text-decoration: none; font-weight: 600; }
+.e-item { display: flex; gap: 14px; align-items: flex-start; padding: 12px 0; border-bottom: 1px solid #f0f0f0; }
+.e-item-img { width: 60px; height: 60px; background: #f8f2ea; border-radius: 4px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; }
+.e-item-img svg { width: 26px; height: 26px; fill: #c9a96e; }
+.e-item-detail { flex: 1; text-align: left; }
+.e-item-title { font-weight: 600; color: #111; font-size: 15px; }
+.e-item-qty { font-size: 14px; color: #555; margin-top: 1px; }
+.e-item-variant { font-size: 13px; color: #888; }
+.e-item-weights { display: inline-block; background: #f9f9f9; border-radius: 3px; padding: 5px 9px; margin-top: 6px; font-size: 12px; color: #666; }
+.e-item-weights strong { color: #444; }
+.e-item-price { font-weight: 500; font-size: 16px; color: #111; padding-top: 2px; white-space: nowrap; text-align: right; }
+.e-summary { margin-top: 14px; }
+.e-sumwrap { margin-left: 45%; }
+.e-sumrow { display: flex; justify-content: space-between; padding: 3px 0; }
+.e-sumrow span:first-child { font-size: 15px; color: #999; }
+.e-sumrow span:last-child { font-size: 16px; color: #333; font-weight: 500; }
+.e-sumrow.total { border-top: 2px solid #e5e5e5; margin-top: 4px; padding-top: 8px; }
+.e-sumrow.total span:first-child { font-size: 15px; color: #333; font-weight: 600; }
+.e-sumrow.total span:last-child { font-size: 16px; color: #111; font-weight: 600; }
+.e-promisebox { background: #F6F6F6; border-radius: 8px; padding: 18px; display: flex; justify-content: center; gap: 26px; text-align: center; }
+.e-promise { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.e-promise img { width: 44px; height: 44px; object-fit: contain; }
+.e-promise span { font-size: 12px; color: #333; line-height: 1.4; }
+.e-custgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; text-align: left; }
+.e-infoblock h4 { font-size: 12px; text-transform: uppercase; letter-spacing: 1px; color: #999; margin-bottom: 6px; font-weight: 600; }
+.e-infoblock p { font-size: 13px; color: #444; line-height: 1.7; }
+.e-support { background: #fff; border: 1px solid #e6d8cc; border-radius: 8px; padding: 20px; text-align: center; }
+.e-support h3 { font-size: 16px; margin-bottom: 8px; }
+.e-support > p { font-size: 14px; color: #666; margin: 0 auto 16px; max-width: 460px; }
+.e-help-col { padding: 0 18px; text-align: center; vertical-align: top; }
+.e-help-col img { display: block; margin: 0 auto 6px; }
+.e-help-col strong { color: #000; font-size: 13px; }
+.e-help-col a { color: #fc7d27; font-weight: 600; text-decoration: underline; font-size: 13px; }
+.e-social { background: #f6f6f6; border-radius: 8px; padding: 20px; text-align: center; }
+.e-social h3 { font-size: 16px; font-weight: 600; color: #000; margin: 0 0 10px 0; }
+.e-social > p { font-size: 13px; color: #444; margin: 0 auto 16px; max-width: 440px; line-height: 1.6; }
+.e-social-btns { display: flex; justify-content: center; gap: 10px; flex-wrap: wrap; }
+.e-social-btn { text-decoration: none; }
+.e-social-btn-inner { display: inline-block; border-radius: 6px; padding: 9px 14px; background: #fff; border: 1.5px solid #000; }
+.e-social-btn-inner img { vertical-align: middle; }
+.e-social-btn-inner span { color: #000; font-size: 13px; font-weight: 600; vertical-align: middle; }
+.e-wa-link { margin: 28px 0 0; } .e-wa-link a { color: #fc7d27; font-weight: 600; text-decoration: underline; font-size: 13px; }
+.e-social-note { font-size: 10px; color: #bbb; margin: 10px auto 0; max-width: 340px; line-height: 1.5; }
+.e-footer { background: #F6F6F6; padding: 16px 40px; text-align: center; }
+.e-footer a { color: #fc7d27; text-decoration: none; font-size: 14px; }
+.e-footer a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+
+<div class="topnav">
+  <div class="nav-section">
+    <span class="nav-label">Advance Receipt</span>
+    <button class="tab-btn active" onclick="show('doi-stock',this)">In-Stock Advance</button>
+    <button class="tab-btn" onclick="show('doi-mto',this)">MTO Advance</button>
+  </div>
+  <div class="nav-section">
+    <span class="nav-label">Order Confirmation</span>
+    <button class="tab-btn oc" onclick="show('oc-online',this)">Online</button>
+    <button class="tab-btn oc" onclick="show('oc-collect',this)">Offline · Pickup</button>
+    <button class="tab-btn oc" onclick="show('oc-delivery',this)">Offline · Delivery</button>
+  </div>
+  <div class="nav-section">
+    <span class="nav-label">Shipping</span>
+    <button class="tab-btn sc" onclick="show('sc-online',this)">Online</button>
+    <button class="tab-btn sc" onclick="show('sc-offline',this)">Offline</button>
+  </div>
+</div>
+
+<div class="preview">
+
+<!-- ADVANCE · IN-STOCK -->
+<div id="doi-stock" class="panel active">
+<div class="lw doi">
+  <div class="lw-header doi"><span class="lw-badge doi">ADVANCE RECEIPT</span><strong>In-Stock Advance Payment</strong></div>
+  <table class="lw-table">
+    <tr><td class="lw-key">Trigger</td><td class="lw-val">Staff clicks <strong>Send invoice</strong> on a draft order for a ready-stock piece. Customer pays advance.</td></tr>
+    <tr><td class="lw-key">Conditions</td><td class="lw-val"><code>order_type = stock</code></td></tr>
+    <tr><td class="lw-key">vs MTO tab</td><td class="lw-val">No "up to 21 business days" timing box.</td></tr>
+    <tr><td class="lw-key">Changes</td><td class="lw-val">No body text · No order number line · Item table shows name + qty only · Single "Advance received" line · Balance note below the table · Button "Download Advance Receipt"</td></tr>
+  </table>
+</div>
+<div class="lw-subject doi"><span class="lw-s-label">Subject</span><span class="lw-s-text">Your Timanti Order Advance Receipt</span></div>
+<div class="email">
+  <div class="e-header"><div style="font-family:Georgia,'Times New Roman',serif;font-size:24px;letter-spacing:7px;color:#111;">TIMANTI</div><div style="font-size:8px;letter-spacing:5px;color:#aaa;margin-top:2px;">JEWELLERY</div></div>
+  <div class="e-content">
+    <h2 class="e-h2">Thank you for your purchase!</h2>
+    <div class="e-btnzone"><a class="e-btn">Download Advance Receipt</a></div>
+    <div class="e-store-link"><a href="#">Visit our online store</a></div>
+  </div>
+  <div class="e-section"><div class="e-section-inner">
+    <h3 style="margin:0 0 12px;">Order summary</h3>
+    <div class="e-item">
+      <div class="e-item-img"><svg viewBox="0 0 24 24"><path d="M12 2l2.4 7.4H22l-6.2 4.5 2.4 7.4L12 17l-6.2 4.3 2.4-7.4L2 9.4h7.6z"/></svg></div>
+      <div class="e-item-detail"><div class="e-item-title">Aabha Halo Necklace</div><div class="e-item-qty">Qty: 1</div><div class="e-item-variant">14K / WG / 16"</div></div>
+    </div>
+    <div class="e-summary"><div class="e-sumwrap">
+      <div class="e-sumrow total"><span>Advance received</span><span>INR 15,000</span></div>
+    </div></div>
+    <p style="font-size:12px;color:#666;line-height:1.5;margin:14px 0 0;text-align:left;">We will let you know the exact balance amount to be paid once your jewellery is ready, based on its exact gold and diamond weight.</p>
+  </div></div>
+  <div class="e-section"><div class="e-section-inner"><h3>Customer information</h3><div class="e-custgrid"><div class="e-infoblock"><h4>Billing address</h4><p>Monodeep Dutta<br>26 1 Rifle Range Road<br>Kolkata 700046<br>India</p></div><div class="e-infoblock"><h4>Payment method</h4><p>Card Payment</p></div></div></div></div>
+  <div class="e-section"><div class="e-section-inner"><div class="e-support"><h3>Need help?</h3><p>For any help with your order, please call or WhatsApp us on the number below, or reply to this email with your query and our customer team will get back to you.</p><table align="center" style="margin:0 auto;"><tr><td class="e-help-col"><svg width="26" height="26" viewBox="0 0 24 24" style="display:block;margin:0 auto 6px;"><path fill="#25D366" d="M12.04 2C6.58 2 2.13 6.45 2.13 11.91c0 1.75.46 3.45 1.32 4.95L2 22l5.25-1.38c1.45.79 3.08 1.21 4.79 1.21 5.46 0 9.91-4.45 9.91-9.91C21.95 6.45 17.5 2 12.04 2zm5.8 14.03c-.24.68-1.4 1.3-1.94 1.35-.5.05-1.12.07-1.81-.11-.42-.13-.95-.31-1.64-.6-2.88-1.24-4.76-4.14-4.9-4.33-.14-.19-1.17-1.56-1.17-2.97 0-1.41.74-2.11 1-2.4.26-.29.57-.36.76-.36.19 0 .38 0 .54.01.17.01.41-.07.64.49.24.57.81 1.98.88 2.12.07.14.12.31.02.5-.09.19-.14.31-.28.48-.14.17-.29.37-.42.5-.14.14-.28.28-.12.55.16.27.71 1.17 1.53 1.9 1.05.93 1.94 1.22 2.21 1.36.27.14.43.12.59-.07.16-.19.68-.79.86-1.06.18-.27.36-.22.61-.13.25.09 1.58.75 1.85.88.27.14.45.2.52.31.06.11.06.65-.18 1.33z"/></svg><strong>Call / WhatsApp</strong><br><a href="#">+91 7710968305</a></td><td class="e-help-col"><svg width="26" height="26" viewBox="0 0 24 24" style="display:block;margin:0 auto 6px;"><rect x="3" y="5.5" width="18" height="13" rx="1.5" fill="none" stroke="#333" stroke-width="1.6"/><path d="M3.5 6.5l8.5 6 8.5-6" fill="none" stroke="#333" stroke-width="1.6"/></svg><strong>Email us</strong><br><a href="#">hello@timanti.in</a></td></tr></table></div></div></div>
+  <div class="e-section"><div class="e-section-inner"><div class="e-social"><h3>We hope you loved the experience so far!</h3><p>Please follow us on Instagram and leave us a review on Google. It would mean the world to us.</p><div class="e-social-btns"><a class="e-social-btn" href="#"><span class="e-social-btn-inner"><svg width="15" height="15" viewBox="0 0 24 24" style="vertical-align:middle;"><path fill="#E4405F" d="M12 2.16c3.2 0 3.58.01 4.85.07 1.17.05 1.8.25 2.23.41.56.22.96.48 1.38.9.42.42.68.82.9 1.38.16.42.36 1.06.41 2.23.06 1.27.07 1.65.07 4.85s-.01 3.58-.07 4.85c-.05 1.17-.25 1.8-.41 2.23-.22.56-.48.96-.9 1.38-.42.42-.82.68-1.38.9-.42.16-1.06.36-2.23.41-1.27.06-1.65.07-4.85.07s-3.58-.01-4.85-.07c-1.17-.05-1.8-.25-2.23-.41-.56-.22-.96-.48-1.38-.9-.42-.42-.68-.82-.9-1.38-.16-.42-.36-1.06-.41-2.23C2.17 15.58 2.16 15.2 2.16 12s.01-3.58.07-4.85c.05-1.17.25-1.8.41-2.23.22-.56.48-.96.9-1.38.42-.42.82-.68 1.38-.9.42-.16 1.06-.36 2.23-.41C8.42 2.17 8.8 2.16 12 2.16zM12 0C8.74 0 8.33.01 7.05.07 5.78.13 4.9.33 4.14.63c-.79.31-1.46.72-2.12 1.38C1.36 2.67.95 3.34.63 4.14.33 4.9.13 5.78.07 7.05.01 8.33 0 8.74 0 12s.01 3.67.07 4.95c.06 1.27.26 2.15.56 2.91.31.79.72 1.46 1.38 2.12.66.66 1.33 1.07 2.12 1.38.76.3 1.64.5 2.91.56C8.33 23.99 8.74 24 12 24s3.67-.01 4.95-.07c1.27-.06 2.15-.26 2.91-.56.79-.31 1.46-.72 2.12-1.38.66-.66 1.07-1.33 1.38-2.12.3-.76.5-1.64.56-2.91.06-1.28.07-1.69.07-4.95s-.01-3.67-.07-4.95c-.06-1.27-.26-2.15-.56-2.91-.31-.79-.72-1.46-1.38-2.12C21.33 1.36 20.66.95 19.86.63 19.1.33 18.22.13 16.95.07 15.67.01 15.26 0 12 0zm0 5.84A6.16 6.16 0 1 0 18.16 12 6.16 6.16 0 0 0 12 5.84zM12 16a4 4 0 1 1 4-4 4 4 0 0 1-4 4zm6.41-10.85a1.44 1.44 0 1 0 1.44 1.44 1.44 1.44 0 0 0-1.44-1.44z"/></svg><span>&nbsp;Follow @timanti.official</span></span></a><a class="e-social-btn" href="#"><span class="e-social-btn-inner"><svg width="15" height="15" viewBox="0 0 48 48" style="vertical-align:middle;"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg><span>&nbsp;Review us on Google</span></span></a></div><p class="e-wa-link"><a href="#">Get WhatsApp updates on new collections &amp; offers</a></p><p class="e-social-note">By joining WhatsApp updates you consent to receive marketing messages.<br>Unsubscribe anytime.</p></div></div></div>
+  <div class="e-section"><div class="e-section-inner"><div class="e-promisebox"><div class="e-promise"><svg width="42" height="42" viewBox="0 0 24 24"><path fill="none" stroke="#b98a4a" stroke-width="1.3" d="M12 2.5l7 3v6c0 4.4-3 7.4-7 8.9-4-1.5-7-4.5-7-8.9v-6z"/><path fill="none" stroke="#b98a4a" stroke-width="1.3" d="M8.8 12l2.1 2.1L15.2 10"/></svg><span>BIS Hallmarked<br>Gold</span></div><div class="e-promise"><svg width="42" height="42" viewBox="0 0 24 24"><path fill="none" stroke="#b98a4a" stroke-width="1.3" d="M6 3.5h12l3 4.8-9 12.2L3 8.3z"/><path fill="none" stroke="#b98a4a" stroke-width="1.3" d="M3 8.3h18M9 3.5L6 8.3l6 12.2 6-12.2-3-4.8"/></svg><span>IGI Certified<br>Diamonds</span></div><div class="e-promise"><svg width="42" height="42" viewBox="0 0 24 24"><path fill="none" stroke="#b98a4a" stroke-width="1.3" d="M4.5 12a7.5 7.5 0 0 1 12.8-5.3L19.5 8"/><path fill="none" stroke="#b98a4a" stroke-width="1.3" d="M19.5 4.2V8h-3.8"/><path fill="none" stroke="#b98a4a" stroke-width="1.3" d="M19.5 12a7.5 7.5 0 0 1-12.8 5.3L4.5 16"/><path fill="none" stroke="#b98a4a" stroke-width="1.3" d="M4.5 19.8V16h3.8"/></svg><span>Lifetime<br>Exchange</span></div></div></div></div>
+  <div class="e-footer"><a href="#">Return &amp; Refund Policy</a> &nbsp;|&nbsp; <a href="#">Lifetime Exchange &amp; Upgrade</a></div>
+</div>
+</div>
+
+<!-- ADVANCE · MTO -->
+<div id="doi-mto" class="panel">
+<div class="lw doi">
+  <div class="lw-header doi"><span class="lw-badge doi">ADVANCE RECEIPT</span><strong>Made-to-Order Advance Payment</strong></div>
+  <table class="lw-table">
+    <tr><td class="lw-key">Trigger</td><td class="lw-val">Staff clicks <strong>Send invoice</strong> on a draft order for a custom / made-to-order piece.</td></tr>
+    <tr><td class="lw-key">Conditions</td><td class="lw-val"><code>order_type = mto</code></td></tr>
+    <tr><td class="lw-key">vs Stock tab</td><td class="lw-val">Adds the <strong>"Made to order pieces take up to 21 business days"</strong> box under the button.</td></tr>
+    <tr><td class="lw-key">Changes</td><td class="lw-val">Same as In-Stock: no body, no order number line, name + qty only, single "Advance received" line, balance note, "Download Advance Receipt" button.</td></tr>
+  </table>
+</div>
+<div class="lw-subject doi"><span class="lw-s-label">Subject</span><span class="lw-s-text">Your Timanti Order Advance Receipt</span></div>
+<div class="email">
+  <div class="e-header"><div style="font-family:Georgia,'Times New Roman',serif;font-size:24px;letter-spacing:7px;color:#111;">TIMANTI</div><div style="font-size:8px;letter-spacing:5px;color:#aaa;margin-top:2px;">JEWELLERY</div></div>
+  <div class="e-content">
+    <h2 class="e-h2">Thank you for your purchase!</h2>
+    <div class="e-btnzone"><a class="e-btn">Download Advance Receipt</a></div>
+    <div class="e-store-link"><a href="#">Visit our online store</a></div>
+    <div class="e-timeline">Made to order pieces take up to 21 business days.</div>
+  </div>
+  <div class="e-section"><div class="e-section-inner">
+    <h3 style="margin:0 0 12px;">Order summary</h3>
+    <div class="e-item">
+      <div class="e-item-img"><svg viewBox="0 0 24 24"><path d="M12 2l2.4 7.4H22l-6.2 4.5 2.4 7.4L12 17l-6.2 4.3 2.4-7.4L2 9.4h7.6z"/></svg></div>
+      <div class="e-item-detail"><div class="e-item-title">Custom Solitaire Ring (Made to Order)</div><div class="e-item-qty">Qty: 1</div><div class="e-item-variant">18K / YG / Size 15</div></div>
+    </div>
+    <div class="e-summary"><div class="e-sumwrap">
+      <div class="e-sumrow total"><span>Advance received</span><span>INR 25,000</span></div>
+    </div></div>
+    <p style="font-size:12px;color:#666;line-height:1.5;margin:14px 0 0;text-align:left;">We will let you know the exact balance amount to be paid once your jewellery is ready, based on its exact gold and diamond weight.</p>
+  </div></div>
+  <div class="e-section"><div class="e-section-inner"><h3>Customer information</h3><div class="e-custgrid"><div class="e-infoblock"><h4>Billing address</h4><p>Monodeep Dutta<br>26 1 Rifle Range Road<br>Kolkata 700046<br>India</p></div><div class="e-infoblock"><h4>Payment method</h4><p>Card Payment</p></div></div></div></div>
+  <div class="e-section"><div class="e-section-inner"><div class="e-support"><h3>Need help?</h3><p>For any help with your order, please call or WhatsApp us on the number below, or reply to this email with your query and our customer team will get back to you.</p><table align="center" style="margin:0 auto;"><tr><td class="e-help-col"><svg width="26" height="26" viewBox="0 0 24 24" style="display:block;margin:0 auto 6px;"><path fill="#25D366" d="M12.04 2C6.58 2 2.13 6.45 2.13 11.91c0 1.75.46 3.45 1.32 4.95L2 22l5.25-1.38c1.45.79 3.08 1.21 4.79 1.21 5.46 0 9.91-4.45 9.91-9.91C21.95 6.45 17.5 2 12.04 2zm5.8 14.03c-.24.68-1.4 1.3-1.94 1.35-.5.05-1.12.07-1.81-.11-.42-.13-.95-.31-1.64-.6-2.88-1.24-4.76-4.14-4.9-4.33-.14-.19-1.17-1.56-1.17-2.97 0-1.41.74-2.11 1-2.4.26-.29.57-.36.76-.36.19 0 .38 0 .54.01.17.01.41-.07.64.49.24.57.81 1.98.88 2.12.07.14.12.31.02.5-.09.19-.14.31-.28.48-.14.17-.29.37-.42.5-.14.14-.28.28-.12.55.16.27.71 1.17 1.53 1.9 1.05.93 1.94 1.22 2.21 1.36.27.14.43.12.59-.07.16-.19.68-.79.86-1.06.18-.27.36-.22.61-.13.25.09 1.58.75 1.85.88.27.14.45.2.52.31.06.11.06.65-.18 1.33z"/></svg><strong>Call / WhatsApp</strong><br><a href="#">+91 7710968305</a></td><td class="e-help-col"><svg width="26" height="26" viewBox="0 0 24 24" style="display:block;margin:0 auto 6px;"><rect x="3" y="5.5" width="18" height="13" rx="1.5" fill="none" stroke="#333" stroke-width="1.6"/><path d="M3.5 6.5l8.5 6 8.5-6" fill="none" stroke="#333" stroke-width="1.6"/></svg><strong>Email us</strong><br><a href="#">hello@timanti.in</a></td></tr></table></div></div></div>
+  <div class="e-section"><div class="e-section-inner"><div class="e-social"><h3>We hope you loved the experience so far!</h3><p>Please follow us on Instagram and leave us a review on Google. It would mean the world to us.</p><div class="e-social-btns"><a class="e-social-btn" href="#"><span class="e-social-btn-inner"><svg width="15" height="15" viewBox="0 0 24 24" style="vertical-align:middle;"><path fill="#E4405F" d="M12 2.16c3.2 0 3.58.01 4.85.07 1.17.05 1.8.25 2.23.41.56.22.96.48 1.38.9.42.42.68.82.9 1.38.16.42.36 1.06.41 2.23.06 1.27.07 1.65.07 4.85s-.01 3.58-.07 4.85c-.05 1.17-.25 1.8-.41 2.23-.22.56-.48.96-.9 1.38-.42.42-.82.68-1.38.9-.42.16-1.06.36-2.23.41-1.27.06-1.65.07-4.85.07s-3.58-.01-4.85-.07c-1.17-.05-1.8-.25-2.23-.41-.56-.22-.96-.48-1.38-.9-.42-.42-.68-.82-.9-1.38-.16-.42-.36-1.06-.41-2.23C2.17 15.58 2.16 15.2 2.16 12s.01-3.58.07-4.85c.05-1.17.25-1.8.41-2.23.22-.56.48-.96.9-1.38.42-.42.82-.68 1.38-.9.42-.16 1.06-.36 2.23-.41C8.42 2.17 8.8 2.16 12 2.16zM12 0C8.74 0 8.33.01 7.05.07 5.78.13 4.9.33 4.14.63c-.79.31-1.46.72-2.12 1.38C1.36 2.67.95 3.34.63 4.14.33 4.9.13 5.78.07 7.05.01 8.33 0 8.74 0 12s.01 3.67.07 4.95c.06 1.27.26 2.15.56 2.91.31.79.72 1.46 1.38 2.12.66.66 1.33 1.07 2.12 1.38.76.3 1.64.5 2.91.56C8.33 23.99 8.74 24 12 24s3.67-.01 4.95-.07c1.27-.06 2.15-.26 2.91-.56.79-.31 1.46-.72 2.12-1.38.66-.66 1.07-1.33 1.38-2.12.3-.76.5-1.64.56-2.91.06-1.28.07-1.69.07-4.95s-.01-3.67-.07-4.95c-.06-1.27-.26-2.15-.56-2.91-.31-.79-.72-1.46-1.38-2.12C21.33 1.36 20.66.95 19.86.63 19.1.33 18.22.13 16.95.07 15.67.01 15.26 0 12 0zm0 5.84A6.16 6.16 0 1 0 18.16 12 6.16 6.16 0 0 0 12 5.84zM12 16a4 4 0 1 1 4-4 4 4 0 0 1-4 4zm6.41-10.85a1.44 1.44 0 1 0 1.44 1.44 1.44 1.44 0 0 0-1.44-1.44z"/></svg><span>&nbsp;Follow @timanti.official</span></span></a><a class="e-social-btn" href="#"><span class="e-social-btn-inner"><svg width="15" height="15" viewBox="0 0 48 48" style="vertical-align:middle;"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg><span>&nbsp;Review us on Google</span></span></a></div><p class="e-wa-link"><a href="#">Get WhatsApp updates on new collections &amp; offers</a></p><p class="e-social-note">By joining WhatsApp updates you consent to receive marketing messages.<br>Unsubscribe anytime.</p></div></div></div>
+  <div class="e-section"><div class="e-section-inner"><div class="e-promisebox"><div class="e-promise"><svg width="42" height="42" viewBox="0 0 24 24"><path fill="none" stroke="#b98a4a" stroke-width="1.3" d="M12 2.5l7 3v6c0 4.4-3 7.4-7 8.9-4-1.5-7-4.5-7-8.9v-6z"/><path fill="none" stroke="#b98a4a" stroke-width="1.3" d="M8.8 12l2.1 2.1L15.2 10"/></svg><span>BIS Hallmarked<br>Gold</span></div><div class="e-promise"><svg width="42" height="42" viewBox="0 0 24 24"><path fill="none" stroke="#b98a4a" stroke-width="1.3" d="M6 3.5h12l3 4.8-9 12.2L3 8.3z"/><path fill="none" stroke="#b98a4a" stroke-width="1.3" d="M3 8.3h18M9 3.5L6 8.3l6 12.2 6-12.2-3-4.8"/></svg><span>IGI Certified<br>Diamonds</span></div><div class="e-promise"><svg width="42" height="42" viewBox="0 0 24 24"><path fill="none" stroke="#b98a4a" stroke-width="1.3" d="M4.5 12a7.5 7.5 0 0 1 12.8-5.3L19.5 8"/><path fill="none" stroke="#b98a4a" stroke-width="1.3" d="M19.5 4.2V8h-3.8"/><path fill="none" stroke="#b98a4a" stroke-width="1.3" d="M19.5 12a7.5 7.5 0 0 1-12.8 5.3L4.5 16"/><path fill="none" stroke="#b98a4a" stroke-width="1.3" d="M4.5 19.8V16h3.8"/></svg><span>Lifetime<br>Exchange</span></div></div></div></div>
+  <div class="e-footer"><a href="#">Return &amp; Refund Policy</a> &nbsp;|&nbsp; <a href="#">Lifetime Exchange &amp; Upgrade</a></div>
+</div>
+</div>
+
+<!-- ORDER CONFIRMATION · ONLINE -->
+<div id="oc-online" class="panel">
+<div class="lw oc">
+  <div class="lw-header oc"><span class="lw-badge oc">ORDER CONFIRMATION</span><strong>Online Purchase — Website Order</strong></div>
+  <table class="lw-table">
+    <tr><td class="lw-key">Trigger</td><td class="lw-val">Customer places and pays in full on timanti.in. Auto-fires at checkout.</td></tr>
+    <tr><td class="lw-key">Conditions</td><td class="lw-val"><code>channel</code> not "offline"</td></tr>
+    <tr><td class="lw-key">Changes</td><td class="lw-val"><strong>No download button</strong> (summary only) · "View order" shown · No weights · Diamond certificate note above items · Timeline: "usually shipped within 21 business days" · Phone 7710938305 · Footer shows Shipping Policy link</td></tr>
+  </table>
+</div>
+<div class="lw-subject oc"><span class="lw-s-label">Subject</span><span class="lw-s-text">Your Timanti order #1042 confirmed</span></div>
+<div class="email">
+  <div class="e-header"><div style="font-family:Georgia,'Times New Roman',serif;font-size:24px;letter-spacing:7px;color:#111;">TIMANTI</div><div style="font-size:8px;letter-spacing:5px;color:#aaa;margin-top:2px;">JEWELLERY</div></div>
+  <div class="e-content">
+    <p class="e-orderref">Order #1042</p>
+    <h2 class="e-h2">Thank you for your purchase!</h2>
+    <p class="e-body">Hi <strong>Priya</strong>, we are preparing your order and will notify you when it is on its way.</p>
+    <div class="e-store-link"><a href="#">Visit our online store</a></div>
+    <div class="e-timeline">Items are usually shipped within 21 business days.</div>
+  </div>
+  <div class="e-section"><div class="e-section-inner">
+    <div class="e-sumhead"><h3>Order summary</h3><a href="#">View order →</a></div>
+    <p style="font-size:12px;color:#666;line-height:1.5;margin:0 0 12px;text-align:left;">Your order is accompanied by a diamond authenticity certificate. Please keep it safe to facilitate future exchanges and returns.</p>
+    <div class="e-item">
+      <div class="e-item-img"><svg viewBox="0 0 24 24"><path d="M12 2l2.4 7.4H22l-6.2 4.5 2.4 7.4L12 17l-6.2 4.3 2.4-7.4L2 9.4h7.6z"/></svg></div>
+      <div class="e-item-detail"><div class="e-item-title">Apex Emerald Cut Band</div><div class="e-item-qty">Qty: 1</div><div class="e-item-variant">18K / WG / 13</div></div>
+      <div class="e-item-price">INR 70,122</div>
+    </div>
+    <div class="e-summary"><div class="e-sumwrap">
+      <div class="e-sumrow"><span>Subtotal (excl. GST)</span><span>INR 68,080</span></div>
+      <div class="e-sumrow"><span>GST @ 3%</span><span>INR 2,042</span></div>
+      <div class="e-sumrow"><span>Shipping</span><span>INR 0</span></div>
+      <div class="e-sumrow total"><span>Total</span><span>INR 70,122</span></div>
+    </div></div>
+  </div></div>
+  <div class="e-section"><div class="e-section-inner"><h3>Customer information</h3><div class="e-custgrid"><div class="e-infoblock"><h4>Shipping address</h4><p>Priya Sharma<br>45 Brigade Road<br>Bengaluru 560025<br>India</p></div><div class="e-infoblock"><h4>Billing address</h4><p>Priya Sharma<br>45 Brigade Road<br>Bengaluru 560025<br>India</p></div></div><div class="e-custgrid" style="margin-top:14px;"><div class="e-infoblock"><h4>Payment method</h4><p>UPI</p></div></div></div></div>
+  <div class="e-section"><div class="e-section-inner"><div class="e-support"><h3>Need help?</h3><p>For any help with your order, please call or WhatsApp us on the number below, or reply to this email with your query and our customer team will get back to you.</p><table align="center" style="margin:0 auto;"><tr><td class="e-help-col"><svg width="26" height="26" viewBox="0 0 24 24" style="display:block;margin:0 auto 6px;"><path fill="#25D366" d="M12.04 2C6.58 2 2.13 6.45 2.13 11.91c0 1.75.46 3.45 1.32 4.95L2 22l5.25-1.38c1.45.79 3.08 1.21 4.79 1.21 5.46 0 9.91-4.45 9.91-9.91C21.95 6.45 17.5 2 12.04 2zm5.8 14.03c-.24.68-1.4 1.3-1.94 1.35-.5.05-1.12.07-1.81-.11-.42-.13-.95-.31-1.64-.6-2.88-1.24-4.76-4.14-4.9-4.33-.14-.19-1.17-1.56-1.17-2.97 0-1.41.74-2.11 1-2.4.26-.29.57-.36.76-.36.19 0 .38 0 .54.01.17.01.41-.07.64.49.24.57.81 1.98.88 2.12.07.14.12.31.02.5-.09.19-.14.31-.28.48-.14.17-.29.37-.42.5-.14.14-.28.28-.12.55.16.27.71 1.17 1.53 1.9 1.05.93 1.94 1.22 2.21 1.36.27.14.43.12.59-.07.16-.19.68-.79.86-1.06.18-.27.36-.22.61-.13.25.09 1.58.75 1.85.88.27.14.45.2.52.31.06.11.06.65-.18 1.33z"/></svg><strong>Call / WhatsApp</strong><br><a href="#">+91 7710938305</a></td><td class="e-help-col"><svg width="26" height="26" viewBox="0 0 24 24" style="display:block;margin:0 auto 6px;"><rect x="3" y="5.5" width="18" height="13" rx="1.5" fill="none" stroke="#333" stroke-width="1.6"/><path d="M3.5 6.5l8.5 6 8.5-6" fill="none" stroke="#333" stroke-width="1.6"/></svg><strong>Email us</strong><br><a href="#">hello@timanti.in</a></td></tr></table></div></div></div>
+  <div class="e-section"><div class="e-section-inner"><div class="e-social"><h3>We hope you loved the experience so far!</h3><p>Please follow us on Instagram and leave us a review on Google. It would mean the world to us.</p><div class="e-social-btns"><a class="e-social-btn" href="#"><span class="e-social-btn-inner"><svg width="15" height="15" viewBox="0 0 24 24" style="vertical-align:middle;"><path fill="#E4405F" d="M12 2.16c3.2 0 3.58.01 4.85.07 1.17.05 1.8.25 2.23.41.56.22.96.48 1.38.9.42.42.68.82.9 1.38.16.42.36 1.06.41 2.23.06 1.27.07 1.65.07 4.85s-.01 3.58-.07 4.85c-.05 1.17-.25 1.8-.41 2.23-.22.56-.48.96-.9 1.38-.42.42-.82.68-1.38.9-.42.16-1.06.36-2.23.41-1.27.06-1.65.07-4.85.07s-3.58-.01-4.85-.07c-1.17-.05-1.8-.25-2.23-.41-.56-.22-.96-.48-1.38-.9-.42-.42-.68-.82-.9-1.38-.16-.42-.36-1.06-.41-2.23C2.17 15.58 2.16 15.2 2.16 12s.01-3.58.07-4.85c.05-1.17.25-1.8.41-2.23.22-.56.48-.96.9-1.38.42-.42.82-.68 1.38-.9.42-.16 1.06-.36 2.23-.41C8.42 2.17 8.8 2.16 12 2.16zM12 0C8.74 0 8.33.01 7.05.07 5.78.13 4.9.33 4.14.63c-.79.31-1.46.72-2.12 1.38C1.36 2.67.95 3.34.63 4.14.33 4.9.13 5.78.07 7.05.01 8.33 0 8.74 0 12s.01 3.67.07 4.95c.06 1.27.26 2.15.56 2.91.31.79.72 1.46 1.38 2.12.66.66 1.33 1.07 2.12 1.38.76.3 1.64.5 2.91.56C8.33 23.99 8.74 24 12 24s3.67-.01 4.95-.07c1.27-.06 2.15-.26 2.91-.56.79-.31 1.46-.72 2.12-1.38.66-.66 1.07-1.33 1.38-2.12.3-.76.5-1.64.56-2.91.06-1.28.07-1.69.07-4.95s-.01-3.67-.07-4.95c-.06-1.27-.26-2.15-.56-2.91-.31-.79-.72-1.46-1.38-2.12C21.33 1.36 20.66.95 19.86.63 19.1.33 18.22.13 16.95.07 15.67.01 15.26 0 12 0zm0 5.84A6.16 6.16 0 1 0 18.16 12 6.16 6.16 0 0 0 12 5.84zM12 16a4 4 0 1 1 4-4 4 4 0 0 1-4 4zm6.41-10.85a1.44 1.44 0 1 0 1.44 1.44 1.44 1.44 0 0 0-1.44-1.44z"/></svg><span>&nbsp;Follow @timanti.official</span></span></a><a class="e-social-btn" href="#"><span class="e-social-btn-inner"><svg width="15" height="15" viewBox="0 0 48 48" style="vertical-align:middle;"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg><span>&nbsp;Review us on Google</span></span></a></div><p class="e-wa-link"><a href="#">Get WhatsApp updates on new collections &amp; offers</a></p><p class="e-social-note">By joining WhatsApp updates you consent to receive marketing messages.<br>Unsubscribe anytime.</p></div></div></div>
+  <div class="e-section"><div class="e-section-inner"><div class="e-promisebox"><div class="e-promise"><svg width="42" height="42" viewBox="0 0 24 24"><path fill="none" stroke="#b98a4a" stroke-width="1.3" d="M12 2.5l7 3v6c0 4.4-3 7.4-7 8.9-4-1.5-7-4.5-7-8.9v-6z"/><path fill="none" stroke="#b98a4a" stroke-width="1.3" d="M8.8 12l2.1 2.1L15.2 10"/></svg><span>BIS Hallmarked<br>Gold</span></div><div class="e-promise"><svg width="42" height="42" viewBox="0 0 24 24"><path fill="none" stroke="#b98a4a" stroke-width="1.3" d="M6 3.5h12l3 4.8-9 12.2L3 8.3z"/><path fill="none" stroke="#b98a4a" stroke-width="1.3" d="M3 8.3h18M9 3.5L6 8.3l6 12.2 6-12.2-3-4.8"/></svg><span>IGI Certified<br>Diamonds</span></div><div class="e-promise"><svg width="42" height="42" viewBox="0 0 24 24"><path fill="none" stroke="#b98a4a" stroke-width="1.3" d="M4.5 12a7.5 7.5 0 0 1 12.8-5.3L19.5 8"/><path fill="none" stroke="#b98a4a" stroke-width="1.3" d="M19.5 4.2V8h-3.8"/><path fill="none" stroke="#b98a4a" stroke-width="1.3" d="M19.5 12a7.5 7.5 0 0 1-12.8 5.3L4.5 16"/><path fill="none" stroke="#b98a4a" stroke-width="1.3" d="M4.5 19.8V16h3.8"/></svg><span>Lifetime<br>Exchange</span></div></div></div></div>
+  <div class="e-footer"><a href="#">Return &amp; Refund Policy</a> &nbsp;|&nbsp; <a href="#">Lifetime Exchange &amp; Upgrade</a> &nbsp;|&nbsp; <a href="#">Shipping Policy</a></div>
+</div>
+</div>
+
+<!-- ORDER CONFIRMATION · OFFLINE PICKUP -->
+<div id="oc-collect" class="panel">
+<div class="lw oc">
+  <div class="lw-header oc"><span class="lw-badge oc">ORDER CONFIRMATION</span><strong>Offline · In-Store Pickup</strong></div>
+  <table class="lw-table">
+    <tr><td class="lw-key">Trigger</td><td class="lw-val">Walk-in sale completed, piece collected in store, or order tagged <code>in-store-sale</code>.</td></tr>
+    <tr><td class="lw-key">Conditions</td><td class="lw-val"><code>channel = offline</code> + <code>shipment = no</code> · or tag <code>in-store-sale</code></td></tr>
+    <tr><td class="lw-key">Changes</td><td class="lw-val"><strong>Tax Invoice</strong> button · No greeting sentence · Weights shown · Diamond certificate note above items · No timeline · No "View order" · Phone 7710968305 · Footer hides Shipping · Subject adds "here's your tax invoice"</td></tr>
+  </table>
+</div>
+<div class="lw-subject oc"><span class="lw-s-label">Subject</span><span class="lw-s-text">Your Timanti order #1042 confirmed, here's your tax invoice</span></div>
+<div class="email">
+  <div class="e-header"><div style="font-family:Georgia,'Times New Roman',serif;font-size:24px;letter-spacing:7px;color:#111;">TIMANTI</div><div style="font-size:8px;letter-spacing:5px;color:#aaa;margin-top:2px;">JEWELLERY</div></div>
+  <div class="e-content">
+    <p class="e-orderref">Order #1042</p>
+    <h2 class="e-h2">Thank you for your purchase!</h2>
+    <div class="e-btnzone"><a class="e-btn">Download Tax Invoice</a></div>
+    <div class="e-store-link"><a href="#">Visit our online store</a></div>
+  </div>
+  <div class="e-section"><div class="e-section-inner">
+    <h3 style="margin:0 0 12px;">Order summary</h3>
+    <p style="font-size:12px;color:#666;line-height:1.5;margin:0 0 12px;text-align:left;">Your order is accompanied by a diamond authenticity certificate. Please keep it safe to facilitate future exchanges and returns.</p>
+    <div class="e-item">
+      <div class="e-item-img"><svg viewBox="0 0 24 24"><path d="M12 2l2.4 7.4H22l-6.2 4.5 2.4 7.4L12 17l-6.2 4.3 2.4-7.4L2 9.4h7.6z"/></svg></div>
+      <div class="e-item-detail"><div class="e-item-title">Aabha Halo Necklace</div><div class="e-item-qty">Qty: 1</div><div class="e-item-variant">14K / WG / 16"</div><div class="e-item-weights"><strong>Gross:</strong> 4.25g &nbsp;·&nbsp; <strong>Net:</strong> 3.80g &nbsp;·&nbsp; <strong>Dia:</strong> 0.50ct</div></div>
+      <div class="e-item-price">INR 42,800</div>
+    </div>
+    <div class="e-summary"><div class="e-sumwrap">
+      <div class="e-sumrow"><span>Subtotal (excl. GST)</span><span>INR 41,553</span></div>
+      <div class="e-sumrow"><span>GST @ 3%</span><span>INR 1,247</span></div>
+      <div class="e-sumrow total"><span>Total</span><span>INR 42,800</span></div>
+    </div></div>
+  </div></div>
+  <div class="e-section"><div class="e-section-inner"><h3>Customer information</h3><div class="e-custgrid"><div class="e-infoblock"><h4>Billing address</h4><p>Priya Sharma<br>45 Brigade Road<br>Bengaluru 560025<br>India</p></div><div class="e-infoblock"><h4>Payment method</h4><p>Card Payment</p></div></div></div></div>
+  <div class="e-section"><div class="e-section-inner"><div class="e-support"><h3>Need help?</h3><p>For any help with your order, please call or WhatsApp us on the number below, or reply to this email with your query and our customer team will get back to you.</p><table align="center" style="margin:0 auto;"><tr><td class="e-help-col"><svg width="26" height="26" viewBox="0 0 24 24" style="display:block;margin:0 auto 6px;"><path fill="#25D366" d="M12.04 2C6.58 2 2.13 6.45 2.13 11.91c0 1.75.46 3.45 1.32 4.95L2 22l5.25-1.38c1.45.79 3.08 1.21 4.79 1.21 5.46 0 9.91-4.45 9.91-9.91C21.95 6.45 17.5 2 12.04 2zm5.8 14.03c-.24.68-1.4 1.3-1.94 1.35-.5.05-1.12.07-1.81-.11-.42-.13-.95-.31-1.64-.6-2.88-1.24-4.76-4.14-4.9-4.33-.14-.19-1.17-1.56-1.17-2.97 0-1.41.74-2.11 1-2.4.26-.29.57-.36.76-.36.19 0 .38 0 .54.01.17.01.41-.07.64.49.24.57.81 1.98.88 2.12.07.14.12.31.02.5-.09.19-.14.31-.28.48-.14.17-.29.37-.42.5-.14.14-.28.28-.12.55.16.27.71 1.17 1.53 1.9 1.05.93 1.94 1.22 2.21 1.36.27.14.43.12.59-.07.16-.19.68-.79.86-1.06.18-.27.36-.22.61-.13.25.09 1.58.75 1.85.88.27.14.45.2.52.31.06.11.06.65-.18 1.33z"/></svg><strong>Call / WhatsApp</strong><br><a href="#">+91 7710968305</a></td><td class="e-help-col"><svg width="26" height="26" viewBox="0 0 24 24" style="display:block;margin:0 auto 6px;"><rect x="3" y="5.5" width="18" height="13" rx="1.5" fill="none" stroke="#333" stroke-width="1.6"/><path d="M3.5 6.5l8.5 6 8.5-6" fill="none" stroke="#333" stroke-width="1.6"/></svg><strong>Email us</strong><br><a href="#">hello@timanti.in</a></td></tr></table></div></div></div>
+  <div class="e-section"><div class="e-section-inner"><div class="e-social"><h3>We hope you loved the experience so far!</h3><p>Please follow us on Instagram and leave us a review on Google. It would mean the world to us.</p><div class="e-social-btns"><a class="e-social-btn" href="#"><span class="e-social-btn-inner"><svg width="15" height="15" viewBox="0 0 24 24" style="vertical-align:middle;"><path fill="#E4405F" d="M12 2.16c3.2 0 3.58.01 4.85.07 1.17.05 1.8.25 2.23.41.56.22.96.48 1.38.9.42.42.68.82.9 1.38.16.42.36 1.06.41 2.23.06 1.27.07 1.65.07 4.85s-.01 3.58-.07 4.85c-.05 1.17-.25 1.8-.41 2.23-.22.56-.48.96-.9 1.38-.42.42-.82.68-1.38.9-.42.16-1.06.36-2.23.41-1.27.06-1.65.07-4.85.07s-3.58-.01-4.85-.07c-1.17-.05-1.8-.25-2.23-.41-.56-.22-.96-.48-1.38-.9-.42-.42-.68-.82-.9-1.38-.16-.42-.36-1.06-.41-2.23C2.17 15.58 2.16 15.2 2.16 12s.01-3.58.07-4.85c.05-1.17.25-1.8.41-2.23.22-.56.48-.96.9-1.38.42-.42.82-.68 1.38-.9.42-.16 1.06-.36 2.23-.41C8.42 2.17 8.8 2.16 12 2.16zM12 0C8.74 0 8.33.01 7.05.07 5.78.13 4.9.33 4.14.63c-.79.31-1.46.72-2.12 1.38C1.36 2.67.95 3.34.63 4.14.33 4.9.13 5.78.07 7.05.01 8.33 0 8.74 0 12s.01 3.67.07 4.95c.06 1.27.26 2.15.56 2.91.31.79.72 1.46 1.38 2.12.66.66 1.33 1.07 2.12 1.38.76.3 1.64.5 2.91.56C8.33 23.99 8.74 24 12 24s3.67-.01 4.95-.07c1.27-.06 2.15-.26 2.91-.56.79-.31 1.46-.72 2.12-1.38.66-.66 1.07-1.33 1.38-2.12.3-.76.5-1.64.56-2.91.06-1.28.07-1.69.07-4.95s-.01-3.67-.07-4.95c-.06-1.27-.26-2.15-.56-2.91-.31-.79-.72-1.46-1.38-2.12C21.33 1.36 20.66.95 19.86.63 19.1.33 18.22.13 16.95.07 15.67.01 15.26 0 12 0zm0 5.84A6.16 6.16 0 1 0 18.16 12 6.16 6.16 0 0 0 12 5.84zM12 16a4 4 0 1 1 4-4 4 4 0 0 1-4 4zm6.41-10.85a1.44 1.44 0 1 0 1.44 1.44 1.44 1.44 0 0 0-1.44-1.44z"/></svg><span>&nbsp;Follow @timanti.official</span></span></a><a class="e-social-btn" href="#"><span class="e-social-btn-inner"><svg width="15" height="15" viewBox="0 0 48 48" style="vertical-align:middle;"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg><span>&nbsp;Review us on Google</span></span></a></div><p class="e-wa-link"><a href="#">Get WhatsApp updates on new collections &amp; offers</a></p><p class="e-social-note">By joining WhatsApp updates you consent to receive marketing messages.<br>Unsubscribe anytime.</p></div></div></div>
+  <div class="e-section"><div class="e-section-inner"><div class="e-promisebox"><div class="e-promise"><svg width="42" height="42" viewBox="0 0 24 24"><path fill="none" stroke="#b98a4a" stroke-width="1.3" d="M12 2.5l7 3v6c0 4.4-3 7.4-7 8.9-4-1.5-7-4.5-7-8.9v-6z"/><path fill="none" stroke="#b98a4a" stroke-width="1.3" d="M8.8 12l2.1 2.1L15.2 10"/></svg><span>BIS Hallmarked<br>Gold</span></div><div class="e-promise"><svg width="42" height="42" viewBox="0 0 24 24"><path fill="none" stroke="#b98a4a" stroke-width="1.3" d="M6 3.5h12l3 4.8-9 12.2L3 8.3z"/><path fill="none" stroke="#b98a4a" stroke-width="1.3" d="M3 8.3h18M9 3.5L6 8.3l6 12.2 6-12.2-3-4.8"/></svg><span>IGI Certified<br>Diamonds</span></div><div class="e-promise"><svg width="42" height="42" viewBox="0 0 24 24"><path fill="none" stroke="#b98a4a" stroke-width="1.3" d="M4.5 12a7.5 7.5 0 0 1 12.8-5.3L19.5 8"/><path fill="none" stroke="#b98a4a" stroke-width="1.3" d="M19.5 4.2V8h-3.8"/><path fill="none" stroke="#b98a4a" stroke-width="1.3" d="M19.5 12a7.5 7.5 0 0 1-12.8 5.3L4.5 16"/><path fill="none" stroke="#b98a4a" stroke-width="1.3" d="M4.5 19.8V16h3.8"/></svg><span>Lifetime<br>Exchange</span></div></div></div></div>
+  <div class="e-footer"><a href="#">Return &amp; Refund Policy</a> &nbsp;|&nbsp; <a href="#">Lifetime Exchange &amp; Upgrade</a></div>
+</div>
+</div>
+
+<!-- ORDER CONFIRMATION · OFFLINE DELIVERY -->
+<div id="oc-delivery" class="panel">
+<div class="lw oc">
+  <div class="lw-header oc"><span class="lw-badge oc">ORDER CONFIRMATION</span><strong>Offline · Remote Delivery</strong></div>
+  <table class="lw-table">
+    <tr><td class="lw-key">Trigger</td><td class="lw-val">Outstation customer's full payment collected; order flagged for shipping.</td></tr>
+    <tr><td class="lw-key">Conditions</td><td class="lw-val"><code>channel = offline</code> + <code>shipment = yes</code></td></tr>
+    <tr><td class="lw-key">Changes</td><td class="lw-val"><strong>Tax Invoice</strong> button · Body: "dispatched to you in 2 to 3 business days" · Weights shown · Diamond certificate note above items · Same timeline as online · Shipping row + Shipping Policy link · Phone 7710968305</td></tr>
+  </table>
+</div>
+<div class="lw-subject oc"><span class="lw-s-label">Subject</span><span class="lw-s-text">Your Timanti order #1042 confirmed, here's your tax invoice</span></div>
+<div class="email">
+  <div class="e-header"><div style="font-family:Georgia,'Times New Roman',serif;font-size:24px;letter-spacing:7px;color:#111;">TIMANTI</div><div style="font-size:8px;letter-spacing:5px;color:#aaa;margin-top:2px;">JEWELLERY</div></div>
+  <div class="e-content">
+    <p class="e-orderref">Order #1042</p>
+    <h2 class="e-h2">Thank you for your purchase!</h2>
+    <p class="e-body">Hi <strong>Priya</strong>, your piece will be dispatched to you in 2 to 3 business days. Your tax invoice is below.</p>
+    <div class="e-btnzone"><a class="e-btn">Download Tax Invoice</a></div>
+    <div class="e-store-link"><a href="#">Visit our online store</a></div>
+    <div class="e-timeline">Items are usually shipped within 21 business days.</div>
+  </div>
+  <div class="e-section"><div class="e-section-inner">
+    <h3 style="margin:0 0 12px;">Order summary</h3>
+    <p style="font-size:12px;color:#666;line-height:1.5;margin:0 0 12px;text-align:left;">Your order is accompanied by a diamond authenticity certificate. Please keep it safe to facilitate future exchanges and returns.</p>
+    <div class="e-item">
+      <div class="e-item-img"><svg viewBox="0 0 24 24"><path d="M12 2l2.4 7.4H22l-6.2 4.5 2.4 7.4L12 17l-6.2 4.3 2.4-7.4L2 9.4h7.6z"/></svg></div>
+      <div class="e-item-detail"><div class="e-item-title">Aabha Halo Necklace</div><div class="e-item-qty">Qty: 1</div><div class="e-item-variant">14K / WG / 16"</div><div class="e-item-weights"><strong>Gross:</strong> 4.25g &nbsp;·&nbsp; <strong>Net:</strong> 3.80g &nbsp;·&nbsp; <strong>Dia:</strong> 0.50ct</div></div>
+      <div class="e-item-price">INR 42,800</div>
+    </div>
+    <div class="e-summary"><div class="e-sumwrap">
+      <div class="e-sumrow"><span>Subtotal (excl. GST)</span><span>INR 41,553</span></div>
+      <div class="e-sumrow"><span>GST @ 3%</span><span>INR 1,247</span></div>
+      <div class="e-sumrow"><span>Shipping</span><span>INR 0</span></div>
+      <div class="e-sumrow total"><span>Total</span><span>INR 42,800</span></div>
+    </div></div>
+  </div></div>
+  <div class="e-section"><div class="e-section-inner"><h3>Customer information</h3><div class="e-custgrid"><div class="e-infoblock"><h4>Shipping address</h4><p>Priya Sharma<br>45 Brigade Road<br>Bengaluru 560025<br>India</p></div><div class="e-infoblock"><h4>Billing address</h4><p>Priya Sharma<br>45 Brigade Road<br>Bengaluru 560025<br>India</p></div></div><div class="e-custgrid" style="margin-top:14px;"><div class="e-infoblock"><h4>Payment method</h4><p>Card Payment</p></div></div></div></div>
+  <div class="e-section"><div class="e-section-inner"><div class="e-support"><h3>Need help?</h3><p>For any help with your order, please call or WhatsApp us on the number below, or reply to this email with your query and our customer team will get back to you.</p><table align="center" style="margin:0 auto;"><tr><td class="e-help-col"><svg width="26" height="26" viewBox="0 0 24 24" style="display:block;margin:0 auto 6px;"><path fill="#25D366" d="M12.04 2C6.58 2 2.13 6.45 2.13 11.91c0 1.75.46 3.45 1.32 4.95L2 22l5.25-1.38c1.45.79 3.08 1.21 4.79 1.21 5.46 0 9.91-4.45 9.91-9.91C21.95 6.45 17.5 2 12.04 2zm5.8 14.03c-.24.68-1.4 1.3-1.94 1.35-.5.05-1.12.07-1.81-.11-.42-.13-.95-.31-1.64-.6-2.88-1.24-4.76-4.14-4.9-4.33-.14-.19-1.17-1.56-1.17-2.97 0-1.41.74-2.11 1-2.4.26-.29.57-.36.76-.36.19 0 .38 0 .54.01.17.01.41-.07.64.49.24.57.81 1.98.88 2.12.07.14.12.31.02.5-.09.19-.14.31-.28.48-.14.17-.29.37-.42.5-.14.14-.28.28-.12.55.16.27.71 1.17 1.53 1.9 1.05.93 1.94 1.22 2.21 1.36.27.14.43.12.59-.07.16-.19.68-.79.86-1.06.18-.27.36-.22.61-.13.25.09 1.58.75 1.85.88.27.14.45.2.52.31.06.11.06.65-.18 1.33z"/></svg><strong>Call / WhatsApp</strong><br><a href="#">+91 7710968305</a></td><td class="e-help-col"><svg width="26" height="26" viewBox="0 0 24 24" style="display:block;margin:0 auto 6px;"><rect x="3" y="5.5" width="18" height="13" rx="1.5" fill="none" stroke="#333" stroke-width="1.6"/><path d="M3.5 6.5l8.5 6 8.5-6" fill="none" stroke="#333" stroke-width="1.6"/></svg><strong>Email us</strong><br><a href="#">hello@timanti.in</a></td></tr></table></div></div></div>
+  <div class="e-section"><div class="e-section-inner"><div class="e-social"><h3>We hope you loved the experience so far!</h3><p>Please follow us on Instagram and leave us a review on Google. It would mean the world to us.</p><div class="e-social-btns"><a class="e-social-btn" href="#"><span class="e-social-btn-inner"><svg width="15" height="15" viewBox="0 0 24 24" style="vertical-align:middle;"><path fill="#E4405F" d="M12 2.16c3.2 0 3.58.01 4.85.07 1.17.05 1.8.25 2.23.41.56.22.96.48 1.38.9.42.42.68.82.9 1.38.16.42.36 1.06.41 2.23.06 1.27.07 1.65.07 4.85s-.01 3.58-.07 4.85c-.05 1.17-.25 1.8-.41 2.23-.22.56-.48.96-.9 1.38-.42.42-.82.68-1.38.9-.42.16-1.06.36-2.23.41-1.27.06-1.65.07-4.85.07s-3.58-.01-4.85-.07c-1.17-.05-1.8-.25-2.23-.41-.56-.22-.96-.48-1.38-.9-.42-.42-.68-.82-.9-1.38-.16-.42-.36-1.06-.41-2.23C2.17 15.58 2.16 15.2 2.16 12s.01-3.58.07-4.85c.05-1.17.25-1.8.41-2.23.22-.56.48-.96.9-1.38.42-.42.82-.68 1.38-.9.42-.16 1.06-.36 2.23-.41C8.42 2.17 8.8 2.16 12 2.16zM12 0C8.74 0 8.33.01 7.05.07 5.78.13 4.9.33 4.14.63c-.79.31-1.46.72-2.12 1.38C1.36 2.67.95 3.34.63 4.14.33 4.9.13 5.78.07 7.05.01 8.33 0 8.74 0 12s.01 3.67.07 4.95c.06 1.27.26 2.15.56 2.91.31.79.72 1.46 1.38 2.12.66.66 1.33 1.07 2.12 1.38.76.3 1.64.5 2.91.56C8.33 23.99 8.74 24 12 24s3.67-.01 4.95-.07c1.27-.06 2.15-.26 2.91-.56.79-.31 1.46-.72 2.12-1.38.66-.66 1.07-1.33 1.38-2.12.3-.76.5-1.64.56-2.91.06-1.28.07-1.69.07-4.95s-.01-3.67-.07-4.95c-.06-1.27-.26-2.15-.56-2.91-.31-.79-.72-1.46-1.38-2.12C21.33 1.36 20.66.95 19.86.63 19.1.33 18.22.13 16.95.07 15.67.01 15.26 0 12 0zm0 5.84A6.16 6.16 0 1 0 18.16 12 6.16 6.16 0 0 0 12 5.84zM12 16a4 4 0 1 1 4-4 4 4 0 0 1-4 4zm6.41-10.85a1.44 1.44 0 1 0 1.44 1.44 1.44 1.44 0 0 0-1.44-1.44z"/></svg><span>&nbsp;Follow @timanti.official</span></span></a><a class="e-social-btn" href="#"><span class="e-social-btn-inner"><svg width="15" height="15" viewBox="0 0 48 48" style="vertical-align:middle;"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg><span>&nbsp;Review us on Google</span></span></a></div><p class="e-wa-link"><a href="#">Get WhatsApp updates on new collections &amp; offers</a></p><p class="e-social-note">By joining WhatsApp updates you consent to receive marketing messages.<br>Unsubscribe anytime.</p></div></div></div>
+  <div class="e-section"><div class="e-section-inner"><div class="e-promisebox"><div class="e-promise"><svg width="42" height="42" viewBox="0 0 24 24"><path fill="none" stroke="#b98a4a" stroke-width="1.3" d="M12 2.5l7 3v6c0 4.4-3 7.4-7 8.9-4-1.5-7-4.5-7-8.9v-6z"/><path fill="none" stroke="#b98a4a" stroke-width="1.3" d="M8.8 12l2.1 2.1L15.2 10"/></svg><span>BIS Hallmarked<br>Gold</span></div><div class="e-promise"><svg width="42" height="42" viewBox="0 0 24 24"><path fill="none" stroke="#b98a4a" stroke-width="1.3" d="M6 3.5h12l3 4.8-9 12.2L3 8.3z"/><path fill="none" stroke="#b98a4a" stroke-width="1.3" d="M3 8.3h18M9 3.5L6 8.3l6 12.2 6-12.2-3-4.8"/></svg><span>IGI Certified<br>Diamonds</span></div><div class="e-promise"><svg width="42" height="42" viewBox="0 0 24 24"><path fill="none" stroke="#b98a4a" stroke-width="1.3" d="M4.5 12a7.5 7.5 0 0 1 12.8-5.3L19.5 8"/><path fill="none" stroke="#b98a4a" stroke-width="1.3" d="M19.5 4.2V8h-3.8"/><path fill="none" stroke="#b98a4a" stroke-width="1.3" d="M19.5 12a7.5 7.5 0 0 1-12.8 5.3L4.5 16"/><path fill="none" stroke="#b98a4a" stroke-width="1.3" d="M4.5 19.8V16h3.8"/></svg><span>Lifetime<br>Exchange</span></div></div></div></div>
+  <div class="e-footer"><a href="#">Return &amp; Refund Policy</a> &nbsp;|&nbsp; <a href="#">Lifetime Exchange &amp; Upgrade</a> &nbsp;|&nbsp; <a href="#">Shipping Policy</a></div>
+</div>
+</div>
+
+<!-- SHIPPING · ONLINE -->
+<div id="sc-online" class="panel">
+<div class="lw sc">
+  <div class="lw-header sc"><span class="lw-badge sc">SHIPPING CONFIRMATION</span><strong>Online Order Dispatched</strong></div>
+  <table class="lw-table">
+    <tr><td class="lw-key">Trigger</td><td class="lw-val">Staff marks an online order <strong>fulfilled</strong> and sends shipment details.</td></tr>
+    <tr><td class="lw-key">Conditions</td><td class="lw-val"><code>channel</code> not "offline"</td></tr>
+    <tr><td class="lw-key">Changes</td><td class="lw-val">No order number line · Headline gains "!" · <strong>Tax Invoice</strong> button kept · Tracking number is a single orange clickable line · GST breakup added · Dia carat shown · Phone 7710938305</td></tr>
+  </table>
+</div>
+<div class="lw-subject sc"><span class="lw-s-label">Subject</span><span class="lw-s-text">Order #1063 is shipped, here's your tax invoice</span></div>
+<div class="email">
+  <div class="e-header"><div style="font-family:Georgia,'Times New Roman',serif;font-size:24px;letter-spacing:7px;color:#111;">TIMANTI</div><div style="font-size:8px;letter-spacing:5px;color:#aaa;margin-top:2px;">JEWELLERY</div></div>
+  <div class="e-content">
+    <h2 class="e-h2">Your order is on the way!</h2>
+    <p class="e-body">Hi <strong>Priya</strong>, great news, your order has been packed with care and is on its way. Your tax invoice and tracking link are below.</p>
+    <div class="e-btnzone"><a class="e-btn">Download Tax Invoice</a></div>
+    <p class="e-track">Tracking Number: <a href="#">7712345678</a> (Sequel Logistics)</p>
+    <div class="e-store-link"><a href="#">Visit our online store</a></div>
+  </div>
+  <div class="e-section"><div class="e-section-inner">
+    <h3 style="margin:0 0 12px;">Items in this shipment</h3>
+    <div class="e-item">
+      <div class="e-item-img"><svg viewBox="0 0 24 24"><path d="M12 2l2.4 7.4H22l-6.2 4.5 2.4 7.4L12 17l-6.2 4.3 2.4-7.4L2 9.4h7.6z"/></svg></div>
+      <div class="e-item-detail"><div class="e-item-title">Heirloom Lab-Grown Diamond Bracelet</div><div class="e-item-qty">Qty: 1</div><div class="e-item-variant">18K / WG / 7"</div><div class="e-item-weights"><strong>Gross:</strong> 1.87g &nbsp;·&nbsp; <strong>Net:</strong> 1.49g &nbsp;·&nbsp; <strong>Dia:</strong> 0.75ct</div></div>
+      <div class="e-item-price">INR 100,111</div>
+    </div>
+    <div class="e-summary"><div class="e-sumwrap">
+      <div class="e-sumrow"><span>Subtotal (excl. GST)</span><span>INR 97,195</span></div>
+      <div class="e-sumrow"><span>GST @ 3%</span><span>INR 2,916</span></div>
+      <div class="e-sumrow total"><span>Total</span><span>INR 100,111</span></div>
+    </div></div>
+  </div></div>
+  <div class="e-section"><div class="e-section-inner"><div class="e-support"><h3>Need help?</h3><p>For any help with your order, please call or WhatsApp us on the number below, or reply to this email with your query and our customer team will get back to you.</p><table align="center" style="margin:0 auto;"><tr><td class="e-help-col"><svg width="26" height="26" viewBox="0 0 24 24" style="display:block;margin:0 auto 6px;"><path fill="#25D366" d="M12.04 2C6.58 2 2.13 6.45 2.13 11.91c0 1.75.46 3.45 1.32 4.95L2 22l5.25-1.38c1.45.79 3.08 1.21 4.79 1.21 5.46 0 9.91-4.45 9.91-9.91C21.95 6.45 17.5 2 12.04 2zm5.8 14.03c-.24.68-1.4 1.3-1.94 1.35-.5.05-1.12.07-1.81-.11-.42-.13-.95-.31-1.64-.6-2.88-1.24-4.76-4.14-4.9-4.33-.14-.19-1.17-1.56-1.17-2.97 0-1.41.74-2.11 1-2.4.26-.29.57-.36.76-.36.19 0 .38 0 .54.01.17.01.41-.07.64.49.24.57.81 1.98.88 2.12.07.14.12.31.02.5-.09.19-.14.31-.28.48-.14.17-.29.37-.42.5-.14.14-.28.28-.12.55.16.27.71 1.17 1.53 1.9 1.05.93 1.94 1.22 2.21 1.36.27.14.43.12.59-.07.16-.19.68-.79.86-1.06.18-.27.36-.22.61-.13.25.09 1.58.75 1.85.88.27.14.45.2.52.31.06.11.06.65-.18 1.33z"/></svg><strong>Call / WhatsApp</strong><br><a href="#">+91 7710938305</a></td><td class="e-help-col"><svg width="26" height="26" viewBox="0 0 24 24" style="display:block;margin:0 auto 6px;"><rect x="3" y="5.5" width="18" height="13" rx="1.5" fill="none" stroke="#333" stroke-width="1.6"/><path d="M3.5 6.5l8.5 6 8.5-6" fill="none" stroke="#333" stroke-width="1.6"/></svg><strong>Email us</strong><br><a href="#">hello@timanti.in</a></td></tr></table></div></div></div>
+  <div class="e-section"><div class="e-section-inner"><div class="e-social"><h3>We hope you loved the experience so far!</h3><p>Please follow us on Instagram and leave us a review on Google. It would mean the world to us.</p><div class="e-social-btns"><a class="e-social-btn" href="#"><span class="e-social-btn-inner"><svg width="15" height="15" viewBox="0 0 24 24" style="vertical-align:middle;"><path fill="#E4405F" d="M12 2.16c3.2 0 3.58.01 4.85.07 1.17.05 1.8.25 2.23.41.56.22.96.48 1.38.9.42.42.68.82.9 1.38.16.42.36 1.06.41 2.23.06 1.27.07 1.65.07 4.85s-.01 3.58-.07 4.85c-.05 1.17-.25 1.8-.41 2.23-.22.56-.48.96-.9 1.38-.42.42-.82.68-1.38.9-.42.16-1.06.36-2.23.41-1.27.06-1.65.07-4.85.07s-3.58-.01-4.85-.07c-1.17-.05-1.8-.25-2.23-.41-.56-.22-.96-.48-1.38-.9-.42-.42-.68-.82-.9-1.38-.16-.42-.36-1.06-.41-2.23C2.17 15.58 2.16 15.2 2.16 12s.01-3.58.07-4.85c.05-1.17.25-1.8.41-2.23.22-.56.48-.96.9-1.38.42-.42.82-.68 1.38-.9.42-.16 1.06-.36 2.23-.41C8.42 2.17 8.8 2.16 12 2.16zM12 0C8.74 0 8.33.01 7.05.07 5.78.13 4.9.33 4.14.63c-.79.31-1.46.72-2.12 1.38C1.36 2.67.95 3.34.63 4.14.33 4.9.13 5.78.07 7.05.01 8.33 0 8.74 0 12s.01 3.67.07 4.95c.06 1.27.26 2.15.56 2.91.31.79.72 1.46 1.38 2.12.66.66 1.33 1.07 2.12 1.38.76.3 1.64.5 2.91.56C8.33 23.99 8.74 24 12 24s3.67-.01 4.95-.07c1.27-.06 2.15-.26 2.91-.56.79-.31 1.46-.72 2.12-1.38.66-.66 1.07-1.33 1.38-2.12.3-.76.5-1.64.56-2.91.06-1.28.07-1.69.07-4.95s-.01-3.67-.07-4.95c-.06-1.27-.26-2.15-.56-2.91-.31-.79-.72-1.46-1.38-2.12C21.33 1.36 20.66.95 19.86.63 19.1.33 18.22.13 16.95.07 15.67.01 15.26 0 12 0zm0 5.84A6.16 6.16 0 1 0 18.16 12 6.16 6.16 0 0 0 12 5.84zM12 16a4 4 0 1 1 4-4 4 4 0 0 1-4 4zm6.41-10.85a1.44 1.44 0 1 0 1.44 1.44 1.44 1.44 0 0 0-1.44-1.44z"/></svg><span>&nbsp;Follow @timanti.official</span></span></a><a class="e-social-btn" href="#"><span class="e-social-btn-inner"><svg width="15" height="15" viewBox="0 0 48 48" style="vertical-align:middle;"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg><span>&nbsp;Review us on Google</span></span></a></div><p class="e-wa-link"><a href="#">Get WhatsApp updates on new collections &amp; offers</a></p><p class="e-social-note">By joining WhatsApp updates you consent to receive marketing messages.<br>Unsubscribe anytime.</p></div></div></div>
+  <div class="e-section"><div class="e-section-inner"><div class="e-promisebox"><div class="e-promise"><svg width="42" height="42" viewBox="0 0 24 24"><path fill="none" stroke="#b98a4a" stroke-width="1.3" d="M12 2.5l7 3v6c0 4.4-3 7.4-7 8.9-4-1.5-7-4.5-7-8.9v-6z"/><path fill="none" stroke="#b98a4a" stroke-width="1.3" d="M8.8 12l2.1 2.1L15.2 10"/></svg><span>BIS Hallmarked<br>Gold</span></div><div class="e-promise"><svg width="42" height="42" viewBox="0 0 24 24"><path fill="none" stroke="#b98a4a" stroke-width="1.3" d="M6 3.5h12l3 4.8-9 12.2L3 8.3z"/><path fill="none" stroke="#b98a4a" stroke-width="1.3" d="M3 8.3h18M9 3.5L6 8.3l6 12.2 6-12.2-3-4.8"/></svg><span>IGI Certified<br>Diamonds</span></div><div class="e-promise"><svg width="42" height="42" viewBox="0 0 24 24"><path fill="none" stroke="#b98a4a" stroke-width="1.3" d="M4.5 12a7.5 7.5 0 0 1 12.8-5.3L19.5 8"/><path fill="none" stroke="#b98a4a" stroke-width="1.3" d="M19.5 4.2V8h-3.8"/><path fill="none" stroke="#b98a4a" stroke-width="1.3" d="M19.5 12a7.5 7.5 0 0 1-12.8 5.3L4.5 16"/><path fill="none" stroke="#b98a4a" stroke-width="1.3" d="M4.5 19.8V16h3.8"/></svg><span>Lifetime<br>Exchange</span></div></div></div></div>
+  <div class="e-footer"><a href="#">Return &amp; Refund Policy</a> &nbsp;|&nbsp; <a href="#">Lifetime Exchange &amp; Upgrade</a> &nbsp;|&nbsp; <a href="#">Shipping Policy</a></div>
+</div>
+</div>
+
+<!-- SHIPPING · OFFLINE -->
+<div id="sc-offline" class="panel">
+<div class="lw sc">
+  <div class="lw-header sc"><span class="lw-badge sc">SHIPPING CONFIRMATION</span><strong>Offline Order Dispatched</strong></div>
+  <table class="lw-table">
+    <tr><td class="lw-key">Trigger</td><td class="lw-val">Staff marks an offline delivery order <strong>fulfilled</strong> with a tracking number.</td></tr>
+    <tr><td class="lw-key">Conditions</td><td class="lw-val"><code>channel = offline</code></td></tr>
+    <tr><td class="lw-key">Changes</td><td class="lw-val"><strong>Tax Invoice button suppressed</strong> (already sent with confirmation) · Body references prior payment confirmation · Subject ends "here are your tracking details" · Phone 7710968305</td></tr>
+  </table>
+</div>
+<div class="lw-subject sc"><span class="lw-s-label">Subject</span><span class="lw-s-text">Order #1063 is shipped, here are your tracking details</span></div>
+<div class="email">
+  <div class="e-header"><div style="font-family:Georgia,'Times New Roman',serif;font-size:24px;letter-spacing:7px;color:#111;">TIMANTI</div><div style="font-size:8px;letter-spacing:5px;color:#aaa;margin-top:2px;">JEWELLERY</div></div>
+  <div class="e-content">
+    <h2 class="e-h2">Your order is on the way!</h2>
+    <p class="e-body">Hi <strong>Priya</strong>, great news, your order is on its way. Your tracking details are below, and your tax invoice was sent earlier with your payment confirmation.</p>
+    <p class="e-track">Tracking Number: <a href="#">7712345678</a> (Sequel Logistics)</p>
+    <div class="e-store-link"><a href="#">Visit our online store</a></div>
+  </div>
+  <div class="e-section"><div class="e-section-inner">
+    <h3 style="margin:0 0 12px;">Items in this shipment</h3>
+    <div class="e-item">
+      <div class="e-item-img"><svg viewBox="0 0 24 24"><path d="M12 2l2.4 7.4H22l-6.2 4.5 2.4 7.4L12 17l-6.2 4.3 2.4-7.4L2 9.4h7.6z"/></svg></div>
+      <div class="e-item-detail"><div class="e-item-title">Heirloom Lab-Grown Diamond Bracelet</div><div class="e-item-qty">Qty: 1</div><div class="e-item-variant">18K / WG / 7"</div><div class="e-item-weights"><strong>Gross:</strong> 1.87g &nbsp;·&nbsp; <strong>Net:</strong> 1.49g &nbsp;·&nbsp; <strong>Dia:</strong> 0.75ct</div></div>
+      <div class="e-item-price">INR 100,111</div>
+    </div>
+    <div class="e-summary"><div class="e-sumwrap">
+      <div class="e-sumrow"><span>Subtotal (excl. GST)</span><span>INR 97,195</span></div>
+      <div class="e-sumrow"><span>GST @ 3%</span><span>INR 2,916</span></div>
+      <div class="e-sumrow total"><span>Total</span><span>INR 100,111</span></div>
+    </div></div>
+  </div></div>
+  <div class="e-section"><div class="e-section-inner"><div class="e-support"><h3>Need help?</h3><p>For any help with your order, please call or WhatsApp us on the number below, or reply to this email with your query and our customer team will get back to you.</p><table align="center" style="margin:0 auto;"><tr><td class="e-help-col"><svg width="26" height="26" viewBox="0 0 24 24" style="display:block;margin:0 auto 6px;"><path fill="#25D366" d="M12.04 2C6.58 2 2.13 6.45 2.13 11.91c0 1.75.46 3.45 1.32 4.95L2 22l5.25-1.38c1.45.79 3.08 1.21 4.79 1.21 5.46 0 9.91-4.45 9.91-9.91C21.95 6.45 17.5 2 12.04 2zm5.8 14.03c-.24.68-1.4 1.3-1.94 1.35-.5.05-1.12.07-1.81-.11-.42-.13-.95-.31-1.64-.6-2.88-1.24-4.76-4.14-4.9-4.33-.14-.19-1.17-1.56-1.17-2.97 0-1.41.74-2.11 1-2.4.26-.29.57-.36.76-.36.19 0 .38 0 .54.01.17.01.41-.07.64.49.24.57.81 1.98.88 2.12.07.14.12.31.02.5-.09.19-.14.31-.28.48-.14.17-.29.37-.42.5-.14.14-.28.28-.12.55.16.27.71 1.17 1.53 1.9 1.05.93 1.94 1.22 2.21 1.36.27.14.43.12.59-.07.16-.19.68-.79.86-1.06.18-.27.36-.22.61-.13.25.09 1.58.75 1.85.88.27.14.45.2.52.31.06.11.06.65-.18 1.33z"/></svg><strong>Call / WhatsApp</strong><br><a href="#">+91 7710968305</a></td><td class="e-help-col"><svg width="26" height="26" viewBox="0 0 24 24" style="display:block;margin:0 auto 6px;"><rect x="3" y="5.5" width="18" height="13" rx="1.5" fill="none" stroke="#333" stroke-width="1.6"/><path d="M3.5 6.5l8.5 6 8.5-6" fill="none" stroke="#333" stroke-width="1.6"/></svg><strong>Email us</strong><br><a href="#">hello@timanti.in</a></td></tr></table></div></div></div>
+  <div class="e-section"><div class="e-section-inner"><div class="e-social"><h3>We hope you loved the experience so far!</h3><p>Please follow us on Instagram and leave us a review on Google. It would mean the world to us.</p><div class="e-social-btns"><a class="e-social-btn" href="#"><span class="e-social-btn-inner"><svg width="15" height="15" viewBox="0 0 24 24" style="vertical-align:middle;"><path fill="#E4405F" d="M12 2.16c3.2 0 3.58.01 4.85.07 1.17.05 1.8.25 2.23.41.56.22.96.48 1.38.9.42.42.68.82.9 1.38.16.42.36 1.06.41 2.23.06 1.27.07 1.65.07 4.85s-.01 3.58-.07 4.85c-.05 1.17-.25 1.8-.41 2.23-.22.56-.48.96-.9 1.38-.42.42-.82.68-1.38.9-.42.16-1.06.36-2.23.41-1.27.06-1.65.07-4.85.07s-3.58-.01-4.85-.07c-1.17-.05-1.8-.25-2.23-.41-.56-.22-.96-.48-1.38-.9-.42-.42-.68-.82-.9-1.38-.16-.42-.36-1.06-.41-2.23C2.17 15.58 2.16 15.2 2.16 12s.01-3.58.07-4.85c.05-1.17.25-1.8.41-2.23.22-.56.48-.96.9-1.38.42-.42.82-.68 1.38-.9.42-.16 1.06-.36 2.23-.41C8.42 2.17 8.8 2.16 12 2.16zM12 0C8.74 0 8.33.01 7.05.07 5.78.13 4.9.33 4.14.63c-.79.31-1.46.72-2.12 1.38C1.36 2.67.95 3.34.63 4.14.33 4.9.13 5.78.07 7.05.01 8.33 0 8.74 0 12s.01 3.67.07 4.95c.06 1.27.26 2.15.56 2.91.31.79.72 1.46 1.38 2.12.66.66 1.33 1.07 2.12 1.38.76.3 1.64.5 2.91.56C8.33 23.99 8.74 24 12 24s3.67-.01 4.95-.07c1.27-.06 2.15-.26 2.91-.56.79-.31 1.46-.72 2.12-1.38.66-.66 1.07-1.33 1.38-2.12.3-.76.5-1.64.56-2.91.06-1.28.07-1.69.07-4.95s-.01-3.67-.07-4.95c-.06-1.27-.26-2.15-.56-2.91-.31-.79-.72-1.46-1.38-2.12C21.33 1.36 20.66.95 19.86.63 19.1.33 18.22.13 16.95.07 15.67.01 15.26 0 12 0zm0 5.84A6.16 6.16 0 1 0 18.16 12 6.16 6.16 0 0 0 12 5.84zM12 16a4 4 0 1 1 4-4 4 4 0 0 1-4 4zm6.41-10.85a1.44 1.44 0 1 0 1.44 1.44 1.44 1.44 0 0 0-1.44-1.44z"/></svg><span>&nbsp;Follow @timanti.official</span></span></a><a class="e-social-btn" href="#"><span class="e-social-btn-inner"><svg width="15" height="15" viewBox="0 0 48 48" style="vertical-align:middle;"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg><span>&nbsp;Review us on Google</span></span></a></div><p class="e-wa-link"><a href="#">Get WhatsApp updates on new collections &amp; offers</a></p><p class="e-social-note">By joining WhatsApp updates you consent to receive marketing messages.<br>Unsubscribe anytime.</p></div></div></div>
+  <div class="e-section"><div class="e-section-inner"><div class="e-promisebox"><div class="e-promise"><svg width="42" height="42" viewBox="0 0 24 24"><path fill="none" stroke="#b98a4a" stroke-width="1.3" d="M12 2.5l7 3v6c0 4.4-3 7.4-7 8.9-4-1.5-7-4.5-7-8.9v-6z"/><path fill="none" stroke="#b98a4a" stroke-width="1.3" d="M8.8 12l2.1 2.1L15.2 10"/></svg><span>BIS Hallmarked<br>Gold</span></div><div class="e-promise"><svg width="42" height="42" viewBox="0 0 24 24"><path fill="none" stroke="#b98a4a" stroke-width="1.3" d="M6 3.5h12l3 4.8-9 12.2L3 8.3z"/><path fill="none" stroke="#b98a4a" stroke-width="1.3" d="M3 8.3h18M9 3.5L6 8.3l6 12.2 6-12.2-3-4.8"/></svg><span>IGI Certified<br>Diamonds</span></div><div class="e-promise"><svg width="42" height="42" viewBox="0 0 24 24"><path fill="none" stroke="#b98a4a" stroke-width="1.3" d="M4.5 12a7.5 7.5 0 0 1 12.8-5.3L19.5 8"/><path fill="none" stroke="#b98a4a" stroke-width="1.3" d="M19.5 4.2V8h-3.8"/><path fill="none" stroke="#b98a4a" stroke-width="1.3" d="M19.5 12a7.5 7.5 0 0 1-12.8 5.3L4.5 16"/><path fill="none" stroke="#b98a4a" stroke-width="1.3" d="M4.5 19.8V16h3.8"/></svg><span>Lifetime<br>Exchange</span></div></div></div></div>
+  <div class="e-footer"><a href="#">Return &amp; Refund Policy</a> &nbsp;|&nbsp; <a href="#">Lifetime Exchange &amp; Upgrade</a> &nbsp;|&nbsp; <a href="#">Shipping Policy</a></div>
+</div>
+</div>
+
+</div>
+
+<script>
+function show(id,btn){
+  document.querySelectorAll('.panel').forEach(function(p){p.classList.remove('active');});
+  document.querySelectorAll('.tab-btn').forEach(function(b){b.classList.remove('active');});
+  document.getElementById(id).classList.add('active');
+  btn.classList.add('active');
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,13 @@
+api_version = "2025-10"
+
+[[extensions]]
+name = "t:name"
+handle = "outside-repair-intake"
+type = "ui_extension"
+
+# Admin action: "Outside repair intake" under More actions on a draft order. Records the inspection
+# of a piece Timanti did not sell and starts the ordinary repair flow. Kept out of the Jewellery
+# Workspace on purpose — that panel is already long, and this is a step-by-step counter task.
+[[extensions.targeting]]
+module = "./src/OutsideRepairIntake.jsx"
+target = "admin.draft-order-details.action.render"

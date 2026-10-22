@@ -28,6 +28,11 @@ const {
   buildRepairReadyFinalHtml,
 } = require('../../integrations/email/templates');
 const { verifySessionToken, peekClaims } = require('./session_token');
+// Pieces Timanti did not sell. Everything for them lives in ./outside; this file only branches.
+const outside = require('./outside/specs');
+const outsideForms = require('./outside/forms');
+const outsideEmails = require('./outside/emails');
+const { getBuyingRateTable, buyingRateFor } = require('../../core/shopify');
 
 // Public identifier of the Metafield Manager app (it ships in shopify.app.*.toml), used as the
 // expected `aud` on a session token. Overridable by env so a second install does not need a code
@@ -263,7 +268,7 @@ async function reconcileRepairDraft(draft, tags, token) {
 
     // (a) The item was never copied across — try again now the reference may exist.
     if (!props._item_title) {
-      const specs = await fetchAndCopyOriginalOrderSpecs(draft, token);
+      const specs = await resolveRepairSpecs(draft, token);
       if (specs) { Object.assign(props, specs); changed = true; }
     }
 
@@ -494,6 +499,20 @@ async function fetchAndCopyOriginalOrderSpecs(draft, token) {
   }
 }
 
+// Where a repair's "as received" specs come from. A Timanti repair copies them off the original
+// order. An outside piece has no order: the intake form (./outside/routes.js) wrote them onto the
+// line already, so they are simply read back, in the same shape the copy returns. Returns false
+// when there is nothing usable, exactly like the copy.
+async function resolveRepairSpecs(draft, token) {
+  if (!outside.isOutside(draft.tags)) return fetchAndCopyOriginalOrderSpecs(draft, token);
+  const props = {};
+  for (const p of (draft.line_items?.[0]?.properties || [])) props[p.name] = p.value;
+  if (!props._item_title) return false;
+  const specs = {};
+  for (const k of SPEC_KEYS) if (props[k]) specs[k] = props[k];
+  return specs;
+}
+
 // The two pieces of human context every internal repair mail should carry.
 //
 // note  — the draft order's native note: what the counter actually wrote down when the piece came
@@ -642,7 +661,7 @@ async function processRepairDraftUpdate(incomingDraft, getShopifyToken, assignRe
   if (tags.includes('repair-resync-items')) {
     const token = await getShopifyToken();
     try {
-      const specs = await fetchAndCopyOriginalOrderSpecs(draft, token);
+      const specs = await resolveRepairSpecs(draft, token);
       console.log(specs
         ? `✅ Repair pieces re-copied for ${draft.name}`
         : `⚠️  Repair pieces resync found nothing to copy for ${draft.name}`);
@@ -674,6 +693,40 @@ async function processRepairDraftUpdate(incomingDraft, getShopifyToken, assignRe
     if (!hqEmail) console.warn(`⚠️  HQ_EMAIL not set — internal intake mail for ${draft.name} goes to the store only`);
     const shopifyToken    = await getShopifyToken();
 
+    // ── GATE (outside pieces): the inspection must be complete ───────────────
+    // The intake form refuses to submit without these, so this only catches a draft tagged
+    // repair-outside by hand. Same hold pattern as the order-reference gate below: tag, tell the
+    // store once, send the customer nothing. Submitting the form clears the tag and re-fires this.
+    if (outside.isOutside(tags)) {
+      const lineProps = {};
+      for (const p of (draft.line_items?.[0]?.properties || [])) lineProps[p.name] = p.value;
+      const missing = outside.missingFromProps(lineProps);
+      if (missing.length) {
+        if (!tags.includes(outside.MISSING_INSPECTION_TAG)) {
+          await updateDraftOrderTags(draft.id, [...tags, outside.MISSING_INSPECTION_TAG], shopifyToken);
+          if (STORE_EMAIL) {
+            await repairSendEmail({
+              internal: true,
+              subject: `Action needed — outside-piece inspection incomplete on ${draft.name}`,
+              html:    `<div style="font-family:Arial,sans-serif;padding:24px;max-width:520px;">
+                <h2 style="font-size:18px;margin:0 0 12px;">Repair intake is on hold</h2>
+                <p style="font-size:14px;color:#444;line-height:1.6;margin:0 0 12px;">
+                  <strong>${draft.name}</strong> is tagged <code>${outside.OUTSIDE_TAG}</code> but the inspection is missing:
+                  <strong>${missing.join(', ')}</strong>.
+                </p>
+                <p style="font-size:14px;color:#444;line-height:1.6;margin:0;">
+                  No emails have been sent to the customer. Open the draft, choose
+                  <em>More actions → Outside repair intake</em>, complete it and submit — the intake then runs automatically.
+                </p>
+              </div>`
+            }).catch(err => console.error(`❌ Missing-inspection alert failed for ${draft.name}:`, err.message));
+          }
+        }
+        console.warn(`⛔ Outside repair intake HELD — inspection incomplete on ${draft.name}: ${missing.join(', ')}`);
+        return;
+      }
+    }
+
     // ── GATE: the original Timanti order reference is MANDATORY ──────────────
     // Every customer-facing repair email shows the real piece — name, variant and
     // image — and all of that is copied from the original order. Without the
@@ -681,7 +734,7 @@ async function processRepairDraftUpdate(incomingDraft, getShopifyToken, assignRe
     // custom line item, i.e. the word "repair". So we do not send at all: we tag
     // the draft, tell HQ, and stop. Filling the metafield re-fires this webhook
     // and the intake proceeds normally, because repair-hq-notified is never set.
-    const specsCopied = await fetchAndCopyOriginalOrderSpecs(draft, shopifyToken);
+    const specsCopied = await resolveRepairSpecs(draft, shopifyToken);
     if (!specsCopied) {
       if (!tags.includes('repair-missing-order-ref')) {
         await updateDraftOrderTags(draft.id, [...tags, 'repair-missing-order-ref'], shopifyToken);
@@ -725,7 +778,7 @@ async function processRepairDraftUpdate(incomingDraft, getShopifyToken, assignRe
     const customerEmail   = draft.email;
     const customerPhone   = draft.billing_address?.phone || draft.phone || '';
     const itemDesc        = draft.line_items?.[0]?.title || 'Repair service';
-    const notes           = draft.note || '';
+    const notes           = outsideEmails.hqNotes(draft, draft.note || '');
     const hmacToken       = generateEstimateToken(draft.id);
     const serverUrl       = process.env.SERVER_URL || 'https://timanti-middleware.fly.dev';
     const approveUrl      = `${serverUrl}/repairs/set-estimate?d=${draft.id}&t=${hmacToken}`;
@@ -753,7 +806,8 @@ async function processRepairDraftUpdate(incomingDraft, getShopifyToken, assignRe
           to:      customerEmail,
           ccStore: true,
           subject: `We've received your jewellery for repair`,
-          html:    buildRepairReceivedHtml({ draftRef: draft.name, items: repairItemsFromDraft(draft, specsCopied) })
+          html:    buildRepairReceivedHtml({ draftRef: draft.name, items: repairItemsFromDraft(draft, specsCopied),
+                                             extraHtml: outsideEmails.receivedExtraHtml(draft) })
         });
       } catch (err) {
         console.error(`❌ Intake ack email failed for ${draft.name}:`, err.message);
@@ -819,7 +873,7 @@ async function processRepairDraftUpdate(incomingDraft, getShopifyToken, assignRe
     }
 
     await updateDraftOrderTags(draft.id, [...tags, 'repair-free-notified'], token);
-    await fetchAndCopyOriginalOrderSpecs(draft, token);
+    await resolveRepairSpecs(draft, token);
     console.log(`✅ Free repair confirmed: ${draft.name}`);
     return;
   }
@@ -915,7 +969,8 @@ async function processRepairDraftUpdate(incomingDraft, getShopifyToken, assignRe
           amount:          Math.round(amount),
           paymentUrl:      shortUrl,
           approveStoreUrl,
-          whatsappUrl
+          whatsappUrl,
+          breakdown:       outsideEmails.breakdownFromDraft(draft)
         })
       });
     } catch (err) {
@@ -1038,7 +1093,8 @@ async function processRepairDraftUpdate(incomingDraft, getShopifyToken, assignRe
           refundWalletUrl,
           payBalanceUrl,
           trackingId:     sequelId,
-          trackingUrl
+          trackingUrl,
+          extraHtml:      outsideEmails.readyExtraHtml(draft)
         })
       });
     } catch (err) {
@@ -1061,6 +1117,9 @@ async function processRepairDraftUpdate(incomingDraft, getShopifyToken, assignRe
 }
 
 function registerRepairRoutes(app, getShopifyToken) {
+
+  // Outside-piece intake form and photo upload.
+  require('./outside/routes').register(app);
 
   // ── Line items on the linked repair order ──────────────────────────────────
   // WHY THIS LOOKUP LIVES HERE AND NOT IN THE EXTENSION
@@ -1168,6 +1227,14 @@ function registerRepairRoutes(app, getShopifyToken) {
       // A draft already tagged complimentary opens with the box ticked and the money field locked,
       // so the form cannot be used to put a price back on a repair that was agreed as free.
       const alreadyFree   = /(^|,)s*(repair-free|free-repair)s*(,|$)/i.test(d.tags || '');
+      // Prefill the breakdown's metal rate with today's sale rate for the piece's karat. Best
+      // effort: an unknown karat or an unreadable table just leaves the box for staff to type.
+      const metalStr = (d.line_items?.[0]?.properties || []).find(p => p.name === '_variant_title')?.value || '';
+      let ratePerGram = null;
+      try {
+        const k = outsideForms.karatOf(metalStr);
+        if (k) ratePerGram = buyingRateFor(await getBuyingRateTable(), k);
+      } catch (_) { /* leave the rate blank */ }
 
       res.send(`<!DOCTYPE html>
 <html lang="en">
@@ -1227,6 +1294,7 @@ function registerRepairRoutes(app, getShopifyToken) {
         <label for="skuId">SKU / Design ID <span class="opt-label">(optional — appears on repair note)</span></label>
         <input id="skuId" name="skuId" type="text" placeholder="e.g. TM-RG-001">
       </div>
+      ${outsideForms.estimateBreakdownHtml({ metal: metalStr, ratePerGram })}
       <div style="margin-top:16px; padding:12px 16px; background:#fff3cd; border-radius:6px; border:1px solid #ffc107;">
         <label style="display:flex; align-items:center; gap:10px; cursor:pointer; font-size:13px; font-weight:500; margin:0;">
           <input type="checkbox" name="free" value="true" id="freeCheck" onchange="toggleFree(this)"${alreadyFree ? ' checked' : ''} style="width:16px; height:16px; cursor:pointer;">
@@ -1272,7 +1340,12 @@ function registerRepairRoutes(app, getShopifyToken) {
       return res.status(400).send('<h2 style="font-family:sans-serif;padding:40px;">Invalid or expired link.</h2>');
     }
     const isFree = free === 'true';
-    const parsedAmount = isFree ? 0 : parseFloat(String(amount || '').replace(/,/g, ''));
+    // An itemised estimate is authoritative: the price is the sum of its rows, whatever the amount
+    // box says, so the customer is never charged a figure that differs from what was itemised.
+    const breakdown = isFree ? [] : outsideForms.parseBreakdown(body.costLines);
+    const parsedAmount = isFree ? 0
+      : breakdown.length ? outside.costTotal(breakdown)
+      : parseFloat(String(amount || '').replace(/,/g, ''));
     if (!isFree && (!parsedAmount || parsedAmount <= 0)) {
       return res.status(400).send('<h2 style="font-family:sans-serif;padding:40px;">Invalid amount.</h2>');
     }
@@ -1292,6 +1365,10 @@ function registerRepairRoutes(app, getShopifyToken) {
         baseProps = baseProps.filter(p => p.name !== '_sku_id');
         baseProps.push({ name: '_sku_id', value: skuId.trim() });
       }
+      // Always replaced, never merged: a re-sent estimate without rows must not keep printing the
+      // old breakdown under a new total.
+      baseProps = baseProps.filter(p => p.name !== '_cost_lines');
+      if (breakdown.length) baseProps.push({ name: '_cost_lines', value: outside.formatCostLines(breakdown) });
       const lineItems = firstItem
         ? [{ id: firstItem.id, title: firstItem.title, quantity: firstItem.quantity, price: parsedAmount.toFixed(2), properties: baseProps },
            ...draft.line_items.slice(1).map(li => ({ id: li.id }))]
@@ -1391,6 +1468,9 @@ function registerRepairRoutes(app, getShopifyToken) {
       // than merely dimmed. (On the ESTIMATE form dimming is right, because a figure quoted then can
       // still legitimately change by the time the work is done — here it cannot.)
       const isFreeRepair = /(^|,)\s*(repair-free|free-repair)\s*(,|$)/i.test(d.tags || '');
+      // Outside pieces must account for every gram of change against the weight taken at intake.
+      const isOutsidePiece = outside.isOutside(d.tags);
+      const intakeWeight = (d.line_items?.[0]?.properties || []).find(p => p.name === '_intake_gross_wt')?.value || '';
 
       res.send(`<!DOCTYPE html>
 <html lang="en">
@@ -1473,6 +1553,7 @@ function registerRepairRoutes(app, getShopifyToken) {
         </div>
       </div>
       <p class="hint">Saved as order metafields (custom.gross_wt / net_wt / diamond_cts / gemstone_cts) — shows as "After repair" on the repair note.</p>
+      ${isOutsidePiece ? outsideForms.completeReconcileHtml({ intakeWeight }) : ''}
       <button type="submit">Notify Customer &amp; Mark Complete</button>
     </form>
     <script>
@@ -1510,6 +1591,18 @@ function registerRepairRoutes(app, getShopifyToken) {
       const draft       = fetchData.draft_order;
       const currentTags = (draft.tags || '').split(',').map(t => t.trim()).filter(Boolean);
 
+      // Outside piece: refuse BEFORE writing anything if the weight change is not accounted for,
+      // so a bounced form leaves the draft exactly as it was.
+      let wtReconcile = null;
+      if (outside.isOutside(currentTags)) {
+        const intakeWeight = (draft.line_items?.[0]?.properties || []).find(p => p.name === '_intake_gross_wt')?.value;
+        const rc = outsideForms.parseCompleteReconcile(body, intakeWeight);
+        if (rc.error) {
+          return res.status(400).send(`<h2 style="font-family:sans-serif;padding:40px;">${rc.error}<br><small style="color:#888;font-weight:400;">Go back, correct it and submit again.</small></h2>`);
+        }
+        wtReconcile = rc.line;
+      }
+
       // Process metafields (timanti namespace) — written before repair-complete tag so webhook sees them
       const completeMf = {};
       if (!isStorePickup && sequelId && sequelId.trim()) completeMf.repair_tracking_id  = sequelId.trim();
@@ -1540,6 +1633,7 @@ function registerRepairRoutes(app, getShopifyToken) {
         if (postSpecs.net_metal_weight_g) postProps._post_net_wt   = postSpecs.net_metal_weight_g;
         if (postSpecs.totaldiamondweight) postProps._post_dia_cts  = postSpecs.totaldiamondweight;
         if (postSpecs.gemstone_weight)    postProps._post_gem_cts  = postSpecs.gemstone_weight;
+        if (wtReconcile)                  postProps._wt_reconcile  = wtReconcile;
         try {
           await mergeLineItemProps(draft, postProps, shopifyToken);
         } catch (err) {
@@ -1889,4 +1983,6 @@ module.exports = {
   // Exported for repair_items.test.js only. These two are the whole multi-piece contract: what a
   // selection means, and how the delimited spec lists unpack back into rows. Both are pure.
   parseRepairItemIds, repairItemsFromDraft, SPEC_SEP,
+  // Exported for outside/outside.test.js: the branch between copying specs and reading them back.
+  resolveRepairSpecs,
 };

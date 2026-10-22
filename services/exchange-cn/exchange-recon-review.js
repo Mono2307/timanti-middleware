@@ -33,20 +33,28 @@ const sandbox = { console, Logger: { log() {} } };
 vm.createContext(sandbox);
 const src = fs.readFileSync(GS, 'utf8')
   // top-level const/let are not visible on the context object — expose the ones we need
-  + '\n;this.__x = { resolveExchangeUnit_, aggregateExchangeUnits_, exchangeIssuesFor_ };';
+  + '\n;this.__x = { resolveExchangeUnit_, aggregateExchangeUnits_, exchangeIssuesFor_, pickSameSpecVariant_ };';
 vm.runInContext(src, sandbox, { filename: 'EXCHANGE-CALCULATOR-FULL.gs.txt' });
-const { resolveExchangeUnit_, exchangeIssuesFor_ } = sandbox.__x;
+const { resolveExchangeUnit_, exchangeIssuesFor_, pickSameSpecVariant_ } = sandbox.__x;
 
 const snap = JSON.parse(fs.readFileSync(path.join(DIR, 'exchange-orders-snapshot.json'), 'utf8'));
 const cat = JSON.parse(fs.readFileSync(path.join(DIR, 'exchange-catalogue-live.json'), 'utf8'));
 const rates = cat._gold_rate_config;
 
+// Mirrors fetchLiveCatalogue_ in the script: a sold variant that 404s is followed to its product,
+// whose current same tone/karat/size variant stands in (pickSameSpecVariant_ is the script's own).
 function liveFor(li) {
   if (!li.variant_id) return { status: 'none' };
   const v = cat.variants[String(li.variant_id)];
   if (!v) return { status: 'error', code: 'not in snapshot' };
-  if (v.status !== 'ok') return { status: v.status, code: v.code };
-  return { status: 'ok', variant: v.variant };
+  if (v.status === 'ok') return { status: 'ok', variant: v.variant };
+  if (v.status !== 'deleted') return { status: v.status, code: v.code };
+  const p = (cat.products || {})[String(li.product_id)];
+  if (!p) return { status: 'deleted', code: 404 };
+  const pick = pickSameSpecVariant_(li.sku, p.variants || []);
+  const sub = pick && cat.variants[String(pick.id)];
+  if (!pick || !sub || sub.status !== 'ok') return { status: 'deleted', code: 404, product: p.metafields };
+  return { status: 'substitute', via: 'product', subSku: pick.sku, variant: sub.variant, product: p.metafields };
 }
 
 const args = process.argv.slice(2);

@@ -1,0 +1,219 @@
+<title>Timanti Exchange Rules</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,500;8..60,600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one reading column; rule cards only where a rule is stated; worked examples as ledger rows. */
+:root {
+  --bg: #f6f7f4;
+  --surface: #ffffff;
+  --ink: #1d2420;
+  --muted: #5a6560;
+  --line: #d9ddd6;
+  --accent: #8a6a1f;          /* brass — the trade's metal, used sparingly */
+  --accent-soft: #f2ead6;
+  --ok: #2f6b45;   --ok-bg: #e3efe6;
+  --warn: #8a5a00; --warn-bg: #f7ecd2;
+  --stop: #9b2c2c; --stop-bg: #f6e1df;
+  --font-display: "Source Serif 4", Georgia, "Times New Roman", serif;
+  --font-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-data: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #151a17; --surface: #1c2320; --ink: #e6ebe7; --muted: #9aa69f; --line: #2e3833;
+    --accent: #d2b26a; --accent-soft: #2c271b;
+    --ok: #8fd0a3; --ok-bg: #1d3226; --warn: #e6bf6a; --warn-bg: #352b16; --stop: #ef9b93; --stop-bg: #3a1f1d;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #151a17; --surface: #1c2320; --ink: #e6ebe7; --muted: #9aa69f; --line: #2e3833;
+  --accent: #d2b26a; --accent-soft: #2c271b;
+  --ok: #8fd0a3; --ok-bg: #1d3226; --warn: #e6bf6a; --warn-bg: #352b16; --stop: #ef9b93; --stop-bg: #3a1f1d;
+  color-scheme: dark;
+}
+body { background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 16px; line-height: 1.6; }
+.wrap { max-width: 46rem; margin: 0 auto; padding-inline: 20px; padding-block: 48px 72px; display: flex; flex-direction: column; gap: 40px; }
+header { display: flex; flex-direction: column; gap: 10px; }
+.eyebrow { font-size: 12px; letter-spacing: .12em; text-transform: uppercase; color: var(--accent); font-weight: 600; }
+h1 { font-family: var(--font-display); font-weight: 600; font-size: clamp(30px, 6vw, 42px); line-height: 1.12; margin: 0; text-wrap: balance; }
+h2 { font-family: var(--font-display); font-weight: 600; font-size: 25px; line-height: 1.25; margin: 0; text-wrap: balance; }
+h3 { font-size: 16px; font-weight: 600; margin: 0; }
+p { margin: 0; }
+.lede { font-size: 18px; color: var(--muted); max-width: 40rem; }
+section { display: flex; flex-direction: column; gap: 16px; }
+.muted { color: var(--muted); }
+.formula { font-family: var(--font-data); font-size: 15px; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 14px 16px; overflow-x: auto; white-space: pre; }
+.modes { display: grid; grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); gap: 14px; }
+.mode { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 18px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.mode h3 { font-family: var(--font-display); font-size: 20px; font-weight: 600; }
+ul { margin: 0; padding-left: 1.2em; display: flex; flex-direction: column; gap: 6px; }
+.rules { display: flex; flex-direction: column; gap: 0; border-top: 1px solid var(--line); }
+.rule { display: grid; grid-template-columns: minmax(0, 15rem) minmax(0, 1fr); gap: 6px 24px; padding: 16px 0; border-bottom: 1px solid var(--line); }
+.rule .when { font-weight: 600; }
+.rule .then { min-width: 0; }
+.rule .eg { grid-column: 2; font-size: 14px; color: var(--muted); }
+@media (max-width: 640px) { .rule { grid-template-columns: minmax(0, 1fr); } .rule .eg { grid-column: 1; } }
+.table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 14px; }
+th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); font-weight: 600; background: var(--accent-soft); }
+tr:last-child td { border-bottom: none; }
+td.num { font-family: var(--font-data); font-variant-numeric: tabular-nums; white-space: nowrap; text-align: right; }
+.pill { display: inline-block; font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
+.pill.ok { color: var(--ok); background: var(--ok-bg); }
+.pill.warn { color: var(--warn); background: var(--warn-bg); }
+.pill.stop { color: var(--stop); background: var(--stop-bg); }
+.levels { display: grid; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); gap: 12px; }
+.level { border-left: 3px solid var(--line); padding: 4px 0 4px 14px; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.level.stop { border-color: var(--stop); } .level.warn { border-color: var(--warn); } .level.ok { border-color: var(--ok); }
+.note { font-size: 14px; color: var(--muted); }
+code { font-family: var(--font-data); font-size: .92em; }
+footer { font-size: 13px; color: var(--muted); border-top: 1px solid var(--line); padding-top: 16px; }
+</style>
+
+<div class="wrap">
+  <header>
+    <span class="eyebrow">Timanti · After-sales</span>
+    <h1>How an exchange is valued</h1>
+    <p class="lede">The rules the Exchange Calculator follows when a customer brings back a piece, what it does when an old order is missing information, and when it refuses to issue anything.</p>
+  </header>
+
+  <section>
+    <h2>The two ways to exchange</h2>
+    <div class="modes">
+      <div class="mode">
+        <h3>Deduction</h3>
+        <p>The piece is revalued at <strong>today's</strong> prices.</p>
+        <ul>
+          <li>Gold at 100% of today's rate for its karat</li>
+          <li>Diamond at 80% of today's catalogue price, never more than the customer paid for the stone</li>
+          <li>Nothing for making, gemstones, shipping, IGI or GST</li>
+        </ul>
+      </div>
+      <div class="mode">
+        <h3>Full Value</h3>
+        <p>The customer gets back <strong>what they were charged</strong> for that piece, GST included.</p>
+        <ul>
+          <li>Taken from what Shopify recorded as charged for the piece</li>
+          <li>Today's prices play no part</li>
+          <li>For a multi-piece order, only the piece being returned counts</li>
+        </ul>
+      </div>
+    </div>
+    <p class="note">Any custom deduction staff enter (always a negative number) comes off the final figure in both modes.</p>
+  </section>
+
+  <section>
+    <h2>The Deduction formula</h2>
+    <div class="formula">Credit  =  net gold weight × today's rate for that karat
+        +  the smaller of  ( 80% × today's diamond price ,  what was paid for the stone )</div>
+    <p>The second part is the <strong>diamond cap</strong>. On most orders it changes nothing, because 80% of the diamond price is already below what the customer paid. It only matters when the catalogue diamond price has risen a lot since the sale, or when a large discount came off the stone. Without it, an exchange could credit the stone at more than the customer ever paid for it.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Order</th><th>Gold</th><th>80% of diamond today</th><th>Paid for stone</th><th>Credit</th></tr></thead>
+        <tbody>
+          <tr><td>#1072 earring, 14K</td><td class="num">3.94 g × 8,831 = 34,794.14</td><td class="num">1,84,000.00</td><td class="num">2,10,000.00</td><td class="num">2,18,794.14</td></tr>
+          <tr><td>#1045 necklace, 14K</td><td class="num">2.494 g × 8,831 = 22,024.51</td><td class="num">29,600.00</td><td class="num">12,759.59</td><td class="num">34,784.10</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="note">On #1045 the catalogue diamond price has nearly tripled since April. The cap holds the stone at the ₹12,759.59 actually paid instead of crediting ₹29,600. Rates shown are from 30 September 2026; the sheet always uses the day's rate.</p>
+  </section>
+
+  <section>
+    <h2>Where each number comes from</h2>
+    <div class="rules">
+      <div class="rule">
+        <div class="when">Gold rate</div>
+        <div class="then">Today's rate for the piece's karat, from the same gold-rate setting the repricing job uses (14K and 18K have different rates). If that setting cannot be read, the product's own rate is used and the sheet says so.</div>
+      </div>
+      <div class="rule">
+        <div class="when">Net gold weight</div>
+        <div class="then">In order of preference: the weight recorded on the order; the gold charged divided by the rate recorded on the order; the catalogue weight; a weight staff measure at the counter, which needs a written reason.</div>
+        <div class="eg">Catalogue weights have been edited since some sales, so using one always asks staff to confirm, and they can weigh the piece instead.</div>
+      </div>
+      <div class="rule">
+        <div class="when">Today's diamond price</div>
+        <div class="then">The catalogue price of the listing the piece was sold as.</div>
+      </div>
+      <div class="rule">
+        <div class="when">Which listing</div>
+        <div class="then">The exact variant sold. If Shopify has since given it a new ID, the listing with the <strong>same SKU code</strong> in the same tone, karat and size. Only if no listing with that code exists does it fall back to another listing on the same product, and then staff are told it is a different code.</div>
+        <div class="eg">#1044 and #1050: the products are live, but the variant IDs on the orders no longer exist because the variants were recreated.</div>
+      </div>
+      <div class="rule">
+        <div class="when">Silver</div>
+        <div class="then">100% of the metal at today's catalogue silver price. The system has no daily silver rate.</div>
+        <div class="eg">#1055 silver coin: 5 g × ₹290 = ₹1,450.</div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>When an old order is missing information</h2>
+    <p>Orders from before August 2026 often lack part of the price breakup. Each gap is settled by a fixed rule that can only err in Timanti's favour, and the sheet tells staff which rule it used. No one has to approve anything.</p>
+    <div class="rules">
+      <div class="rule">
+        <div class="when">What was paid for the stone is not recorded, but there was no discount</div>
+        <div class="then">The diamond price on the order is what was paid.</div>
+      </div>
+      <div class="rule">
+        <div class="when">Orders up to April 2026</div>
+        <div class="then">The prices on these orders are already after discount, so the diamond price on the order is what was paid for the stone, and the discount is not subtracted again.</div>
+        <div class="eg">Recognised by checking which reading adds up to the amount actually charged.</div>
+      </div>
+      <div class="rule">
+        <div class="when">A discount was given, but not how it was split between stone and making</div>
+        <div class="then">The stone is taken at the least it could have cost: as if the whole discount came off the stone.</div>
+        <div class="eg">#1056: diamond ₹65,400 − ₹4,822 discount = ₹60,578 cap.</div>
+      </div>
+      <div class="rule">
+        <div class="when">The breakup is slightly off the amount charged</div>
+        <div class="then">The reading that lands within 1% of the charge is used.</div>
+        <div class="eg">#1039: ₹449.94 off (0.7%).</div>
+      </div>
+      <div class="rule">
+        <div class="when">No breakup at all</div>
+        <div class="then">The stone can't have cost more than the piece's price excluding GST, minus its gold, so that is the cap. The whole Deduction is also held to the price excluding GST.</div>
+        <div class="eg">#1041 bangle: today's catalogue values it at ₹95,245 of gold alone, against ₹57,225 paid excluding GST. Credit: ₹57,225.</div>
+      </div>
+      <div class="rule">
+        <div class="when">Custom item with no listing</div>
+        <div class="then">Staff enter the catalogue SKU it corresponds to, with a reason, and it is valued as that SKU. Otherwise only Full Value is available.</div>
+        <div class="eg">#1048 nosepin → NSP00001–NSP00003.</div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>What the sheet shows staff</h2>
+    <div class="levels">
+      <div class="level stop"><span class="pill stop">Blocked</span><p>Nothing can be issued in that mode. The message says why and what to do.</p></div>
+      <div class="level warn"><span class="pill warn">Confirm</span><p>Staff read it and press Yes. Their confirmation is written to the log.</p></div>
+      <div class="level ok"><span class="pill ok">OK</span><p>Every figure came straight from the order and the live catalogue.</p></div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Always blocked</th><th>Example</th></tr></thead>
+        <tbody>
+          <tr><td>Test orders, cancelled, refunded or voided orders</td><td>#1001–#1034, #1074</td></tr>
+          <tr><td>Item already exchanged or tagged returned</td><td>#1060, exchanged into #1063 on 24 June</td></tr>
+          <tr><td>Deduction with no metal weight anywhere and no weighed weight</td><td>Staff weigh the piece to proceed</td></tr>
+          <tr><td>A value on the sheet edited after the lookup</td><td>Re-enter the order number</td></tr>
+          <tr><td>A positive custom deduction</td><td>Custom deductions must be negative</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="note">An earlier voucher on the same order only asks for confirmation, because some were balance refunds rather than returns (#1073's was an overpayment refund).</p>
+  </section>
+
+  <section>
+    <h2>Voucher and exchange note status</h2>
+    <p>Whether a voucher or exchange note has been applied, redeemed, voided or has expired is known only to the ledger the middleware keeps. The sheet copies that onto the After-Sales Log, the Voucher Log and the Exchange Log <strong>every day at 12:00 and 18:00 IST</strong>, and whenever someone runs <em>Refresh log statuses from ledger</em> from the menu. Voided rows are never changed.</p>
+    <p class="note">Before this, the Voucher and Exchange Logs kept the status written at issue. That is why EXC27-KAHSR-0001 read "Applied" although it was redeemed against #D154 on 1 July.</p>
+  </section>
+
+  <footer>Source of truth: <code>EXCHANGE-CALCULATOR-FULL.gs.txt</code>, the Apps Script behind the Timanti Exchanges sheet. Updated 1 October 2026.</footer>
+</div>

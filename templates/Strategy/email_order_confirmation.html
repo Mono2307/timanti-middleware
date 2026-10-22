@@ -1,0 +1,476 @@
+{% assign delivery_method_types = delivery_agreements | map: 'delivery_method_type' | uniq %}
+{% if delivery_method_types.size > 1 %}
+  {% assign has_split_cart = true %}
+{% else %}
+  {% assign has_split_cart = false %}
+{% endif %}
+{% comment %}
+  ROUTING. Read TAGS first. This email is sent ~2s after a draft converts, BEFORE the middleware copies
+  the draft's custom.* metafields onto the order (#1075: email 14:46:18, channel written 14:46:21), so
+  the metafields read blank here. The admin panel mirrors them onto the draft as tags, which travel
+  with the conversion: ch:offline|ch:online and ship:yes|ship:no (ot:mto|ot:in-stock also exists but
+  is unused here: the confirmation does not vary by order type). Metafields are only a fallback.
+    is_offline   ch:offline tag, custom.channel = Offline, or the in-store-sale tag
+    is_delivery  offline AND ship:yes (or custom.shipment = Yes), and NOT in-store-sale
+    otherwise an offline order is treated as collected in store: no delivery promise of any kind
+{% endcomment %}
+{% assign ch = order.metafields.custom.channel | downcase %}
+{% assign sh = order.metafields.custom.shipment | downcase %}
+{% assign is_instore_sale = false %}
+{% if order.tags contains 'in-store-sale' %}{% assign is_instore_sale = true %}{% endif %}
+{% assign is_offline = false %}
+{% if order.tags contains 'ch:offline' or ch == "offline" or is_instore_sale %}{% assign is_offline = true %}{% endif %}
+{% assign ship_yes = false %}
+{% if order.tags contains 'ship:yes' %}{% assign ship_yes = true %}{% elsif order.tags contains 'ship:no' %}{% assign ship_yes = false %}{% elsif sh == "yes" %}{% assign ship_yes = true %}{% endif %}
+{% assign is_delivery = false %}
+{% if is_offline and ship_yes and is_instore_sale == false %}{% assign is_delivery = true %}{% endif %}
+{% comment %} Offline and not delivered = collected in store: no shipping row, address, timeline or link. {% endcomment %}
+{% assign hide_shipping_footer = false %}
+{% if is_offline and is_delivery == false %}{% assign hide_shipping_footer = true %}{% endif %}
+{% assign support_phone = "7710938305" %}
+{% if is_offline %}{% assign support_phone = "7710968305" %}{% endif %}
+{% comment %} ===== LOGO SIZE: change the number below to set the logo width in pixels ===== {% endcomment %}
+{% assign logo_width = 120 %}
+{% capture email_title %}Thank you for your purchase!{% endcapture %}
+{% capture email_body %}{% if has_pending_payment %}{% if buyer_action_required %}You'll get a confirmation email after completing your payment.{% else %}Your payment is being processed. You'll get an email when your order is confirmed.{% endif %}{% elsif is_delivery %}Hi <strong>{{ customer.first_name }}</strong>, your piece will be dispatched to you in 2 to 3 business days. Your tax invoice is below.{% elsif is_offline %}{% else %}Hi <strong>{{ customer.first_name }}</strong>, we are preparing your order and will notify you when it is on its way.{% endif %}{% endcapture %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <title>{% if has_pending_payment %}Your Timanti order {{ order_name }} is received{% elsif is_offline %}Your Timanti order {{ order_name }} confirmed, here's your tax invoice{% else %}Your Timanti order {{ order_name }} confirmed{% endif %}</title>
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+  <meta name="viewport" content="width=device-width">
+  <link rel="stylesheet" type="text/css" href="/assets/notifications/styles.css">
+  <style>
+    body, p, td, span, .order-list__item-title, .order-list__item-variant,
+    .customer-info__item, .subtotal-line__title, .subtotal-line__value,
+    .disclaimer__subtext, .footer__cell {
+      font-family: 'Muli', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      font-weight: 300;
+    }
+    h1, h2, h3, h4, h5, h6, .shop-name__text {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      font-weight: 500;
+      letter-spacing: 0.3px;
+    }
+    .button__cell { background: #000000; border-radius: 4px; }
+    .button__text { color: #ffffff !important; text-decoration: none; font-weight: 500; }
+    a, a:hover, a:active, a:visited { color: #fc7d27; text-decoration: none; }
+    .timanti-info-box { background: #F6F6F6; border-left: 4px solid #fc7d27; padding: 20px; margin: 20px auto; text-align: center; max-width: 600px; }
+    .timanti-info-box h4 { margin: 0 0 12px 0; font-weight: 600; color: #000000; }
+    .timanti-info-box p { color: #000000; }
+    .timanti-info-box strong { color: #000000; font-weight: 600; }
+    .timanti-support-section { background: #ffffff; border: 1px solid #e6d8cc; border-radius: 8px; padding: 20px; margin: 20px 0; text-align: center; }
+    .timanti-support-item { display: inline-block; margin: 10px 20px; vertical-align: top; }
+    .timanti-support-item a { color: #000000 !important; }
+    .timanti-promises { background: #F6F6F6; padding: 20px; border-radius: 8px; margin: 20px 0; text-align: center; }
+    .timanti-promise-item { display: inline-block; margin: 10px 15px; text-align: center; vertical-align: top; }
+    .timanti-promise-item img { width: 50px; height: 50px; display: block; margin: 0 auto 8px; }
+    .timanti-promise-item span { display: block; font-size: 13px; color: #000000; }
+    .timanti-consent-section { background: #F6F6F6; border: 1px solid #e6d8cc; border-radius: 8px; padding: 20px; margin: 20px 0; text-align: center; }
+    .timanti-consent-section h4 { color: #000000; font-weight: 600; }
+    .timanti-consent-section p { color: #000000; }
+    .timanti-consent-link { display: inline-block; margin-top: 10px; padding: 10px 20px; background: #000000; color: #ffffff !important; border-radius: 4px; font-weight: 500; }
+    .timanti-weight-info { background: #F9F9F9; padding: 10px; margin: 8px 0; border-radius: 4px; font-size: 13px; color: #666; }
+    .timanti-weight-row { display: inline-block; margin-right: 12px; white-space: nowrap; }
+    .order-list__item-price { font-size: 16px !important; font-weight: 500; }
+    .subtotal-line__title span { font-size: 15px !important; }
+    .subtotal-line__value { font-size: 16px !important; }
+    .subtotal-table--total .subtotal-line__title span { font-size: 15px !important; }
+    .subtotal-table--total .subtotal-line__value { font-size: 16px !important; }
+    .shop-name__cell { text-align: center; }
+    .actions__cell { text-align: center; }
+    .footer-contact-link { color: #000000 !important; }
+  </style>
+</head>
+<body>
+  <table class="body">
+    <tr>
+      <td>
+        <table class="header row">
+          <tr>
+            <td class="header__cell">
+              <center>
+                <table class="container">
+                  <tr>
+                    <td>
+                      <table class="row">
+                        <tr>
+                          <td class="shop-name__cell" colspan="2" style="text-align: center;">
+                            <img src="https://cdn.shopify.com/s/files/1/0775/8322/0993/files/WhatsApp_Image_2026-04-23_at_10.42.47_AM.jpg?v=1777029219" alt="Timanti" width="{{ logo_width }}" style="margin: 0 auto;">
+                          </td>
+                        </tr>
+                      </table>
+                    </td>
+                  </tr>
+                </table>
+              </center>
+            </td>
+          </tr>
+        </table>
+        <table class="row content">
+          <tr>
+            <td class="content__cell">
+              <center>
+                <table class="container">
+                  <tr>
+                    <td style="text-align: center;">
+                      <p style="font-size: 14px; color: #999; margin-bottom: 5px;">Order {{ order_name }}</p>
+                      <h2>{{ email_title }}</h2>
+                      {% if email_body != blank %}<p>{{ email_body }}</p>{% endif %}
+                      <table class="row actions" style="width: 100%;">
+                        <tr><td class="empty-line">&nbsp;</td></tr>
+                        {% if is_offline %}
+                        <tr>
+                          <td class="actions__cell" style="text-align: center; padding-bottom: 15px;">
+                            <center>
+                              <table class="button main-action-cell" align="center" style="margin: 0 auto; float: none !important;">
+                                <tr>
+                                  <td class="button__cell">
+                                    <a target="_blank" href="https://timanti.in/apps/download-pdf/orders/00f6f4bcc547f05bf47f/{{ order.id | times: 8909 }}/{{ order.name | handleize }}.pdf" class="button__text">Download Tax Invoice</a>
+                                  </td>
+                                </tr>
+                              </table>
+                            </center>
+                          </td>
+                        </tr>
+                        {% endif %}
+                        {% if shop.url %}
+                        <tr>
+                          <td class="actions__cell" style="text-align: center;">
+                            <center>
+                              <table class="link secondary-action-cell" align="center" style="margin: 0 auto; float: none !important;">
+                                <tr>
+                                  <td class="link__cell"><a href="{{ shop.url }}">Visit our online store</a></td>
+                                </tr>
+                              </table>
+                            </center>
+                          </td>
+                        </tr>
+                        {% endif %}
+                      </table>
+                      {% unless hide_shipping_footer %}
+                        <div style="background: #F6F6F6; padding: 12px 16px; margin: 14px auto; text-align: center; max-width: 460px; border-radius: 4px; font-size: 12px; line-height: 1.5; color: #888;">
+                          Items are usually shipped within 21 business days.
+                        </div>
+                      {% endunless %}
+                    </td>
+                  </tr>
+                </table>
+              </center>
+            </td>
+          </tr>
+        </table>
+        <table class="row section">
+          <tr>
+            <td class="section__cell">
+              <center>
+                <table class="container">
+                  <tr>
+                    <td>
+                      <table style="width:100%;border-collapse:collapse;">
+                        <tr>
+                          <td style="vertical-align:middle;"><h3 style="margin:0;">Order summary</h3></td>
+                          {% unless is_offline %}{% if order_status_url %}<td style="text-align:right;vertical-align:middle;padding-left:8px;"><a href="{{ order_status_url }}" style="font-size:12px;color:#fc7d27;text-decoration:none;font-weight:600;">View order &#8594;</a></td>{% endif %}{% endunless %}
+                        </tr>
+                      </table>
+                    </td>
+                  </tr>
+                </table>
+                <table class="container">
+                  <tr>
+                    <td>
+                      <p style="font-size: 12px; color: #666; line-height: 1.5; margin: 0 0 12px 0; text-align: left;">Your order is accompanied by a diamond authenticity certificate. Please keep it safe to facilitate future exchanges and returns.</p>
+                      {% for line in subtotal_line_items %}
+                        <table class="row">
+                          <tr class="order-list__item">
+                            <td class="order-list__item__cell">
+                              <table style="width: 100%;">
+                                <tr>
+                                  <td class="order-list__image-cell" style="width: 70px; min-width: 70px; vertical-align: top;">
+                                    {% if line.image %}
+                                      <img src="{{ line | img_url: 'compact_cropped' }}" align="left" width="60" height="60" class="order-list__product-image" style="border-radius: 4px;"/>
+                                    {% endif %}
+                                  </td>
+                                  <td class="order-list__product-description-cell" style="vertical-align: top; text-align: left;">
+                                    <span class="order-list__item-title"><strong>{{ line.title }}</strong></span><br/>
+                                    <span class="order-list__item-title">Qty: {{ line.quantity }}</span><br/>
+                                    {% if line.variant.title != 'Default Title' %}
+                                      <span class="order-list__item-variant" style="color: #777;">{{ line.variant.title }}</span><br/>
+                                    {% endif %}
+                                    {% assign has_weight = false %}
+                                    {% if line.variant.metafields.custom.total_metal_weight_g or line.variant.metafields.custom.net_metal_weight_g or line.variant.metafields.custom.total_diamond_weight %}{% assign has_weight = true %}{% endif %}
+                                    {% if is_offline and has_weight %}
+                                    <div class="timanti-weight-info">
+                                      {% if line.variant.metafields.custom.total_metal_weight_g %}
+                                        <span class="timanti-weight-row"><strong>Gross:</strong> {{ line.variant.metafields.custom.total_metal_weight_g | round: 2 }}g</span>
+                                      {% endif %}
+                                      {% if line.variant.metafields.custom.net_metal_weight_g %}
+                                        <span class="timanti-weight-row"><strong>Net:</strong> {{ line.variant.metafields.custom.net_metal_weight_g | round: 2 }}g</span>
+                                      {% endif %}
+                                      {% if line.variant.metafields.custom.total_diamond_weight %}
+                                        <span class="timanti-weight-row"><strong>Dia:</strong> {{ line.variant.metafields.custom.total_diamond_weight | round: 2 }}ct</span>
+                                      {% endif %}
+                                    </div>
+                                    {% endif %}
+                                    {% comment %} Line-item properties are deliberately NOT printed: they carry the middleware's internal pricing breakdown (Diamond, Gold, Making, Taxable Value, Discount...). {% endcomment %}
+                                  </td>
+                                  <td class="order-list__price-cell" style="vertical-align: top; text-align: right; white-space: nowrap;">
+                                    <p class="order-list__item-price">{{ line.final_line_price | money }}</p>
+                                  </td>
+                                </tr>
+                              </table>
+                            </td>
+                          </tr>
+                        </table>
+                      {% endfor %}
+                      {% comment %}Compute GST (3%) from line item prices. Shopify tax_price may be blank for tax inclusive setups{% endcomment %}
+                      {% assign computed_subtotal = 0 %}
+                      {% for line in subtotal_line_items %}
+                        {% assign computed_subtotal = computed_subtotal | plus: line.final_line_price %}
+                      {% endfor %}
+                      {% assign computed_taxable = computed_subtotal | divided_by: 1.03 %}
+                      {% assign computed_gst = computed_subtotal | minus: computed_taxable %}
+                      <table class="row subtotal-lines">
+                        <tr>
+                          <td class="subtotal-spacer"></td>
+                          <td>
+                            <table class="row subtotal-table">
+                              <tr class="subtotal-line">
+                                <td class="subtotal-line__title"><p><span>Subtotal (excl. GST)</span></p></td>
+                                <td class="subtotal-line__value"><strong>{{ computed_taxable | money }}</strong></td>
+                              </tr>
+                              <tr class="subtotal-line">
+                                <td class="subtotal-line__title"><p><span>GST @ 3%</span></p></td>
+                                <td class="subtotal-line__value"><strong>{{ computed_gst | money }}</strong></td>
+                              </tr>
+                              {% unless hide_shipping_footer %}
+                              <tr class="subtotal-line">
+                                <td class="subtotal-line__title"><p><span>Shipping</span></p></td>
+                                <td class="subtotal-line__value"><strong>{{ shipping_price | money }}</strong></td>
+                              </tr>
+                              {% endunless %}
+                            </table>
+                            <table class="row subtotal-table subtotal-table--total">
+                              <tr class="subtotal-line">
+                                <td class="subtotal-line__title" style="font-size: 15px !important;"><p style="margin: 0;"><span style="font-size: 15px !important; font-weight: 600;">Total</span></p></td>
+                                <td class="subtotal-line__value" style="font-size: 16px !important; text-align: right;"><strong style="font-size: 16px !important; font-weight: 600;">{{ total_price | money_with_currency }}</strong></td>
+                              </tr>
+                            </table>
+                          </td>
+                        </tr>
+                      </table>
+                    </td>
+                  </tr>
+                </table>
+              </center>
+            </td>
+          </tr>
+        </table>
+        <table class="row section">
+          <tr>
+            <td class="section__cell">
+              <center>
+                <table class="container">
+                  <tr>
+                    <td><h3>Customer information</h3></td>
+                  </tr>
+                </table>
+                <table class="container">
+                  <tr>
+                    <td>
+                      <table class="row">
+                        <tr>
+                          {% unless hide_shipping_footer %}
+                            {% if requires_shipping and shipping_address %}
+                              <td class="customer-info__item">
+                                <h4>Shipping address</h4>
+                                {{ shipping_address | format_address }}
+                              </td>
+                            {% endif %}
+                          {% endunless %}
+                          {% if billing_address %}
+                            <td class="customer-info__item">
+                              <h4>Billing address</h4>
+                              {{ billing_address | format_address }}
+                            </td>
+                          {% endif %}
+                        </tr>
+                      </table>
+                      <table class="row">
+                        <tr>
+                          <td class="customer-info__item">
+                            <h4>Payment method</h4>
+                            <p class="customer-info__item-content">
+                              {% assign payment_method_found = false %}
+                              {% comment %} pmodes:card/upi/... is written by the middleware from the installment legs and travels with the draft. {% endcomment %}
+                              {% for tag in order.tags %}
+                                {% assign tag_lower = tag | downcase %}
+                                {% if tag_lower contains 'pmodes:' %}
+                                  {% assign pm_list = tag_lower | remove: 'pmodes:' | split: '/' %}
+                                  {% for pm in pm_list %}{% case pm %}{% when 'card', 'cards' %}Card Payment{% when 'upi' %}UPI{% when 'cash' %}Cash{% when 'netbanking' %}Net Banking{% when 'emi' %}EMI{% when 'online_link' %}Online Payment Link{% else %}{{ pm | replace: '_', ' ' | capitalize }}{% endcase %}{% unless forloop.last %} / {% endunless %}{% endfor %}
+                                  {% assign payment_method_found = true %}{% break %}
+                                {% endif %}
+                              {% endfor %}
+                              {% for tag in order.tags %}
+                                {% if payment_method_found %}{% break %}{% endif %}
+                                {% assign tag_lower = tag | downcase %}
+                                {% if tag_lower == 'cards' or tag_lower == 'card' %}Card Payment{% assign payment_method_found = true %}{% break %}
+                                {% elsif tag_lower == 'upi' %}UPI{% assign payment_method_found = true %}{% break %}
+                                {% elsif tag_lower == 'netbanking' or tag_lower == 'net banking' %}Net Banking{% assign payment_method_found = true %}{% break %}
+                                {% elsif tag_lower == 'wallets' or tag_lower == 'wallet' %}Wallet{% assign payment_method_found = true %}{% break %}
+                                {% elsif tag_lower == 'emi' %}EMI{% assign payment_method_found = true %}{% break %}
+                                {% elsif tag_lower contains 'cash' %}Cash{% assign payment_method_found = true %}{% break %}
+                                {% endif %}
+                              {% endfor %}
+                              {% unless payment_method_found %}
+                                {% for transaction in transactions %}
+                                  {% if transaction.status == "success" and transaction.kind == "sale" %}
+                                    {% if transaction.payment_details.credit_card_company %}{{ transaction.payment_details.credit_card_company }} ending in {{ transaction.payment_details.credit_card_last_four_digits }}{% else %}{{ transaction.gateway_display_name }}{% endif %}
+                                  {% endif %}
+                                {% endfor %}
+                              {% endunless %}
+                            </p>
+                          </td>
+                        </tr>
+                      </table>
+                    </td>
+                  </tr>
+                </table>
+              </center>
+            </td>
+          </tr>
+        </table>
+        <table class="row section">
+          <tr>
+            <td class="section__cell">
+              <center>
+                <table class="container">
+                  <tr>
+                    <td>
+                      <div class="timanti-support-section">
+                        <h3>Need help?</h3>
+                        <p style="color: #666; font-size: 14px; margin: 0 auto 16px; max-width: 460px;">For any help with your order, please call or WhatsApp us on the number below, or reply to this email with your query and our customer team will get back to you.</p>
+                        <table align="center" style="margin: 0 auto;">
+                          <tr>
+                            <td style="padding: 0 18px; text-align: center; vertical-align: top;">
+                              <img src="https://cdn.simpleicons.org/whatsapp/25D366" width="26" height="26" alt="WhatsApp" style="display:block; margin:0 auto 6px;">
+                              <strong style="color: #000000; font-size: 13px;">Call / WhatsApp</strong><br>
+                              <a href="https://wa.me/91{{ support_phone }}" style="color: #fc7d27; font-size: 13px; font-weight: 600; text-decoration: underline;">+91 {{ support_phone }}</a>
+                            </td>
+                            <td style="padding: 0 18px; text-align: center; vertical-align: top;">
+                              <img src="https://api.iconify.design/mdi/email-outline.svg?color=%23333333" width="26" height="26" alt="Email" style="display:block; margin:0 auto 6px;">
+                              <strong style="color: #000000; font-size: 13px;">Email us</strong><br>
+                              <a href="mailto:hello@timanti.in?subject=Query%20about%20order%20{{ order_name }}" style="color: #fc7d27; font-size: 13px; font-weight: 600; text-decoration: underline;">hello@timanti.in</a>
+                            </td>
+                          </tr>
+                        </table>
+                      </div>
+                    </td>
+                  </tr>
+                </table>
+              </center>
+            </td>
+          </tr>
+        </table>
+        <table class="row section">
+          <tr>
+            <td class="section__cell">
+              <center>
+                <table class="container">
+                  <tr>
+                    <td>
+                      <div style="background: #F6F6F6; border-radius: 8px; padding: 20px; margin: 4px 0; text-align: center;">
+                        <h3 style="font-size: 16px; font-weight: 600; color: #000; margin: 0 0 10px 0;">We hope you loved the experience so far!</h3>
+                        <p style="color: #444; font-size: 13px; margin: 0 auto 18px; max-width: 440px; line-height: 1.6; text-align: center;">Please follow us on Instagram and leave us a review on Google. It would mean the world to us.</p>
+                        <table width="100%" cellpadding="0" cellspacing="0">
+                          <tr>
+                            <td align="center">
+                              <table align="center" cellpadding="0" cellspacing="0" style="margin: 0 auto;">
+                                <tr>
+                                  <td style="padding: 0 5px;">
+                                    <a href="https://www.instagram.com/timanti.official/" target="_blank" style="text-decoration: none;">
+                                      <table cellpadding="0" cellspacing="0" style="background: #ffffff; border: 1.5px solid #000000; border-radius: 6px;"><tr><td style="padding: 9px 14px;">
+                                        <img src="https://cdn.simpleicons.org/instagram/E4405F" width="16" height="16" alt="Instagram" style="vertical-align: middle;">
+                                        <span style="color: #000000; font-size: 13px; font-weight: 600; vertical-align: middle;">&nbsp;Follow @timanti.official</span>
+                                      </td></tr></table>
+                                    </a>
+                                  </td>
+                                  <td style="padding: 0 5px;">
+                                    <a href="https://g.page/r/CfUBHho17bbkEBM/review" target="_blank" style="text-decoration: none;">
+                                      <table cellpadding="0" cellspacing="0" style="background: #ffffff; border: 1.5px solid #000000; border-radius: 6px;"><tr><td style="padding: 9px 14px;">
+                                        <img src="https://api.iconify.design/logos/google-icon.svg" width="16" height="16" alt="Google" style="vertical-align: middle;">
+                                        <span style="color: #000000; font-size: 13px; font-weight: 600; vertical-align: middle;">&nbsp;Review us on Google</span>
+                                      </td></tr></table>
+                                    </a>
+                                  </td>
+                                </tr>
+                              </table>
+                            </td>
+                          </tr>
+                        </table>
+                        <p style="margin: 28px 0 0 0; text-align: center;">
+                          <a href="https://wa.me/91{{ support_phone }}?text=Yes%2C%20I%20want%20to%20receive%20WhatsApp%20updates%20from%20Timanti" target="_blank" style="font-size: 13px; color: #fc7d27; font-weight: 600; text-decoration: underline;">Get WhatsApp updates on new collections &amp; offers</a>
+                        </p>
+                        <p style="font-size: 10px; color: #bbb; margin: 12px auto 0; max-width: 340px; line-height: 1.5;">By joining WhatsApp updates you consent to receive marketing messages.<br>Unsubscribe anytime.</p>
+                      </div>
+                    </td>
+                  </tr>
+                </table>
+              </center>
+            </td>
+          </tr>
+        </table>
+        <table class="row section">
+          <tr>
+            <td class="section__cell">
+              <center>
+                <table class="container">
+                  <tr>
+                    <td>
+                      <div class="timanti-promises">
+                        <div class="timanti-promise-item">
+                          <img src="https://cdn.shopify.com/s/files/1/0775/8322/0993/files/icon1_10925c66-b900-4920-a93c-49753bce74cf.png?v=1770206196" alt="BIS Hallmarked">
+                          <span>BIS Hallmarked<br>Gold</span>
+                        </div>
+                        <div class="timanti-promise-item">
+                          <img src="https://cdn.shopify.com/s/files/1/0775/8322/0993/files/icon6.png" alt="IGI Certified">
+                          <span>IGI Certified<br>Diamonds</span>
+                        </div>
+                        <div class="timanti-promise-item">
+                          <img src="https://cdn.shopify.com/s/files/1/0775/8322/0993/files/icon2_1d5faa97-53c3-44c7-9b2a-04ca57696e11.png?v=1770206090" alt="Lifetime Exchange">
+                          <span>Lifetime<br>Exchange</span>
+                        </div>
+                      </div>
+                    </td>
+                  </tr>
+                </table>
+              </center>
+            </td>
+          </tr>
+        </table>
+        <table class="row footer">
+          <tr>
+            <td class="footer__cell" style="background: #F6F6F6; padding-top: 14px; padding-bottom: 14px;">
+              <center>
+                <table class="container">
+                  <tr>
+                    <td style="text-align: center; padding: 0;">
+                      <p class="disclaimer__subtext" style="font-size: 14px; color: #999; margin: 0;">
+                        <a href="https://timanti.in/pages/return-refund-policy" style="font-size: 14px; color: #fc7d27;">Return &amp; Refund Policy</a> &nbsp;|&nbsp;
+                        <a href="https://timanti.in/pages/exchange-and-buyback" style="font-size: 14px; color: #fc7d27;">Lifetime Exchange &amp; Upgrade</a>
+                        {% unless hide_shipping_footer %}
+                        &nbsp;|&nbsp; <a href="https://timanti.in/pages/shipping" style="font-size: 14px; color: #fc7d27;">Shipping Policy</a>
+                        {% endunless %}
+                      </p>
+                    </td>
+                  </tr>
+                </table>
+              </center>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

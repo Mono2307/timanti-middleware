@@ -116,6 +116,25 @@ async function codesIssuedSince(supabase, customerId, sinceIso) {
   return count || 0;
 }
 
+/**
+ * The redemption that already took this month's birthday/anniversary bonus, or null. The bonus is
+ * good for ONE transaction a month (founder, 2026-10-21): a store sale recorded at conversion, or an
+ * online code that was used — or is still live, so the cart and the counter cannot both take it.
+ * monthStartIso is the first instant of the IST month; excludeDraftId skips the draft being priced.
+ */
+async function occasionRedemptionSince(supabase, customerId, monthStartIso, { excludeDraftId = null } = {}) {
+  const { data, error } = await supabase.from(REDEMPTIONS)
+    .select('order_name, channel, status, draft_id, used_at, created_at, expires_at')
+    .eq('customer_id', String(customerId)).not('occasion', 'is', null).neq('occasion', '')
+    .in('status', ['used', 'pending']).gte('created_at', monthStartIso)
+    .order('created_at', { ascending: true }).limit(20);
+  if (error) throw new Error(`loyalty occasion use ${customerId}: ${error.message}`);
+  const now = Date.now();
+  return (data || []).find(r =>
+    !(excludeDraftId && String(r.draft_id) === String(excludeDraftId)) &&
+    (r.status === 'used' || (r.expires_at && Date.parse(r.expires_at) > now))) || null;
+}
+
 /** The store redemption already recorded for a draft, if any (makes conversion idempotent). */
 async function storeRedemptionForDraft(supabase, draftId) {
   const { data, error } = await supabase.from(REDEMPTIONS)
@@ -141,5 +160,5 @@ module.exports = {
   deleteEntriesByPrefix, deleteRedemptionByCode,
   upsertOrderEntry, addAdjustment, customerPoints, customerEntries,
   insertRedemption, getRedemptionByCode, updateRedemption,
-  pendingCodesFor, expiredPendingCodes, codesIssuedSince, storeRedemptionForDraft,
+  pendingCodesFor, expiredPendingCodes, codesIssuedSince, storeRedemptionForDraft, occasionRedemptionSince,
 };

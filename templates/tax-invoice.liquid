@@ -65,13 +65,24 @@ properties (prop_*). jc_meta stays nil so its fallback branches below are simply
   </div>
 
   <div class="company-invoice-grid">
+    {% comment %}── Seller identity follows the store / place of supply (custom.state_code: MH-HQ → MH, KA-HSR → KA). Blank stays KA, as before. Same address and GSTIN as delivery-challan.liquid. ──{% endcomment %}
+    {% assign _sc = order.metafields.custom.state_code.value | default: order.metafields.custom.state_code %}
+    {% assign supplier_state = _sc | split: "-" | first | strip | upcase %}
+    {% if supplier_state == blank %}{% assign supplier_state = "KA" %}{% endif %}
+    {% if supplier_state == "MH" %}
+      {% assign seller_gstin    = "27ABBCA3309B1ZB" %}
+      {% assign seller_dispatch = "408, 1 Aerocity, Safed Pul, Saki Naka, Mumbai – 400072" %}
+    {% else %}
+      {% assign seller_gstin    = "29ABBCA3309B1Z7" %}
+      {% assign seller_dispatch = "17th Cross, 19th Main Rd, HSR Layout Sec 2, Opp. Gnan Srishti School, Bengaluru – 560102" %}
+    {% endif %}
     <div class="company-section">
       <strong>AURACARAT PRIVATE LIMITED</strong><br>
       <strong>Office:</strong> C207 Crystal Plaza, New Link Road, Andheri (W), Mumbai – 400053<br>
       <strong>Store:</strong> 17th Cross, 19th Main Rd, HSR Layout Sec 2, Opp. Gnan Srishti School, Bengaluru – 560102<br>
       <strong>Tel:</strong> +91-7710938305 &nbsp;|&nbsp; <strong>Email:</strong> hello@timanti.in &nbsp;|&nbsp; <strong>Website:</strong> www.timanti.in<br>
-      <strong>GSTIN</strong> – 29ABBCA3309B1Z7 &nbsp;|&nbsp; <strong>PAN</strong> – ABBCA3309B<br>
-      <strong>Dispatched From:</strong> 17th Cross, 19th Main Rd, HSR Layout Sec 2, Opp. Gnan Srishti School, Bengaluru – 560102
+      <strong>GSTIN</strong> – {{ seller_gstin }} &nbsp;|&nbsp; <strong>PAN</strong> – ABBCA3309B<br>
+      <strong>Dispatched From:</strong> {{ seller_dispatch }}
     </div>
 
     <div class="invoice-details-grid">
@@ -98,9 +109,7 @@ properties (prop_*). jc_meta stays nil so its fallback branches below are simply
 
       <div class="invoice-detail-row">
         {% comment %}── Place of Supply = supplier store state (custom.state_code metafield, e.g. KA-HSR→KA), NOT shipping. Shipping is the delivery destination, used only for the GST inter/intra split. ──{% endcomment %}
-        {% assign _sc = order.metafields.custom.state_code.value | default: order.metafields.custom.state_code %}
-        {% assign supplier_state = _sc | split: "-" | first | strip | upcase %}
-        {% if supplier_state == blank %}{% assign supplier_state = "KA" %}{% endif %}
+        {% comment %}supplier_state is resolved above the seller header.{% endcomment %}
         {% assign shipping_state = order.shipping_address.province_code %}
         {% assign dest_state = shipping_state %}
         {% if dest_state == blank %}{% assign dest_state = supplier_state %}{% endif %}
@@ -717,8 +726,11 @@ reads them as unknown tags, rejecting the paste.
   </div>
 
   <div style="padding: 4px 8px; font-size: 7px; color: #555; border-top: 1px solid #ccc; text-align: right;">
-    {% assign rate_k1 = "" %}{% assign rate_v1 = "" %}
-    {% assign rate_k2 = "" %}{% assign rate_v2 = "" %}
+    {% comment %}18kt and 14kt always print, as on the order confirmation: a scheme karat with no line on this
+    order is derived from the other with the price job's purity ratios (18K 0.771, 14K 0.604). 22kt and
+    24kt print only when a line on the order carries them.{% endcomment %}
+    {% assign rate_18k = "" %}{% assign rate_14k = "" %}
+    {% assign rate_22k = "" %}{% assign rate_24k = "" %}
     {% assign gold_updated = "" %}
     {% for line_item in order.line_items %}
       {% assign sku_parts = line_item.variant.sku | split: "|" %}
@@ -728,12 +740,22 @@ reads them as unknown tags, rejecting the paste.
         {% if p.first == "_gold_rate"       %}{% assign locked_rate = p.last %}{% endif %}
         {% if p.first == "_gold_updated_at" %}{% assign locked_ts   = p.last %}{% endif %}
       {% endfor %}
-      {% if locked_rate != "" and karat == "24" or karat == "22" or karat == "18" or karat == "14" %}
-        {% if rate_k1 == "" %}{% assign rate_k1 = karat %}{% assign rate_v1 = locked_rate %}{% if locked_ts != "" %}{% assign gold_updated = locked_ts %}{% endif %}
-        {% elsif karat != rate_k1 and rate_k2 == "" %}{% assign rate_k2 = karat %}{% assign rate_v2 = locked_rate %}{% endif %}
+      {% if locked_rate != "" %}
+        {% if karat == "18" and rate_18k == "" %}{% assign rate_18k = locked_rate %}{% endif %}
+        {% if karat == "14" and rate_14k == "" %}{% assign rate_14k = locked_rate %}{% endif %}
+        {% if karat == "22" and rate_22k == "" %}{% assign rate_22k = locked_rate %}{% endif %}
+        {% if karat == "24" and rate_24k == "" %}{% assign rate_24k = locked_rate %}{% endif %}
+        {% if gold_updated == "" and locked_ts != "" %}{% if karat == "18" or karat == "14" or karat == "22" or karat == "24" %}{% assign gold_updated = locked_ts %}{% endif %}{% endif %}
       {% endif %}
     {% endfor %}
-    Gold rate at order date{% if rate_k1 != "" %} — {{ rate_k1 }}kt: Rs {{ rate_v1 }}{% if rate_k2 != "" %} &nbsp;|&nbsp; {{ rate_k2 }}kt: Rs {{ rate_v2 }}{% endif %}{% endif %}{% if gold_updated != "" %}{% assign ist_ts = gold_updated | date: "%s" | plus: 19800 %} &nbsp;(as of {{ ist_ts | date: "%d %b %Y %H:%M" }} IST){% endif %}
+    {% if rate_18k == "" and rate_14k != "" %}{% assign rate_18k = rate_14k | plus: 0 | times: 0.771 | divided_by: 0.604 | round: 2 %}{% endif %}
+    {% if rate_14k == "" and rate_18k != "" %}{% assign rate_14k = rate_18k | plus: 0 | times: 0.604 | divided_by: 0.771 | round: 2 %}{% endif %}
+    {% assign rate_parts = "" %}
+    {% if rate_24k != "" %}{% assign rate_parts = rate_parts | append: "24kt: Rs " | append: rate_24k | append: "|" %}{% endif %}
+    {% if rate_22k != "" %}{% assign rate_parts = rate_parts | append: "22kt: Rs " | append: rate_22k | append: "|" %}{% endif %}
+    {% if rate_18k != "" %}{% assign rate_parts = rate_parts | append: "18kt: Rs " | append: rate_18k | append: "|" | append: "14kt: Rs " | append: rate_14k | append: "|" %}{% endif %}
+    {% assign rate_list = rate_parts | split: "|" %}
+    Gold rate at order date{% if rate_list.size > 0 %} — {{ rate_list | join: " &nbsp;|&nbsp; " }}{% endif %}{% if gold_updated != "" %}{% assign ist_ts = gold_updated | date: "%s" | plus: 19800 %} &nbsp;(as of {{ ist_ts | date: "%d %b %Y %H:%M" }} IST){% endif %}
   </div>
 
   <div class="footer-section">

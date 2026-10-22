@@ -104,10 +104,11 @@ const DIA_VALUE_CELL   = 'C34';  // was C20 (variant diamond value; the '=C20' b
 // 35-39 were unused, so this needed no layout change. Blank on an order predating that property,
 // which simply leaves the leg uncapped, exactly as it behaved before.
 const DIA_PAID_CELL    = 'B35';
-// What the piece (or the selected lot) was CHARGED, tax inclusive — Shopify's own figure, per
-// piece. Full Value issues THIS plus custom deductions, never the breakup sum: the breakup is an
-// explanation, and on some old orders it does not add up to what was charged (#1039, #1067).
-const INVOICE_CELL       = 'B36';
+// Row 36 is a MERGED header (A36:C36) on the live sheet: a value written to B36 is silently dropped.
+// An earlier version kept the charged amount there and Full Value read 0 (#1050). Nothing uses row
+// 36 or row 39 now — the charged amount and the Deduction limit travel inside the stored checks and
+// the Value to Issue formula. healCalcLabels_ removes the labels that version wrote into A36 / A39.
+const RETIRED_LABELS_ = [['A36', 'Charged for this item (tax incl.)'], ['A39', 'Deduction limit (no breakup on order)']];
 // Staff-weighed NET gold weight in grams (gross minus stones). Blank normally. Used only when
 // filled, only for a single piece, and only with a reason in OVERRIDE_REASON_CELL — for pieces
 // whose sold weight was never recorded (#1044) or where the recorded figures disagree.
@@ -115,12 +116,11 @@ const WEIGHED_NETWT_CELL = 'B37';
 // One-line verdict of the checks resolveExchangeUnit_ ran on the looked-up item. The full list is
 // the cell's note. Nothing can be issued past a ❌ on this cell — exchangeGate_ enforces it.
 const CHECKS_CELL        = 'B38';
-// Ceiling on the Deduction credit, written ONLY when the order recorded no price breakup — then
-// nothing says what the gold weighed or the stone cost, and the credit is held to what was paid
-// excluding GST. Blank on every other order. VALUE TO ISSUE reads it; see refreshFinalIssueValue_.
-const DEDUCTION_LIMIT_CELL = 'B39';
-const DEDUCTION_LIMIT_LABEL = 'Deduction limit (no breakup on order)';
-const INVOICE_LABEL      = 'Charged for this item (tax incl.)';
+// For a CUSTOM line that never had a catalogue listing (#1048 "Nosepin"): the catalogue SKU this
+// piece corresponds to (e.g. NSP00001). Staff-entered, needs a reason in OVERRIDE_REASON_CELL.
+// Row 25 sits between the SKU picker and the karat and was empty.
+const CATALOGUE_SKU_CELL = 'B25';
+const CATALOGUE_SKU_LABEL = 'Catalogue SKU (custom items only)';
 const WEIGHED_LABEL      = 'Weighed net gold wt (g) — override';
 const CHECKS_LABEL       = 'CHECKS (see note)';
 const EXCH_CHECKS_KEY    = '_EXCHANGE_CHECKS';   // DocumentProperties: the checks of the last lookup
@@ -396,12 +396,20 @@ function healCalcLabels_(calc) {
    [OG_WEIGHT_CELL, 'Old Gold — Weight (g)'], [OG_PURITY_CELL, 'Old Gold — Purity (karat)'],
    [OG_RATE_CELL, 'Old Gold — Buy-back rate/g (auto)'], [OVERRIDE_REASON_CELL, 'Final value override — reason'],
    [ORDER_NUM_CELL, 'Original Order Number (e.g. #1020)'], [SKU_CELL, 'SKU / Jewellery Code'],
-   [INVOICE_CELL, INVOICE_LABEL], [WEIGHED_NETWT_CELL, WEIGHED_LABEL], [CHECKS_CELL, CHECKS_LABEL],
-   [DEDUCTION_LIMIT_CELL, DEDUCTION_LIMIT_LABEL]]
+   [WEIGHED_NETWT_CELL, WEIGHED_LABEL], [CHECKS_CELL, CHECKS_LABEL],
+   [CATALOGUE_SKU_CELL, CATALOGUE_SKU_LABEL]]
     .forEach(function (p) {
       var a = calc.getRange(cellRow_(p[0]), 1);
       if (String(a.getValue()).trim() === '') a.setValue(p[1]);
     });
+  // Take back the labels an earlier version wrote into the row-36 header and row 39 — only if the
+  // cell still holds exactly that text, so nothing staff typed is touched.
+  RETIRED_LABELS_.forEach(function (p) {
+    var r = calc.getRange(p[0]);
+    if (String(r.getValue()).trim() === p[1]) r.clearContent();
+    var b = calc.getRange(cellRow_(p[0]), 2);
+    if (b.getNote() && /charged for|Full Value issues this/i.test(b.getNote())) b.clearNote();
+  });
   if (!calc.getRange(NEWDRAFT_CELL).getNote()) calc.getRange(NEWDRAFT_CELL).setNote(NEWDRAFT_NOTE);
 
   // The three dropdowns. Without its list a control accepts any typed text, and a misspelt mode is
@@ -552,7 +560,7 @@ function handleEdit(e) {
     // SOURCE IS CHOSEN FIRST. Each mode's block refuses input while the other mode is selected, so
     // an order can never be looked up under Old Gold and old-gold weights can never be typed under
     // Purchase Exchange. The typed value is put back rather than left half-applied.
-    var orderInputs = [ORDER_NUM_CELL, SKU_CELL, WEIGHED_NETWT_CELL];
+    var orderInputs = [ORDER_NUM_CELL, SKU_CELL, WEIGHED_NETWT_CELL, CATALOGUE_SKU_CELL];
     var ogInputs    = [OG_CUSTOMER_CELL, OG_WEIGHT_CELL, OG_PURITY_CELL];
     if (oldGold && orderInputs.indexOf(a1) !== -1) {
       e.range.setValue(e.oldValue === undefined ? '' : e.oldValue);
@@ -574,8 +582,9 @@ function handleEdit(e) {
     if (col === 2 && row === cellRow_(ORDER_NUM_CELL)) { onOrderNumberEntered(sheet); try { refreshFinalIssueValue_(sheet); } catch (x) {} return; }
     if (col === 2 && row === cellRow_(SKU_CELL))       { onSkuSelected(sheet);        return; }
     // A weighed weight, or the reason that must accompany it, re-runs the checks on the item.
-    if (a1 === WEIGHED_NETWT_CELL ||
-        (a1 === OVERRIDE_REASON_CELL && String(sheet.getRange(WEIGHED_NETWT_CELL).getValue()).trim() !== '')) {
+    if (a1 === WEIGHED_NETWT_CELL || a1 === CATALOGUE_SKU_CELL ||
+        (a1 === OVERRIDE_REASON_CELL && (String(sheet.getRange(WEIGHED_NETWT_CELL).getValue()).trim() !== '' ||
+                                         String(sheet.getRange(CATALOGUE_SKU_CELL).getValue()).trim() !== ''))) {
       rerunChecksForSelection_(sheet);
       return;
     }
@@ -589,6 +598,10 @@ function handleEdit(e) {
       }
       try { refreshFinalIssueValue_(sheet); } catch (x) {}
       if (a1 === SOURCE_CELL) { try { refreshSourceFieldStates_(sheet); } catch (x) {} }
+      // An item left on the sheet without checks for the CURRENT order and SKU — looked up before
+      // this script was pasted, or by an older version — has no "charged" figure, so Full Value would
+      // read 0. Re-run the lookup for it rather than show a number nothing backs.
+      if (!oldGold) { try { recheckIfStale_(sheet); } catch (x) {} }
       return;
     }
     // Old-gold auto-fill: purity → buy-back rate; weight → value; customer phone/email → resolve.
@@ -612,7 +625,7 @@ function onOrderNumberEntered(sheet, allowModal) {
    NET_WT_CELL, DIA_CTS_CELL, GOLD_RATE_ORD_CELL, LGD_RATE_CELL,
    DIA_VALUE_CELL, DIA_PAID_CELL, GOLD_RATE_EFF_CELL, GOLD_VAL_CELL, DIA_VAL_CELL,
    // A weighed weight belongs to one physical piece; it must not follow the sheet to the next order.
-   INVOICE_CELL, WEIGHED_NETWT_CELL, CHECKS_CELL, DEDUCTION_LIMIT_CELL]
+   WEIGHED_NETWT_CELL, CHECKS_CELL, CATALOGUE_SKU_CELL]
    // Both sides of the before/after table. A paid figure left over from the previous order would sit
    // under the new one looking like its history — the single worst failure this table could have.
    .concat(CALC_ROWS.map(function (r) { return r.paid; }))
@@ -804,16 +817,21 @@ function populateExchange_(sheet, order, lineItems) {
   } catch (e) { rates = null; }                       // the resolver falls back and says so
 
   var weighed = toNum(sheet.getRange(WEIGHED_NETWT_CELL).getValue());
+  var mapSku  = String(sheet.getRange(CATALOGUE_SKU_CELL).getValue()).trim();
   var reason  = String(sheet.getRange(OVERRIDE_REASON_CELL).getValue()).trim();
   var single  = lineItems.length === 1;
 
   var liveCache = {};
   var units = lineItems.map(function (li) {
     var key = li.variant_id ? String(li.variant_id) : 'none:' + li.id;
-    if (!liveCache[key]) liveCache[key] = fetchLiveCatalogue_(li);
+    if (!liveCache[key]) liveCache[key] = fetchLiveCatalogue_(li, single ? mapSku : '');
     return resolveExchangeUnit_(order, li, liveCache[key], rates,
-                                single ? { weighedNetWt: weighed, weighedReason: reason } : {});
+                                { weighedNetWt: single ? weighed : 0, overrideReason: reason });
   });
+  if (mapSku && !single) {
+    units[0].issues.push({ level: 'block', scope: 'deduction',
+      msg: 'A catalogue SKU mapping works for one piece at a time. Clear ' + CATALOGUE_SKU_CELL + ', or exchange the pieces one by one.' });
+  }
   var agg = aggregateExchangeUnits_(units);
   if (weighed > 0 && !single) {
     agg.issues.push({ level: 'block', scope: 'deduction',
@@ -862,13 +880,11 @@ function populateExchange_(sheet, order, lineItems) {
     return (u.sku || u.title) + ': ' + (u.cap === null ? 'NOT KNOWN' : u.cap) + (u.capSource ? ' — ' + u.capSource : '');
   }).join('\n'));
 
-  put(INVOICE_CELL, agg.fullValue);
-  // The ceiling exists only when a piece had no breakup on its order. For a lot, the ceiling is the
-  // resolver's own total, which already holds each such piece to what was paid for it.
+  // The Deduction ceiling exists only when a piece had no breakup on its order. For a lot, it is the
+  // resolver's own total, which already holds each such piece to what was paid for it. It travels in
+  // the stored checks and the Value to Issue formula, not in a cell (see RETIRED_LABELS_).
   var limited = units.some(function (u) { return u.deductionLimit !== null && u.deductionLimit !== undefined; });
-  put(DEDUCTION_LIMIT_CELL, limited ? agg.deduction : null);
-  sheet.getRange(INVOICE_CELL).setNote('What Shopify recorded as charged for ' + (single ? 'this piece' : 'these pieces') +
-    ', tax inclusive (line price − discount allocated to it, per piece). Full Value issues this plus custom deductions.');
+  agg.limit = limited ? agg.deduction : null;
 
   // Paid column — the explanation. The cap travels with it into DIA_PAID_CELL.
   writePaidColumn_(sheet, {}, { totals: {
@@ -899,16 +915,141 @@ function populateFromMultipleLineItems(sheet, lineItems, order) { populateExchan
 // What the catalogue says about a line's variant TODAY, with the difference between "deleted" and
 // "could not reach Shopify" kept — shopifyGet returns null for both, and they need opposite answers:
 // a deleted listing is a fact to work around, a failed call is a reason to try again.
-function fetchLiveCatalogue_(li) {
-  if (!li.variant_id) return { status: 'none' };
+//
+// THE SOLD VARIANT ID OFTEN NO LONGER EXISTS EVEN THOUGH THE PRODUCT IS LIVE. An order keeps the
+// variant id it was sold under; when a product's variants are rebuilt they get new ids and the old
+// one returns 404 (#1044: product live as ER00054A, its sold variant 48578102657281 → 404; #1050
+// likewise as RG00088A). So a 404 on the variant is followed through to the PRODUCT, and its
+// current variant in the same tone / karat / size stands in. Only a 404 on the product itself
+// means the item is truly gone.
+//
+// mapSku: a catalogue SKU staff typed for a custom line that never had a listing (#1048).
+function fetchLiveCatalogue_(li, mapSku) {
+  if (!li.variant_id) {
+    if (!mapSku) return { status: 'none' };
+    var hit = findVariantBySku_(mapSku);
+    if (hit.error) return { status: 'error', code: hit.error };
+    var m0 = variantMetafields_(hit.variantId);
+    if (!m0.ok) return { status: 'error', code: m0.code };
+    return { status: 'substitute', via: 'staff', subSku: hit.sku, variant: m0.mf,
+             product: productMetafields_(hit.productId) };
+  }
   var v = shopifyGetStatus_('variants/' + li.variant_id + '.json');
-  if (v.code === 404) return { status: 'deleted', code: 404 };
-  if (v.code !== 200) return { status: 'error', code: 'HTTP ' + v.code };
-  var m = shopifyGetStatus_('variants/' + li.variant_id + '/metafields.json');
-  if (m.code !== 200) return { status: 'error', code: 'metafields HTTP ' + m.code };
-  var vmf = {};
-  (m.json.metafields || []).forEach(function (mf) { if (mf.namespace === 'custom') vmf[mf.key] = mf.value; });
-  return { status: 'ok', variant: vmf };
+  if (v.code === 200) {
+    var m = variantMetafields_(li.variant_id);
+    if (!m.ok) return { status: 'error', code: m.code };
+    return { status: 'ok', variant: m.mf };
+  }
+  if (v.code !== 404) return { status: 'error', code: 'HTTP ' + v.code };
+
+  // The sold variant id is gone. First: is the SAME SKU code still listed anywhere — a variant that
+  // was recreated, possibly under another product? (#1050: RG00088 is still listed; the first
+  // version of this fallback skipped that and picked an RG00088A listing off the same product.)
+  var relisted = findSameCodeVariant_(li.sku);
+  if (relisted) {
+    var mr = variantMetafields_(relisted.id);
+    if (mr.ok) return { status: 'substitute', via: 'relisted', subSku: relisted.sku, variant: mr.mf,
+                        product: productMetafields_(relisted.productId || li.product_id) };
+  }
+  // Then the product the order points to, and its own current listings.
+  if (!li.product_id) return { status: 'deleted', code: 404 };
+  var p = shopifyGetStatus_('products/' + li.product_id + '.json?fields=id,variants');
+  if (p.code === 404) return { status: 'deleted', code: 404 };
+  if (p.code !== 200) return { status: 'error', code: 'product HTTP ' + p.code };
+  var prodMf = productMetafields_(li.product_id);
+  var pick = pickSameSpecVariant_(li.sku, (p.json.product && p.json.product.variants) || []);
+  // No same tone/karat listing: the product's own weight can still be used, nothing else.
+  if (!pick) return { status: 'deleted', code: 'no ' + (li.sku || '') + ' tone/karat match on the live product', product: prodMf };
+  var mm = variantMetafields_(pick.id);
+  if (!mm.ok) return { status: 'error', code: mm.code };
+  return { status: 'substitute', via: 'product', subSku: pick.sku, variant: mm.mf, product: prodMf };
+}
+
+// The product's current variant that matches the sold one: same tone and karat, required; same size
+// preferred. Tone compares on its first letter, because the codes were renamed (PG → P).
+// Returns null rather than guess a different karat or colour.
+function pickSameSpecVariant_(soldSku, variants) {
+  var s = String(soldSku || '').split('|');
+  var tone = (s[1] || '').trim().charAt(0).toUpperCase();
+  var karat = (s[2] || '').trim();
+  var size = (s[5] || '').replace(/["\s]|inches/gi, '');
+  if (!tone || !karat) return null;
+  var same = variants.filter(function (v) {
+    var p = String(v.sku || '').split('|');
+    return (p[1] || '').trim().charAt(0).toUpperCase() === tone && (p[2] || '').trim() === karat;
+  });
+  if (!same.length) return null;
+  // Preference: same SKU code AND size, then same code, then same size, then any same tone/karat.
+  var code = (s[0] || '').trim().toUpperCase();
+  var sizeOf = function (v) { return (String(v.sku || '').split('|')[5] || '').replace(/["\s]|inches/gi, ''); };
+  var codeOf = function (v) { return String(v.sku || '').split('|')[0].trim().toUpperCase(); };
+  var v = same.filter(function (x) { return codeOf(x) === code && sizeOf(x) === size; })[0] ||
+          same.filter(function (x) { return codeOf(x) === code; })[0] ||
+          same.filter(function (x) { return sizeOf(x) === size; })[0] ||
+          same[0];
+  return { id: v.id, sku: v.sku, productId: v.productId };
+}
+
+// The sold SKU's code (RG00088) listed anywhere in the catalogue, in the same tone / karat (size
+// preferred) — the variant the piece was sold as, recreated under a new id. Null if none, or if the
+// search itself fails (the caller then falls back to the product's own listings).
+function findSameCodeVariant_(soldSku) {
+  var code = String(soldSku || '').split('|')[0].trim();
+  if (!code) return null;
+  try {
+    var res = UrlFetchApp.fetch('https://' + SHOPIFY_SHOP + '/admin/api/2024-01/graphql.json', {
+      method: 'post', contentType: 'application/json', muteHttpExceptions: true,
+      headers: { 'X-Shopify-Access-Token': getToken() },
+      payload: JSON.stringify({ query: '{ productVariants(first: 50, query: ' + JSON.stringify('sku:' + code + '*') +
+        ') { nodes { legacyResourceId sku product { legacyResourceId } } } }' })
+    });
+    if (res.getResponseCode() !== 200) return null;
+    var nodes = ((JSON.parse(res.getContentText()).data || {}).productVariants || {}).nodes || [];
+    var exactCode = nodes
+      .filter(function (n) { return String(n.sku || '').split('|')[0].trim().toUpperCase() === code.toUpperCase(); })
+      .map(function (n) { return { id: n.legacyResourceId, sku: n.sku, productId: n.product && n.product.legacyResourceId }; });
+    return pickSameSpecVariant_(soldSku, exactCode);
+  } catch (e) {
+    Logger.log('same-code search failed: ' + e.message);
+    return null;
+  }
+}
+
+function variantMetafields_(variantId) {
+  var m = shopifyGetStatus_('variants/' + variantId + '/metafields.json');
+  if (m.code !== 200) return { ok: false, code: 'metafields HTTP ' + m.code };
+  var mf = {};
+  (m.json.metafields || []).forEach(function (x) { if (x.namespace === 'custom') mf[x.key] = x.value; });
+  return { ok: true, mf: mf };
+}
+
+function productMetafields_(productId) {
+  if (!productId) return {};
+  var m = shopifyGetStatus_('products/' + productId + '/metafields.json');
+  var mf = {};
+  if (m.code === 200) (m.json.metafields || []).forEach(function (x) { if (x.namespace === 'custom') mf[x.key] = x.value; });
+  return mf;
+}
+
+// A catalogue variant by SKU. Accepts the full SKU or just its code ("NSP00001"); a code that
+// matches several variants (tones, karats) asks staff for the exact one rather than picking.
+function findVariantBySku_(typed) {
+  var q = String(typed || '').trim();
+  var code = q.split('|')[0];
+  var res = UrlFetchApp.fetch('https://' + SHOPIFY_SHOP + '/admin/api/2024-01/graphql.json', {
+    method: 'post', contentType: 'application/json', muteHttpExceptions: true,
+    headers: { 'X-Shopify-Access-Token': getToken() },
+    payload: JSON.stringify({ query: '{ productVariants(first: 25, query: ' + JSON.stringify('sku:' + code + '*') +
+      ') { nodes { legacyResourceId sku product { legacyResourceId } } } }' })
+  });
+  if (res.getResponseCode() !== 200) return { error: 'SKU search HTTP ' + res.getResponseCode() };
+  var nodes = ((JSON.parse(res.getContentText()).data || {}).productVariants || {}).nodes || [];
+  var exact = nodes.filter(function (n) { return String(n.sku || '').toUpperCase() === q.toUpperCase(); });
+  var hits = exact.length ? exact : nodes.filter(function (n) { return String(n.sku || '').split('|')[0].toUpperCase() === code.toUpperCase(); });
+  if (!hits.length) return { error: 'catalogue SKU "' + q + '" not found' };
+  if (hits.length > 1) return { error: '"' + q + '" matches ' + hits.length + ' listings — paste the exact one: ' +
+                                        hits.slice(0, 8).map(function (n) { return n.sku; }).join(' ; ') };
+  return { variantId: hits[0].legacyResourceId, sku: hits[0].sku, productId: hits[0].product.legacyResourceId };
 }
 
 function shopifyGetStatus_(endpoint) {
@@ -924,7 +1065,7 @@ function storeExchangeChecks_(sheet, order, agg) {
   var state = {
     order: String(order.name || '').replace('#', ''),
     sku: String(sheet.getRange(SKU_CELL).getValue()).trim(),
-    deduction: agg.deduction, fullValue: agg.fullValue,
+    deduction: agg.deduction, fullValue: agg.fullValue, limit: agg.limit === undefined ? null : agg.limit,
     issues: agg.issues, at: new Date().toISOString()
   };
   var json = JSON.stringify(state);
@@ -1065,6 +1206,22 @@ function orderSummary_(order) {
       }) };
     })
   };
+}
+
+// Re-runs the lookup when the item on the sheet has no checks for its current order + SKU. A lot of
+// several pieces cannot be re-picked automatically, so staff are asked to run the lookup instead.
+function recheckIfStale_(sheet) {
+  var order = String(sheet.getRange(ORDER_NUM_CELL).getValue()).trim().replace('#', '');
+  var label = String(sheet.getRange(SKU_CELL).getValue()).trim();
+  if (!order || !label) return;
+  var st = readExchangeChecks_();
+  if (st && st.order === order && st.sku === label) return;
+  if (label.indexOf(', ') !== -1) {
+    SpreadsheetApp.getUi().alert('These pieces were looked up before the current checks existed.\n\n' +
+      'Run "🔄 Lookup Order Now" from the menu and pick them again.');
+    return;
+  }
+  onSkuSelected(sheet);
 }
 
 // Re-runs the checks on whatever is selected, after a weighed weight or its reason was entered.
@@ -1231,7 +1388,7 @@ function exTagValue_(tags, prefix) {
 // li     — the line item this piece belongs to
 // live   — { status: 'ok'|'deleted'|'none'|'error', code, variant: {custom metafields}, product: {…} }
 // rates  — the Supabase gold_rate config, or null if it could not be read
-// opts   — { weighedNetWt, weighedReason }  staff override from the sheet, optional
+// opts   — { weighedNetWt, overrideReason }  staff override from the sheet, optional
 //
 // NO TABLE, NO APPROVALS. Every case the order data cannot settle on its own is settled by a fixed
 // rule that can only err in the business's favour, and says so on the sheet:
@@ -1371,9 +1528,39 @@ function resolveExchangeUnit_(order, li, live, rates, opts) {
         'so the diamond credit is capped at the lowest the stone could have cost (' + exInr_(cap) + ').');
   }
 
+  // ── 4. WHICH CATALOGUE LISTING STANDS FOR THIS PIECE ─────────────────────────────────────────
+  //   ok          the variant that was sold, as it is today
+  //   substitute  that variant is gone, so another listing stands in for it: the same product's
+  //               current variant in the same tone / karat / size (products rebuilt in place —
+  //               #1044 ER00054 → ER00054A, #1050 RG00088 → RG00088A), or, for a custom line that
+  //               never had a listing, the catalogue SKU staff mapped it to (#1048 → NSP0000x)
+  //   deleted     the product itself is gone
+  //   none        a custom line, not mapped to anything
+  var hasLive = live.status === 'ok' || live.status === 'substitute';
+  var lv = live.variant || {};
+  var lp = live.product || {};
+  if (live.status === 'substitute') {
+    if (live.via === 'staff') {
+      if (!opts.overrideReason)
+        add('block', 'deduction', 'This custom item has been mapped to catalogue SKU ' + live.subSku +
+            '. Write the reason in the override-reason cell before issuing.');
+      else
+        add('confirm', 'deduction', 'This custom item had no listing of its own; it is valued as catalogue SKU ' + live.subSku +
+            '. Reason: ' + opts.overrideReason);
+    } else if (live.via === 'relisted') {
+      add('confirm', 'deduction', 'The variant sold has a new ID in Shopify. Its current listing with the same code (' + live.subSku +
+          ') supplies today\'s weight and diamond price.');
+    } else {
+      add('confirm', 'deduction', 'No listing with the sold code (' + String(li.sku || li.title).split('|')[0] + ') exists any more. ' +
+          'The closest listing on the same product, ' + live.subSku + ', a DIFFERENT code, supplies today\'s weight and diamond price. ' +
+          'Check the piece matches it before issuing.');
+    }
+  }
+  var specSku = li.sku || live.subSku || '';
+  var metal = exMetal_({ sku: specSku, title: li.title });
+  var karat = exKarat_(specSku);
+
   // ── 5. NET WEIGHT OF ONE PIECE ───────────────────────────────────────────────────────────────
-  var metal = exMetal_(li);
-  var karat = exKarat_(li.sku);
   var wRec  = exRs_(props['_net_wt']);
   var rOrd  = exRs_(props['_gold_rate']);
   // Gold ÷ the rate locked on the order is the weight actually SOLD. Proven on every line that
@@ -1381,13 +1568,16 @@ function resolveExchangeUnit_(order, li, live, rates, opts) {
   // pre-discount figure, and never for silver, which is priced through the same 'Gold' property.
   var wDerived = (metal === 'gold' && gold !== null && rOrd > 0 &&
                   (era === 'pre-discount' || era === 'no-discount')) ? exR3_(gold / rOrd) : null;
-  var lv = live.variant || {};
+  var catWt = hasLive ? exRs_(lv.net_metal_weight_g) : null;
+  var prodWt = exRs_(lp.net_metal_weight_g);
+  var catMsg = 'The weight sold was not recorded on this order, so ';
+  var catTail = ' Catalogue weights have been edited on some products since they were sold. If the piece weighs differently, enter the weighed net weight.';
   var netWt = null, wSource = '';
   if (opts.weighedNetWt > 0) {
     netWt = opts.weighedNetWt; wSource = 'weighed in store';
-    if (!opts.weighedReason)
+    if (!opts.overrideReason)
       add('block', 'deduction', 'A weighed net weight was entered. Write the reason in the override-reason cell before issuing.');
-    else add('confirm', 'deduction', 'Using the weight entered in store (' + netWt + ' g) instead of the recorded one. Reason: ' + opts.weighedReason);
+    else add('confirm', 'deduction', 'Using the weight entered in store (' + netWt + ' g) instead of the recorded one. Reason: ' + opts.overrideReason);
   } else if (wRec !== null && qty === 1) {
     netWt = wRec; wSource = 'order (_net_wt)';
     if (wDerived !== null && Math.abs(wDerived - wRec) / wRec > 0.02)
@@ -1398,22 +1588,35 @@ function resolveExchangeUnit_(order, li, live, rates, opts) {
   } else if (wRec !== null) {
     netWt = wRec; wSource = 'order (_net_wt)';
     add('confirm', 'deduction', 'This line has ' + qty + ' pieces and it is not certain whether _net_wt (' + wRec + ' g) is per piece. Weigh one piece to confirm.');
-  } else if (live.status === 'ok' && exRs_(lv.net_metal_weight_g) > 0) {
-    netWt = exRs_(lv.net_metal_weight_g); wSource = "today's catalogue (net_metal_weight_g)";
-    add('confirm', 'deduction', 'The weight sold was not recorded on this order, so today\'s catalogue weight (' + netWt +
-        ' g) is used. Catalogue weights have been edited on some products since they were sold. If the piece weighs differently, enter the weighed net weight.');
-  } else if (live.status === 'ok' && exRs_(lv.price_breakup_gold) > 0 && exRs_(lv.gold_rate) > 0) {
-    netWt = exR3_(exRs_(lv.price_breakup_gold) / exRs_(lv.gold_rate)); wSource = "today's catalogue (gold price ÷ gold rate)";
+  } else if (catWt > 0) {
+    netWt = catWt; wSource = "catalogue variant (net_metal_weight_g)";
+    add('confirm', 'deduction', catMsg + 'the catalogue weight (' + netWt + ' g) is used.' + catTail);
+  } else if (prodWt > 0) {
+    netWt = prodWt; wSource = "catalogue product (net_metal_weight_g)";
+    add('confirm', 'deduction', catMsg + 'the product\'s catalogue weight (' + netWt + ' g) is used.' + catTail);
+  } else if (hasLive && exRs_(lv.price_breakup_gold) > 0 && exRs_(lv.gold_rate) > 0) {
+    netWt = exR3_(exRs_(lv.price_breakup_gold) / exRs_(lv.gold_rate)); wSource = "catalogue (gold price ÷ gold rate)";
     add('confirm', 'deduction', 'No weight recorded anywhere except the catalogue gold price; ' + netWt + ' g is inferred from it. Weigh the piece to confirm.');
   }
 
   // ── 6. TODAY'S RATE AND DIAMOND VALUE ────────────────────────────────────────────────────────
   var rate = null, rateSource = '';
   if (metal === 'silver') {
-    add('block', 'deduction', 'This is silver. The system has no live silver rate, so a Deduction value cannot be calculated. Use Full Value, or value it manually with HQ.');
+    // Silver is credited at 100% of the metal like gold, but the system keeps no daily silver rate.
+    // Today's catalogue silver price per gram is the live figure; failing that, what was charged.
+    var sPrice = hasLive ? exRs_(lv.price_breakup_gold) : null;
+    var sWt    = hasLive ? exRs_(lv.net_metal_weight_g) : null;
+    if (sPrice > 0 && sWt > 0) {
+      rate = exR2_(sPrice / sWt); rateSource = "today's catalogue silver price (" + exInr_(sPrice) + ' for ' + sWt + ' g)';
+    } else if (gold !== null && netWt > 0) {
+      rate = exR2_(gold / netWt); rateSource = 'the silver price charged';
+    }
+    if (rate) add('confirm', 'deduction', 'Silver has no daily rate in the system, so it is valued at ' + exInr_(rate) + '/g (' + rateSource +
+                  '): 100% of the metal, nothing for making or GST.');
+    else add('block', 'deduction', 'This is silver and there is no catalogue or charged silver price to value it by. Use Full Value.');
   } else {
     var cfgRate = exKaratRate_(karat, rates);
-    var vRate = live.status === 'ok' ? exRs_(lv.gold_rate) : null;
+    var vRate = hasLive ? exRs_(lv.gold_rate) : null;
     if (cfgRate) {
       rate = cfgRate; rateSource = "today's " + karat + 'K rate (gold_rate config)';
       if (vRate && Math.abs(vRate - cfgRate) / cfgRate > 0.01)
@@ -1423,19 +1626,20 @@ function resolveExchangeUnit_(order, li, live, rates, opts) {
       rate = vRate; rateSource = "the product's gold_rate";
       if (!rates) add('info', 'deduction', 'Could not read today\'s rate from the config, so the product\'s own gold rate is used.');
     } else {
-      add('block', 'deduction', 'No gold rate for ' + (karat ? karat + 'K' : 'this item (karat unreadable from SKU "' + (li.sku || '') + '")') +
-          '. Check the gold_rate config is set.');
+      add('block', 'deduction', 'No gold rate for ' + (karat ? karat + 'K' : 'this item (karat unreadable from SKU "' + (specSku || li.title || '') + '")') +
+          (live.status === 'none' ? '. Map it to a catalogue SKU in the catalogue-SKU cell, with a reason.' : '. Check the gold_rate config is set.'));
     }
   }
 
   var ctsProp = exRs_(props['_diamond_cts']);
   var liveDia = null, liveDiaSource = '';
-  if (live.status === 'ok') {
+  if (hasLive) {
     liveDia = exRs_(lv.price_breakup_diamond);
-    liveDiaSource = "today's catalogue (price_breakup_diamond)";
+    liveDiaSource = live.status === 'substitute' ? 'catalogue listing ' + live.subSku + ' (price_breakup_diamond)'
+                                                 : "today's catalogue (price_breakup_diamond)";
   } else if (live.status === 'deleted' || live.status === 'none') {
     var why = live.status === 'deleted'
-      ? 'This product listing has been deleted from Shopify'
+      ? 'This product has been deleted from Shopify'
       : 'This line was a custom item with no product listing';
     if (dia !== null) {
       liveDia = dia; liveDiaSource = 'the diamond price charged (no current listing)';
@@ -1447,22 +1651,22 @@ function resolveExchangeUnit_(order, li, live, rates, opts) {
   } else {
     add('block', 'deduction', 'Could not read this product from Shopify (' + (live.code || 'error') + '). Try the lookup again.');
   }
-  // Stones are present if the order priced one, the catalogue prices one, or either records carats
-  // (the SKU's carat fields count: #1050's listing is gone but its SKU still says 0.44 ct).
-  var skuParts = String(li.sku || '').split('|');
+  // Stones are present if the order priced one, the catalogue prices one, or either records carats.
+  var skuParts = String(specSku).split('|');
   var skuCts = (parseFloat(skuParts[6]) || 0) + (parseFloat(skuParts[7]) || 0);
   var hasStones = (dia !== null && dia > 0) || (liveDia !== null && liveDia > 0) ||
                   (ctsProp !== null && ctsProp > 0) || skuCts > 0;
   if (liveDia === null && !hasStones) liveDia = 0;
   if (liveDia === null && hasStones)
-    add('block', 'deduction', 'The diamond on this item has no current value anywhere (its listing is gone and the order recorded no diamond price). Use Full Value.');
+    add('block', 'deduction', 'The diamond on this item has no current value anywhere (no listing, and the order recorded no diamond price). Use Full Value.');
 
-  if (netWt === null && metal === 'gold')
-    add('block', 'deduction', 'The gold weight of this piece is not recorded on the order' +
-        (live.status === 'ok' ? ' or in the catalogue' : ' and its product listing is gone') +
-        '. Weigh the piece and enter its NET gold weight (gross weight minus stones) in the weighed-weight cell, with a reason.');
+  if (netWt === null)
+    add('block', 'deduction', 'The metal weight of this piece is not recorded on the order' +
+        (hasLive ? ' or in the catalogue' : live.status === 'none' ? ' and it has no catalogue listing' : ' and its product is gone') +
+        '. Weigh the piece and enter its NET metal weight (gross weight minus stones) in the weighed-weight cell, with a reason' +
+        (live.status === 'none' ? ', or map it to a catalogue SKU in the catalogue-SKU cell.' : '.'));
 
-  // ── 6. THE TWO AMOUNTS ───────────────────────────────────────────────────────────────────────
+  // ── 7. THE TWO AMOUNTS ───────────────────────────────────────────────────────────────────────
   var goldLeg = (netWt !== null && rate !== null) ? exR2_(netWt * rate) : null;
   // What was paid for the piece excluding GST. The ceiling whenever the order recorded no breakup.
   var paidExGst = exR2_(invoice / 1.03);
@@ -1477,7 +1681,7 @@ function resolveExchangeUnit_(order, li, live, rates, opts) {
   }
   var diaLeg  = liveDia === null ? null
               : (cap === null ? exR2_(liveDia * 0.8) : exR2_(Math.min(liveDia * 0.8, cap)));
-  var deduction = (goldLeg === null && metal === 'gold') || diaLeg === null ? null
+  var deduction = goldLeg === null || diaLeg === null ? null
                 : exR2_((goldLeg || 0) + diaLeg);
   // With no breakup on the order, nothing recorded says what the gold weighed or what the stone
   // cost, so the whole credit is held to what was paid ex-GST. (#1041: the catalogue now says 8.4 g
@@ -1613,6 +1817,8 @@ function removeTriggers() {
 // "Exchange Note" (instant post-tax deduction on a new invoice).
 function createDocument() {
   const calc = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CALC_SHEET_NAME);
+  // The hourly refund + status jobs must exist; a missing one is recreated here. Never blocks issuing.
+  try { ensureScheduledTriggers_(); } catch (x) { Logger.log('trigger check skipped: ' + x.message); }
   // Source wins over Document Type: Old Gold is always a voucher bound to a customer, no order.
   if (currentSource_(calc) === SOURCE_OLD_GOLD) return createOldGoldVoucher_();
   const modality = String(calc.getRange(DOCTYPE_CELL).getValue()).trim().toLowerCase();
@@ -1648,10 +1854,8 @@ function createVoucher_() {
   // 1-year validity (same day next year — JS rolls leap years over cleanly).
   const validUntil = new Date(today.getFullYear() + 1, today.getMonth(), today.getDate());
 
-  if (!customerEmail || !orderNumber || netCredit <= 0) {
-    ui.alert('Missing data. Fill customer email, order number, and ensure net credit > 0.');
-    return;
-  }
+  const missing = missingIssueData_(orderNumber, netCredit);
+  if (missing) { ui.alert(missing); return; }
 
   // Checked BEFORE the serial is allocated — an abandoned allocation leaves a gap in the ledger.
   if (!confirmNoDuplicateInstrument_(ss, ui, orderNumber)) return;
@@ -2014,10 +2218,9 @@ function buildExchangeCalculator() {
   label(GOLD_RATE_ORD_CELL, GOLD_RATE_LABEL);
   label(LGD_RATE_CELL, 'Diamond Value (from variant →)');
   label(DIA_PAID_CELL, 'Diamond paid (after discount)');
-  label(INVOICE_CELL, INVOICE_LABEL);
   label(WEIGHED_NETWT_CELL, WEIGHED_LABEL);
   label(CHECKS_CELL, CHECKS_LABEL);
-  label(DEDUCTION_LIMIT_CELL, DEDUCTION_LIMIT_LABEL);
+  label(CATALOGUE_SKU_CELL, CATALOGUE_SKU_LABEL);
 
   // ── 4 + 5: Calculation (before / after) ──
   header(cellRow_(GOLD_VAL_CELL) - 1, '4 — CALCULATION  (auto)');
@@ -3224,68 +3427,145 @@ function shopifyGetPaged_(endpoint) {
 // redeemed, and against what" is answerable from the tab instead of from the database.
 // ═════════════════════════════════════════════════════════════════════════════
 
-function refreshLogStatuses() {
+// HOW STATUS WORKS
+// The credit_instruments ledger (Supabase, written by the middleware) is the ONLY place that knows
+// what happened to a voucher or exchange note after issue: applied to a draft, redeemed when that
+// draft converted, voided, expired. The sheet's tabs only know the moment of issue. This copies the
+// ledger's state onto ALL THREE tabs, matched by serial:
+//   • After-Sales Log — Status, Redeemed On, Applied To, Status Synced
+//   • Voucher Log / Exchange Log — the Status column (L). These used to stay frozen at whatever was
+//     written at issue ("Applied"), which is why EXC27-KAHSR-0001 read "Applied" in the Exchange Log
+//     while the ledger had it redeemed against #D154 since 1 July.
+// A row the ledger does not know is left alone, and a voided row is never overwritten.
+//
+// It runs on its own at 12:00 and 18:00 IST (see ensureScheduledTriggers_), and the menu item still
+// runs it on demand.
+function refreshLogStatuses()          { refreshLogStatuses_(true); }
+function refreshLogStatusesScheduled() { refreshLogStatuses_(false); }
+
+function refreshLogStatuses_(showUi) {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var sh = ensureAfterSalesLog_(ss);
-  var ui = SpreadsheetApp.getUi();
+  var ui = showUi ? SpreadsheetApp.getUi() : null;
   var tz = ss.getSpreadsheetTimeZone();
 
   var ledger;
   try {
     ledger = fetchLedgerDetail_();
   } catch (e) {
-    ui.alert('❌ Could not read the ledger:\n\n' + e.message +
-             '\n\nStatuses are unchanged — nothing was overwritten with a guess.');
+    Logger.log('status refresh: ledger unreadable: ' + e.message);
+    if (ui) ui.alert('❌ Could not read the ledger:\n\n' + e.message +
+                     '\n\nStatuses are unchanged — nothing was overwritten with a guess.');
     return;
   }
 
-  var last = sh.getLastRow();
-  if (last < 2) { ui.alert('Nothing logged yet.'); return; }
-
-  var serialCol   = afterSalesCol_('Serial');
-  var statusCol   = afterSalesCol_('Status');
-  var redeemedCol = afterSalesCol_('Redeemed On');
-  var appliedCol  = afterSalesCol_('Applied To');
-  var syncedCol   = afterSalesCol_('Status Synced');
-
-  var serials = sh.getRange(2, serialCol, last - 1, 1).getValues();
-  var status  = sh.getRange(2, statusCol,   last - 1, 1).getValues();
-  var redeem  = sh.getRange(2, redeemedCol, last - 1, 1).getValues();
-  var applied = sh.getRange(2, appliedCol,  last - 1, 1).getValues();
-  var synced  = sh.getRange(2, syncedCol,   last - 1, 1).getValues();
-  var stamp   = Utilities.formatDate(new Date(), tz, 'dd-MM-yyyy HH:mm');
   var updated = 0, unknown = 0;
+  var last = sh.getLastRow();
+  if (last >= 2) {
+    var serialCol   = afterSalesCol_('Serial');
+    var statusCol   = afterSalesCol_('Status');
+    var redeemedCol = afterSalesCol_('Redeemed On');
+    var appliedCol  = afterSalesCol_('Applied To');
+    var syncedCol   = afterSalesCol_('Status Synced');
 
-  for (var i = 0; i < serials.length; i++) {
-    var code = String(serials[i][0]).trim().toUpperCase();
-    if (!code) continue;                       // refund rows carry no serial — their status is final
-    var row = ledger[code];
-    if (!row) { unknown++; continue; }          // in the sheet but not the ledger — leave it alone and report it
-    if (String(status[i][0]) === row.state && String(redeem[i][0]) === row.redeemed_against) continue;
-    status[i][0]  = row.state;
-    redeem[i][0]  = row.redeemed_against;
-    if (row.applied_to_draft) applied[i][0] = row.applied_to_draft;
-    synced[i][0]  = stamp;
-    updated++;
+    var serials = sh.getRange(2, serialCol, last - 1, 1).getValues();
+    var status  = sh.getRange(2, statusCol,   last - 1, 1).getValues();
+    var redeem  = sh.getRange(2, redeemedCol, last - 1, 1).getValues();
+    var applied = sh.getRange(2, appliedCol,  last - 1, 1).getValues();
+    var synced  = sh.getRange(2, syncedCol,   last - 1, 1).getValues();
+    var stamp   = Utilities.formatDate(new Date(), tz, 'dd-MM-yyyy HH:mm');
+
+    for (var i = 0; i < serials.length; i++) {
+      var code = String(serials[i][0]).trim().toUpperCase();
+      if (!code) continue;                       // refund rows carry no serial — their status is final
+      var row = ledger[code];
+      if (!row) { unknown++; continue; }          // in the sheet but not the ledger — leave it alone and report it
+      if (String(status[i][0]) === row.state && String(redeem[i][0]) === row.redeemed_against) continue;
+      status[i][0]  = row.state;
+      redeem[i][0]  = row.redeemed_against;
+      if (row.applied_to_draft) applied[i][0] = row.applied_to_draft;
+      synced[i][0]  = stamp;
+      updated++;
+    }
+
+    sh.getRange(2, statusCol,   last - 1, 1).setValues(status);
+    sh.getRange(2, redeemedCol, last - 1, 1).setValues(redeem);
+    sh.getRange(2, appliedCol,  last - 1, 1).setValues(applied);
+    sh.getRange(2, syncedCol,   last - 1, 1).setValues(synced);
   }
 
-  sh.getRange(2, statusCol,   last - 1, 1).setValues(status);
-  sh.getRange(2, redeemedCol, last - 1, 1).setValues(redeem);
-  sh.getRange(2, appliedCol,  last - 1, 1).setValues(applied);
-  sh.getRange(2, syncedCol,   last - 1, 1).setValues(synced);
+  // The two issue-time tabs: serial in column B, status in column L. Same ledger, same rules.
+  var legacyUpdated = 0;
+  [ss.getSheetByName(VOUCHER_LOG) || ss.getSheetByName('CN Log'), ss.getSheetByName(EXCHANGE_LOG)]
+    .forEach(function (tab) {
+      if (!tab || tab.getLastRow() < 2) return;
+      var n = tab.getLastRow() - 1;
+      var codes = tab.getRange(2, 2, n, 1).getValues();
+      var stats = tab.getRange(2, 12, n, 1).getValues();
+      var changed = false;
+      for (var j = 0; j < n; j++) {
+        var row2 = ledger[String(codes[j][0]).trim().toUpperCase()];
+        if (!row2 || !row2.state) continue;
+        if (/void/i.test(String(stats[j][0]))) continue;      // a void is final; never un-void a row
+        var label = row2.state.charAt(0).toUpperCase() + row2.state.slice(1) +
+                    (row2.redeemed_against ? ' ' + row2.redeemed_against
+                     : row2.applied_to_draft ? ' (on ' + row2.applied_to_draft + ')' : '');
+        if (String(stats[j][0]) === label) continue;
+        stats[j][0] = label; changed = true; legacyUpdated++;
+      }
+      if (changed) tab.getRange(2, 12, n, 1).setValues(stats);
+    });
 
-  ui.alert('✅ Statuses refreshed from the ledger.\n\n' +
-           'Rows updated: ' + updated + '\n' +
-           (unknown ? 'Serials not found in the ledger: ' + unknown +
-                      '\n(left untouched — these were issued before the ledger, or the ledger write failed)\n' : '') +
-           '\nStatus values: outstanding | applied | redeemed | voided | expired' +
-           (ledger.__partial
-             ? '\n\n⚠️ PARTIAL REFRESH — this middleware build has no "detail" view, so only OPEN and ' +
-               'REDEEMED instruments could be read. Applied / voided / expired ones are among the ' +
-               (unknown ? unknown + ' ' : '') + 'not-found serials above and kept their existing status. ' +
-               'Deploy the detail view for a full refresh.'
-             : ''));
+  if (ui) {
+    ui.alert('✅ Statuses refreshed from the ledger.\n\n' +
+             'After-Sales Log rows updated: ' + updated + '\n' +
+             'Voucher / Exchange Log rows updated: ' + legacyUpdated + '\n' +
+             (unknown ? 'Serials not found in the ledger: ' + unknown +
+                        '\n(left untouched — these were issued before the ledger, or the ledger write failed)\n' : '') +
+             '\nThis also runs by itself daily at 12:00 and 18:00 IST.' +
+             (ledger.__partial
+               ? '\n\n⚠️ PARTIAL REFRESH — this middleware build has no "detail" view, so only OPEN and ' +
+                 'REDEEMED instruments could be read.'
+               : ''));
+  }
 }
+
+// The scheduled jobs. Refund syncs pull hourly; the status refresh runs twice a day, at 12:00 and
+// 18:00 IST (Google fires a daily trigger somewhere inside the chosen hour). Installed by
+// setupRefundSync and RE-CHECKED every time a document is created, so none can quietly go missing —
+// a missing one is recreated on the spot. Installable triggers can be created from any run a staff
+// member starts, which is why no separate setup step is needed.
+var SCHEDULED_JOBS_ = ['syncShopifyRefundsScheduled', 'syncDraftRefundsScheduled', 'refreshLogStatusesScheduled'];
+var STATUS_REFRESH_HOURS_IST_ = [12, 18];
+
+function ensureScheduledTriggers_() {
+  var count = {};
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    var f = t.getHandlerFunction(); count[f] = (count[f] || 0) + 1;
+  });
+  var made = [];
+  ['syncShopifyRefundsScheduled', 'syncDraftRefundsScheduled'].forEach(function (f) {
+    if (!count[f]) { ScriptApp.newTrigger(f).timeBased().everyHours(1).create(); made.push(f); }
+  });
+  // The status refresh needs exactly one trigger per hour in STATUS_REFRESH_HOURS_IST_. Anything else
+  // (none, a leftover hourly one) is cleared and rebuilt.
+  if ((count.refreshLogStatusesScheduled || 0) !== STATUS_REFRESH_HOURS_IST_.length) {
+    installStatusRefreshTriggers_();
+    made.push('refreshLogStatusesScheduled');
+  }
+  return made;
+}
+
+function installStatusRefreshTriggers_() {
+  ScriptApp.getProjectTriggers()
+    .filter(function (t) { return t.getHandlerFunction() === 'refreshLogStatusesScheduled'; })
+    .forEach(function (t) { ScriptApp.deleteTrigger(t); });
+  STATUS_REFRESH_HOURS_IST_.forEach(function (h) {
+    ScriptApp.newTrigger('refreshLogStatusesScheduled').timeBased()
+      .atHour(h).everyDays(1).inTimezone('Asia/Kolkata').create();
+  });
+}
+
 
 // serial_code → { state, redeemed_against, applied_to_draft } for every instrument in the ledger.
 //
@@ -3368,15 +3648,17 @@ function setupRefundSync() {
   ScriptApp.getProjectTriggers()
     .filter(function (t) {
       var f = t.getHandlerFunction();
-      return f === 'syncShopifyRefundsScheduled' || f === 'syncDraftRefundsScheduled';
+      return SCHEDULED_JOBS_.indexOf(f) !== -1;
     })
     .forEach(function (t) { ScriptApp.deleteTrigger(t); });
+  installStatusRefreshTriggers_();   // 12:00 and 18:00 IST
   ScriptApp.newTrigger('syncShopifyRefundsScheduled').timeBased().everyHours(1).create();
   // Draft refunds ride the same hourly cadence. Two triggers rather than one function calling both,
   // so a failure in one pull cannot stop the other from running.
   ScriptApp.newTrigger('syncDraftRefundsScheduled').timeBased().everyHours(1).create();
-  SpreadsheetApp.getUi().alert('✅ Hourly refund sync installed.\n\n' +
-    'It reads Shopify order refunds AND draft-order refunds into "' + AFTERSALES_LOG + '". ' +
+  SpreadsheetApp.getUi().alert('✅ Scheduled jobs installed.\n\n' +
+    'Hourly: Shopify order refunds AND draft-order refunds into "' + AFTERSALES_LOG + '".\n' +
+    'Daily at 12:00 and 18:00 IST: every voucher / exchange note status refreshed from the ledger, on all three log tabs.\n\n' +
     'Run "Sync Shopify refunds now" or "Sync draft refunds now" any time to pull immediately.');
 }
 
@@ -3387,10 +3669,10 @@ function removeRefundSync() {
   ScriptApp.getProjectTriggers()
     .filter(function (t) {
       var f = t.getHandlerFunction();
-      return f === 'syncShopifyRefundsScheduled' || f === 'syncDraftRefundsScheduled';
+      return SCHEDULED_JOBS_.indexOf(f) !== -1;
     })
     .forEach(function (t) { ScriptApp.deleteTrigger(t); });
-  SpreadsheetApp.getUi().alert('Hourly refund sync removed (order refunds and draft refunds).');
+  SpreadsheetApp.getUi().alert('Hourly refund sync and status refresh removed (order refunds and draft refunds).');
 }
 
 function restructureControlsToTop() {
@@ -3458,7 +3740,7 @@ function restructureControlsToTop() {
 function lockCalcCells_(calc) {
   var lockCells = [NET_WT_CELL, DIA_CTS_CELL, GOLD_RATE_ORD_CELL, GOLD_RATE_EFF_CELL,
                    LGD_RATE_CELL, DIA_VALUE_CELL, DIA_PAID_CELL, GOLD_VAL_CELL, DIA_VAL_CELL,
-                   OG_RATE_CELL, OG_CUSTID_CELL, INVOICE_CELL, CHECKS_CELL, DEDUCTION_LIMIT_CELL]
+                   OG_RATE_CELL, OG_CUSTID_CELL, CHECKS_CELL]
     // The whole paid column is read off the order — hand-editing it would make the sheet claim the
     // customer was charged something they were not.
     .concat(CALC_ROWS.map(function (r) { return r.paid; }))
@@ -3538,6 +3820,16 @@ function lookupOldGoldCustomer() {
   ui.alert('✅ Customer: ' + c.name + '\nid ' + c.id + (c.email ? '\n' + c.email : ''));
 }
 
+// The two fields a Voucher / Exchange Note cannot be issued without. Customer email is deliberately
+// NOT one of them: it only feeds the log row and the customer mail (off, and skipped when blank), and
+// requiring it blocked phone-only customers such as #1071. Returns the alert text, or '' when fine.
+function missingIssueData_(orderNumber, value) {
+  const missing = [];
+  if (!orderNumber) missing.push('Original order number (' + ORDER_NUM_CELL + ') is empty.');
+  if (!(value > 0)) missing.push('Value to Issue (' + FINAL_ISSUE_CELL + ') must be above 0 — it reads ' + value + '.');
+  return missing.length ? 'Missing data:\n  • ' + missing.join('\n  • ') : '';
+}
+
 // ── EXCHANGE NOTE — instant post-tax deduction applied to a NEW invoice ──────────
 // Staff ring up the new item (creating a Shopify draft), then enter that draft # in NEWDRAFT_CELL.
 // The middleware appends a negative custom line item (EXC-...) to that draft.
@@ -3565,10 +3857,8 @@ function createExchangeNote_() {
   const gate = exchangeGate_(calc, ui);
   if (!gate) return;
 
-  if (!customerEmail || !orderNumber || excValue <= 0) {
-    ui.alert('Missing data. Fill customer email, old order number, and ensure exchange value > 0.');
-    return;
-  }
+  const missing = missingIssueData_(orderNumber, excValue);
+  if (missing) { ui.alert(missing); return; }
   if (!newDraftRef) {
     // Put the label back first, in case it is the reason the field was missed.
     try { healCalcLabels_(calc); } catch (x) {}
@@ -4110,7 +4400,9 @@ function getSupabaseConfig_(key) {
 
 // Old-gold buy-back rate per gram for a (possibly fractional) karat. Reads the SAME buying_rate_table
 // the middleware uses (server.js getBuyingRateTable/buyingRateFor), so the sheet and any middleware
-// re-valuation agree to the paise. Formula: karat/24 × base_24k × (1 − haircut_pct/100).
+// re-valuation agree to the paise. 14/18/22/24kt buy at that karat's SALE rate exactly as set
+// (table.sale_rates, manual 18K/14K included); any other purity is karat/24 × base_24k ×
+// (1 − haircut_pct/100), and haircut_pct is 0 from 2026-10-09 (was 5).
 // Returns null if the table is missing or purity is outside 0<p<=24.
 function getBuyingRate_(purity) {
   var p = toNum(purity);
@@ -4120,6 +4412,8 @@ function getBuyingRate_(purity) {
   var t;
   try { t = JSON.parse(raw); } catch (e) { return null; }
   if (!t || !(t.base_24k > 0)) return null;
+  var sale = t.sale_rates && Number(t.sale_rates[String(p)]);
+  if (sale > 0) return sale;
   return Math.round((p / 24) * t.base_24k * (1 - (t.haircut_pct || 0) / 100) * 100) / 100;
 }
 
@@ -4180,19 +4474,35 @@ function refreshFinalIssueValue_(calc) {
   // Write the table for the selected mode first.
   refreshExchangeColumn_(calc);
   cell.clearNote();
+  // Both amounts that are not plain arithmetic on the table — what was charged (Full Value) and the
+  // Deduction ceiling for orders with no breakup — come from the CHECKS of the item on the sheet and
+  // are written into the formula as numbers, never read back from a cell. (They used to live in B36
+  // and B39; row 36 is a merged header on the live sheet, so B36 silently dropped the value and Full
+  // Value read 0 on #1050.) No checks for this order + SKU → 0 with the reason beside it; the issue
+  // gate refuses that state anyway.
+  var st = readExchangeChecks_();
+  var onSheet = String(calc.getRange(ORDER_NUM_CELL).getValue()).trim().replace('#', '');
+  var skuNow  = String(calc.getRange(SKU_CELL).getValue()).trim();
+  var checked = !!(st && st.order === onSheet && st.sku === skuNow);
+  var inr = function (n) { return '₹' + Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2 }); };
   if (isFullValue_(calc)) {
-    // Full Value issues what was CHARGED for the piece — INVOICE_CELL — plus custom deductions. Not
-    // the breakup total: on #1039 and #1067 the recorded breakup does not add up to the charge, and
-    // on orders before #1039 there is no breakup at all. The table above still shows the breakup.
-    cell.setFormula('=' + INVOICE_CELL + '+N(' + CUSTOM_DED_CELL + ')');
-    explain('Full Value — what was charged for this item, tax inclusive (' + INVOICE_CELL + '), plus custom deductions');
+    // What was CHARGED for the piece, plus custom deductions. Not the breakup total: on #1039 and
+    // #1067 the recorded breakup does not add up to the charge, and before #1039 there is none.
+    if (checked && Number(st.fullValue) > 0) {
+      cell.setFormula('=' + Number(st.fullValue).toFixed(2) + '+N(' + CUSTOM_DED_CELL + ')');
+      explain('Full Value — ' + inr(st.fullValue) + ' charged for this item, tax inclusive, plus custom deductions');
+    } else {
+      cell.setFormula('=0');
+      explain('Full Value — this item has not been checked: re-enter the order number');
+    }
+  } else if (checked && st.limit !== null && st.limit !== undefined) {
+    // NET held to the ceiling, custom deductions applied after it so they always come off in full.
+    cell.setFormula('=MIN(' + NET_VALUE_CELL + '-N(' + CUSTOM_DED_CELL + '),' + Number(st.limit).toFixed(2) +
+                    ')+N(' + CUSTOM_DED_CELL + ')');
+    explain('Deduction — revalued today, held to ' + inr(st.limit) + ' (what was paid ex-GST; no breakup on the order)');
   } else {
-    // NET, held to DEDUCTION_LIMIT_CELL when that is set (order with no breakup), custom deductions
-    // applied after the limit so they always come off in full.
-    cell.setFormula('=IF(' + DEDUCTION_LIMIT_CELL + '="",' + NET_VALUE_CELL + ',MIN(' + NET_VALUE_CELL +
-                    '-N(' + CUSTOM_DED_CELL + '),' + DEDUCTION_LIMIT_CELL + ')+N(' + CUSTOM_DED_CELL + '))');
-    explain('Deduction — gold + diamond revalued today (mirrors NET' +
-            (String(calc.getRange(DEDUCTION_LIMIT_CELL).getValue()).trim() !== '' ? ', held to the limit in ' + DEDUCTION_LIMIT_CELL : '') + ')');
+    cell.setFormula('=' + NET_VALUE_CELL);
+    explain('Deduction — gold + diamond revalued today (mirrors NET)');
   }
   try { renderExchangeChecks_(calc); } catch (x) {}
 }

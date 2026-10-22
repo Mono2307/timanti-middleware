@@ -71,7 +71,7 @@ var SS_ID = '1l0tRGEBVc3_SVODSMfnTntmsC9iDj-DtweiXjRNlzkU';
 
 // Stamped into the finish alert. If the popup does not say v9, the Apps Script project is still
 // running an older paste and nothing in this file has taken effect.
-var VERSION = 'v10';
+var VERSION = 'v10.1';
 
 var NAV='#111827', WHITE='#FFFFFF', WAG='#25D366';
 var Y_BG='#FFFBEB', Y_FG='#1E3A8A', Y_BD='#D97706';
@@ -302,7 +302,7 @@ function sendBtn(sh,r,prRow,phone,reqCells,block){
   rh(sh,r,40);
   sh.getRange(r,2,1,3).merge()
     .setFormula('='+pre+'IF(OR('+chk+'),"Fill all required (red) fields above first",'
-      +'HYPERLINK("https://wa.me/91"&'+phone+'&"?text="&ENCODEURL(B'+prRow+'),"  Open WhatsApp >>"))'+post)
+      +'HYPERLINK("https://wa.me/91"&'+waPhone(phone)+'&"?text="&ENCODEURL(B'+prRow+'),"  Open WhatsApp >>"))'+post)
     .setBackground(WAG).setFontColor(WHITE).setFontSize(13).setFontWeight('bold')
     .setHorizontalAlignment('center').setVerticalAlignment('middle');
   return r+1;
@@ -352,9 +352,14 @@ function fEstimate(id,nm){
   return pdfGuard(id,nm,'Enter Draft Order Name (C7) + Draft Order ID (C8)',
     '"https://timanti.in/apps/download-pdf/drafts/6fb7c284e3dd71764a10/"&'+pdfMult(id,8810)+'&"/"&SUBSTITUTE(LOWER('+nm+'),"#","")&".pdf"');
 }
+// Staff type numbers as "98303 80785", "+91 98303-80785", "098303…". wa.me rejects anything but
+// digits (a space 404s the whole link), so strip non-digits and keep the last 10.
+function waPhone(phone){
+  return 'RIGHT(REGEXREPLACE(TO_TEXT('+phone+'),"[^0-9]",""),10)';
+}
 function waBackup(prCell,phone,block){
   phone=phone||'C6';
-  var url='"https://wa.me/91"&'+phone+'&"?text="&ENCODEURL('+prCell+')';
+  var url='"https://wa.me/91"&'+waPhone(phone)+'&"?text="&ENCODEURL('+prCell+')';
   return block ? '=IF('+block.cond+',"'+block.msg+'",'+url+')' : '='+url;
 }
 

@@ -1,0 +1,675 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Timanti — After-Sales Communication Touchpoints</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:Arial,sans-serif;background:#fff;padding:20px;font-size:11px;}
+
+.title{font-size:15px;font-weight:700;color:#111;margin-bottom:3px;}
+.subtitle{font-size:10px;color:#888;margin-bottom:14px;}
+
+.legend{display:flex;gap:14px;margin-bottom:10px;flex-wrap:wrap;align-items:center;padding:10px 14px;background:#fafafa;border-radius:4px;border:1px solid #eee;}
+.leg{display:flex;align-items:center;gap:6px;font-size:10px;color:#444;}
+.ld{width:10px;height:10px;border-radius:2px;flex-shrink:0;}
+
+.alert{font-size:10px;color:#7f1d1d;background:#fef2f2;border:1px solid #fecaca;border-left:3px solid #dc2626;padding:7px 11px;margin-bottom:14px;border-radius:0 3px 3px 0;line-height:1.6;}
+.alert strong{color:#991b1b;}
+
+.counts{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;}
+.cbox{border:1px solid #eee;border-radius:4px;padding:7px 11px;min-width:96px;background:#fafafa;}
+.cnum{font-size:16px;font-weight:700;color:#111;line-height:1.1;}
+.clab{font-size:8px;color:#999;text-transform:uppercase;letter-spacing:0.6px;margin-top:2px;}
+
+.sec{padding:5px 10px;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:#fff;margin-top:14px;margin-bottom:0;border-radius:2px;}
+.sec-rep {background:#7f1d3d;}
+.sec-exc {background:#155e75;}
+.sec-og  {background:#7a3500;}
+.sec-chg {background:#4b0082;}
+.sec-vch {background:#166534;}
+.sec-ref {background:#1e3a5f;}
+
+.jrow{display:flex;align-items:flex-start;border-bottom:1px solid #f0f0f0;padding:8px 0;}
+.jrow:last-child{border-bottom:none;}
+.jlabel{width:154px;min-width:154px;padding-right:10px;border-right:2px solid #eee;display:flex;flex-direction:column;gap:2px;padding-top:4px;}
+.jname{font-size:9.5px;font-weight:700;color:#111;line-height:1.4;}
+.jsub{font-size:8px;color:#aaa;line-height:1.4;}
+.jtag{font-size:7.5px;color:#4c1d95;background:#ede9fe;border-radius:2px;padding:1px 4px;display:inline-block;margin-top:2px;font-family:'Menlo','Courier New',monospace;align-self:flex-start;}
+
+.jflow{display:flex;align-items:flex-start;padding-left:10px;flex-wrap:nowrap;gap:0;overflow-x:auto;min-height:76px;padding-top:4px;}
+
+.nd{display:flex;flex-direction:column;align-items:center;flex-shrink:0;}
+.nb{border-radius:4px;padding:6px 5px 5px 5px;text-align:center;width:102px;}
+.nc {font-size:7px;text-transform:uppercase;letter-spacing:0.4px;font-weight:600;margin-bottom:2px;}
+.nsub{font-size:6.5px;font-style:italic;line-height:1.3;margin-bottom:3px;border-top:1px solid rgba(255,255,255,0.2);padding-top:3px;opacity:0.9;}
+.nt {font-size:8.5px;font-weight:700;line-height:1.3;margin-bottom:2px;}
+.ndoc{font-size:7.5px;line-height:1.3;}
+
+/* colour themes */
+.e   {background:#111;}
+.e   .nc,.e .nsub,.e .nt,.e .ndoc{color:#fff;}
+.hq  {background:#1d4ed8;}
+.hq  .nc,.hq .nsub,.hq .nt,.hq .ndoc{color:#fff;}
+.sh  {background:#047857;}
+.sh  .nc,.sh .nsub,.sh .nt,.sh .ndoc{color:#fff;}
+.s   {background:#f97316;}
+.s   .nc,.s .nsub,.s .nt,.s .ndoc{color:#fff;}
+.wa  {background:#b45309;}
+.wa  .nc,.wa .nsub,.wa .nt,.wa .ndoc{color:#fff;}
+.ac  {background:#fff;border:1.5px dashed #7c3aed;}
+.ac  .nc{color:#7c3aed;}
+.ac  .nt{color:#4c1d95;}
+.ac  .ndoc{color:#8b7bb8;}
+.g   {background:#f5f5f5;border:1.5px dashed #ddd;}
+.g   .nt{color:#bbb;font-weight:400;font-size:8.5px;}
+.g   .ndoc{color:#ccc;}
+
+.nm{font-size:7px;margin-top:4px;padding:2px 5px;border-radius:2px;display:inline-block;white-space:nowrap;}
+.mauto {background:#dcfce7;color:#166534;}
+.mman  {background:#fef3c7;color:#92400e;}
+.mstaff{background:#fee2e2;color:#991b1b;}
+.mflag {background:#1f2937;color:#fcd34d;font-weight:700;}
+.mnone {background:#f5f5f5;color:#aaa;}
+
+.arr {font-size:13px;color:#ccc;margin:0 3px;flex-shrink:0;padding-top:18px;line-height:1;}
+.arrw{display:flex;flex-direction:column;align-items:center;flex-shrink:0;margin:0 3px;}
+.arrg{font-size:13px;color:#ccc;padding-top:18px;line-height:1;}
+.arrl{font-size:7.5px;color:#aaa;white-space:nowrap;text-align:center;margin-top:2px;}
+.arrl.warn{color:#dc2626;}
+.plus{display:flex;flex-direction:column;align-items:center;flex-shrink:0;margin:0 3px;}
+.plusg{font-size:14px;color:#9333ea;padding-top:16px;line-height:1;font-weight:700;}
+.plusl{font-size:7px;color:#9333ea;white-space:nowrap;text-align:center;margin-top:2px;}
+
+.fnote {font-size:9px;color:#555;background:#fffbeb;border-left:3px solid #b45309;padding:5px 9px;margin:5px 0 3px 0;border-radius:0 3px 3px 0;line-height:1.5;}
+.finput{font-size:9px;color:#4c1d95;background:#ede9fe;border-left:3px solid #7c3aed;padding:5px 9px;margin:5px 0 3px 0;border-radius:0 3px 3px 0;line-height:1.5;}
+.fgap  {font-size:9px;color:#7f1d1d;background:#fef2f2;border-left:3px solid #dc2626;padding:5px 9px;margin:5px 0 3px 0;border-radius:0 3px 3px 0;line-height:1.5;}
+code{background:#f0f0f0;padding:1px 4px;border-radius:2px;font-family:'Menlo','Courier New',monospace;font-size:9px;color:#c7254e;}
+
+.key{margin-top:20px;padding-top:12px;border-top:1px solid #eee;}
+.key-title{font-size:11px;font-weight:700;color:#111;margin-bottom:8px;}
+.key-row{display:flex;align-items:flex-start;gap:8px;margin-bottom:5px;font-size:9px;color:#555;line-height:1.5;}
+.key-badge{flex-shrink:0;padding:2px 7px;border-radius:2px;font-size:8px;font-weight:700;}
+
+table.inv{width:100%;border-collapse:collapse;margin-top:8px;font-size:8.5px;}
+table.inv th{background:#111;color:#fff;text-align:left;padding:5px 7px;font-size:8px;text-transform:uppercase;letter-spacing:0.6px;font-weight:700;}
+table.inv td{border-bottom:1px solid #eee;padding:5px 7px;vertical-align:top;line-height:1.45;color:#444;}
+table.inv tr:nth-child(even) td{background:#fafafa;}
+.pill{display:inline-block;padding:1px 5px;border-radius:2px;font-size:7.5px;font-weight:700;white-space:nowrap;}
+.p-cust{background:#111;color:#fff;}
+.p-int {background:#1d4ed8;color:#fff;}
+.p-sh  {background:#047857;color:#fff;}
+.p-live{background:#dcfce7;color:#166534;}
+.p-sup {background:#fee2e2;color:#991b1b;}
+.p-off {background:#f3f4f6;color:#6b7280;}
+.mono{font-family:'Menlo','Courier New',monospace;font-size:8px;}
+</style>
+</head>
+<body>
+
+<div class="title">Timanti — After-Sales Communication Touchpoints</div>
+<div class="subtitle">Current state &nbsp;·&nbsp; Repairs · Exchange &amp; Upgrade · Old Gold · Change / Swap · Voucher · Returns &amp; Refunds &nbsp;·&nbsp; Source: <span class="mono">timanti-middleware</span> (Resend) + Shopify notification templates</div>
+
+<div class="legend">
+  <div class="leg"><div class="ld" style="background:#111"></div>Resend → Customer (external)</div>
+  <div class="leg"><div class="ld" style="background:#1d4ed8"></div>Resend → HQ (internal)</div>
+  <div class="leg"><div class="ld" style="background:#047857"></div>Shopify notification</div>
+  <div class="leg"><div class="ld" style="background:#f97316"></div>GoKwik payment link</div>
+  <div class="leg"><div class="ld" style="background:#b45309"></div>WhatsApp / phone (manual)</div>
+  <div class="leg"><div class="ld" style="background:#fff;border:1.5px dashed #7c3aed"></div>Internal action (no comm)</div>
+  <div class="leg"><div class="ld" style="background:#f5f5f5;border:1.5px dashed #ddd"></div>No comm / silence</div>
+</div>
+
+<div class="alert">
+  <strong>Live-state warning — two switches currently suppress real sends.</strong>
+  &nbsp;(1) <code>REPAIR_TEST_EMAIL = 'monodeep.dutta@timanti.in'</code> in <span class="mono">services/repairs/index.js</span> — <strong>every</strong> repair email, customer and HQ, is redirected to that one inbox; no customer receives anything.
+  &nbsp;(2) <code>SEND_CUSTOMER_EMAILS = false</code> in <span class="mono">services/exchange-cn/apps-script.js</span> — voucher and exchange-note customer emails are logged but never sent.
+  Nodes carrying these are marked <span class="nm mflag" style="margin:0;">⚑</span> below.
+</div>
+
+<div class="counts">
+  <div class="cbox"><div class="cnum">16</div><div class="clab">Distinct emails</div></div>
+  <div class="cbox"><div class="cnum">11</div><div class="clab">To customer</div></div>
+  <div class="cbox"><div class="cnum">4</div><div class="clab">Internal → HQ</div></div>
+  <div class="cbox"><div class="cnum">15</div><div class="clab">Via Resend</div></div>
+  <div class="cbox"><div class="cnum">1</div><div class="clab">Via Shopify</div></div>
+  <div class="cbox"><div class="cnum">12</div><div class="clab">Repairs alone</div></div>
+  <div class="cbox"><div class="cnum" style="color:#dc2626;">9</div><div class="clab">Silent gaps</div></div>
+</div>
+
+
+<!-- ══════════════════════ REPAIRS ══════════════════════ -->
+<div class="sec sec-rep">Repairs &nbsp;— &nbsp;12 emails &nbsp;·&nbsp; the only fully automated after-sales journey</div>
+<div class="finput">INPUT: Staff adds tag <strong>repair-intake</strong> to the repair draft order in Shopify. Everything downstream is tag-driven and webhook-fired. HQ steers the flow from signed links inside the internal emails — no Shopify admin work after intake.</div>
+
+<!-- Stage 0 · Intake -->
+<div class="jrow">
+  <div class="jlabel"><div class="jname">0 · Intake</div><div class="jsub">Piece received at store, draft created.</div><div class="jtag">repair-intake</div></div>
+  <div class="jflow">
+    <div class="nd">
+      <div class="nb hq"><div class="nc">Resend · HQ</div><div class="nsub">Sub: "New Repair Intake — D#1042 — Priya Sharma"</div><div class="nt">Repair received — estimate required</div><div class="ndoc">Customer + item + notes · CTA: Set Estimate</div></div>
+      <div class="nm mauto">Auto on tag</div>
+      <div class="nm mflag">⚑ redirected</div>
+    </div>
+    <div class="plus"><div class="plusg">＋</div><div class="plusl">both fire</div></div>
+    <div class="nd">
+      <div class="nb e"><div class="nc">Resend · Customer</div><div class="nsub">Sub: "We've Received Your Item — D#1042"</div><div class="nt">We've Received Your Item</div><div class="ndoc">Estimate within 1–2 business days</div></div>
+      <div class="nm mauto">Auto on tag</div>
+      <div class="nm mflag">⚑ redirected</div>
+    </div>
+    <div class="arrw"><div class="arrg">→</div><div class="arrl">HQ opens link</div></div>
+    <div class="nd">
+      <div class="nb ac"><div class="nc">Internal action</div><div class="nt">Set Estimate form</div><div class="ndoc">Signed URL · enters amount or ticks "our mistake"</div></div>
+      <div class="nm mstaff">HQ must act</div>
+    </div>
+  </div>
+</div>
+
+<!-- Stage 1 · Estimate -->
+<div class="jrow">
+  <div class="jlabel"><div class="jname">1 · Estimate sent (chargeable)</div><div class="jsub">Middleware prices the line item, creates GoKwik link.</div><div class="jtag">repair-estimate-ready</div></div>
+  <div class="jflow">
+    <div class="nd">
+      <div class="nb s"><div class="nc">GoKwik</div><div class="nt">Payment link created</div><div class="ndoc">Embedded in email — not sent as SMS</div></div>
+      <div class="nm mauto">Auto</div>
+    </div>
+    <div class="arr">→</div>
+    <div class="nd">
+      <div class="nb e"><div class="nc">Resend · Customer</div><div class="nsub">Sub: "Your Timanti Repair Estimate — D#1042"</div><div class="nt">Your Repair Estimate is Ready</div><div class="ndoc">Item + cost · 3 CTAs · link expires 30 days</div></div>
+      <div class="nm mauto">Auto on tag</div>
+      <div class="nm mflag">⚑ redirected</div>
+    </div>
+    <div class="arrw"><div class="arrg">→</div><div class="arrl">customer chooses</div></div>
+    <div class="nd">
+      <div class="nb wa"><div class="nc">WhatsApp · CTA</div><div class="nt">Ask a Question</div><div class="ndoc">wa.me link — customer-initiated, system sends nothing</div></div>
+      <div class="nm mnone">Passive</div>
+    </div>
+  </div>
+</div>
+
+<!-- Stage 1B · Free repair -->
+<div class="jrow">
+  <div class="jlabel"><div class="jname">1B · Complimentary repair</div><div class="jsub">HQ ticks "our mistake", or staff tags directly. One dedup guard covers both.</div><div class="jtag">repair-free / free-repair</div></div>
+  <div class="jflow">
+    <div class="nd">
+      <div class="nb e"><div class="nc">Resend · Customer</div><div class="nsub">Sub: "Great News — Complimentary Repair Confirmed (D#1042)"</div><div class="nt">Great News — No Charge for This Repair</div><div class="ndoc">No payment needed · work starts</div></div>
+      <div class="nm mauto">Auto on tag</div>
+      <div class="nm mflag">⚑ redirected</div>
+    </div>
+    <div class="plus"><div class="plusg">＋</div><div class="plusl">both fire</div></div>
+    <div class="nd">
+      <div class="nb hq"><div class="nc">Resend · HQ</div><div class="nsub">Sub: "Complimentary Repair — D#1042 — Priya Sharma"</div><div class="nt">Repair in Progress — Mark Complete When Done</div><div class="ndoc">Green banner · CTA: Mark Complete</div></div>
+      <div class="nm mauto">Auto on tag</div>
+      <div class="nm mflag">⚑ redirected</div>
+    </div>
+    <div class="arrw"><div class="arrg">→</div><div class="arrl warn">repair bench time · no comm</div></div>
+    <div class="nd"><div class="nb g"><div class="nt">No comm</div><div class="ndoc">Repair in progress</div></div></div>
+  </div>
+</div>
+
+<!-- Stage 2A · Paid online -->
+<div class="jrow">
+  <div class="jlabel"><div class="jname">2A · Paid online (GoKwik)</div><div class="jsub">Customer clicks "Approve &amp; Pay Now". GoKwik webhook fires.</div><div class="jtag">repair-paid</div></div>
+  <div class="jflow">
+    <div class="nd">
+      <div class="nb s"><div class="nc">GoKwik</div><div class="nt">Payment success</div><div class="ndoc">Webhook → middleware</div></div>
+      <div class="nm mauto">Auto</div>
+    </div>
+    <div class="arr">→</div>
+    <div class="nd">
+      <div class="nb e"><div class="nc">Resend · Customer</div><div class="nsub">Sub: "Payment Confirmed — Repair in Progress (D#1042)"</div><div class="nt">Payment Confirmed — Repair in Progress</div><div class="ndoc">Txn ID · method · amount · what happens next</div></div>
+      <div class="nm mauto">Auto on webhook</div>
+      <div class="nm mflag">⚑ redirected</div>
+    </div>
+    <div class="plus"><div class="plusg">＋</div><div class="plusl">both fire</div></div>
+    <div class="nd">
+      <div class="nb hq"><div class="nc">Resend · HQ</div><div class="nsub">Sub: "Payment Received — D#1042 — Priya Sharma"</div><div class="nt">Repair in Progress — Mark Complete When Done</div><div class="ndoc">CTA: Mark Complete &amp; Notify Customer</div></div>
+      <div class="nm mauto">Auto on webhook</div>
+      <div class="nm mflag">⚑ redirected</div>
+    </div>
+    <div class="arrw"><div class="arrg">→</div><div class="arrl warn">bench time · no comm</div></div>
+    <div class="nd"><div class="nb g"><div class="nt">No comm</div><div class="ndoc">No mid-repair update exists</div></div></div>
+  </div>
+</div>
+
+<!-- Stage 2B · Pay at store -->
+<div class="jrow">
+  <div class="jlabel"><div class="jname">2B · Approved, pay at store</div><div class="jsub">Customer clicks "Approve &amp; Pay at Store", confirms on landing page.</div><div class="jtag">repair-store-approved</div></div>
+  <div class="jflow">
+    <div class="nd">
+      <div class="nb ac"><div class="nc">Landing page</div><div class="nt">Approve at store</div><div class="ndoc">Signed URL · customer confirms</div></div>
+      <div class="nm mauto">Self-serve</div>
+    </div>
+    <div class="arr">→</div>
+    <div class="nd">
+      <div class="nb e"><div class="nc">Resend · Customer</div><div class="nsub">Sub: "Repair Confirmed — We'll Be in Touch (D#1042)"</div><div class="nt">Repair Confirmed — We'll Get Started</div><div class="ndoc">Rs.X due at collection</div></div>
+      <div class="nm mauto">Auto on tag</div>
+      <div class="nm mflag">⚑ redirected</div>
+    </div>
+    <div class="plus"><div class="plusg">＋</div><div class="plusl">both fire</div></div>
+    <div class="nd">
+      <div class="nb hq"><div class="nc">Resend · HQ</div><div class="nsub">Sub: "Store Payment Approved — D#1042 — Priya Sharma — Rs.3,500"</div><div class="nt">Repair in Progress — Mark Complete When Done</div><div class="ndoc">CTA: Mark Complete &amp; Notify Customer</div></div>
+      <div class="nm mauto">Auto on tag</div>
+      <div class="nm mflag">⚑ redirected</div>
+    </div>
+  </div>
+</div>
+
+<!-- Stage 3A · Complete, dispatched -->
+<div class="jrow">
+  <div class="jlabel"><div class="jname">3A · Complete — dispatched</div><div class="jsub">HQ enters Sequel shipment ID on the complete form.</div><div class="jtag">repair-complete</div></div>
+  <div class="jflow">
+    <div class="nd">
+      <div class="nb ac"><div class="nc">Internal action</div><div class="nt">Mark Complete form</div><div class="ndoc">Enters Sequel AWB → writes repair_tracking_id</div></div>
+      <div class="nm mstaff">HQ must act</div>
+    </div>
+    <div class="arr">→</div>
+    <div class="nd">
+      <div class="nb e"><div class="nc">Resend · Customer</div><div class="nsub">Sub: "Your Repair is Ready — D#1042"</div><div class="nt">Your Repair is Ready</div><div class="ndoc">AWB in bold · CTA: Track Shipment (Sequel)</div></div>
+      <div class="nm mauto">Auto on tag</div>
+      <div class="nm mflag">⚑ redirected</div>
+    </div>
+  </div>
+</div>
+
+<!-- Stage 3B · Complete, pickup -->
+<div class="jrow">
+  <div class="jlabel"><div class="jname">3B · Complete — store pickup</div><div class="jsub">HQ ticks "Customer will collect in-store".</div><div class="jtag">repair-complete + store_pickup</div></div>
+  <div class="jflow">
+    <div class="nd">
+      <div class="nb ac"><div class="nc">Internal action</div><div class="nt">Mark Complete form</div><div class="ndoc">Ticks store pickup</div></div>
+      <div class="nm mstaff">HQ must act</div>
+    </div>
+    <div class="arr">→</div>
+    <div class="nd">
+      <div class="nb e"><div class="nc">Resend · Customer</div><div class="nsub">Sub: "Your Repair is Ready — Please Collect at Our Store (D#1042)"</div><div class="nt">Please Collect at Our Store</div><div class="ndoc">HSR address · quote D# · Mon–Sun 10–9</div></div>
+      <div class="nm mauto">Auto on tag</div>
+      <div class="nm mflag">⚑ redirected</div>
+    </div>
+    <div class="arrw"><div class="arrg">→</div><div class="arrl">payment line varies</div></div>
+    <div class="nd">
+      <div class="nb ac"><div class="nc">Conditional copy</div><div class="nt">3 variants</div><div class="ndoc">paid → nothing due · store-approved → bring Rs.X · free → complimentary</div></div>
+      <div class="nm mauto">Auto from tags</div>
+    </div>
+  </div>
+</div>
+
+<!-- Stage 3C · Complete, no tracking -->
+<div class="jrow">
+  <div class="jlabel"><div class="jname">3C · Complete — no tracking</div><div class="jsub">HQ submits with neither AWB nor pickup ticked.</div><div class="jtag">repair-complete</div></div>
+  <div class="jflow">
+    <div class="nd">
+      <div class="nb e"><div class="nc">Resend · Customer</div><div class="nsub">Sub: "Your Repair is Ready — D#1042"</div><div class="nt">Your Repair is Ready</div><div class="ndoc">"Team will be in touch" · call if no contact in 24h</div></div>
+      <div class="nm mauto">Auto on tag</div>
+      <div class="nm mflag">⚑ redirected</div>
+    </div>
+    <div class="arrw"><div class="arrg">→</div><div class="arrl warn">promise with no owner</div></div>
+    <div class="nd"><div class="nb g"><div class="nt">No comm</div><div class="ndoc">Nothing schedules the follow-up call</div></div></div>
+  </div>
+</div>
+
+<div class="fgap">GAPS IN REPAIRS: no mid-repair progress update between payment and completion &nbsp;·&nbsp; no reminder if the customer never acts on the estimate (link simply dies at 30 days) &nbsp;·&nbsp; no chase against the 30-day collection window in the T&amp;Cs &nbsp;·&nbsp; no SMS or outbound WhatsApp anywhere in the journey.</div>
+
+
+<!-- ══════════════════════ EXCHANGE & UPGRADE ══════════════════════ -->
+<div class="sec sec-exc">Exchange &amp; Upgrade &nbsp;— &nbsp;1 email &nbsp;·&nbsp; lifetime trade-in against a new purchase</div>
+<div class="fnote">Value is computed in the Exchange Calculator sheet (100% of gold, 80% of lab-grown diamonds, 0% of coloured stones, less labour / shipping / certification / GST). Applied as a <strong>post-tax</strong> adjustment via metafield <code>exchange_note_value</code> — it reduces what the customer pays, never the taxable base. Nothing about the assessment reaches the customer by email.</div>
+
+<!-- Exchange in-store -->
+<div class="jrow">
+  <div class="jlabel"><div class="jname">In-store exchange → applied</div><div class="jsub">Customer picks the new piece the same visit.</div><div class="jtag">exc-applied · exc-num:</div></div>
+  <div class="jflow">
+    <div class="nd"><div class="nb g"><div class="nt">No comm</div><div class="ndoc">Sheet lookup, valuation, quote — verbal in store</div></div></div>
+    <div class="arr">→</div>
+    <div class="nd">
+      <div class="nb ac"><div class="nc">Internal action</div><div class="nt">Create + Apply Exchange Note</div><div class="ndoc">Apps Script → /api/exc-redeem → metafield + tags</div></div>
+      <div class="nm mstaff">Staff must act</div>
+    </div>
+    <div class="arr">→</div>
+    <div class="nd">
+      <div class="nb e"><div class="nc">Resend · Customer</div><div class="nsub">Sub: "Your Timanti Exchange Note — Rs.28,400 applied | EXC-2026-0031"</div><div class="nt">Your Exchange Note</div><div class="ndoc">Value deducted · applied-to order · no code, no expiry</div></div>
+      <div class="nm mauto">Auto on apply</div>
+      <div class="nm mflag">⚑ suppressed</div>
+    </div>
+    <div class="arr">→</div>
+    <div class="nd">
+      <div class="nb sh"><div class="nc">Shopify · Invoice</div><div class="nt">Tax invoice</div><div class="ndoc">Shows "Less: Exchange Note Adjustment" then Net Payable</div></div>
+      <div class="nm mstaff">Staff: send invoice</div>
+    </div>
+  </div>
+</div>
+
+<!-- Exchange undecided -->
+<div class="jrow">
+  <div class="jlabel"><div class="jname">Undecided → Voucher</div><div class="jsub">Customer takes credit instead of a piece.</div><div class="jtag">cn-issued · cn-num:</div></div>
+  <div class="jflow">
+    <div class="nd">
+      <div class="nb ac"><div class="nc">Internal action</div><div class="nt">Create Voucher &amp; Tag Order</div><div class="ndoc">Apps Script menu · logs to CN Log sheet</div></div>
+      <div class="nm mstaff">Staff must act</div>
+    </div>
+    <div class="arrw"><div class="arrg">→</div><div class="arrl">see Voucher section</div></div>
+    <div class="nd">
+      <div class="nb e"><div class="nc">Resend · Customer</div><div class="nsub">Sub: "Your Timanti Voucher — Rs.28,400 | Code: VCH-2026-0044"</div><div class="nt">Your Voucher</div><div class="ndoc">Code · value · valid 1 year</div></div>
+      <div class="nm mauto">Auto on create</div>
+      <div class="nm mflag">⚑ suppressed</div>
+    </div>
+  </div>
+</div>
+
+<!-- Online exchange -->
+<div class="jrow">
+  <div class="jlabel"><div class="jname">Online exchange</div><div class="jsub">Customer service → insured pickup → warehouse QC → revised value.</div></div>
+  <div class="jflow">
+    <div class="nd"><div class="nb g"><div class="nt">No comm</div><div class="ndoc">Request acknowledgement</div></div></div>
+    <div class="arr">→</div>
+    <div class="nd">
+      <div class="nb wa"><div class="nc">WhatsApp / phone</div><div class="nt">Pickup coordination</div><div class="ndoc">Manual — no template, no log</div></div>
+      <div class="nm mman">Staff sends</div>
+    </div>
+    <div class="arrw"><div class="arrg">→</div><div class="arrl warn">transit + QC · no comm</div></div>
+    <div class="nd"><div class="nb g"><div class="nt">No comm</div><div class="ndoc">Received-at-warehouse, QC result</div></div></div>
+    <div class="arr">→</div>
+    <div class="nd">
+      <div class="nb wa"><div class="nc">WhatsApp / phone</div><div class="nt">Value quote / damage deduction</div><div class="ndoc">Manual — policy requires it be "communicated"</div></div>
+      <div class="nm mman">Staff sends</div>
+    </div>
+    <div class="arr">→</div>
+    <div class="nd">
+      <div class="nb e"><div class="nc">Resend · Customer</div><div class="nt">Exchange Note or Voucher</div><div class="ndoc">Only once applied / issued</div></div>
+      <div class="nm mflag">⚑ suppressed</div>
+    </div>
+  </div>
+</div>
+
+<div class="fgap">GAPS IN EXCHANGE: nothing is sent between "customer hands over the piece" and "note is applied" — no receipt of goods, no QC outcome, no formal value quote. On the online path that silence spans pickup, transit, warehouse QC and revaluation. The exchange-note email is a <em>confirmation of an accounting entry</em>, not a quote the customer can accept or decline.</div>
+
+
+<!-- ══════════════════════ OLD GOLD ══════════════════════ -->
+<div class="sec sec-og">Old Gold Exchange &nbsp;— &nbsp;0 dedicated emails &nbsp;·&nbsp; entirely paper + verbal in store</div>
+<div class="finput">INPUT: Signed <strong>customer declaration before melting</strong> is a printed form, not a system record. Purity test, net weight and deduction are explained face to face. Only the final number reaches the system, as <code>old_gold_value</code>.</div>
+
+<div class="jrow">
+  <div class="jlabel"><div class="jname">Melt → adjust on invoice</div><div class="jsub">Value set against the new purchase.</div><div class="jtag">old_gold_value</div></div>
+  <div class="jflow">
+    <div class="nd"><div class="nb g"><div class="nt">No comm</div><div class="ndoc">XRF test, net weight, deductions — verbal</div></div></div>
+    <div class="arr">→</div>
+    <div class="nd">
+      <div class="nb ac"><div class="nc">Paper</div><div class="nt">Declaration signed</div><div class="ndoc">Mandatory before melting · no digital copy sent</div></div>
+      <div class="nm mstaff">Staff must act</div>
+    </div>
+    <div class="arr">→</div>
+    <div class="nd">
+      <div class="nb sh"><div class="nc">Shopify · Invoice</div><div class="nt">Tax invoice</div><div class="ndoc">"Consideration against Gold" row · Net Payable</div></div>
+      <div class="nm mstaff">Staff: send invoice</div>
+    </div>
+  </div>
+</div>
+
+<div class="jrow">
+  <div class="jlabel"><div class="jname">Melt → take a Voucher</div><div class="jsub">Customer defers the purchase.</div><div class="jtag">cn-issued</div></div>
+  <div class="jflow">
+    <div class="nd">
+      <div class="nb ac"><div class="nc">Internal action</div><div class="nt">Create Voucher</div><div class="ndoc">Same sheet path as exchange</div></div>
+      <div class="nm mstaff">Staff must act</div>
+    </div>
+    <div class="arr">→</div>
+    <div class="nd">
+      <div class="nb e"><div class="nc">Resend · Customer</div><div class="nsub">Sub: "Your Timanti Voucher — Rs.X | Code: VCH-…"</div><div class="nt">Your Voucher</div><div class="ndoc">Valid 1 year · single use · non-transferable</div></div>
+      <div class="nm mauto">Auto on create</div>
+      <div class="nm mflag">⚑ suppressed</div>
+    </div>
+  </div>
+</div>
+
+<div class="fgap">GAP: the melting declaration — the single highest-dispute-risk moment in the business — leaves no emailed record with the customer. A PDF copy of the signed declaration is not sent.</div>
+
+
+<!-- ══════════════════════ CHANGE / SWAP ══════════════════════ -->
+<div class="sec sec-chg">Change / Piece &amp; Size Swap &nbsp;— &nbsp;0 dedicated emails &nbsp;·&nbsp; no automation exists for this path</div>
+<div class="fnote">"Change" (customer swaps for a different piece or a different size rather than returning for money) has <strong>no tag, no route and no template</strong> anywhere in the middleware. It is executed today by borrowing other mechanisms: a fresh draft order for the replacement piece, plus an exchange note or voucher to carry the old value across. Note the policy tension — resized or altered items are explicitly <em>not</em> returnable, so a size change is a one-way door once done.</div>
+
+<div class="jrow">
+  <div class="jlabel"><div class="jname">Swap for another piece</div><div class="jsub">Within window, value carried across.</div><div class="jtag">no dedicated tag</div></div>
+  <div class="jflow">
+    <div class="nd"><div class="nb g"><div class="nt">No comm</div><div class="ndoc">Request + agreement — in store or on phone</div></div></div>
+    <div class="arr">→</div>
+    <div class="nd">
+      <div class="nb ac"><div class="nc">Workaround</div><div class="nt">New draft + Exchange Note</div><div class="ndoc">Reuses the exchange machinery</div></div>
+      <div class="nm mstaff">Staff must act</div>
+    </div>
+    <div class="arr">→</div>
+    <div class="nd">
+      <div class="nb e"><div class="nc">Resend · Customer</div><div class="nt">Exchange Note email</div><div class="ndoc">Copy says "exchange", not "change" — reads oddly here</div></div>
+      <div class="nm mflag">⚑ suppressed</div>
+    </div>
+    <div class="arr">→</div>
+    <div class="nd">
+      <div class="nb sh"><div class="nc">Shopify</div><div class="nt">Draft invoice / order confirmation</div><div class="ndoc">For the replacement piece + any top-up</div></div>
+      <div class="nm mstaff">Staff: send invoice</div>
+    </div>
+  </div>
+</div>
+
+<div class="jrow">
+  <div class="jlabel"><div class="jname">Size change / resize</div><div class="jsub">Same piece, altered.</div><div class="jtag">— none —</div></div>
+  <div class="jflow">
+    <div class="nd"><div class="nb g"><div class="nt">No comm</div><div class="ndoc">Intake of the piece</div></div></div>
+    <div class="arrw"><div class="arrg">→</div><div class="arrl warn">workshop time · no comm</div></div>
+    <div class="nd"><div class="nb g"><div class="nt">No comm</div><div class="ndoc">In alteration</div></div></div>
+    <div class="arr">→</div>
+    <div class="nd"><div class="nb g"><div class="nt">No comm</div><div class="ndoc">Ready for collection</div></div></div>
+    <div class="arr">→</div>
+    <div class="nd">
+      <div class="nb wa"><div class="nc">WhatsApp / phone</div><div class="nt">"It's ready"</div><div class="ndoc">Manual call — nothing tracks it</div></div>
+      <div class="nm mman">Staff sends</div>
+    </div>
+  </div>
+</div>
+
+<div class="fgap">GAP: a size change is functionally identical to a repair — piece in, work done, piece out — but gets none of the repair journey's automation. Routing resizes through the <code>repair-intake</code> tag (with a zero or nominal estimate) would give this path all 12 repair emails for free.</div>
+
+
+<!-- ══════════════════════ VOUCHER ══════════════════════ -->
+<div class="sec sec-vch">Voucher &nbsp;— &nbsp;2 emails &nbsp;·&nbsp; store credit, 1 year, single use</div>
+<div class="fnote">Two independent code paths can send a voucher email. The live one is the sheet path. The webhook path is legacy, still branded "Credit Note", and only fires when <code>CN_EMAIL_ENABLED=true</code> on the middleware — it is gated off. Both write a dedup marker so a voucher is never emailed twice.</div>
+
+<!-- Voucher issue - sheet path -->
+<div class="jrow">
+  <div class="jlabel"><div class="jname">Issue — sheet path (live)</div><div class="jsub">From the Exchange Calculator, "Create Voucher &amp; Tag Order".</div><div class="jtag">POST /api/cn-email</div></div>
+  <div class="jflow">
+    <div class="nd">
+      <div class="nb ac"><div class="nc">Internal action</div><div class="nt">Apps Script menu</div><div class="ndoc">Mints VCH-YYYY-NNNN · tags order · appends CN Log row</div></div>
+      <div class="nm mstaff">Staff must act</div>
+    </div>
+    <div class="arr">→</div>
+    <div class="nd">
+      <div class="nb e"><div class="nc">Resend · Customer</div><div class="nsub">Sub: "Your Timanti Voucher — Rs.28,400 | Code: VCH-2026-0044"</div><div class="nt">Your Voucher</div><div class="ndoc">Code doubles as discount code · valid until date · how to use online / in-store</div></div>
+      <div class="nm mauto">Auto on create</div>
+      <div class="nm mflag">⚑ suppressed</div>
+    </div>
+    <div class="arr">→</div>
+    <div class="nd">
+      <div class="nb sh"><div class="nc">Order Printer Pro</div><div class="nt">Printable Voucher</div><div class="ndoc">A4 document · handed over or attached manually</div></div>
+      <div class="nm mman">Staff prints</div>
+    </div>
+  </div>
+</div>
+
+<!-- Voucher issue - webhook path -->
+<div class="jrow">
+  <div class="jlabel"><div class="jname">Issue — webhook path (gated off)</div><div class="jsub">Fires on the <code>cn-issued</code> tag if the env flag is on.</div><div class="jtag">CN_EMAIL_ENABLED</div></div>
+  <div class="jflow">
+    <div class="nd">
+      <div class="nb sh"><div class="nc">Shopify webhook</div><div class="nt">cn-issued tag added</div><div class="ndoc">Reads timanti.cn_number metafield</div></div>
+      <div class="nm mauto">Auto</div>
+    </div>
+    <div class="arr">→</div>
+    <div class="nd">
+      <div class="nb e"><div class="nc">Resend · Customer</div><div class="nsub">Sub: "Your Timanti Credit Note — CNTM-2026-0044"</div><div class="nt">Your Voucher</div><div class="ndoc">Same body · old "Credit Note" subject line</div></div>
+      <div class="nm mnone">Off unless flag = true</div>
+    </div>
+    <div class="arr">→</div>
+    <div class="nd">
+      <div class="nb ac"><div class="nc">Guard</div><div class="nt">cn-email-sent tag</div><div class="ndoc">Written back so it can never re-fire</div></div>
+      <div class="nm mauto">Auto</div>
+    </div>
+  </div>
+</div>
+
+<!-- Voucher redemption -->
+<div class="jrow">
+  <div class="jlabel"><div class="jname">Redemption</div><div class="jsub">Customer spends the voucher.</div><div class="jtag">voucher_value</div></div>
+  <div class="jflow">
+    <div class="nd">
+      <div class="nb ac"><div class="nc">Internal action</div><div class="nt">Apply to new draft</div><div class="ndoc">Post-tax adjustment · retires the code</div></div>
+      <div class="nm mstaff">Staff must act</div>
+    </div>
+    <div class="arr">→</div>
+    <div class="nd"><div class="nb g"><div class="nt">No comm</div><div class="ndoc">No "voucher redeemed" confirmation</div></div></div>
+    <div class="arr">→</div>
+    <div class="nd">
+      <div class="nb sh"><div class="nc">Shopify · Invoice</div><div class="nt">Tax invoice</div><div class="ndoc">"Less: Voucher Adjustment" row · excess becomes a new voucher</div></div>
+      <div class="nm mstaff">Staff: send invoice</div>
+    </div>
+  </div>
+</div>
+
+<div class="fgap">GAPS IN VOUCHER: no expiry reminder before the 1-year lapse &nbsp;·&nbsp; no redemption confirmation &nbsp;·&nbsp; no balance statement &nbsp;·&nbsp; the two issue paths use different names ("Voucher" vs "Credit Note") for the same instrument.</div>
+
+
+<!-- ══════════════════════ RETURNS & REFUNDS ══════════════════════ -->
+<div class="sec sec-ref">Returns &amp; Refunds &nbsp;— &nbsp;1 email &nbsp;·&nbsp; 7-day window, defect or wrong item only</div>
+<div class="fnote">The refund confirmation is the <strong>only</strong> after-sales email that is not sent by the middleware — it is Shopify's native refund notification running the customised <code>refund-confirmation.liquid</code> template. Everything before it (request, approval, kit dispatch, pickup, QC) is unautomated.</div>
+
+<!-- Refund happy path -->
+<div class="jrow">
+  <div class="jlabel"><div class="jname">Return → refund to source</div><div class="jsub">Approved by QC. 7–10 business days to reflect.</div></div>
+  <div class="jflow">
+    <div class="nd">
+      <div class="nb wa"><div class="nc">Inbound · Customer</div><div class="nt">Request raised</div><div class="ndoc">Email / phone within 7 days · photos or video</div></div>
+      <div class="nm mnone">Inbound</div>
+    </div>
+    <div class="arrw"><div class="arrg">→</div><div class="arrl warn">no acknowledgement</div></div>
+    <div class="nd"><div class="nb g"><div class="nt">No comm</div><div class="ndoc">Nothing confirms the request was received</div></div></div>
+    <div class="arr">→</div>
+    <div class="nd">
+      <div class="nb wa"><div class="nc">WhatsApp / phone</div><div class="nt">Approval + shipping kit</div><div class="ndoc">Manual · tamper-proof kit dispatched</div></div>
+      <div class="nm mman">Staff sends</div>
+    </div>
+    <div class="arrw"><div class="arrg">→</div><div class="arrl warn">pickup + QC · no comm</div></div>
+    <div class="nd"><div class="nb g"><div class="nt">No comm</div><div class="ndoc">Received, inspected</div></div></div>
+    <div class="arr">→</div>
+    <div class="nd">
+      <div class="nb sh"><div class="nc">Shopify notification</div><div class="nsub">Template: refund-confirmation.liquid</div><div class="nt">Your return is confirmed</div><div class="ndoc">Refund amount · items returned · UPI 3–5d / card 5–7d / EMI 7–10d</div></div>
+      <div class="nm mstaff">Staff: refund in Shopify</div>
+    </div>
+  </div>
+</div>
+
+<!-- Refund as voucher -->
+<div class="jrow">
+  <div class="jlabel"><div class="jname">Return → voucher instead</div><div class="jsub">Customer opts for credit over a bank refund.</div><div class="jtag">cn-issued</div></div>
+  <div class="jflow">
+    <div class="nd">
+      <div class="nb ac"><div class="nc">Internal action</div><div class="nt">Create Voucher</div><div class="ndoc">No refund transaction in Shopify</div></div>
+      <div class="nm mstaff">Staff must act</div>
+    </div>
+    <div class="arr">→</div>
+    <div class="nd">
+      <div class="nb e"><div class="nc">Resend · Customer</div><div class="nt">Your Voucher</div><div class="ndoc">Valid 1 year · single use</div></div>
+      <div class="nm mflag">⚑ suppressed</div>
+    </div>
+    <div class="arrw"><div class="arrg">→</div><div class="arrl warn">no refund email fires</div></div>
+    <div class="nd"><div class="nb g"><div class="nt">No comm</div><div class="ndoc">Return itself never gets a confirmation</div></div></div>
+  </div>
+</div>
+
+<!-- Refund rejected -->
+<div class="jrow">
+  <div class="jlabel"><div class="jname">QC fail → refund refused</div><div class="jsub">Piece doesn't match the proof, or fails inspection.</div></div>
+  <div class="jflow">
+    <div class="nd"><div class="nb g"><div class="nt">No comm</div><div class="ndoc">QC outcome</div></div></div>
+    <div class="arr">→</div>
+    <div class="nd">
+      <div class="nb wa"><div class="nc">Phone · Customer care</div><div class="nt">Rejection handled case by case</div><div class="ndoc">No template, no written record to the customer</div></div>
+      <div class="nm mman">Staff calls</div>
+    </div>
+    <div class="arrw"><div class="arrg">→</div><div class="arrl warn">highest-dispute path, zero paper trail</div></div>
+    <div class="nd"><div class="nb g"><div class="nt">No comm</div><div class="ndoc">Return of the piece to the customer</div></div></div>
+  </div>
+</div>
+
+<div class="fgap">GAPS IN REFUNDS: no return-request acknowledgement &nbsp;·&nbsp; no RMA or approval email &nbsp;·&nbsp; no "we've received your piece" on arrival at QC &nbsp;·&nbsp; no written rejection notice &nbsp;·&nbsp; deductions for discounts, promos, gold coins and loyalty rewards are policy but appear nowhere in the customer-facing copy until the refund amount lands.</div>
+
+
+<!-- ══════════════════════ EMAIL INVENTORY ══════════════════════ -->
+<div class="key">
+  <div class="key-title">Complete Email Inventory — every after-sales send, by system</div>
+  <table class="inv">
+    <thead>
+      <tr>
+        <th style="width:22px;">#</th>
+        <th style="width:78px;">Journey</th>
+        <th style="width:60px;">Direction</th>
+        <th style="width:118px;">Trigger</th>
+        <th>Subject</th>
+        <th style="width:132px;">Builder / template</th>
+        <th style="width:74px;">Live?</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr><td>1</td><td>Repairs</td><td><span class="pill p-int">HQ</span></td><td>Tag <span class="mono">repair-intake</span></td><td>New Repair Intake — D#XXXX — [Customer]</td><td class="mono">buildRepairIntakeHtml</td><td><span class="pill p-sup">Redirected</span></td></tr>
+      <tr><td>2</td><td>Repairs</td><td><span class="pill p-cust">Customer</span></td><td>Tag <span class="mono">repair-intake</span></td><td>We've Received Your Item — D#XXXX</td><td class="mono">buildRepairAcknowledgementHtml</td><td><span class="pill p-sup">Redirected</span></td></tr>
+      <tr><td>3</td><td>Repairs</td><td><span class="pill p-cust">Customer</span></td><td>Tag <span class="mono">repair-estimate-ready</span></td><td>Your Timanti Repair Estimate — D#XXXX</td><td class="mono">buildRepairEstimateHtml</td><td><span class="pill p-sup">Redirected</span></td></tr>
+      <tr><td>4</td><td>Repairs</td><td><span class="pill p-cust">Customer</span></td><td>Tag <span class="mono">repair-free</span> / <span class="mono">free-repair</span></td><td>Great News — Complimentary Repair Confirmed (D#XXXX)</td><td class="mono">buildRepairFreeHtml</td><td><span class="pill p-sup">Redirected</span></td></tr>
+      <tr><td>5</td><td>Repairs</td><td><span class="pill p-int">HQ</span></td><td>Tag <span class="mono">repair-free</span> / <span class="mono">free-repair</span></td><td>Complimentary Repair — D#XXXX — [Customer]</td><td class="mono">buildRepairHqCompleteReadyHtml</td><td><span class="pill p-sup">Redirected</span></td></tr>
+      <tr><td>6</td><td>Repairs</td><td><span class="pill p-cust">Customer</span></td><td>GoKwik payment webhook</td><td>Payment Confirmed — Repair in Progress (D#XXXX)</td><td class="mono">buildRepairPaymentConfirmedHtml</td><td><span class="pill p-sup">Redirected</span></td></tr>
+      <tr><td>7</td><td>Repairs</td><td><span class="pill p-int">HQ</span></td><td>GoKwik payment webhook</td><td>Payment Received — D#XXXX — [Customer]</td><td class="mono">buildRepairHqCompleteReadyHtml</td><td><span class="pill p-sup">Redirected</span></td></tr>
+      <tr><td>8</td><td>Repairs</td><td><span class="pill p-cust">Customer</span></td><td>Tag <span class="mono">repair-store-approved</span></td><td>Repair Confirmed — We'll Be in Touch (D#XXXX)</td><td class="mono">buildRepairStoreApprovedCustomerHtml</td><td><span class="pill p-sup">Redirected</span></td></tr>
+      <tr><td>9</td><td>Repairs</td><td><span class="pill p-int">HQ</span></td><td>Tag <span class="mono">repair-store-approved</span></td><td>Store Payment Approved — D#XXXX — [Customer] — Rs.X</td><td class="mono">buildRepairHqCompleteReadyHtml</td><td><span class="pill p-sup">Redirected</span></td></tr>
+      <tr><td>10</td><td>Repairs</td><td><span class="pill p-cust">Customer</span></td><td>Tag <span class="mono">repair-complete</span> + AWB</td><td>Your Repair is Ready — D#XXXX</td><td class="mono">buildRepairCompleteHtml</td><td><span class="pill p-sup">Redirected</span></td></tr>
+      <tr><td>11</td><td>Repairs</td><td><span class="pill p-cust">Customer</span></td><td>Tag <span class="mono">repair-complete</span> + pickup</td><td>Your Repair is Ready — Please Collect at Our Store (D#XXXX)</td><td class="mono">buildRepairCompleteHtml</td><td><span class="pill p-sup">Redirected</span></td></tr>
+      <tr><td>12</td><td>Repairs</td><td><span class="pill p-cust">Customer</span></td><td>Tag <span class="mono">repair-complete</span>, neither</td><td>Your Repair is Ready — D#XXXX</td><td class="mono">buildRepairCompleteHtml</td><td><span class="pill p-sup">Redirected</span></td></tr>
+      <tr><td>13</td><td>Voucher</td><td><span class="pill p-cust">Customer</span></td><td><span class="mono">POST /api/cn-email</span> from sheet</td><td>Your Timanti Voucher — Rs.X | Code: VCH-YYYY-NNNN</td><td class="mono">buildCreditNoteHtml</td><td><span class="pill p-sup">Suppressed</span></td></tr>
+      <tr><td>14</td><td>Voucher</td><td><span class="pill p-cust">Customer</span></td><td>Tag <span class="mono">cn-issued</span> + env flag</td><td>Your Timanti Credit Note — CNTM-YYYY-NNNN</td><td class="mono">buildCreditNoteHtml</td><td><span class="pill p-off">Gated off</span></td></tr>
+      <tr><td>15</td><td>Exchange</td><td><span class="pill p-cust">Customer</span></td><td><span class="mono">POST /api/exc-email</span> from sheet</td><td>Your Timanti Exchange Note — Rs.X applied | EXC-YYYY-NNNN</td><td class="mono">buildExchangeNoteHtml</td><td><span class="pill p-sup">Suppressed</span></td></tr>
+      <tr><td>16</td><td>Refunds</td><td><span class="pill p-sh">Shopify</span></td><td>Refund created on the order</td><td>Refund notification &nbsp;<span style="color:#999;">(heading: "Your return is confirmed")</span></td><td class="mono">refund-confirmation.liquid</td><td><span class="pill p-live">Live</span></td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- ══════════════════════ ACTION KEY ══════════════════════ -->
+<div class="key">
+  <div class="key-title">Staff &amp; HQ Action Reference</div>
+  <div class="key-row">
+    <span class="key-badge" style="background:#ede9fe;color:#4c1d95;">TAG</span>
+    <span><strong>repair-intake</strong> — the single entry point to the entire repair journey. Nothing fires without it. Add it to the repair draft order once the piece is physically in hand and the item description is filled.</span>
+  </div>
+  <div class="key-row">
+    <span class="key-badge" style="background:#ede9fe;color:#4c1d95;">TAG</span>
+    <span><strong>free-repair</strong> — alternative to HQ ticking "our mistake" on the estimate form. Both routes converge on the same dedup guard, so tagging after HQ has already marked it free will not double-send.</span>
+  </div>
+  <div class="key-row">
+    <span class="key-badge" style="background:#fee2e2;color:#991b1b;">HQ</span>
+    <span><strong>Set Estimate</strong> — signed link inside the intake email. Setting the amount prices the draft line item and releases the customer estimate + GoKwik link in one step. The customer is waiting on this; nothing chases it.</span>
+  </div>
+  <div class="key-row">
+    <span class="key-badge" style="background:#fee2e2;color:#991b1b;">HQ</span>
+    <span><strong>Mark Repair Complete</strong> — signed link inside every HQ email. Enter the Sequel AWB for dispatch, or tick store pickup. Submitting with neither still emails the customer, but with a "we'll be in touch" promise nothing schedules.</span>
+  </div>
+  <div class="key-row">
+    <span class="key-badge" style="background:#fee2e2;color:#991b1b;">SEND</span>
+    <span><strong>Tax invoice after any adjustment</strong> — exchange note, voucher and old gold all land as post-tax rows on the invoice. The adjustment email confirms the accounting entry only; the customer sees the arithmetic solely on the invoice, which staff must send.</span>
+  </div>
+  <div class="key-row">
+    <span class="key-badge" style="background:#fef3c7;color:#92400e;">WA</span>
+    <span><strong>Everything on the returns and online-exchange paths</strong> — request acknowledgement, pickup coordination, QC outcome, value quote and rejection are all manual WhatsApp or phone. No templates exist and nothing is logged against the order.</span>
+  </div>
+  <div class="key-row">
+    <span class="key-badge" style="background:#1f2937;color:#fcd34d;">⚑</span>
+    <span><strong>Before go-live</strong> — clear <code>REPAIR_TEST_EMAIL</code> in <span class="mono">services/repairs/index.js</span>, set <code>SEND_CUSTOMER_EMAILS = true</code> in <span class="mono">apps-script.js</span>, and confirm <code>HQ_EMAIL</code> (plus optional <code>HQ_CC_EMAIL</code>) are set on the middleware — a missing <code>HQ_EMAIL</code> silently skips every internal email and tags the draft <span class="mono">repair-hq-email-failed</span>.</span>
+  </div>
+</div>
+
+</body>
+</html>
