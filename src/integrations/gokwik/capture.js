@@ -8,6 +8,7 @@
 // observes; it never changes what the handler does, and a failure here is logged and swallowed.
 
 const crypto = require('crypto');
+const { config } = require('../../core/config');
 
 // Headers that could carry credentials of ours are never stored. GoKwik's status callback sends OUR
 // app secret back in `app-secret` (that is its only proof of origin), so it is replaced by whether it
@@ -16,7 +17,7 @@ const DROP_HEADERS   = new Set(['authorization', 'cookie', 'gk-app-secret', 'x-w
 const SECRET_HEADERS = new Set(['app-secret']);
 
 function secretMatches(value) {
-  const expected = process.env.GOKWIK_APP_SECRET || '';
+  const expected = config.gokwik.appSecret || '';
   const got = String(value || '');
   if (!expected || got.length !== expected.length) return false;
   return crypto.timingSafeEqual(Buffer.from(got), Buffer.from(expected));
