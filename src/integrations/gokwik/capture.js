@@ -7,14 +7,28 @@
 // plan will record money off this webhook automatically, so that has to be known first. This only
 // observes; it never changes what the handler does, and a failure here is logged and swallowed.
 
-// Headers that could carry credentials of ours are never stored.
-const DROP_HEADERS = new Set(['authorization', 'cookie', 'gk-app-secret', 'x-webhook-secret']);
+const crypto = require('crypto');
+
+// Headers that could carry credentials of ours are never stored. GoKwik's status callback sends OUR
+// app secret back in `app-secret` (that is its only proof of origin), so it is replaced by whether it
+// matched GOKWIK_APP_SECRET — the evidence we need, without the secret.
+const DROP_HEADERS   = new Set(['authorization', 'cookie', 'gk-app-secret', 'x-webhook-secret']);
+const SECRET_HEADERS = new Set(['app-secret']);
+
+function secretMatches(value) {
+  const expected = process.env.GOKWIK_APP_SECRET || '';
+  const got = String(value || '');
+  if (!expected || got.length !== expected.length) return false;
+  return crypto.timingSafeEqual(Buffer.from(got), Buffer.from(expected));
+}
 
 async function captureGokwikWebhook(supabase, req) {
   try {
     const headers = {};
     for (const [k, v] of Object.entries(req.headers || {})) {
-      if (!DROP_HEADERS.has(k.toLowerCase())) headers[k] = v;
+      const key = k.toLowerCase();
+      if (DROP_HEADERS.has(key)) continue;
+      headers[k] = SECRET_HEADERS.has(key) ? (secretMatches(v) ? '[matches GOKWIK_APP_SECRET]' : '[MISMATCH]') : v;
     }
     const { error } = await supabase.from('gokwik_webhook_log').insert({
       headers,
@@ -27,4 +41,4 @@ async function captureGokwikWebhook(supabase, req) {
   }
 }
 
-module.exports = { captureGokwikWebhook };
+module.exports = { captureGokwikWebhook, secretMatches };
