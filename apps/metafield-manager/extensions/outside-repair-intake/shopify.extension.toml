@@ -1,8 +1,9 @@
-api_version = "2025-10"
+api_version = "2026-01"
 
 [[extensions]]
 name = "t:name"
 handle = "outside-repair-intake"
+uid = "6db18c30-69f2-fdbf-904a-68c44651bc21dd37528b"
 type = "ui_extension"
 
 # Admin action: "Outside repair intake" under More actions on a draft order. Records the inspection
