@@ -24,15 +24,9 @@ const DEFAULT_CONFIG = Object.freeze({
     { key: 'T2', name: 'Gold',     min: 500000,  pct: 5 },
     { key: 'T3', name: 'Platinum', min: 1000000, pct: 7 },
   ],
-  // A tier is granted this % short of its threshold: ₹1,98,000 is Silver (founder, 2026-10-21).
-  tier_tolerance_pct: 1,
   birthday:    { pct: 2, window: 'month' },
   anniversary: { pct: 2, window: 'month' },
   occasion_bonus_stacks: false,
-  // The campaign the automatic diamond discount runs under. LABEL ONLY: it names the "Campaign" row of
-  // the staff discount breakup ("Dussehra 2026 (21/10/26-08/11/26)") and is stamped on each auto entry
-  // when it is applied. It does not switch the auto discount on or off. Dates are YYYY-MM-DD, IST.
-  campaign: { name: 'Dussehra 2026', start: '2026-10-21', end: '2026-11-08' },
   eligibility: {
     include: { product_types: [], tags: [], collections: [], skus: [] },
     exclude: { skus: ['SCOIN', 'GCOIN'], tags: ['no-loyalty'], collections: [], product_types: [], jewel_code_prefixes: [] },
@@ -46,6 +40,10 @@ const DEFAULT_CONFIG = Object.freeze({
   // superseded_orders: an invoice replaced by a later one with no exchange-note record linking them —
   // the earlier one earns nothing. Vandana Reddy's #1052 was re-invoiced as #1057.
   earning: { min_order_number: 1038, superseded_orders: { '#1052': '#1057' } },
+  // Promo codes that take a % off the DIAMOND value only (custom.price_breakup_diamond). The customer
+  // types the code in the cart drawer; the server turns it into a one-time Shopify code (promo.js).
+  // starts_at / ends_at are optional ISO dates, e.g. "2026-12-31T18:29:59Z".
+  promos: { ISB10: { pct: 10, active: true, starts_at: null, ends_at: null, require_login: false } },
 });
 
 /**
@@ -81,17 +79,6 @@ function normalizeConfig(raw) {
     birthday: pctOf(raw.birthday),
     anniversary: pctOf(raw.anniversary),
     occasion_bonus_stacks: !!raw.occasion_bonus_stacks,
-    // Missing from a config saved before these existed → the defaults.
-    tier_tolerance_pct: (() => {
-      const v = raw.tier_tolerance_pct == null ? DEFAULT_CONFIG.tier_tolerance_pct : Number(raw.tier_tolerance_pct);
-      if (!(v >= 0 && v <= 10)) throw new Error('tier_tolerance_pct must be between 0 and 10');
-      return v;
-    })(),
-    campaign: (() => {
-      const c = raw.campaign || DEFAULT_CONFIG.campaign;
-      const d = (x) => (/^\d{4}-\d{2}-\d{2}$/.test(String(x || '')) ? String(x) : '');
-      return { name: String(c.name || '').trim(), start: d(c.start), end: d(c.end) };
-    })(),
     eligibility: {
       include: {
         product_types: arr((el.include || {}).product_types),
@@ -117,6 +104,19 @@ function normalizeConfig(raw) {
       occasion: !!(raw.emails || {}).occasion,
       online_live: !!(raw.emails || {}).online_live,
     },
+    // Promo codes on the diamond value. Missing -> the defaults; {} -> none. A bad entry is skipped
+    // (and logged) instead of failing the whole config, so a typo here can never touch the tiers.
+    promos: (() => {
+      const src = raw.promos || DEFAULT_CONFIG.promos;
+      const out = {};
+      for (const [k, v] of Object.entries(src)) {
+        const code = String(k).trim().toUpperCase();
+        const pct = Number((v || {}).pct);
+        if (!code || !(pct > 0 && pct <= 100)) { log.warn('loyalty', `promo ${code || '(blank)'} skipped: pct must be between 0 and 100`); continue; }
+        out[code] = { pct, active: v.active !== false, starts_at: v.starts_at || null, ends_at: v.ends_at || null, require_login: !!v.require_login };
+      }
+      return out;
+    })(),
     // Missing from a config saved before this existed → the defaults, so the rules never silently lapse.
     earning: (() => {
       const er = raw.earning || DEFAULT_CONFIG.earning;
