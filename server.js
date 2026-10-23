@@ -1546,14 +1546,34 @@ async function publishDiscountBreakup(draftOrderId, mfMap, perLine) {
 // A line with no discount carries none of these props. That is why the NAMES are stripped at every call
 // site (DISCOUNT_SPLIT_PROPS) before the values are pushed: remove a discount and the old breakup has to
 // go with it, or the line goes on advertising a saving that no longer exists.
-const DISCOUNT_SPLIT_PROPS = new Set(['Discount on Diamond', 'Discount on Making', 'Discount on Total']);
+// The same rupees are ALSO split by SCHEME (founder, 2026-10-23): which campaign gave the line its cut,
+// and how much came from manual entry and from loyalty. Campaign / Manual / Loyalty are written on every
+// discounted line, zeros included, so staff always see all three; a Shopify-captured or order-code cut
+// only when it exists. Campaign Discount + Manual + Loyalty (+ Shopify + Code) === Discount Applied.
+// Not printed for customers: the invoice and the slips read props by name, and the order emails print
+// no line props at all (see templates/Strategy/email_order_confirmation.html).
+const DISCOUNT_SPLIT_PROPS = new Set([
+  'Discount on Diamond', 'Discount on Making', 'Discount on Total',
+  'Campaign', 'Campaign Discount', 'Manual Discount', 'Loyalty Discount', 'Shopify Discount', 'Code Discount',
+]);
 
-function discountSplitProps({ dia = 0, mk = 0, tot = 0 } = {}) {
+function discountSplitProps({ dia = 0, mk = 0, tot = 0, bySrc = null, campaigns = [] } = {}) {
   const out = [];
   // Half a paisa — below this a "discount" is float dust off the proration, not a saving worth printing.
   if (dia > 0.005) out.push({ name: 'Discount on Diamond', value: `Rs${dia.toFixed(2)}` });
   if (mk  > 0.005) out.push({ name: 'Discount on Making',  value: `Rs${mk.toFixed(2)}` });
   if (tot > 0.005) out.push({ name: 'Discount on Total',   value: `Rs${tot.toFixed(2)}` });
+  if (bySrc && dia + mk + tot > 0.005) {
+    const rs = (v) => `Rs${(Math.round((Number(v) || 0) * 100) / 100).toFixed(2)}`;
+    if ((Number(bySrc.campaign) || 0) > 0.005) {
+      out.push({ name: 'Campaign', value: (campaigns || []).join(' + ') || 'Auto diamond discount' });
+    }
+    out.push({ name: 'Campaign Discount', value: rs(bySrc.campaign) });
+    out.push({ name: 'Manual Discount',   value: rs(bySrc.manual) });
+    out.push({ name: 'Loyalty Discount',  value: rs(bySrc.loyalty) });
+    if ((Number(bySrc.other) || 0) > 0.005) out.push({ name: 'Shopify Discount', value: rs(bySrc.other) });
+    if ((Number(bySrc.code)  || 0) > 0.005) out.push({ name: 'Code Discount',    value: rs(bySrc.code) });
+  }
   return out;
 }
 
@@ -1846,7 +1866,7 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
         { name: 'Making (After Discount)',  value: `Rs${mkAfterDisc.toFixed(2)}` },
       );
       // The same cut stated forward, so staff read the saving instead of subtracting for it.
-      filteredProps.push(...discountSplitProps({ dia: r2(df.dia), mk: r2(df.mk), tot: r2(df.tot) }));
+      filteredProps.push(...discountSplitProps({ dia: r2(df.dia), mk: r2(df.mk), tot: r2(df.tot), bySrc: df.bySrc, campaigns: df.campaigns }));
       const idxRate = goldRateForIdx(idx);
       const effectiveRate = idxRate ? String(idxRate) : ((item.properties || []).find(p => p.name === '_gold_rate')?.value || h.properties.find(p => p.name === '_gold_rate')?.value || '');
       if (effectiveRate) filteredProps.push({ name: '_gold_rate', value: effectiveRate });
@@ -2143,7 +2163,7 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
       .filter(p => !(p.name in repricedProps) && !DISCOUNT_SPLIT_PROPS.has(p.name));
     for (const [name, value] of Object.entries(repricedProps)) updatedProperties.push({ name, value });
     // The same cut stated forward, so staff read the saving instead of subtracting for it.
-    updatedProperties.push(...discountSplitProps({ dia: df.dia, mk: df.mk, tot: df.tot }));
+    updatedProperties.push(...discountSplitProps({ dia: df.dia, mk: df.mk, tot: df.tot, bySrc: df.bySrc, campaigns: df.campaigns }));
 
     repricedMap.set(item.id, { id: item.id, variant_id: item.variant_id || undefined, quantity: item.quantity, price: (newFinalValue / (item.quantity || 1)).toFixed(2), properties: updatedProperties });
     allJewelData.push(jewel_data);
