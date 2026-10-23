@@ -36,7 +36,10 @@ const { startLoyaltySweep } = require('./src/modules/loyalty/sweep');
 const app = express();
 app.use(cors());
 app.use(express.json({ verify: (req, _res, buf) => { req.rawBody = buf.toString('utf8'); } }));
-app.use(express.text({ type: '*/*' }));
+// Every body that is not JSON arrives as text — EXCEPT images. An image read here would hit the
+// 100 KB default limit (413 on any phone photo) and, below it, be consumed as a string before
+// /api/repairs/photo's own raw parser could read the bytes.
+app.use(express.text({ type: (req) => !/^image//i.test(String(req.headers['content-type'] || '')) }));
 
 // Shared primitives live in src/core/ — one definition, one place to change.
 const { supabase } = require('./src/core/supabase');
@@ -3474,6 +3477,16 @@ async function handleAutoDiamondDiscount(draft) {
 
     // Loyalty STACKS on the auto diamond discount (founder, 2026-10-12): both are diamond-only per-line %,
     // added together and capped at the diamond by resolveLineDiscount. So loyalty no longer blocks this.
+
+    // The auto discount IS the campaign: it runs only inside the campaign's dates (loyalty config
+    // `campaign`, IST, both ends inclusive) and stops on its own after the end date (founder,
+    // 2026-10-23). Drafts discounted inside the window keep their entries; this only stops NEW runs —
+    // including the panel's manual button and the re-run after a piece is added.
+    const window = discountBreakup.campaignWindow((await loadLoyaltyConfig()).campaign);
+    if (window === 'ended' || window === 'before') {
+      await finish([`auto-dia-invalid: campaign ${window === 'ended' ? 'ended' : 'not started'}`]);
+      return;
+    }
 
     const lines = (live.line_items || []).filter(item =>
       !isExcLine(item) &&

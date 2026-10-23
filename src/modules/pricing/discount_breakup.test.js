@@ -24,6 +24,23 @@ t('no dates: the name alone; no name: a plain description', () => {
   assert.strictEqual(B.campaignLabel({}), 'Auto diamond discount');
 });
 
+console.log('campaign window (IST dates, both ends inclusive)');
+const DUSSEHRA = { name: 'Dussehra 2026', start: '2026-10-21', end: '2026-11-08' };
+t('runs from 21/10 through the whole of 08/11 IST', () => {
+  assert.strictEqual(B.campaignWindow(DUSSEHRA, new Date('2026-10-20T18:30:00Z')), 'active');   // 00:00 IST 21 Oct
+  assert.strictEqual(B.campaignWindow(DUSSEHRA, new Date('2026-11-08T18:29:00Z')), 'active');   // 23:59 IST 8 Nov
+});
+t('stops at midnight IST going into 09/11', () => {
+  assert.strictEqual(B.campaignWindow(DUSSEHRA, new Date('2026-11-08T18:30:00Z')), 'ended');
+});
+t('not before it starts', () => {
+  assert.strictEqual(B.campaignWindow(DUSSEHRA, new Date('2026-10-20T18:29:00Z')), 'before');
+});
+t('no dates set: open, as the discount always behaved', () => {
+  assert.strictEqual(B.campaignWindow({ name: 'X' }), 'open');
+  assert.strictEqual(B.campaignWindow(undefined), 'open');
+});
+
 console.log('split by source');
 t('uncapped: each source keeps its own rupees', () => {
   // Diamond 60,000: campaign 15% = 9,000, loyalty 5% = 3,000; manual 10% of making 20,000 = 2,000.

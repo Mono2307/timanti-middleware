@@ -56,6 +56,22 @@ function campaignLabel(campaign) {
 }
 
 /**
+ * Is the campaign running on this date? The automatic diamond discount only applies INSIDE its window
+ * (founder, 2026-10-23: "should automatically stop after 8/11"). Both ends inclusive, by the IST date.
+ * Returns 'active' | 'before' | 'ended' | 'open' — 'open' when no dates are set, which keeps the
+ * discount running as it always did.
+ */
+function campaignWindow(campaign, now = new Date()) {
+  const start = String((campaign && campaign.start) || '');
+  const end = String((campaign && campaign.end) || '');
+  if (!start && !end) return 'open';
+  const today = new Date(now.getTime() + 330 * 60 * 1000).toISOString().slice(0, 10);
+  if (start && today < start) return 'before';
+  if (end && today > end) return 'ended';
+  return 'active';
+}
+
+/**
  * Split one line's capped discount portions by source.
  *
  * raw: { dia: {src: Rs}, mk: {src: Rs}, tot: {src: Rs} } — UNCAPPED cut per target per source.
@@ -111,4 +127,4 @@ function breakupJson(breakup) {
   return breakup ? JSON.stringify(breakup) : '';
 }
 
-module.exports = { SOURCES, sourceOf, ddmmyy, campaignLabel, splitBySource, buildBreakup, breakupJson };
+module.exports = { SOURCES, sourceOf, ddmmyy, campaignLabel, campaignWindow, splitBySource, buildBreakup, breakupJson };
