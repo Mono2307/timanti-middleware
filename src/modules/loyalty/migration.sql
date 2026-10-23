@@ -32,6 +32,7 @@ create table if not exists loyalty_redemptions (
   customer_id        text not null,
   order_customer_id  text,
   customer_mismatch  boolean not null default false,
+  promo_code         text,
   draft_id           text,
   order_id           text,
   order_name         text,
@@ -54,3 +55,6 @@ create index if not exists loyalty_redemptions_status_idx   on loyalty_redemptio
 -- one-time PRM-... Shopify code minted for the cart. Loyalty rows leave it null.
 alter table loyalty_redemptions add column if not exists promo_code text;
 create index if not exists loyalty_redemptions_promo_idx on loyalty_redemptions (promo_code) where promo_code is not null;
+
+-- Make Supabase's API see the new column straight away (otherwise it can take a minute or two).
+notify pgrst, 'reload schema';
