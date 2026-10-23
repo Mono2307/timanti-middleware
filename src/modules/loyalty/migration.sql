@@ -49,3 +49,8 @@ create table if not exists loyalty_redemptions (
 );
 create index if not exists loyalty_redemptions_customer_idx on loyalty_redemptions (customer_id);
 create index if not exists loyalty_redemptions_status_idx   on loyalty_redemptions (status, expires_at);
+
+-- Promo codes (ISB10 ...). promo_code is the code the customer typed; the row's own `code` is the
+-- one-time PRM-... Shopify code minted for the cart. Loyalty rows leave it null.
+alter table loyalty_redemptions add column if not exists promo_code text;
+create index if not exists loyalty_redemptions_promo_idx on loyalty_redemptions (promo_code) where promo_code is not null;
