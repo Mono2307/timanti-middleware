@@ -39,7 +39,7 @@ app.use(express.json({ verify: (req, _res, buf) => { req.rawBody = buf.toString(
 // Every body that is not JSON arrives as text — EXCEPT images. An image read here would hit the
 // 100 KB default limit (413 on any phone photo) and, below it, be consumed as a string before
 // /api/repairs/photo's own raw parser could read the bytes.
-app.use(express.text({ type: (req) => !/^image//i.test(String(req.headers['content-type'] || '')) }));
+app.use(express.text({ type: (req) => !String(req.headers['content-type'] || '').toLowerCase().startsWith('image/') }));
 
 // Shared primitives live in src/core/ — one definition, one place to change.
 const { supabase } = require('./src/core/supabase');

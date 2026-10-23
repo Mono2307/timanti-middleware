@@ -204,7 +204,7 @@ function OutsideRepairIntake() {
         <s-stack direction="inline" gap="small-200">
           {f.photos.map((url, i) => (
             <s-stack direction="block" gap="small-500">
-              <s-image src={url} alt={`Intake photo ${i + 1}`} inlineSize="auto" aspectRatio="1" objectFit="cover" />
+              <s-thumbnail src={url} alt={`Intake photo ${i + 1}`} size="large" />
               <s-button variant="tertiary" onClick={() => set({ photos: f.photos.filter((_, j) => j !== i) })}>Remove</s-button>
             </s-stack>
           ))}
