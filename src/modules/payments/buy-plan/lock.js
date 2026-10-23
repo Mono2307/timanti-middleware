@@ -9,12 +9,13 @@
 // two that change the price by discount (apply-discount, loyalty) check this as well.
 //
 // The lock is a TAG, not a metafield, on purpose: every one of those paths already holds the draft's
-// tags, so checking costs no extra API call on the hot draft-update webhook. `ot:buy-plan` (the
-// order-type routing tag) also counts, so a plan whose rate-locked tag was stripped by hand still
-// refuses — but rate-locked is the one the plan writes, because staff can change the order type.
+// tags, so checking costs no extra API call on the hot draft-update webhook. `buy-plan` (the plan's
+// own marker) also counts, so a plan whose rate-locked tag was stripped by hand still refuses.
+// Deliberately NOT ot:buy-plan: ot: tags are rebuilt from custom.order_type (in-stock | mto) and drive
+// the confirmation email, and a buy-plan piece is still one of those two.
 
 const RATE_LOCK_TAG = 'rate-locked';
-const BUY_PLAN_TAG  = 'ot:buy-plan';
+const BUY_PLAN_TAG  = 'buy-plan';
 const REFUSED_NOTE  = 'rate locked: buy plan';
 
 const tagList = (tags) => (Array.isArray(tags) ? tags : String(tags || '').split(','))

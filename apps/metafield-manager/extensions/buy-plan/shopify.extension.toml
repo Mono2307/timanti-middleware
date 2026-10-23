@@ -1,0 +1,13 @@
+api_version = "2026-01"
+
+[[extensions]]
+name = "t:name"
+handle = "buy-plan"
+type = "ui_extension"
+
+# Admin action: "Buy plan" under More actions on a draft order. Starts the fixed 6-installment plan
+# (locks the price, stamps the due dates) and, once started, shows the schedule and sends payment
+# links. Its own action rather than another Jewellery Workspace section — that panel is long enough.
+[[extensions.targeting]]
+module = "./src/BuyPlan.jsx"
+target = "admin.draft-order-details.action.render"

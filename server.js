@@ -5170,6 +5170,7 @@ lookbook.register(app);
 
 // Loyalty programme: storefront proxy, staff preview, operator endpoints. src/modules/loyalty.
 require('./src/modules/loyalty/routes').register(app, ctx);
+require('./src/modules/payments/buy-plan/routes').register(app, ctx);
 
 // ─────────────────────────────────────────
 // Start
