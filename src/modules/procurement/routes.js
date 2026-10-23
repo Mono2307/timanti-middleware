@@ -46,6 +46,7 @@ const { handlePoAction }  = require('./action');
 const { syncDraftOrderToSheet, syncOrderToSheet, removeDraftFromSheet,
         syncAllDraftOrders, syncAllOrders, pruneOrphans } = require('./sync');
 const { batchRaisePo } = require('./batch');
+const { isRateLocked } = require('../payments/buy-plan/lock');
 // Same omission as the sync trio above, one branch further down: the draft-delete handler calls
 // creditInstruments.revertApplied and this was never imported. It is a bare identifier, so the
 // ReferenceError is thrown while EVALUATING the expression — before the trailing .catch() can ever
@@ -178,6 +179,13 @@ app.post('/api/po-ops/reprice-from-sheet', async (req, res) => {
     const token   = await getShopifyToken();
     const headers = { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' };
     const baseUrl = process.env.SHOPIFY_STORE_URL;
+
+    // A buy plan locked the price (and gold rate) when it started. Refuse before step 1 overwrites
+    // custom.gold_rate — the engine's own guard would leave the prices alone but the rate rewritten.
+    const { data: lockCheck } = await axios.get(`${baseUrl}/admin/api/2024-01/draft_orders/${draft_order_id}.json?fields=id,name,tags`, { headers, timeout: 10000 });
+    if (isRateLocked(lockCheck?.draft_order?.tags)) {
+      return res.status(409).json({ ok: false, error: `${lockCheck.draft_order.name} is on a buy plan — its price is locked` });
+    }
 
     // 1. Write weight metafields (same keys as handleRecalculatePriceTag reads)
     const mfRes = await axios.get(`${baseUrl}/admin/api/2024-01/draft_orders/${draft_order_id}/metafields.json`, { headers, timeout: 10000 });

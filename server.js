@@ -29,6 +29,7 @@ const { handleTypeformWebhook } = require('./src/integrations/typeform');
 const pine = require('./src/integrations/pine');
 // Loyalty programme: tiers on lifetime spend, diamond-only discount online and in-store.
 const loyaltyDraft = require('./src/modules/loyalty/draft');
+const buyPlanLock = require('./src/modules/payments/buy-plan/lock');
 const { loadConfig: loadLoyaltyConfig } = require('./src/modules/loyalty/config');
 const discountBreakup = require('./src/modules/pricing/discount_breakup');
 const { startLoyaltySweep } = require('./src/modules/loyalty/sweep');
@@ -1613,6 +1614,15 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
   const token = await getShopifyToken();
   const headers = { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' };
   const tagsWithoutRecalc = tags.filter(t => t && t.toLowerCase() !== tagToProcess).join(', ');
+
+  // Buy plan: the price was locked when the plan started. Consume the trigger and leave every line
+  // exactly as it is — whoever (or whatever) asked for this reprice. See src/modules/payments/buy-plan/lock.js.
+  if (buyPlanLock.isRateLocked(tags)) {
+    await axios.put(`${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}.json`,
+      { draft_order: { id: draftOrderId, tags: tagsWithoutRecalc } }, { headers, timeout: 10000 });
+    console.log(`handleRecalculatePriceTag: draft ${draft.name || draftOrderId} is rate-locked (buy plan) — ${tagToProcess} refused, prices untouched`);
+    return;
+  }
 
   // Fetch jewel metafields set manually by staff
   const { data: mfData } = await axios.get(
@@ -3315,6 +3325,14 @@ async function handleApplyDiscountTag(draft) {
     const tags = (draft.tags || '').split(',').map(t => t.trim());
     const trigger = tags.find(t => /^apply-discount:/i.test(t));
     if (!trigger) return;
+    if (buyPlanLock.isRateLocked(tags)) {
+      const keep = tags.filter(t => t && !/^apply-discount:/i.test(t) && !/^discount-invalid:/i.test(t));
+      await axios.put(`${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draft.id}.json`,
+        { draft_order: { id: draft.id, tags: [...keep, `discount-invalid: ${buyPlanLock.REFUSED_NOTE}`].join(', ') } },
+        { headers: { 'X-Shopify-Access-Token': await getShopifyToken(), 'Content-Type': 'application/json' }, timeout: 10000 });
+      console.log(`[apply-discount] draft ${draft.name || draft.id}: refused — rate-locked (buy plan)`);
+      return;
+    }
     // Loyalty is exclusive: no discount code on a draft that carries it (src/modules/loyalty).
     if (tags.some(t => t.toLowerCase() === loyaltyDraft.T_ON)) {
       const keep = tags.filter(t => t && !/^apply-discount:/i.test(t) && !/^discount-invalid:/i.test(t));
@@ -3950,6 +3968,9 @@ app.post('/api/form-reprice', async (req, res) => {
       { headers, timeout: 10000 }
     );
     const draft = data.draft_order;
+    if (buyPlanLock.isRateLocked(draft.tags)) {
+      return res.status(409).json({ success: false, error: `${draft.name} is on a buy plan — its price is locked` });
+    }
 
     const productItems = (draft.line_items || []).filter(
       item => !((item.title || '').toLowerCase().includes('discount') && parseFloat(item.price) < 0)

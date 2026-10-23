@@ -41,6 +41,7 @@ const E = require('./engine');
 const ledger = require('./ledger');
 const { loadConfig } = require('./config');
 const { readCustomer } = require('./customer');
+const { isRateLocked } = require('../payments/buy-plan/lock');
 
 const APPLIED_KEY = 'loyalty_applied';
 const NOTE_KEY = 'loyalty_note';
@@ -279,6 +280,14 @@ async function handleLoyaltyStep(draft) {
   }
 
   const applied = E.readApplied(map[APPLIED_KEY]);
+
+  if (wantApply && isRateLocked(tags)) {
+    // A buy plan locked the price on the day it started; a loyalty discount would change it.
+    await updateDraftOrderMetafields(draftId, { [NOTE_KEY]: 'This draft is on a buy plan. Its price is locked, so loyalty cannot be applied.' });
+    await setDraftTags(draftId, refusedTags(tags, 'rate locked'));
+    log.info('loyalty', `draft ${draft.name || draftId}: loyalty refused — rate-locked (buy plan)`);
+    return;
+  }
 
   if (wantApply) {
     // Re-applying is a refresh: drop our own record first so the exclusivity check does not trip
