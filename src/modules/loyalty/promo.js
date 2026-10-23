@@ -28,7 +28,7 @@ const { log } = require('../../core/logger');
 const E = require('./engine');
 const ledger = require('./ledger');
 const { loadConfig } = require('./config');
-const { cartLineFacts } = require('./online');
+const { cartLineFacts, deleteDiscountNode } = require('./online');
 
 const CODE_PREFIX = 'PRM-';
 const MAX_CODES_PER_HOUR = 10;          // per logged-in customer (shared with loyalty codes)
@@ -129,14 +129,22 @@ async function createPromoCode(customerId, rawCode, lines) {
     log.error('loyalty', `promo ${key} code create failed for ${cid}: ${JSON.stringify(errs)}`);
     return { ok: false, reason: 'We could not apply this code just now. Please try again.' };
   }
-  await ledger.insertRedemption(supabase, {
+  try {
+    await ledger.insertRedemption(supabase, {
     code, discount_node_id: out.codeDiscountNode.id, channel: 'online', status: 'pending',
     customer_id: cid, promo_code: key, rate: promo.pct,
     diamond_base: r.perLine.filter(l => l.eligible).reduce((s, l) => s + l.diamond, 0),
     discount_pre_tax: r.total, discount_incl_tax: amountIncl,
     lines: { signature, perLine: r.perLine.map((l, i) => ({ variant_id: described[i].variant_id, diamond: l.diamond, discount: l.discount, eligible: l.eligible })) },
     expires_at: endsAt.toISOString(),
-  });
+    });
+  } catch (e) {
+    // Never leave a live, untracked discount behind: if the redemption could not be recorded
+    // (e.g. the promo_code column is missing), take the Shopify code back out and say so.
+    await deleteDiscountNode(out.codeDiscountNode.id);
+    log.error('loyalty', `promo ${key}: could not record redemption for ${code}, discount removed: ${e.message}`);
+    return { ok: false, reason: 'We could not apply this code just now. Please try again.' };
+  }
   log.info('loyalty', `promo ${key}: code ${code} for ${isGuest ? 'a guest' : 'customer ' + cid} = Rs${amountIncl} incl. GST on ${eligibleVariants.length} variant(s)`);
   return { ok: true, code, label: key, pct: promo.pct, amount: amountIncl, expires_at: endsAt.toISOString() };
 }
