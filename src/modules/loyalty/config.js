@@ -48,8 +48,8 @@ const DEFAULT_CONFIG = Object.freeze({
   earning: { min_order_number: 1038, superseded_orders: { '#1052': '#1057' } },
   // Promo codes that take a % off the DIAMOND value only (custom.price_breakup_diamond). The customer
   // types the code in the cart drawer; the server turns it into a one-time Shopify code (promo.js).
-  // starts_at / ends_at are optional ISO dates, e.g. "2026-12-31T18:29:59Z".
-  promos: { ISB10: { pct: 10, active: true, starts_at: null, ends_at: null, require_login: false } },
+  // starts_at / ends_at are ISO dates in UTC. ISB10 runs 23 Oct 2026 12:00 AM IST to 30 Nov 2026 11:59:59 PM IST.
+  promos: { ISB10: { pct: 10, active: true, starts_at: '2026-10-22T18:30:00Z', ends_at: '2026-11-30T18:29:59Z', require_login: false } },
 });
 
 /**
