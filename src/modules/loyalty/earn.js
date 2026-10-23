@@ -25,6 +25,7 @@ const ledger = require('./ledger');
 const { refreshCustomer } = require('./customer');
 const { deleteDiscountNode } = require('./online');
 const afterSales = require('./after_sales');
+const promo = require('./promo');
 const creditInstruments = require('../adjustments/credit_instruments');
 
 // Shopify sends several deliveries per order within seconds. Coalesce them: keep the newest
@@ -94,9 +95,35 @@ async function settleOnlineCode(order, cfg) {
   return String(red.customer_id);
 }
 
+/**
+ * Settle a PRM- promo code (e.g. ISB10) on this order: mark the redemption used and delete the
+ * one-time Shopify discount. Promo codes carry no customer, so nobody is re-credited: the order
+ * earns for whoever it is on. Safe to run on every delivery, a 'used' row is left alone.
+ */
+async function settlePromoCode(order) {
+  const entry = (order.discount_codes || []).find(c => String(c.code || '').toUpperCase().startsWith(promo.CODE_PREFIX));
+  if (!entry) return;
+  const red = await ledger.getRedemptionByCode(supabase, entry.code);
+  if (!red) { log.warn('loyalty', `order ${order.name}: promo code ${entry.code} has no redemption record`); return; }
+  if (red.status === 'used') return;
+  const appliedIncl = Number(entry.amount) || 0;
+  await ledger.updateRedemption(supabase, red.id, {
+    status: 'used', used_at: new Date().toISOString(),
+    order_id: String(order.id), order_name: order.name || null,
+    order_customer_id: order.customer && order.customer.id ? String(order.customer.id) : null,
+    discount_incl_tax: appliedIncl || red.discount_incl_tax,
+  });
+  if (Math.abs(appliedIncl - Number(red.discount_incl_tax || 0)) > 1) {
+    log.warn('loyalty', `order ${order.name}: promo ${red.promo_code} applied Rs${appliedIncl}, expected Rs${red.discount_incl_tax} - check`);
+  }
+  log.info('loyalty', `order ${order.name}: promo ${red.promo_code} (${entry.code}) used`);
+  if (red.discount_node_id) await deleteDiscountNode(red.discount_node_id);
+}
+
 async function processOrder(order) {
   const { loadConfig } = require('./config');
   const cfg = await loadConfig();
+  await settlePromoCode(order).catch(e => log.error('loyalty', `order ${order.name}: promo settlement failed: ${e.message}`));
   const loyaltyCustomer = await settleOnlineCode(order, cfg).catch(e => {
     log.error('loyalty', `order ${order.name}: code settlement failed: ${e.message}`);
     return null;
@@ -146,4 +173,4 @@ creditInstruments.onRedeemed(async ({ instrumentType, serialCode }) => {
   } catch (e) { log.error('loyalty', `re-check after ${serialCode} redeemed: ${e.message}`); }
 });
 
-module.exports = { onOrderWebhook, processOrder, settleOnlineCode, reearnOrderByName };
+module.exports = { onOrderWebhook, processOrder, settleOnlineCode, settlePromoCode, reearnOrderByName };
