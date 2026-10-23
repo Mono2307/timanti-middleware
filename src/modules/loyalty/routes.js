@@ -12,6 +12,7 @@
  *   Storefront, through the Shopify app proxy (signed by Shopify; /apps/loyalty/* on the store):
  *     GET  /api/loyalty/proxy/benefits      the logged-in customer's tier, rate and open vouchers
  *     POST /api/loyalty/proxy/apply         one-time diamond-only code for the cart's pieces
+ *     POST /api/loyalty/proxy/promo         typed promo code (e.g. ISB10) -> one-time diamond-only code
  *   Staff panel (Shopify admin session token):
  *     GET  /api/loyalty/draft-preview?draft=<id>   what "Apply loyalty" would do on this draft
  *   Operator (x-admin-secret header or ?secret=):
@@ -41,6 +42,7 @@ const { loadConfig, DEFAULT_CONFIG, NAMESPACE, KEY, _resetCache } = require('./c
 const { readCustomer, refreshCustomer } = require('./customer');
 const { evaluateDraft, readDraftMetafields, APPLIED_KEY, NOTE_KEY } = require('./draft');
 const online = require('./online');
+const promo = require('./promo');
 const backfill = require('./backfill');
 const { runLoyaltySweep } = require('./sweep');
 
@@ -202,6 +204,17 @@ function register(app /* , ctx */) {
     catch (e) { log.error('loyalty', `apply for ${cid}: ${e.message}`); return res.status(500).json({ ok: false, reason: 'We could not apply your benefit just now.' }); }
   });
 
+  // A typed promo code (ISB10 ...). Works for guests too unless the promo says require_login.
+  // Unknown codes answer { ok:false, notPromo:true } so the cart drawer falls back to Shopify's own code box.
+  app.post('/api/loyalty/proxy/promo', requireEnabled, requireProxy, async (req, res) => {
+    const cid = String(req.query.logged_in_customer_id || '');
+    let body = req.body;
+    if (typeof body === 'string') { try { body = JSON.parse(body); } catch { body = {}; } }
+    body = body || {};
+    try { return res.json(await promo.createPromoCode(cid, body.code, body.lines)); }
+    catch (e) { log.error('loyalty', `promo ${body.code} for ${cid || 'guest'}: ${e.message}`); return res.status(500).json({ ok: false, reason: 'We could not apply this code just now. Please try again.' }); }
+  });
+
   // ── Customer account: the tier graphic (public; it draws only the points number it is given) ─
   app.get('/api/loyalty/tier.svg', requireEnabled, async (req, res) => {
     try {
@@ -225,10 +238,7 @@ function register(app /* , ctx */) {
       const evMap = { ...map };
       if (applied) delete evMap.discount_applied;
       const ev = await evaluateDraft(draft, evMap);
-      // The staff discount breakup the reprice wrote (campaign / manual / loyalty), shown in the panel.
-      let breakup = null;
-      try { breakup = map.discount_breakup ? JSON.parse(map.discount_breakup) : null; } catch { breakup = null; }
-      return res.json({ success: true, applied, note: map[NOTE_KEY] || '', preview: ev, breakup, offers: await draftOffers(draft, map) });
+      return res.json({ success: true, applied, note: map[NOTE_KEY] || '', preview: ev, offers: await draftOffers(draft, map) });
     } catch (e) {
       log.error('loyalty', `draft-preview ${draftId}: ${e.message}`);
       return res.status(500).json({ success: false, error: e.message });
