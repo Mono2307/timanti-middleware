@@ -89,7 +89,7 @@ async function createPromoCode(customerId, rawCode, lines) {
   const r = computePromo({ promo, lines: described, cfg });
   if (!r.ok) return { ok: false, reason: `${key} applies to the diamond value of a piece, and none of the pieces in your cart is eligible.` };
 
-  const amountIncl = E.onlineAmount(r.total);
+  const amountIncl = r.total;
   const eligibleVariants = described.filter((_, i) => r.perLine[i].eligible).map(l => l.variant_id);
   const signature = described.map(l => `${l.variant_id}x${l.quantity}`).sort().join(',');
 
