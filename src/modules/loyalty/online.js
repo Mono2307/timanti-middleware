@@ -84,7 +84,8 @@ async function benefitsFor(customerId) {
   if (!customer) return { loggedIn: true, found: false };
   const points = await ledger.customerPoints(supabase, customerId).catch(() => Number(customer.points) || 0);
   const info = E.tierFor(points, cfg);
-  const occasion = E.occasionBonus(customer, new Date(), cfg);
+  // The bonus is one transaction a month: once used (in store or online) the cart stops offering it.
+  const occasion = (await occasionUsed(customerId)) ? { pct: 0, occasions: [] } : E.occasionBonus(customer, new Date(), cfg);
   let vouchers = [];
   try {
     // Only vouchers carry a Shopify code; exchange notes are in-store only.
@@ -102,6 +103,20 @@ async function benefitsFor(customerId) {
     rate: info.tier ? info.tier.pct + occasion.pct : 0,
     vouchers,
   };
+}
+
+/**
+ * The redemption that already took this month's birthday/anniversary bonus, or null. A ledger
+ * outage gives the bonus rather than refusing it.
+ */
+async function occasionUsed(customerId) {
+  try {
+    const r = await ledger.occasionRedemptionSince(supabase, customerId, E.istMonthStartIso());
+    return r ? { order_name: r.order_name || null, channel: r.channel } : null;
+  } catch (e) {
+    log.warn('loyalty', `occasion-use read failed for ${customerId}: ${e.message}`);
+    return null;
+  }
 }
 
 /** Delete a discount by node id. Best effort — the sweep retries expired ones. */
@@ -147,7 +162,8 @@ async function createCartCode(customerId, lines) {
     return { ...l, sku: f.sku, title: f.title, productType: f.productType, tags: f.tags, collections: f.collections,
       jewelCode: f.jewelCode, diamond: (f.diamondUnit || 0) * l.quantity };
   });
-  const r = E.computeLoyalty({ points, birthday: customer.birthday, anniversary: customer.anniversary, lines: described, cfg });
+  const r = E.computeLoyalty({ points, birthday: customer.birthday, anniversary: customer.anniversary, lines: described, cfg,
+    occasionUsed: await occasionUsed(customerId) });
   if (!r.ok) {
     const reason = r.reason === 'below the first tier'
       ? `Spend ₹${Math.round(r.gapToNext).toLocaleString('en-IN')} more to unlock your first loyalty benefit.`
