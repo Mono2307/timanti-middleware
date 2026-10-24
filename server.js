@@ -29,6 +29,7 @@ const { handleTypeformWebhook } = require('./src/integrations/typeform');
 const pine = require('./src/integrations/pine');
 // Loyalty programme: tiers on lifetime spend, diamond-only discount online and in-store.
 const loyaltyDraft = require('./src/modules/loyalty/draft');
+const loyaltyEngine = require('./src/modules/loyalty/engine');
 const buyPlanLock = require('./src/modules/payments/buy-plan/lock');
 const { loadConfig: loadLoyaltyConfig } = require('./src/modules/loyalty/config');
 const discountBreakup = require('./src/modules/pricing/discount_breakup');
@@ -1837,8 +1838,10 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
           || parseFloat((hydratedBase[idx].varMf || {}).price_breakup_making || 0) * (item.quantity || 1)
           || 0;
     });
+    // Loyalty's making cut is capped per TRANSACTION, so it is settled across all lines first.
+    const lineDiscCapped = loyaltyEngine.capLoyaltyMaking(lineDiscArr, makingBaseArr);
     const discFinalByIdx = productItems.map((item, idx) => {
-      const pl = resolveLineDiscount(lineDiscArr[idx], {
+      const pl = resolveLineDiscount(lineDiscCapped[idx], {
         diamond: diaArr[idx] || 0, making: makingBaseArr[idx] || 0, grossIncl: r2(preTaxArr[idx] * 1.03),
       });
       if (pl) return { total: pl.total, dia: pl.diaPortion, mk: pl.mkPortion, tot: pl.totalPortion, bySrc: pl.bySrc, campaigns: pl.campaigns };
@@ -2062,9 +2065,13 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
   // 'Diamond (After Discount)', only the making-targeted cut reduces 'Making (After Discount)', while a
   // native/whole-line cut reduces the line taxable without being attributed to either component.
   const lineDiscArr = parseLineDiscounts(mfMap['line_discounts']);
+  // Loyalty's making cut is capped per TRANSACTION, so it is settled across all lines first.
+  const makingByIdx = [];
+  for (const r of itemResults) if (r) makingByIdx[r.idx] = r.newMakingValue || 0;
+  const lineDiscCapped = loyaltyEngine.capLoyaltyMaking(lineDiscArr, makingByIdx);
   const discByIdx = new Map(itemResults.map((r, i) => {
     if (!r) return [undefined, { total: 0, dia: 0, mk: 0, tot: 0 }];
-    const pl = resolveLineDiscount(lineDiscArr[r.idx], {
+    const pl = resolveLineDiscount(lineDiscCapped[r.idx], {
       diamond: r.newDiamondValue || 0, making: r.newMakingValue || 0, grossIncl: r.newGrossValue || 0,
     });
     if (pl) return [r.idx, { total: pl.total, dia: pl.diaPortion, mk: pl.mkPortion, tot: pl.totalPortion, bySrc: pl.bySrc, campaigns: pl.campaigns }];

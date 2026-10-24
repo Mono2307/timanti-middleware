@@ -89,7 +89,10 @@ async function createPromoCode(customerId, rawCode, lines) {
   const r = computePromo({ promo, lines: described, cfg });
   if (!r.ok) return { ok: false, reason: `${key} applies to the diamond value of a piece, and none of the pieces in your cart is eligible.` };
 
-  const amountIncl = r.total;
+  // Shopify takes a code off the GST-INCLUSIVE price, so the pre-tax cut is grossed up by 1.03: 10% of
+  // a Rs40,000 diamond is Rs4,000 off before GST = Rs4,120 off the final price. Without it the code
+  // gave 9.7% (founder, 2026-10-24: exact % before GST, the same as loyalty and the in-store discounts).
+  const amountIncl = E.onlineAmount(r.total);
   const eligibleVariants = described.filter((_, i) => r.perLine[i].eligible).map(l => l.variant_id);
   const signature = described.map(l => `${l.variant_id}x${l.quantity}`).sort().join(',');
 

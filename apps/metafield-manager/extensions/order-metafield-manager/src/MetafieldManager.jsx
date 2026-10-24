@@ -1443,7 +1443,11 @@ export default function MetafieldManager({ surface = "block" } = {}) {
     const p = loyalty?.preview;
     const applied = loyalty?.applied;
     const hasStanding = Boolean(p?.customer);
-    const tierPct = p?.tier ? `${p.tier.pct}% off diamond` : "";
+    // Tier making discount (founder, 2026-10-24): a % off making, capped per bill.
+    const mkText = (t) => (t && Number(t.making_pct) > 0
+      ? ` + ${t.making_pct}% off making${Number(t.making_cap) > 0 ? ` (up to ${inr(t.making_cap)} a bill)` : ""}`
+      : "");
+    const tierPct = p?.tier ? `${p.tier.pct}% off diamond${mkText(p.tier)}` : "";
     // Birthday / anniversary month: called out on its own line so staff can tell the customer.
     const occNames = p?.occasion?.occasions || [];
     const occLine = p?.tier && occNames.length
@@ -1463,7 +1467,7 @@ export default function MetafieldManager({ surface = "block" } = {}) {
     // Progress toward the next tier, so staff can tell the customer how close they are.
     const progressLine = !hasStanding ? ""
       : p.next
-        ? `Lifetime spend ${inr(p.points)} · ${inr(p.gapToNext)} more to ${p.next.name} (${p.next.pct}% off diamond) · ${p.progressPct ?? 0}% of the way`
+        ? `Lifetime spend ${inr(p.points)} · ${inr(p.gapToNext)} more to ${p.next.name} (${p.next.pct}% off diamond${mkText(p.next)}) · ${p.progressPct ?? 0}% of the way`
         : `Lifetime spend ${inr(p.points)} · top tier reached`;
     const timeline = hasStanding ? `${MIDDLEWARE_BASE_URL}/api/loyalty/tier.svg?p=${Math.max(0, Math.floor(Number(p.points) || 0))}` : "";
     return (
@@ -1485,16 +1489,16 @@ export default function MetafieldManager({ surface = "block" } = {}) {
             </s-stack>
           ) : null}
           {applied ? (
-            <s-text>{`Applied: ${appliedBreakdown(applied)} off the diamond value of ${(applied.eligible_variants || []).length} piece(s). Stacks with the campaign and manual discounts; an order-level discount code cannot be used with it.`}</s-text>
+            <s-text>{`Applied: ${appliedBreakdown(applied)} off the diamond value${mkText({ making_pct: applied.mk, making_cap: applied.mkcap })} on ${(applied.eligible_variants || []).length} piece(s). Stacks with the campaign and manual discounts; an order-level discount code cannot be used with it.`}</s-text>
           ) : null}
           {p && p.ok ? (
             <s-stack direction="block" gap="small-200">
               {(p.lines || []).map((l) => (
                 <s-text key={String(l.variant_id)} tone={l.eligible ? undefined : "subdued"}>
-                  {l.eligible ? `${l.title}: ${inr(l.discount)} off diamond ${inr(l.diamond)}` : `${l.title}: not eligible (${l.reason})`}
+                  {l.eligible ? `${l.title}: ${inr(l.discount)} off diamond ${inr(l.diamond)}${Number(l.makingDiscount) > 0 ? ` + ${inr(l.makingDiscount)} off making ${inr(l.making)}` : ""}` : `${l.title}: not eligible (${l.reason})`}
                 </s-text>
               ))}
-              <s-text>{`Estimated loyalty saving: ${inr(p.total)} before GST (${p.rate}% of the diamond value${occNames.length ? `, incl. +${p.occasion.pct}% ${occNames.join(" & ")} month` : ""})`}</s-text>
+              <s-text>{`Estimated loyalty saving: ${inr(p.total)} before GST (${p.rate}% of the diamond value${occNames.length ? `, incl. +${p.occasion.pct}% ${occNames.join(" & ")} month` : ""}${Number(p.makingPct) > 0 ? `; ${p.makingPct}% of making${Number(p.makingCap) > 0 ? `, capped at ${inr(p.makingCap)} a bill` : ""}` : ""})`}</s-text>
             </s-stack>
           ) : null}
           {p && !p.ok && !applied && p.code !== "below tier" ? <s-text tone="subdued">{p.reason}</s-text> : null}

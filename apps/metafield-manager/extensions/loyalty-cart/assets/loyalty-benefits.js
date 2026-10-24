@@ -37,6 +37,11 @@
     del: function (k) { try { sessionStorage.removeItem(k); } catch (e) { /* blocked */ } },
   };
   function inr(v) { return '₹' + Math.round(Number(v) || 0).toLocaleString('en-IN'); }
+  // The tier's making discount, capped per order (2026-10-24).
+  function mk(t) {
+    if (!t || !(Number(t.making_pct) > 0)) return '';
+    return ' + ' + t.making_pct + '% off making' + (Number(t.making_cap) > 0 ? ' (up to ' + inr(t.making_cap) + ')' : '');
+  }
   function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
   function getCart() { return fetch('/cart.js', { headers: { Accept: 'application/json' } }).then(function (r) { return r.json(); }); }
   function cartCodes(cart) { return (cart.discount_codes || []).map(function (d) { return d.code; }).filter(Boolean); }
@@ -175,18 +180,18 @@
         if (!loyCode && store.get(KEY_ON) === '1' && store.get(KEY_SIG) !== cartSig(cart)) {
           // Applied earlier, cart changed since → re-apply for the new contents, once.
           store.set(KEY_SIG, cartSig(cart));
-          body.appendChild(row(b.tier.name + ' member · ' + b.rate + '% off diamonds' + occ, null));
+          body.appendChild(row(b.tier.name + ' member · ' + b.rate + '% off diamonds' + mk(b.tier) + occ, null));
           applyLoyalty(cart, ctx);
         } else if (loyCode) {
           var saved = codeSaving(cart, loyCode);
-          body.appendChild(row(b.tier.name + ' benefit applied · ' + (saved > 0 ? inr(saved) + ' off' : b.rate + '% off diamonds'),
+          body.appendChild(row(b.tier.name + ' benefit applied · ' + (saved > 0 ? inr(saved) + ' off' : b.rate + '% off diamonds' + mk(b.tier)),
             textLink('Remove', function () { removeCode(cart, loyCode, ctx); })));
         } else {
-          body.appendChild(row(b.tier.name + ' member · ' + b.rate + '% off diamonds' + occ,
+          body.appendChild(row(b.tier.name + ' member · ' + b.rate + '% off diamonds' + mk(b.tier) + occ,
             primary('Apply', function () { applyLoyalty(cart, ctx); })));
         }
       } else if (b.found && b.next) {
-        body.appendChild(row(inr(b.next.gap) + ' more to unlock ' + b.next.name + ' · ' + b.next.pct + '% off diamonds', null));
+        body.appendChild(row(inr(b.next.gap) + ' more to unlock ' + b.next.name + ' · ' + b.next.pct + '% off diamonds' + mk(b.next), null));
       }
 
       // 2. Codes already on the cart (vouchers, discount codes)

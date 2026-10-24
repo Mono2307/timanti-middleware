@@ -9,9 +9,13 @@
  *
  * THE PROGRAMME (founder's spec, 2026-10-07 — loyalty/planning/LOYALTY_PLAN_A_MIDDLEWARE.md)
  *   ₹1 of order value = 1 point. Points only measure lifetime spend toward a tier; they are never
- *   spent. Tiers (editable in config): ₹2L → 3%, ₹5L → 5%, ₹10L → 7%, off the DIAMOND value only.
- *   +2% in the birthday or anniversary month (once, even if both fall in the same month), on ONE
- *   transaction that month; the tier rate itself has no cap (founder, 2026-10-21).
+ *   spent and never expire. Tiers (editable in config, founder 2026-10-24):
+ *     ₹2L  →  5% off DIAMOND + 15% off MAKING, the making cut capped at ₹2,000 a transaction
+ *     ₹5L  →  7% off DIAMOND + 20% off MAKING, capped at ₹5,000
+ *     ₹10L → 10% off DIAMOND + 30% off MAKING, capped at ₹10,000
+ *   The caps are pre-tax rupees across the whole transaction; any number of transactions get them.
+ *   +2% on the DIAMOND in the birthday or anniversary month (once, even if both fall in the same
+ *   month), on ONE transaction that month, and only for a customer who has reached a tier.
  *   A tier is reached 1% short of its threshold (₹1,98,000 is Silver) — config tier_tolerance_pct.
  *   Loyalty stacks with the campaign (automatic diamond) discount and with manual per-line cuts;
  *   only an order-level discount code blocks it. Vouchers and exchange notes are tender, not
@@ -185,15 +189,20 @@ function lineEligibility(line, cfg) {
  *   occasionUsed: the redemption that already took this month's birthday/anniversary bonus
  *   ({ order_name, channel }), or null. When set the bonus is withheld and reported as
  *   occasion.used, so the panel can say where it went.
- * Returns { ok, reason, tier, rate, basePct, occasion, perLine: [{ idx, eligible, reason, diamond,
- *           discount }], total }
- *   discount is PRE-TAX rupees, capped at the line's diamond value.
+ *   Each line may also carry making (pre-tax Rs, already × quantity) for the making discount.
+ * Returns { ok, reason, tier, rate, basePct, occasion, makingPct, makingCap, perLine: [{ idx,
+ *           eligible, reason, diamond, discount, making, makingDiscount }], diamondTotal,
+ *           makingTotal, total }
+ *   discount is the DIAMOND cut, PRE-TAX rupees, capped at the line's diamond value. makingDiscount
+ *   is the making cut, scaled down across the lines so their sum stays within makingCap.
+ *   total = diamondTotal + makingTotal.
  */
 function computeLoyalty({ points, birthday, anniversary, lines = [], now = new Date(), cfg, occasionUsed = null } = {}) {
   const t = tierFor(points, cfg);
   const empty = (reason) => ({
     ok: false, reason, tier: t.tier, next: t.next, gapToNext: t.gapToNext, points: t.points,
-    rate: 0, basePct: 0, occasion: { pct: 0, occasions: [] }, perLine: [], total: 0,
+    rate: 0, basePct: 0, occasion: { pct: 0, occasions: [] }, makingPct: 0, makingCap: 0,
+    perLine: [], diamondTotal: 0, makingTotal: 0, total: 0,
   });
   if (!cfg || cfg.enabled === false) return empty('loyalty programme is switched off');
   if (!t.tier) return empty('below the first tier');
@@ -202,20 +211,39 @@ function computeLoyalty({ points, birthday, anniversary, lines = [], now = new D
   // One transaction a month gets the bonus (founder, 2026-10-21); the tier rate itself is uncapped.
   if (occasion.pct > 0 && occasionUsed) occasion = { pct: 0, occasions: [], used: { occasions: occasion.occasions, by: occasionUsed } };
   const rate = Number(t.tier.pct) + occasion.pct;
+  const makingPct = Math.max(0, Number(t.tier.making_pct) || 0);
+  const makingCap = Math.max(0, Number(t.tier.making_cap) || 0);
   const perLine = lines.map((line, idx) => {
     const e = lineEligibility(line, cfg);
     const diamond = Math.max(0, Number(line.diamond) || 0);
+    const making = Math.max(0, Number(line.making) || 0);
     const discount = e.eligible ? Math.min(diamond, r2(diamond * rate / 100)) : 0;
-    return { idx, eligible: e.eligible, reason: e.reason, diamond: r2(diamond), discount };
+    const mkRaw = e.eligible ? Math.min(making, making * makingPct / 100) : 0;
+    return { idx, eligible: e.eligible, reason: e.reason, diamond: r2(diamond), discount, making: r2(making), mkRaw };
   });
-  const total = r2(perLine.reduce((s, l) => s + l.discount, 0));
+  const scale = makingScale(perLine.reduce((s, l) => s + l.mkRaw, 0), makingCap);
+  for (const l of perLine) { l.makingDiscount = floor2(l.mkRaw * scale); delete l.mkRaw; }
+  const diamondTotal = r2(perLine.reduce((s, l) => s + l.discount, 0));
+  const makingTotal = r2(perLine.reduce((s, l) => s + l.makingDiscount, 0));
+  const total = r2(diamondTotal + makingTotal);
+  const rates = { rate, basePct: Number(t.tier.pct), occasion, makingPct, makingCap };
   if (!perLine.some(l => l.eligible)) {
-    return { ...empty('no eligible pieces'), tier: t.tier, rate, basePct: Number(t.tier.pct), occasion, perLine };
+    return { ...empty('no eligible pieces'), tier: t.tier, ...rates, perLine };
   }
   return {
     ok: true, reason: '', tier: t.tier, next: t.next, gapToNext: t.gapToNext, points: t.points,
-    rate, basePct: Number(t.tier.pct), occasion, perLine, total,
+    ...rates, perLine, diamondTotal, makingTotal, total,
   };
+}
+
+/** Paise rounded DOWN, so lines scaled to a cap never add up to a paisa over it. */
+function floor2(v) {
+  return Math.floor((Number(v) || 0) * 100 + 1e-6) / 100;
+}
+
+/** Factor (≤ 1) that brings a transaction's raw making cut within the tier cap. Cap 0 = no cap. */
+function makingScale(rawTotal, cap) {
+  return cap > 0 && rawTotal > cap ? cap / rawTotal : 1;
 }
 
 /** A pre-tax rupee discount expressed on Shopify's GST-inclusive prices (for an online code). */
@@ -344,7 +372,34 @@ function withLoyaltyEntries(lineDiscArr, productItems, applied) {
     if (!item || !item.variant_id || !eligible.has(String(item.variant_id))) return;
     out[i] = out[i].filter(e => !(e && e.src === 'loyalty'));
     out[i].push({ t: 'dia', m: 'pct', v: Number(applied.rate), src: 'loyalty' });
+    // The making cut carries the tier's per-transaction cap; capLoyaltyMaking enforces it across lines.
+    if (Number(applied.mk) > 0) out[i].push({ t: 'mk', m: 'pct', v: Number(applied.mk), src: 'loyalty', cap: Number(applied.mkcap) || 0 });
   });
+  return out;
+}
+
+/**
+ * Hold loyalty's making cut within the tier cap for the WHOLE transaction. Called by the reprice
+ * once it knows each line's making value (makingBases, indexed like lineDiscArr), before the lines
+ * are resolved. Under the cap nothing changes. Over it, each loyalty making entry becomes a flat
+ * rupee amount, all scaled by the same factor so their sum is the cap. Returns a NEW array.
+ */
+function capLoyaltyMaking(lineDiscArr, makingBases) {
+  const hits = [];
+  let raw = 0;
+  let cap = 0;
+  (lineDiscArr || []).forEach((entries, i) => (Array.isArray(entries) ? entries : []).forEach((e, j) => {
+    if (!e || e.src !== 'loyalty' || String(e.t) !== 'mk' || String(e.m) !== 'pct') return;
+    const making = Math.max(0, Number((makingBases || [])[i]) || 0);
+    const rs = Math.min(making, making * Math.abs(Number(e.v) || 0) / 100);
+    raw += rs;
+    cap = Math.max(cap, Number(e.cap) || 0);
+    hits.push([i, j, rs]);
+  }));
+  const scale = makingScale(raw, cap);
+  if (scale === 1) return lineDiscArr;
+  const out = lineDiscArr.map(x => (Array.isArray(x) ? [...x] : x));
+  for (const [i, j, rs] of hits) out[i][j] = { ...out[i][j], m: 'flat', v: floor2(rs * scale) };
   return out;
 }
 
@@ -354,5 +409,5 @@ module.exports = {
   monthOf, istMonth, istDate, istMonthStartIso, occasionBonus,
   lineEligibility, computeLoyalty, onlineAmount,
   isExchangeLine, orderEarnValue, orderNumber, earnPoints,
-  readApplied, otherDiscountOnDraft, withLoyaltyEntries,
+  readApplied, otherDiscountOnDraft, withLoyaltyEntries, capLoyaltyMaking,
 };

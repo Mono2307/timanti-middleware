@@ -19,10 +19,12 @@ const TTL_MS = 5 * 60 * 1000;
 /** The founder's grid. Also what /api/loyalty/setup seeds the metafield with. */
 const DEFAULT_CONFIG = Object.freeze({
   enabled: true,
+  // pct: % off the DIAMOND value. making_pct: % off MAKING, and making_cap the most that making cut
+  // can take off one transaction (pre-tax rupees; any number of transactions). Founder, 2026-10-24.
   tiers: [
-    { key: 'T1', name: 'Silver',   min: 200000,  pct: 3 },
-    { key: 'T2', name: 'Gold',     min: 500000,  pct: 5 },
-    { key: 'T3', name: 'Platinum', min: 1000000, pct: 7 },
+    { key: 'T1', name: 'Silver',   min: 200000,  pct: 5,  making_pct: 15, making_cap: 2000 },
+    { key: 'T2', name: 'Gold',     min: 500000,  pct: 7,  making_pct: 20, making_cap: 5000 },
+    { key: 'T3', name: 'Platinum', min: 1000000, pct: 10, making_pct: 30, making_cap: 10000 },
   ],
   // A tier is granted this % short of its threshold: ₹1,98,000 is Silver (founder, 2026-10-21).
   tier_tolerance_pct: 1,
@@ -52,6 +54,9 @@ const DEFAULT_CONFIG = Object.freeze({
   promos: { ISB10: { pct: 10, active: true, starts_at: '2026-10-22T18:30:00Z', ends_at: '2026-11-30T18:29:59Z', require_login: false } },
 });
 
+/** The diamond % per tier before the 2026-10-24 grid — see the upgrade in normalizeConfig. */
+const LEGACY_GRID = Object.freeze({ T1: 3, T2: 5, T3: 7 });
+
 /**
  * Validate and normalise a parsed config. Throws with a readable message on anything that would
  * make the engine misbehave — a tier without a number, a percentage over 100.
@@ -60,8 +65,17 @@ function normalizeConfig(raw) {
   if (!raw || typeof raw !== 'object') throw new Error('config is not an object');
   const tiers = Array.isArray(raw.tiers) ? raw.tiers : [];
   if (!tiers.length) throw new Error('config has no tiers');
+  // A config still on the ORIGINAL grid (T1 3% / T2 5% / T3 7%, no making on any tier) is read as the
+  // 2026-10-24 grid (rates matched by tier key; names and thresholds kept), so the deploy moves the
+  // live rates without a hand edit of the metafield. Any other hand-edited grid is left exactly as
+  // typed. POST /api/loyalty/setup writes the upgraded tiers back.
+  const legacy = tiers.every(t => t && t.making_pct == null && LEGACY_GRID[String(t.key || '').trim()] === Number(t.pct));
+  const grid = (key) => {
+    const d = DEFAULT_CONFIG.tiers.find(x => x.key === String(key || '').trim());
+    return d ? { pct: d.pct, making_pct: d.making_pct, making_cap: d.making_cap } : {};
+  };
   const keys = new Set();
-  const norm = tiers.map((t, i) => {
+  const norm = (legacy ? tiers.map(t => ({ ...t, ...grid(t.key) })) : tiers).map((t, i) => {
     const min = Number(t.min);
     const pct = Number(t.pct);
     const key = String(t.key || `T${i + 1}`).trim();
@@ -69,7 +83,12 @@ function normalizeConfig(raw) {
     if (!(pct > 0 && pct <= 100)) throw new Error(`tier ${key}: pct must be between 0 and 100`);
     if (keys.has(key)) throw new Error(`tier key ${key} is repeated`);
     keys.add(key);
-    return { key, name: String(t.name || key), min, pct };
+    const makingPct = Number(t.making_pct || 0);
+    const makingCap = Number(t.making_cap || 0);
+    if (!(makingPct >= 0 && makingPct <= 100)) throw new Error(`tier ${key}: making_pct must be between 0 and 100`);
+    // 0 / missing cap = no cap.
+    if (!(makingCap >= 0)) throw new Error(`tier ${key}: making_cap must be a number`);
+    return { key, name: String(t.name || key), min, pct, making_pct: makingPct, making_cap: makingCap };
   }).sort((a, b) => a.min - b.min);
 
   const pctOf = (o) => {

@@ -8,8 +8,9 @@
  * extension) asks this service, through the Shopify app proxy, for:
  *   GET  /apps/loyalty/benefits  → the logged-in customer's tier, today's rate, and their open
  *                                  vouchers (codes usable online)
- *   POST /apps/loyalty/apply     → a single-use code worth exactly the diamond-only discount on the
- *                                  cart's eligible pieces
+ *   POST /apps/loyalty/apply     → a single-use code worth exactly the tier's diamond + making
+ *                                  discount (making capped per transaction) on the cart's eligible
+ *                                  pieces
  *
  * The code is a fixed amount, limited to the eligible variants, single use, expiring in two hours,
  * PRODUCT class combining with ORDER-class discounts only — so a voucher code (order class) can sit
@@ -61,6 +62,7 @@ async function cartLineFacts(lines) {
   const data = await graphql(`query($ids: [ID!]!) { nodes(ids: $ids) { ... on ProductVariant {
       id sku price
       diamond: metafield(namespace: "custom", key: "price_breakup_diamond") { value }
+      making:  metafield(namespace: "custom", key: "price_breakup_making") { value }
       jewel:   metafield(namespace: "custom", key: "jewel_code") { value }
       product { title productType tags collections(first: 25) { nodes { handle } } }
     } } }`, { ids: ids.map(id => `gid://shopify/ProductVariant/${id}`) });
@@ -71,7 +73,8 @@ async function cartLineFacts(lines) {
       sku: n.sku || '', title: (n.product && n.product.title) || '',
       productType: (n.product && n.product.productType) || '', tags: (n.product && n.product.tags) || [],
       collections: ((n.product && n.product.collections && n.product.collections.nodes) || []).map(c => c.handle),
-      diamondUnit: n.diamond ? Number(n.diamond.value) || 0 : 0, jewelCode: n.jewel ? n.jewel.value : '',
+      diamondUnit: n.diamond ? Number(n.diamond.value) || 0 : 0, makingUnit: n.making ? Number(n.making.value) || 0 : 0,
+      jewelCode: n.jewel ? n.jewel.value : '',
     };
   }
   return out;
@@ -97,8 +100,8 @@ async function benefitsFor(customerId) {
     firstName: customer.firstName,
     enabled: cfg.enabled,
     points: info.points,
-    tier: info.tier ? { key: info.tier.key, name: info.tier.name, pct: info.tier.pct } : null,
-    next: info.next ? { name: info.next.name, pct: info.next.pct, gap: info.gapToNext } : null,
+    tier: info.tier ? { key: info.tier.key, name: info.tier.name, pct: info.tier.pct, making_pct: info.tier.making_pct, making_cap: info.tier.making_cap } : null,
+    next: info.next ? { name: info.next.name, pct: info.next.pct, making_pct: info.next.making_pct, making_cap: info.next.making_cap, gap: info.gapToNext } : null,
     occasion: occasion.occasions,
     rate: info.tier ? info.tier.pct + occasion.pct : 0,
     vouchers,
@@ -160,7 +163,7 @@ async function createCartCode(customerId, lines) {
   const described = clean.map(l => {
     const f = facts[l.variant_id] || {};
     return { ...l, sku: f.sku, title: f.title, productType: f.productType, tags: f.tags, collections: f.collections,
-      jewelCode: f.jewelCode, diamond: (f.diamondUnit || 0) * l.quantity };
+      jewelCode: f.jewelCode, diamond: (f.diamondUnit || 0) * l.quantity, making: (f.makingUnit || 0) * l.quantity };
   });
   const r = E.computeLoyalty({ points, birthday: customer.birthday, anniversary: customer.anniversary, lines: described, cfg,
     occasionUsed: await occasionUsed(customerId) });
@@ -189,7 +192,7 @@ async function createCartCode(customerId, lines) {
       discountCodeBasicCreate(basicCodeDiscount: $d) {
         codeDiscountNode { id } userErrors { field message } } }`, {
     d: {
-      title: `Loyalty ${r.tier.name} ${r.rate}% — customer ${customerId}`,
+      title: `Loyalty ${r.tier.name} ${r.rate}% dia + ${r.makingPct}% making — customer ${customerId}`,
       code,
       startsAt: startsAt.toISOString(),
       endsAt: endsAt.toISOString(),
@@ -215,7 +218,7 @@ async function createCartCode(customerId, lines) {
     occasion: r.occasion.occasions.join('+') || null,
     diamond_base: r.perLine.filter(l => l.eligible).reduce((s, l) => s + l.diamond, 0),
     discount_pre_tax: r.total, discount_incl_tax: amountIncl,
-    lines: { signature, perLine: r.perLine.map((l, i) => ({ variant_id: described[i].variant_id, diamond: l.diamond, discount: l.discount, eligible: l.eligible })) },
+    lines: { signature, perLine: r.perLine.map((l, i) => ({ variant_id: described[i].variant_id, diamond: l.diamond, discount: l.discount, making: l.making, making_discount: l.makingDiscount, eligible: l.eligible })) },
     expires_at: endsAt.toISOString(),
   });
   log.info('loyalty', `code ${code} for customer ${customerId}: ${r.tier.key} ${r.rate}% = Rs${amountIncl} incl. GST on ${eligibleVariants.length} variant(s)`);

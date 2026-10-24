@@ -12,10 +12,12 @@
  *     - works out which product lines are eligible and the rate (tier % + occasion bonus);
  *     - stores that decision in custom.loyalty_applied and adds the tags `loyalty-applied` and
  *       `reprice`.
- *   The reprice then adds a { t:'dia', m:'pct', v:rate, src:'loyalty' } entry to each eligible
- *   line's per-line discounts (engine.withLoyaltyEntries) and the existing pricing engine does the
- *   rest: diamond-only, pre-GST, capped at the diamond, Discount on Diamond / Taxable Value / GST
- *   props written exactly as for any other discount.
+ *   The reprice then adds a { t:'dia', m:'pct', v:rate, src:'loyalty' } entry and a
+ *   { t:'mk', m:'pct', v:making %, src:'loyalty', cap } entry to each eligible line's per-line
+ *   discounts (engine.withLoyaltyEntries); engine.capLoyaltyMaking holds the making cut within the
+ *   tier's per-transaction cap, and the existing pricing engine does the rest: pre-GST, each cut
+ *   capped at its component, Discount on Diamond / Making / Taxable Value / GST props written
+ *   exactly as for any other discount.
  *
  *   Because the entry is a PERCENTAGE re-applied on every reprice, staff editing the Diamond prop
  *   (or weights, carats) moves the discount with it. Because eligibility is stored per VARIANT, the
@@ -77,6 +79,7 @@ async function variantFacts(variantIds) {
   const data = await graphql(`query($ids: [ID!]!) { nodes(ids: $ids) { ... on ProductVariant {
       id sku
       diamond: metafield(namespace: "custom", key: "price_breakup_diamond") { value }
+      making:  metafield(namespace: "custom", key: "price_breakup_making") { value }
       jewel:   metafield(namespace: "custom", key: "jewel_code") { value }
       product { productType tags collections(first: 25) { nodes { handle } } }
     } } }`, { ids: ids.map(id => `gid://shopify/ProductVariant/${id}`) });
@@ -89,6 +92,7 @@ async function variantFacts(variantIds) {
       tags: (n.product && n.product.tags) || [],
       collections: ((n.product && n.product.collections && n.product.collections.nodes) || []).map(c => c.handle),
       diamondUnit: n.diamond ? Number(n.diamond.value) || 0 : 0,
+      makingUnit: n.making ? Number(n.making.value) || 0 : 0,
       jewelCode: n.jewel ? n.jewel.value : '',
     };
   }
@@ -105,11 +109,13 @@ async function describeDraftLines(draft) {
     // The live Diamond prop wins — staff edit it at the counter. The catalogue value is the fallback
     // for a line the pricing engine has not touched yet.
     const diamond = rupees(propOf(item, 'Diamond')) || (f.diamondUnit || 0) * qty;
+    // Same for making: the line's PRE-discount Making prop, else the catalogue figure.
+    const making = rupees(propOf(item, 'Making')) || rupees(propOf(item, 'Making Charges')) || (f.makingUnit || 0) * qty;
     return {
       variant_id: item.variant_id, title: item.title, quantity: qty,
       sku: f.sku || item.sku || '', productType: f.productType || '', tags: f.tags || [],
       collections: f.collections || [], jewelCode: propOf(item, '_jewel_code') || f.jewelCode || '',
-      diamond,
+      diamond, making,
     };
   });
 }
@@ -152,7 +158,7 @@ function tierProgress(t, cfg) {
     : 100;
   return {
     points: t.points, tier: t.tier, next: t.next, gapToNext: t.gapToNext, progressPct,
-    ladder: tiers.map(x => ({ key: x.key, name: x.name, min: x.min, pct: x.pct, reached: t.points >= x.min })),
+    ladder: tiers.map(x => ({ key: x.key, name: x.name, min: x.min, pct: x.pct, making_pct: x.making_pct, making_cap: x.making_cap, reached: t.points >= x.min })),
   };
 }
 
@@ -193,11 +199,13 @@ async function evaluateDraft(draft, mfMap) {
     ...standing,
     points: r.points, tier: r.tier, next: r.next, gapToNext: r.gapToNext,
     rate: r.rate, basePct: r.basePct, occasion: r.occasion, total: r.total,
+    makingPct: r.makingPct, makingCap: r.makingCap, diamondTotal: r.diamondTotal, makingTotal: r.makingTotal,
     lines: lines.map((l, i) => ({
-      variant_id: l.variant_id, title: l.title, diamond: l.diamond,
+      variant_id: l.variant_id, title: l.title, diamond: l.diamond, making: l.making,
       eligible: r.perLine[i] ? r.perLine[i].eligible : false,
       reason: r.perLine[i] ? r.perLine[i].reason : '',
       discount: r.perLine[i] ? r.perLine[i].discount : 0,
+      makingDiscount: r.perLine[i] ? r.perLine[i].makingDiscount : 0,
     })),
   };
   if (!r.ok) {
@@ -229,6 +237,7 @@ async function occasionUsedThisMonth(customerId, draftId) {
 function appliedRecord(draft, ev) {
   return JSON.stringify({
     tier: ev.tier.key, name: ev.tier.name, rate: ev.rate,
+    mk: ev.makingPct || 0, mkcap: ev.makingCap || 0,
     occ: ev.occasion.occasions.join('+') || '',
     cid: String(ev.customer.id),
     eligible_variants: ev.lines.filter(l => l.eligible).map(l => String(l.variant_id)),
@@ -304,7 +313,7 @@ async function handleLoyaltyStep(draft) {
     await deleteDraftMetafield(draftId, all, NOTE_KEY);
     const next = tags.filter(t => t.toLowerCase() !== T_APPLY && !/^loyalty-invalid/i.test(t));
     await setDraftTags(draftId, [...next, T_ON, 'reprice']);
-    log.info('loyalty', `draft ${draft.name || draftId}: ${ev.tier.key} ${ev.rate}% applied to ${ev.lines.filter(l => l.eligible).length} line(s), est. Rs${ev.total}`);
+    log.info('loyalty', `draft ${draft.name || draftId}: ${ev.tier.key} ${ev.rate}% dia + ${ev.makingPct}% making (cap Rs${ev.makingCap}) applied to ${ev.lines.filter(l => l.eligible).length} line(s), est. Rs${ev.total}`);
     return;
   }
 

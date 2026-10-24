@@ -38,7 +38,7 @@ const { verifySessionToken } = require('../after-sales/session_token');
 const creditInstruments = require('../adjustments/credit_instruments');
 const ledger = require('./ledger');
 const E = require('./engine');
-const { loadConfig, DEFAULT_CONFIG, NAMESPACE, KEY, _resetCache } = require('./config');
+const { loadConfig, DEFAULT_CONFIG, NAMESPACE, KEY, _resetCache, normalizeConfig } = require('./config');
 const { readCustomer, refreshCustomer } = require('./customer');
 const { evaluateDraft, readDraftMetafields, APPLIED_KEY, NOTE_KEY } = require('./draft');
 const online = require('./online');
@@ -151,7 +151,18 @@ async function setup() {
     try { cur = JSON.parse(shop.shop.metafield.value); } catch { cur = null; }
     if (cur) {
       addedKeys = Object.keys(DEFAULT_CONFIG).filter(k => !(k in cur));
-      if (addedKeys.length) value = { ...cur, ...Object.fromEntries(addedKeys.map(k => [k, DEFAULT_CONFIG[k]])) };
+      // Tiers saved before the making discount existed are read as the 2026-10-24 grid (config.js);
+      // write that back so the metafield shows what is actually charged.
+      let legacyTiers = false;
+      try {
+        legacyTiers = Array.isArray(cur.tiers) && cur.tiers.length > 0 && cur.tiers.every(t => t && t.making_pct == null) &&
+          normalizeConfig(cur).tiers.some(t => t.making_pct > 0);
+      } catch { legacyTiers = false; }
+      if (legacyTiers) addedKeys.push('tiers (2026-10-24 grid)');
+      if (addedKeys.length) {
+        value = { ...cur, ...Object.fromEntries(Object.keys(DEFAULT_CONFIG).filter(k => !(k in cur)).map(k => [k, DEFAULT_CONFIG[k]])) };
+        if (legacyTiers) value.tiers = normalizeConfig(cur).tiers;
+      }
     }
   }
   if (value) {

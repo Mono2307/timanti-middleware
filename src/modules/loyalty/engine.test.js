@@ -75,9 +75,9 @@ t('month is read in IST: 31 Mar 20:00 UTC is already April in India', () => {
 t('bonus is withheld once this month\'s has been used, the tier rate is not', () => {
   const lines = [{ sku: 'R1', diamond: 10000 }];
   const fresh = E.computeLoyalty({ points: 620000, birthday: '1990-03-02', lines, now: MARCH, cfg });
-  assert.strictEqual(fresh.rate, 7);
+  assert.strictEqual(fresh.rate, 9);
   const used = E.computeLoyalty({ points: 620000, birthday: '1990-03-02', lines, now: MARCH, cfg, occasionUsed: { order_name: '#1101', channel: 'store' } });
-  assert.strictEqual(used.rate, 5);
+  assert.strictEqual(used.rate, 7);
   assert.strictEqual(used.occasion.pct, 0);
   assert.deepStrictEqual(used.occasion.used, { occasions: ['birthday'], by: { order_name: '#1101', channel: 'store' } });
 });
@@ -114,25 +114,48 @@ t('jewel-code prefix exclusion', () => {
 });
 
 console.log('computeLoyalty');
-t('gold tier takes 5% of the diamond only', () => {
+t('gold tier takes 7% of the diamond', () => {
   const r = E.computeLoyalty({ points: 600000, lines: [line({ diamond: 80000 })], now: MARCH, cfg });
   assert.ok(r.ok);
   assert.strictEqual(r.tier.key, 'T2');
-  assert.strictEqual(r.rate, 5);
-  assert.strictEqual(r.perLine[0].discount, 4000);
-  assert.strictEqual(r.total, 4000);
-});
-t('birthday month adds 2% to the tier rate', () => {
-  const r = E.computeLoyalty({ points: 600000, birthday: '1991-03-20', lines: [line({ diamond: 80000 })], now: MARCH, cfg });
   assert.strictEqual(r.rate, 7);
+  assert.strictEqual(r.perLine[0].discount, 5600);
   assert.strictEqual(r.total, 5600);
 });
+t('birthday month adds 2% to the diamond rate, not to making', () => {
+  const r = E.computeLoyalty({ points: 600000, birthday: '1991-03-20', lines: [line({ diamond: 80000, making: 10000 })], now: MARCH, cfg });
+  assert.strictEqual(r.rate, 9);
+  assert.strictEqual(r.makingPct, 20);
+  assert.strictEqual(r.diamondTotal, 7200);
+  assert.strictEqual(r.makingTotal, 2000);
+  assert.strictEqual(r.total, 9200);
+});
 t('ineligible lines get nothing, eligible ones still do', () => {
-  const r = E.computeLoyalty({ points: 1200000, lines: [line({ diamond: 10000 }), line({ sku: 'SCOIN', diamond: 0 })], now: MARCH, cfg });
-  assert.strictEqual(r.perLine[0].discount, 700);
+  const r = E.computeLoyalty({ points: 1200000, lines: [line({ diamond: 10000 }), line({ sku: 'SCOIN', diamond: 0, making: 5000 })], now: MARCH, cfg });
+  assert.strictEqual(r.perLine[0].discount, 1000);
   assert.strictEqual(r.perLine[1].discount, 0);
+  assert.strictEqual(r.perLine[1].makingDiscount, 0);
   assert.strictEqual(r.perLine[1].eligible, false);
-  assert.strictEqual(r.total, 700);
+  assert.strictEqual(r.total, 1000);
+});
+t('the 2026-10-24 grid: 5/7/10% diamond, 15/20/30% making capped at 2,000/5,000/10,000', () => {
+  assert.deepStrictEqual(cfg.tiers.map(x => [x.pct, x.making_pct, x.making_cap]), [[5, 15, 2000], [7, 20, 5000], [10, 30, 10000]]);
+});
+t('silver: 15% of making until the cap, then exactly 2,000 for the whole transaction', () => {
+  const under = E.computeLoyalty({ points: 250000, lines: [line({ diamond: 40000, making: 8000 })], now: MARCH, cfg });
+  assert.strictEqual(under.perLine[0].discount, 2000);
+  assert.strictEqual(under.perLine[0].makingDiscount, 1200);
+  assert.strictEqual(under.total, 3200);
+  // 15% of 12,000 + 15% of 8,000 = 3,000 > 2,000 → both scaled by 2/3.
+  const over = E.computeLoyalty({ points: 250000, lines: [line({ diamond: 40000, making: 12000 }), line({ diamond: 20000, making: 8000 })], now: MARCH, cfg });
+  assert.strictEqual(over.perLine[0].makingDiscount, 1200);
+  assert.strictEqual(over.perLine[1].makingDiscount, 800);
+  assert.strictEqual(over.makingTotal, 2000);
+  assert.strictEqual(over.diamondTotal, 3000);
+});
+t('platinum: cap 10,000 never exceeded, even by a paisa of rounding', () => {
+  const r = E.computeLoyalty({ points: 1100000, lines: [1, 2, 3].map(() => line({ making: 33333.33 })), now: MARCH, cfg });
+  assert.ok(r.makingTotal <= 10000 && r.makingTotal > 9999.9, String(r.makingTotal));
 });
 t('below tier gets nothing and says why', () => {
   const r = E.computeLoyalty({ points: 1000, lines: [line()], now: MARCH, cfg });
@@ -230,6 +253,8 @@ t('vouchers and exchange notes do not block it', () => {
 });
 t('loyalty entries land on eligible variants only, by variant not position', () => {
   const items = [{ variant_id: 22 }, { variant_id: 11 }, { variant_id: 33 }];
+  const withMk = E.withLoyaltyEntries([], [{ variant_id: 11 }], { rate: 5, mk: 15, mkcap: 2000, eligible_variants: ['11'] });
+  assert.deepStrictEqual(withMk[0], [{ t: 'dia', m: 'pct', v: 5, src: 'loyalty' }, { t: 'mk', m: 'pct', v: 15, src: 'loyalty', cap: 2000 }]);
   const out = E.withLoyaltyEntries([], items, { rate: 5, eligible_variants: ['11', '33'] });
   assert.deepStrictEqual(out[0], []);
   assert.deepStrictEqual(out[1], [{ t: 'dia', m: 'pct', v: 5, src: 'loyalty' }]);
@@ -263,7 +288,33 @@ t('loyalty is added beside the auto entry, so both reach the pricing engine', ()
   assert.deepStrictEqual(out[0], [{ t: 'dia', m: 'pct', v: 15, src: 'auto-dia' }, { t: 'dia', m: 'pct', v: 5, src: 'loyalty' }]);
 });
 
+console.log('making cap in the reprice');
+t('under the cap the entries are untouched', () => {
+  const arr = [[{ t: 'mk', m: 'pct', v: 15, src: 'loyalty', cap: 2000 }]];
+  assert.strictEqual(E.capLoyaltyMaking(arr, [10000]), arr);
+});
+t('over the cap each loyalty making entry becomes its scaled share, manual entries untouched', () => {
+  const manual = { t: 'mk', m: 'pct', v: 10 };
+  const arr = [[manual, { t: 'mk', m: 'pct', v: 15, src: 'loyalty', cap: 2000 }], [{ t: 'mk', m: 'pct', v: 15, src: 'loyalty', cap: 2000 }], []];
+  const out = E.capLoyaltyMaking(arr, [12000, 8000, 5000]);
+  assert.deepStrictEqual(out[0], [manual, { t: 'mk', m: 'flat', v: 1200, src: 'loyalty', cap: 2000 }]);
+  assert.deepStrictEqual(out[1], [{ t: 'mk', m: 'flat', v: 800, src: 'loyalty', cap: 2000 }]);
+  assert.strictEqual(arr[0][1].m, 'pct', 'input not mutated');
+});
+t('a resolved line still clamps the making cut at the making value', () => {
+  const out = E.capLoyaltyMaking([[{ t: 'mk', m: 'pct', v: 30, src: 'loyalty', cap: 10000 }]], [50000]);
+  assert.deepStrictEqual(out[0][0], { t: 'mk', m: 'flat', v: 10000, src: 'loyalty', cap: 10000 });
+});
+
 console.log('config validation');
+t('a config still on the original 3/5/7 grid is read as the new grid, names and thresholds kept', () => {
+  const c = normalizeConfig({ tiers: [{ key: 'T1', name: 'Club', min: 200000, pct: 3 }, { key: 'T2', name: 'Gold', min: 500000, pct: 5 }, { key: 'T3', name: 'Platinum', min: 1000000, pct: 7 }] });
+  assert.deepStrictEqual(c.tiers.map(x => [x.name, x.pct, x.making_pct, x.making_cap]), [['Club', 5, 15, 2000], ['Gold', 7, 20, 5000], ['Platinum', 10, 30, 10000]]);
+});
+t('any other hand-edited grid is left as typed', () => {
+  const c = normalizeConfig({ tiers: [{ key: 'T1', min: 200000, pct: 4 }] });
+  assert.deepStrictEqual([c.tiers[0].pct, c.tiers[0].making_pct, c.tiers[0].making_cap], [4, 0, 0]);
+});
 t('a percentage over 100 is refused', () => {
   assert.throws(() => normalizeConfig({ tiers: [{ key: 'T1', min: 1, pct: 150 }] }), /pct/);
 });

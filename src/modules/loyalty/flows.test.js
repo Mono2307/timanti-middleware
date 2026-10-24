@@ -135,12 +135,14 @@ shop.variants = {
 shop.customers['501'] = { tags: [], birthday: null };
 db.ledger['order:1'] = { customer_id: '501', points: 620000, kind: 'backfill' };   // Gold tier
 
-t('apply: gold customer gets 5% on the ring only, tags and record written', async () => {
+t('apply: gold customer gets 7% diamond + 20% making on the ring only, tags and record written', async () => {
   shop.draftMf[DRAFT_ID] = {};
   await draftMod.handleLoyaltyStep(makeDraft('apply-loyalty'));
   const applied = E.readApplied(shop.draftMf[DRAFT_ID].loyalty_applied);
   assert.strictEqual(applied.tier, 'T2');
-  assert.strictEqual(applied.rate, 5);
+  assert.strictEqual(applied.rate, 7);
+  assert.strictEqual(applied.mk, 20);
+  assert.strictEqual(applied.mkcap, 5000);
   assert.deepStrictEqual(applied.eligible_variants, ['11']);
   const tags = shop.draftTags[DRAFT_ID].split(', ');
   assert.ok(tags.includes('loyalty-applied') && tags.includes('reprice') && !tags.includes('apply-loyalty'));
@@ -152,7 +154,7 @@ t('pricing hook: the engine receives a 5% diamond entry on the ring and nothing 
   const arr = JSON.parse(mfMap.line_discounts);
   // Product lines only, in the engine's order: ring, coin. The exchange note is not a product line.
   assert.strictEqual(arr.length, 2);
-  assert.deepStrictEqual(arr[0], [{ t: 'dia', m: 'pct', v: 5, src: 'loyalty' }]);
+  assert.deepStrictEqual(arr[0], [{ t: 'dia', m: 'pct', v: 7, src: 'loyalty' }, { t: 'mk', m: 'pct', v: 20, src: 'loyalty', cap: 5000 }]);
   assert.deepStrictEqual(arr[1], []);
   assert.strictEqual(mfMap.discount_applied, undefined, 'order-level keys are dropped while loyalty is on');
 });
@@ -192,7 +194,7 @@ t('a manual per-line discount on the draft: loyalty applies beside it (stacks)',
   assert.ok(E.readApplied(shop.draftMf[DRAFT_ID].loyalty_applied), 'loyalty was refused: ' + shop.draftMf[DRAFT_ID].loyalty_note);
   const mfMap = { ...shop.draftMf[DRAFT_ID] };
   draftMod.applyLoyaltyToPricingInputs(mfMap, makeDraft('loyalty-applied'));
-  assert.deepStrictEqual(JSON.parse(mfMap.line_discounts)[0], [{ t: 'mk', m: 'pct', v: 10 }, { t: 'dia', m: 'pct', v: 5, src: 'loyalty' }]);
+  assert.deepStrictEqual(JSON.parse(mfMap.line_discounts)[0], [{ t: 'mk', m: 'pct', v: 10 }, { t: 'dia', m: 'pct', v: 7, src: 'loyalty' }, { t: 'mk', m: 'pct', v: 20, src: 'loyalty', cap: 5000 }]);
 });
 
 t('birthday month: +2% on the first draft, not on a second once the first is recorded', async () => {
@@ -200,12 +202,12 @@ t('birthday month: +2% on the first draft, not on a second once the first is rec
   try {
     shop.draftMf[DRAFT_ID] = {};
     await draftMod.handleLoyaltyStep(makeDraft('apply-loyalty'));
-    assert.strictEqual(E.readApplied(shop.draftMf[DRAFT_ID].loyalty_applied).rate, 7, 'first transaction gets 5% + 2%');
+    assert.strictEqual(E.readApplied(shop.draftMf[DRAFT_ID].loyalty_applied).rate, 9, 'first transaction gets 7% + 2%');
     db.redemptions.push({ id: 99, channel: 'store', status: 'used', customer_id: '501', draft_id: '7777', order_name: '#1101',
       occasion: 'birthday', used_at: new Date().toISOString() });
     shop.draftMf[DRAFT_ID] = {};
     await draftMod.handleLoyaltyStep(makeDraft('apply-loyalty'));
-    assert.strictEqual(E.readApplied(shop.draftMf[DRAFT_ID].loyalty_applied).rate, 5, 'second transaction: tier rate only');
+    assert.strictEqual(E.readApplied(shop.draftMf[DRAFT_ID].loyalty_applied).rate, 7, 'second transaction: tier rate only');
     const ev = await draftMod.evaluateDraft(makeDraft(''), {});
     assert.strictEqual(ev.occasion.used.by.order_name, '#1101');
   } finally {
@@ -312,7 +314,7 @@ t('auto diamond discount on the draft: loyalty still applies (stacks), not refus
   assert.ok(E.readApplied(shop.draftMf[DRAFT_ID].loyalty_applied), 'loyalty was refused: ' + shop.draftMf[DRAFT_ID].loyalty_note);
   const mfMap = { ...shop.draftMf[DRAFT_ID] };
   draftMod.applyLoyaltyToPricingInputs(mfMap, makeDraft('loyalty-applied, auto-dia-applied'));
-  assert.deepStrictEqual(JSON.parse(mfMap.line_discounts)[0], [{ t: 'dia', m: 'pct', v: 15, src: 'auto-dia' }, { t: 'dia', m: 'pct', v: 5, src: 'loyalty' }]);
+  assert.deepStrictEqual(JSON.parse(mfMap.line_discounts)[0], [{ t: 'dia', m: 'pct', v: 15, src: 'auto-dia' }, { t: 'dia', m: 'pct', v: 7, src: 'loyalty' }, { t: 'mk', m: 'pct', v: 20, src: 'loyalty', cap: 5000 }]);
 });
 
 t('app proxy: a correctly signed request passes, a tampered customer id does not', async () => {
