@@ -92,7 +92,7 @@ function BuyPlan() {
       });
       setData(body);
       setAmount(String(body.plan?.minPayment || ""));
-      setNotice("Buy plan started. The price on this draft is now locked.");
+      setNotice("Buy plan started. The price on this draft is now locked, and the customer has been emailed their schedule. Take installment 1 at the counter as usual, or send a link below.");
     } catch (e) {
       setError(e.message);
     } finally {
@@ -172,6 +172,13 @@ function BuyPlan() {
                   value={amount} onInput={(e) => setAmount(val(e))}
                 />
                 {amountProblem ? <s-text color="subdued">{amountProblem}</s-text> : null}
+                <s-text color="subdued">
+                  The link goes to the customer by SMS and email, and replaces any earlier link that is still unpaid.
+                  Reminders with a link also go automatically 3 days before each due date.
+                </s-text>
+                {plan.customPayUrl ? (
+                  <s-text-field label="Customer's own link to pay a different amount (share on WhatsApp)" value={plan.customPayUrl} readOnly />
+                ) : null}
               </s-stack>
             ) : (
               <s-banner tone="success">Fully paid. The draft converts to an order.</s-banner>

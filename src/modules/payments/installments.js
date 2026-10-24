@@ -30,12 +30,18 @@
 // ─────────────────────────────────────────
 
 const MAX_INSTALLMENTS = 4;
+// A buy plan is paid in 6 installments, so its draft gets 6 slots. Recognised by custom.plan_total,
+// which POST /api/buy-plan/start writes — every payment path already holds the metafield map, so the
+// cap is decided without an extra read. Reading always covers all 6: slots 5-6 are simply empty on
+// any other document, because nothing but a plan ever writes them.
+const PLAN_MAX_INSTALLMENTS = 6;
+const maxInstallmentsFor = (mfMap) => (String((mfMap || {}).plan_total || '').trim() ? PLAN_MAX_INSTALLMENTS : MAX_INSTALLMENTS);
 
 // Sparse-safe: a draft may have slots 1 and 3 populated with 2 empty. Legs come back in slot order.
 function readInstallments(mfMap) {
   const map = mfMap || {};
   const rows = [];
-  for (let n = 1; n <= MAX_INSTALLMENTS; n++) {
+  for (let n = 1; n <= PLAN_MAX_INSTALLMENTS; n++) {
     const value = parseFloat(map[`installment_${n}_value`]);
     if (!Number.isFinite(value) || value <= 0) continue;
     rows.push({
@@ -128,12 +134,12 @@ function materializeLegacyLeg(mfMap, rows, { tags } = {}) {
 // deliberately left at whatever type the slot already had: merging an absorbed advance into a leg of
 // real collected money and calling the result an advance would mislabel the money, and the reverse
 // would hide the advance. The warning below is the signal that a human has to split it by hand.
-function installmentLegPatch(rows, { value, mode, date, type }) {
+function installmentLegPatch(rows, { value, mode, date, type }, { max = MAX_INSTALLMENTS } = {}) {
   const used = new Set((rows || []).map(r => r.slot));
   let slot = 0;
-  for (let n = 1; n <= MAX_INSTALLMENTS; n++) { if (!used.has(n)) { slot = n; break; } }
+  for (let n = 1; n <= max; n++) { if (!used.has(n)) { slot = n; break; } }
   if (!slot) {
-    slot = MAX_INSTALLMENTS;
+    slot = max;
     const existing = (rows || []).find(r => r.slot === slot);
     const merged = (existing?.value || 0) + value;
     console.warn(`[payments] installment slots exhausted — folding Rs${value.toFixed(2)} into slot ${slot} (now Rs${merged.toFixed(2)})`);
@@ -154,6 +160,8 @@ function installmentLegPatch(rows, { value, mode, date, type }) {
 
 module.exports = {
   MAX_INSTALLMENTS,
+  PLAN_MAX_INSTALLMENTS,
+  maxInstallmentsFor,
   readInstallments,
   sumInstallments,
   installmentModes,

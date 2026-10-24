@@ -34,6 +34,8 @@ const buyPlanLock = require('./src/modules/payments/buy-plan/lock');
 const { loadConfig: loadLoyaltyConfig } = require('./src/modules/loyalty/config');
 const discountBreakup = require('./src/modules/pricing/discount_breakup');
 const { startLoyaltySweep } = require('./src/modules/loyalty/sweep');
+const { startBuyPlanSweep } = require('./src/modules/payments/buy-plan/sweep');
+const { restoreDeletedPlanDraft } = require('./src/modules/payments/buy-plan/restore');
 
 const app = express();
 app.use(cors());
@@ -296,7 +298,7 @@ async function getCollectionBase(draftOrderId, fallbackTotal) {
 // Payment installments — pure helpers live in src/modules/payments/installments.js so the
 // backfill script and unit tests can use the same arithmetic. See that file for the data model.
 const {
-  MAX_INSTALLMENTS, readInstallments, sumInstallments, installmentModes, installmentLegPatch,
+  MAX_INSTALLMENTS, maxInstallmentsFor, readInstallments, sumInstallments, installmentModes, installmentLegPatch,
   materializeLegacyLeg,
 } = require('./src/modules/payments/installments');
 const { isCommsTag, commsTagsFromMetafields } = require('./src/core/comms_tags');
@@ -373,7 +375,8 @@ function paymentLegPatch(state, { value, mode, date }, cumulativePaid) {
   // free slot after it and the leg sum reconciles to amount_paid. Without this the older money has
   // no leg, and the next recompute writes the balance down by exactly that amount.
   const { rows, patch: legacyPatch } = materializeLegacyLeg(state.map, state.rows);
-  const patch = Object.assign({}, legacyPatch, installmentLegPatch(rows, { value, mode, date }));
+  // A buy-plan draft has 6 slots; anything else 4 (maxInstallmentsFor, payments/installments.js).
+  const patch = Object.assign({}, legacyPatch, installmentLegPatch(rows, { value, mode, date }, { max: maxInstallmentsFor(state.map) }));
   patch.amount_paid = cumulativePaid.toFixed(2);
   patch.amount_paid_final = '0'; // legacy field, retired at rollout step 6
   return patch;
@@ -1235,6 +1238,9 @@ function isExcLine(item) {
 async function handleDraftCreated(draft) {
   const draftOrderId = draft.id?.toString();
   if (!draftOrderId) return;
+  // A buy-plan draft (including one just restored after a deletion) keeps its locked prices;
+  // hydration would reset them to today's variant price.
+  if (buyPlanLock.isRateLocked(draft.tags)) return;
 
   const productItems = (draft.line_items || []).filter(item =>
     item.variant_id && !isExcLine(item) &&
@@ -5228,6 +5234,7 @@ app.listen(PORT, async () => {
   startCadAdvanceSweep(CAD_SWEEP_DEPS());
   // Loyalty: expire unused online codes, keep the occasion-month tag current. No-op unless LOYALTY_ENABLED.
   startLoyaltySweep();
+  startBuyPlanSweep({ restore: restoreDeletedPlanDraft });   // buy-plan reminders, staff digest, completion
 
   // Counter-vs-ledger reconciliation. Emails accounts only when a document number has gone missing;
   // silence means the counters and the ledger agree. This is the layer that catches a cause we have

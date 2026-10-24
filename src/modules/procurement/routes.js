@@ -47,6 +47,7 @@ const { syncDraftOrderToSheet, syncOrderToSheet, removeDraftFromSheet,
         syncAllDraftOrders, syncAllOrders, pruneOrphans } = require('./sync');
 const { batchRaisePo } = require('./batch');
 const { isRateLocked } = require('../payments/buy-plan/lock');
+const { restoreDeletedPlanDraft } = require('../payments/buy-plan/restore');
 // Same omission as the sync trio above, one branch further down: the draft-delete handler calls
 // creditInstruments.revertApplied and this was never imported. It is a bare identifier, so the
 // ReferenceError is thrown while EVALUATING the expression — before the trailing .catch() can ever
@@ -97,6 +98,9 @@ app.post('/api/po-webhook', async (req, res) => {
       handleDraftDeletedRefunds(String(req.body.id))
         .catch(e => console.error('[ledger] refund bookkeeping on draft delete:', e.message));
     }
+    // A draft on an active buy plan is the customer's reserved piece at a locked price: rebuild it.
+    restoreDeletedPlanDraft(String(req.body.id))
+      .catch(e => console.error('[buy-plan] restore on draft delete:', e.message));
     return res.status(200).send('OK');
   }
   if (topic.startsWith('draft_orders') && req.body?.id) {

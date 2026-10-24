@@ -43,7 +43,7 @@ t('net_sales stays tax-INCLUSIVE post-discount', () => {
 console.log('legColumns — legs spread rightward');
 t('every slot gets four columns, empty when absent', () => {
   const c = legColumns([], []);
-  assert.strictEqual(Object.keys(c).length, 4 * 2 + 2 * 3);
+  assert.strictEqual(Object.keys(c).length, 6 * 2 + 2 * 3);   // 6 installment slots (buy plans use 5-6), 2 refund
   assert.strictEqual(c.i1_value, '');
   assert.strictEqual(c.r2_ref, '');
 });

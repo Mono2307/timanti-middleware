@@ -102,7 +102,7 @@ function optionValuesFromVariantTitle(variantTitle) {
 //
 // Emitted on the first line of a document only, like every other document-level figure here, so
 // summing a column never multiplies by the number of line items.
-const MAX_INST_COLS   = 4;
+const MAX_INST_COLS   = 6;   // 4 legs on any document, 6 on a buy plan (payments/installments.js)
 const MAX_REFUND_COLS = 2;
 
 // Per-leg DATE and TYPE are deliberately not emitted. The legs still carry both (the parsers below
@@ -549,6 +549,8 @@ const SALES_COLS = [
   'i2_value', 'i2_mode',
   'i3_value', 'i3_mode',
   'i4_value', 'i4_mode',
+  'i5_value', 'i5_mode',   // buy plans only
+  'i6_value', 'i6_mode',
   'r1_value', 'r1_mode', 'r1_ref',
   'r2_value', 'r2_mode', 'r2_ref',
   // ── Totals, to the right of the legs they are computed from ──

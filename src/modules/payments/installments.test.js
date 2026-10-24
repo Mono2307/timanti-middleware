@@ -1,6 +1,6 @@
 const assert = require('assert');
 const {
-  MAX_INSTALLMENTS, readInstallments, sumInstallments, installmentModes, installmentLegPatch,
+  MAX_INSTALLMENTS, PLAN_MAX_INSTALLMENTS, maxInstallmentsFor, readInstallments, sumInstallments, installmentModes, installmentLegPatch,
   materializeLegacyLeg,
 } = require('./installments');
 
@@ -36,10 +36,15 @@ t('any slot can be cad_advance — a Path B advance lands wherever is free', () 
   assert.strictEqual(rows[0].type, 'payment');
   assert.strictEqual(rows[1].type, 'cad_advance');
 });
-t('caps at MAX_INSTALLMENTS', () => {
+t('reads up to PLAN_MAX_INSTALLMENTS (6) — slots past it are ignored', () => {
   const map = {};
-  for (let i = 1; i <= MAX_INSTALLMENTS + 3; i++) map[`installment_${i}_value`] = '10';
-  assert.strictEqual(readInstallments(map).length, MAX_INSTALLMENTS);
+  for (let i = 1; i <= PLAN_MAX_INSTALLMENTS + 3; i++) map[`installment_${i}_value`] = '10';
+  assert.strictEqual(readInstallments(map).length, PLAN_MAX_INSTALLMENTS);
+});
+t('the cap is 4, or 6 on a buy plan (custom.plan_total set)', () => {
+  assert.strictEqual(maxInstallmentsFor({}), MAX_INSTALLMENTS);
+  assert.strictEqual(maxInstallmentsFor({ plan_total: '' }), MAX_INSTALLMENTS);
+  assert.strictEqual(maxInstallmentsFor({ plan_total: '120000' }), PLAN_MAX_INSTALLMENTS);
 });
 
 console.log('sumInstallments');
@@ -160,6 +165,14 @@ t('a 5th payment folds into slot 4 rather than being dropped', () => {
   const rows = readInstallments(map);
   const patch = installmentLegPatch(rows, { value: 500, mode: 'upi', date: '2026-07-22' });
   assert.strictEqual(patch.installment_4_value, '1500.00');   // 1000 + 500, money preserved
+});
+t('a buy plan takes its 5th and 6th payments in their own slots, folds a 7th into slot 6', () => {
+  const map = {};
+  for (let i = 1; i <= 4; i++) map[`installment_${i}_value`] = '20000';
+  const max = maxInstallmentsFor({ plan_total: '120000' });
+  assert.strictEqual(installmentLegPatch(readInstallments(map), { value: 20000, mode: 'online_link', date: '2027-02-22' }, { max }).installment_5_value, '20000.00');
+  map.installment_5_value = '20000'; map.installment_6_value = '15000';
+  assert.strictEqual(installmentLegPatch(readInstallments(map), { value: 5000, mode: 'upi', date: '2027-03-22' }, { max }).installment_6_value, '20000.00');
 });
 t('appending never loses money across a full 4-leg sequence', () => {
   const legs = [

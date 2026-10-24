@@ -778,8 +778,158 @@ function buildLoyaltyOccasionHtml({ firstName, occasion, totalPct, bonusPct, mon
     + foot();
 }
 
+// ═════════════════════════════════════════════════════════════════════════════
+// BUY PLAN — the fixed 6-installment plan (src/modules/payments/buy-plan)
+// ═════════════════════════════════════════════════════════════════════════════
+// rows: [{ k, due (YYYY-MM-DD), amount, status: paid|open|overdue|upcoming }] from schedule.scheduleRows.
+
+const planDate = (d) => (d ? new Date(`${String(d).slice(0, 10)}T00:00:00Z`)
+  .toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' }) : '—');
+
+function planScheduleTable(rows) {
+  const label = { paid: 'Paid', open: 'Due', overdue: 'Overdue', upcoming: 'Upcoming' };
+  const colour = { paid: '#16a34a', open: '#111111', overdue: '#dc2626', upcoming: '#999999' };
+  return `
+    <table width="100%" cellpadding="0" cellspacing="0" border="0" style="font-size:14px; color:#333333;">
+      ${rows.map(r => `
+      <tr style="border-top:1px solid #f0f0f0;">
+        <td style="padding:8px 0; color:#999999;">${r.k} of 6</td>
+        <td style="padding:8px 0;">${esc(planDate(r.due))}</td>
+        <td style="padding:8px 0; text-align:right;">${r.status === 'paid' ? '—' : money(r.amount)}</td>
+        <td style="padding:8px 0 8px 12px; text-align:right; color:${colour[r.status] || '#333333'};">${label[r.status] || ''}</td>
+      </tr>`).join('')}
+    </table>`;
+}
+
+const PLAN_RULES = 'Your price was locked on the day the plan started and will not change. You can pay more than the amount due at any time (the payments after it get smaller), but never less.';
+
+function planBody({ heading, ref, body, payUrl, amount, customPayUrl, rows, paid, balance, timelineText }) {
+  return head()
+    + contentBlock({
+        ref, heading, body,
+        buttonsHtml: payUrl ? button(`Pay ${money(amount)}`, payUrl) : '',
+        storeLinkHtml: customPayUrl ? storeLink('Pay a different amount', customPayUrl) : '',
+        timelineHtml: timeline(timelineText || PLAN_RULES),
+      })
+    + section(
+        h3('Your plan')
+        + planScheduleTable(rows)
+        + summary([
+            { label: 'Paid so far', value: money(paid) },
+            { label: 'Balance', value: money(balance), total: true },
+          ])
+      )
+    + standardFooter()
+    + foot();
+}
+
+function buildBuyPlanStartedHtml({ customerName, draftName, total, rows, paid, balance, customPayUrl }) {
+  return planBody({
+    ref: `Buy Plan — ${draftName}`,
+    heading: 'Your buy plan has started',
+    body: `${customerName ? esc(customerName) + ', your' : 'Your'} piece is reserved for you at today's price of <strong>${money(total)}</strong>, paid in six monthly installments. We will email you a payment link a few days before each one is due.`,
+    rows, paid, balance, customPayUrl,
+  });
+}
+
+function buildBuyPlanDueHtml({ customerName, draftName, k, dueDate, amount, payUrl, customPayUrl, rows, paid, balance, overdue = false }) {
+  const who = customerName ? `${esc(customerName)}, installment` : 'Installment';
+  return planBody({
+    ref: `Buy Plan — ${draftName}`,
+    heading: overdue ? `Installment ${k} is overdue` : `Installment ${k} is due on ${esc(planDate(dueDate))}`,
+    body: overdue
+      ? `${who} ${k} of your buy plan was due on <strong>${esc(planDate(dueDate))}</strong>. Your piece is still reserved at the price you locked in. Please pay <strong>${money(amount)}</strong> when you can.`
+      : `${who} ${k} of 6 on your buy plan is <strong>${money(amount)}</strong>, due on <strong>${esc(planDate(dueDate))}</strong>.`,
+    payUrl, amount, customPayUrl, rows, paid, balance,
+  });
+}
+
+function buildBuyPlanReceivedHtml({ customerName, draftName, nextK, nextDue, nextAmount, customPayUrl, rows, paid, balance }) {
+  return planBody({
+    ref: `Buy Plan — ${draftName}`,
+    heading: 'Payment received, thank you',
+    body: `${customerName ? esc(customerName) + ', we' : 'We'} have received your payment.${nextK
+      ? ` Your next installment, <strong>${money(nextAmount)}</strong>, is due on <strong>${esc(planDate(nextDue))}</strong>. We will send you a link a few days before.`
+      : ''}`,
+    customPayUrl, rows, paid, balance,
+  });
+}
+
+function buildBuyPlanCompletedHtml({ customerName, draftName, total }) {
+  return head()
+    + contentBlock({
+        ref: `Buy Plan — ${draftName}`,
+        heading: 'Your buy plan is complete',
+        body: `${customerName ? esc(customerName) + ', you' : 'You'} have paid the full <strong>${money(total)}</strong>. Your piece is ready for you. Our store team will be in touch to arrange collection or delivery, and your tax invoice follows.`,
+        storeLinkHtml: storeLink('Visit our HSR Layout store', STORE_MAP_URL),
+      })
+    + standardFooter()
+    + foot();
+}
+
+// Internal, one mail a day to the store. rows: [{ draftName, adminUrl, customerName, phone, k, due,
+// amount, overdue, waUrl }]
+function buildBuyPlanStaffDigestHtml({ dateLabel, rows }) {
+  const block = (title, list, blurb) => section(
+    h3(`${title} — ${list.length}`)
+    + `<p style="font-size:13px; color:#777777; line-height:1.6; margin:0 0 14px;">${blurb}</p>`
+    + (list.length ? `
+    <table width="100%" cellpadding="0" cellspacing="0" border="0" style="font-size:13px; color:#333333;">
+      <tr style="color:#999999; font-size:12px;">
+        <td style="padding:0 0 6px;">Draft</td><td style="padding:0 0 6px;">Customer</td>
+        <td style="padding:0 0 6px;">Inst.</td><td style="padding:0 0 6px;">Due</td>
+        <td style="padding:0 0 6px; text-align:right;">Amount</td><td style="padding:0 0 6px; text-align:right;">Follow up</td>
+      </tr>
+      ${list.map(r => `
+      <tr style="border-top:1px solid #f0f0f0;">
+        <td style="padding:8px 0;"><a href="${r.adminUrl}" style="color:#fc7d27;">${esc(r.draftName)}</a></td>
+        <td style="padding:8px 0;">${esc(r.customerName || '—')}<br><span style="color:#999999;">${esc(r.phone || '')}</span></td>
+        <td style="padding:8px 0;">${r.k} of 6</td>
+        <td style="padding:8px 0;">${esc(planDate(r.due))}</td>
+        <td style="padding:8px 0; text-align:right;">${money(r.amount)}</td>
+        <td style="padding:8px 0; text-align:right;">${r.waUrl ? `<a href="${r.waUrl}" style="color:#16a34a;">WhatsApp</a>` : ''}</td>
+      </tr>`).join('')}
+    </table>` : `<p style="font-size:13px; color:#999999; margin:0;">None today.</p>`)
+  );
+  const overdue = rows.filter(r => r.overdue);
+  const soon = rows.filter(r => !r.overdue);
+  return head()
+    + contentBlock({
+        ref: 'Store — internal',
+        heading: `Buy plan follow-ups — ${esc(dateLabel)}`,
+        body: 'Customers on a buy plan with an installment due in the next 3 days, or already overdue. Each has been emailed a payment link. The WhatsApp link opens a ready-written message to send from the store phone.',
+      })
+    + block('Overdue', overdue, 'Past the due date and not yet paid. The piece stays reserved and the price stays locked. Call the customer.')
+    + block('Due in the next 3 days', soon, 'The customer has their reminder and link. A short WhatsApp nudge helps.')
+    + foot();
+}
+
+// Internal: a buy-plan draft was deleted in Shopify and has been rebuilt from its snapshot.
+function buildBuyPlanRestoredHtml({ oldName, newName, adminUrl, customerName, total, paid, balance }) {
+  return head()
+    + contentBlock({
+        ref: 'Store — internal',
+        heading: `Buy plan draft ${esc(oldName)} was deleted and restored as ${esc(newName)}`,
+        body: 'A draft on an active buy plan was deleted. The middleware rebuilt it at the locked prices with its payments, and the plan now follows the new draft. If the deletion was intentional, cancel the plan with HQ rather than deleting the draft.',
+        buttonsHtml: button('Open the restored draft', adminUrl),
+      })
+    + section(summary([
+        { label: 'Customer', value: customerName || '—' },
+        { label: 'Plan total', value: money(total) },
+        { label: 'Paid so far', value: money(paid) },
+        { label: 'Balance', value: money(balance), total: true },
+      ]))
+    + foot();
+}
+
 module.exports = {
   buildLoyaltyTierUpHtml,
+  buildBuyPlanStartedHtml,
+  buildBuyPlanDueHtml,
+  buildBuyPlanReceivedHtml,
+  buildBuyPlanCompletedHtml,
+  buildBuyPlanStaffDigestHtml,
+  buildBuyPlanRestoredHtml,
   buildLoyaltyOccasionHtml,
   buildCadAdvanceDigestHtml,
   buildCadAdvanceExpiryHtml,
