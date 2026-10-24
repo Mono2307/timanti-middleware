@@ -3,6 +3,7 @@ api_version = "2026-01"
 [[extensions]]
 name = "t:name"
 handle = "buy-plan"
+uid = "84efa25c-9559-8874-6f00-39cdde57d6ee11a8ec3f"
 type = "ui_extension"
 
 # Admin action: "Buy plan" under More actions on a draft order. Starts the fixed 6-installment plan
