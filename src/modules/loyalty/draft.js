@@ -384,7 +384,7 @@ const ORDER_LEVEL_KEYS = ['discount_rate', 'discount_kind', 'discount_mode', 'di
  * draft's custom.* metafields, BEFORE anything is priced. When loyalty is applied it rewrites the
  * in-memory map so that:
  *   - every order-level discount key is gone (loyalty is exclusive), and
- *   - custom.line_discounts carries a diamond-only % entry on each eligible product line.
+ *   - custom.line_discounts carries loyalty's diamond % and making % entries on each eligible product line.
  * The metafields themselves are not touched. When loyalty is not applied the map is left alone.
  */
 function applyLoyaltyToPricingInputs(mfMap, draft) {

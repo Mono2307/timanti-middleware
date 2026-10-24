@@ -1,6 +1,6 @@
 # Loyalty Program, Plan B: Shopify App Store apps (Nector + Function Studio)
 
-*Status: planning only, nothing built. Last updated 2026-10-07.*
+*Status: planning only, nothing built. Last updated 2026-10-07. Superseded: the founder chose Plan A, and the rates below are the original grid. Live rates (2026-10-24): 5/7/10% off diamond + 15/20/30% off making, capped at ₹2,000/5,000/10,000 a bill — see LOYALTY_PLAN_A_MIDDLEWARE.md.*
 
 ## Program
 The program is the same as Plan A:

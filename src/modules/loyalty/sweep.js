@@ -6,6 +6,8 @@
  *
  *   1. Expired one-time online codes: delete the Shopify discount and mark the redemption expired,
  *      so unused codes do not pile up in Shopify's discount list.
+ *   0. Tier customers whose published rates (loyalty.discount_pct / making_pct / making_cap) no longer
+ *      match the config are republished, so a change of grid reaches the account page by itself.
  *   2. The occasion tag `loyalty-occasion-month`: on for customers whose birthday or anniversary is
  *      this calendar month (IST), off for everyone else who carries it. Shopify Flow, segments and
  *      Shopify Email key off this tag ("your extra 2% is live this month"). The discount itself never
@@ -36,6 +38,26 @@ async function expireCodes() {
     if (r.discount_node_id) await deleteDiscountNode(r.discount_node_id);
     await ledger.updateRedemption(supabase, r.id, { status: 'expired' });
     n++;
+  }
+  return n;
+}
+
+async function republishRates() {
+  const { refreshCustomer } = require('./customer');
+  const cfg = await loadConfig();
+  const query = cfg.tiers.map(t => `tag:'loyalty-${t.key}'`).join(' OR ');
+  let after = null;
+  let n = 0;
+  for (let page = 0; page < 50; page++) {
+    const data = await graphql(`query($q: String!, $after: String) {
+        customers(first: 100, after: $after, query: $q) { pageInfo { hasNextPage endCursor } nodes { id } } }`, { q: query, after });
+    for (const c of data.customers.nodes) {
+      // refreshCustomer writes only when something moved; notify:false — a grid change emails no one.
+      try { const r = await refreshCustomer(c.id.split('/').pop(), { notify: false }); if (r && r.changed) n++; }
+      catch (e) { log.warn('loyalty', `republish ${c.id}: ${e.message}`); }
+    }
+    if (!data.customers.pageInfo.hasNextPage) break;
+    after = data.customers.pageInfo.endCursor;
   }
   return n;
 }
@@ -142,11 +164,12 @@ async function recheckOrders() {
 }
 
 async function runLoyaltySweep({ dryRun = false } = {}) {
+  const republished = dryRun ? 0 : await republishRates().catch(e => { log.error('loyalty', `rate republish failed: ${e.message}`); return 0; });
   const expired = dryRun ? 0 : await expireCodes().catch(e => { log.error('loyalty', `code expiry failed: ${e.message}`); return 0; });
   const tags = await occasionTags({ dryRun }).catch(e => { log.error('loyalty', `occasion tags failed: ${e.message}`); return null; });
   const rechecked = dryRun ? 0 : await recheckOrders().catch(e => { log.error('loyalty', `order re-check failed: ${e.message}`); return 0; });
-  log.info('loyalty', `sweep${dryRun ? ' (dry run)' : ''}: ${expired} code(s) expired; occasion tag ${tags ? `+${tags.added} −${tags.removed} of ${tags.seen}, ${tags.emailed} emailed` : 'failed'}; ${rechecked} order(s) re-checked`);
-  return { expired, tags, rechecked };
+  log.info('loyalty', `sweep${dryRun ? ' (dry run)' : ''}: ${republished} customer(s) republished; ${expired} code(s) expired; occasion tag ${tags ? `+${tags.added} −${tags.removed} of ${tags.seen}, ${tags.emailed} emailed` : 'failed'}; ${rechecked} order(s) re-checked`);
+  return { republished, expired, tags, rechecked };
 }
 
 /** Once shortly after boot, then daily. No-op unless LOYALTY_ENABLED. */
@@ -157,4 +180,4 @@ function startLoyaltySweep() {
   setInterval(kick, DAY_MS);
 }
 
-module.exports = { OCCASION_TAG, runLoyaltySweep, startLoyaltySweep, expireCodes, occasionTags, monthEndLabel, sendOccasionEmail };
+module.exports = { OCCASION_TAG, runLoyaltySweep, startLoyaltySweep, expireCodes, occasionTags, monthEndLabel, sendOccasionEmail, republishRates };

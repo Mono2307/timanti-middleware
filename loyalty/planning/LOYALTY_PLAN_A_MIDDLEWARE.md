@@ -7,16 +7,18 @@
 - **Points are recorded only when an order is created.** That covers online orders, and draft orders when they convert. Installment entries logged on a draft earn nothing.
 - **Tiers** (editable):
 
-  | Tier | Lifetime spend | Off the diamond value | Birthday or anniversary month |
-  |---|---|---|---|
-  | T1 | ₹2L | 3% | +2% |
-  | T2 | ₹5L | 5% | +2% |
-  | T3 | ₹10L | 7% | +2% |
+  | Tier | Lifetime spend | Off the diamond value | Birthday or anniversary month | Off making | Making cap per bill |
+  |---|---|---|---|---|---|
+  | T1 | ₹2L | 5% | +2% | 15% | ₹2,000 |
+  | T2 | ₹5L | 7% | +2% | 20% | ₹5,000 |
+  | T3 | ₹10L | 10% | +2% | 30% | ₹10,000 |
+
+  - Grid set by the founder on 2026-10-24 (it was 3/5/7% off diamond only). The making cap is pre-GST, across the whole bill; every bill gets it. The +2% is on the diamond only, and only for tier members.
 
   - The birthday and anniversary bonuses don't add together. If both fall in the same month, the customer gets +2% once.
   - The dates come from customer metafields `custom.birthday` and `custom.anniversary`, written by the Typeform webhook.
 - **What the discount applies to:**
-  - The **diamond component of each line only**, never gold, making or gemstone, and never the order total.
+  - The **diamond and making components of each line**, never gold or gemstone, and never the order total.
   - Products are included or excluded by SKU and attribute rules.
 - **Stacking:**
   - Loyalty can be combined with **vouchers and exchange notes**.
@@ -88,7 +90,7 @@ The same function is used online and in-store, so the two always give the same n
   - writes `{t:'dia', m:'pct', v:rate, src:'loyalty'}` into `custom.line_discounts` for eligible product lines;
   - sets `custom.loyalty_applied` and adds the `reprice` tag.
 
-  `resolveLineDiscount` then works out the diamond-only discount before GST, and the invoice props (`Discount on Diamond`, `Taxable Value`, `GST`) fill in as they do today.
+  `resolveLineDiscount` then works out the diamond and making discount before GST, and the invoice props (`Discount on Diamond`, `Discount on Making`, `Taxable Value`, `GST`) fill in as they do today.
 - **Live repricing:**
   - The entries are percentages, so when staff edit the Diamond prop, the reprice stays correct.
   - If the line set changes and `wipeStalePositionalPricing` clears the entries, the step puts them back because `loyalty_applied` is set.
@@ -103,7 +105,7 @@ The same function is used online and in-store, so the two always give the same n
 - **The "My benefits" cart block** (theme app extension, Liquid and JS):
   - **Logged out:** "Log in to see your benefits", which goes to the Shopify customer-account login and back to the cart.
   - **Logged in:** everything the customer can use, each with Apply and Remove:
-    - Loyalty: "Gold member: 5% off diamond value (+2% birthday month)". It is hidden below tier.
+    - Loyalty: "Gold member · 7% off diamonds + 20% off making (up to ₹5,000)". It is hidden below tier.
     - Open vouchers and exchange notes, from `loyalty.available_codes`: code, value and expiry.
   - The free-text code box stays.
   - At most one loyalty code plus one voucher or exchange-note code can be applied.

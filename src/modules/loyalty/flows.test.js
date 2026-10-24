@@ -148,7 +148,7 @@ t('apply: gold customer gets 7% diamond + 20% making on the ring only, tags and 
   assert.ok(tags.includes('loyalty-applied') && tags.includes('reprice') && !tags.includes('apply-loyalty'));
 });
 
-t('pricing hook: the engine receives a 5% diamond entry on the ring and nothing on the coin', async () => {
+t('pricing hook: the engine receives the 7% diamond + 20% making entries on the ring and nothing on the coin', async () => {
   const mfMap = { ...shop.draftMf[DRAFT_ID], discount_applied: '3000' };
   draftMod.applyLoyaltyToPricingInputs(mfMap, makeDraft('loyalty-applied'));
   const arr = JSON.parse(mfMap.line_discounts);

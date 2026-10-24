@@ -1,6 +1,6 @@
 # Loyalty Programme: user acceptance criteria
 
-**Scope:** Plan A loyalty (tiers on lifetime spend, diamond-only discount online and in-store).
+**Scope:** Plan A loyalty (tiers on lifetime spend; % off diamond + % off making, capped per bill; online and in-store).
 **Rule for every test:** no real order is created and nothing is paid.
 - The live tests work on scratch **draft** orders. They are never converted and are deleted afterwards.
 - They use one-time codes the test creates and deletes itself.
@@ -58,7 +58,7 @@ Afterwards, the UAT customer is put back to its real points, and its scratch dra
 | ID | Criterion | Expected |
 |---|---|---|
 | B1 | Apply on a draft | Tier customer: rate recorded, `loyalty-applied` + `reprice` tags, only eligible pieces listed |
-| B2 | Pricing hook | The engine receives 5% of the diamond on eligible lines only. Other discount inputs are ignored while loyalty is on |
+| B2 | Pricing hook | The engine receives 7% of the diamond and 20% of making (Gold) on eligible lines only, the making cut held to ₹5,000 across the bill. Campaign and manual per-line cuts stack; an order-level code is ignored while loyalty is on |
 | B3 | Line changes | Adding a piece re-checks the draft and covers the new eligible line |
 | B4 | Conflict | A discount code added later takes loyalty off and leaves a reason |
 | B5 | Refusals | Another discount, below tier, or no customer: a short `loyalty-invalid` tag plus a full note. Every tag is ≤ 40 characters |
@@ -110,7 +110,7 @@ Afterwards, the UAT customer is put back to its real points, and its scratch dra
 | O1 | Security | A tampered storefront request is rejected (401) |
 | O2 | Benefits, tier customer | Tier, today's rate and open vouchers returned |
 | O3 | Benefits, logged out | "Log in" response |
-| O4 | Apply on a cart (eligible + excluded piece) | A code exists in Shopify with: amount = diamond-only discount incl. GST, single use, expiry ≤ 2h, combines with order discounts only, eligible variant entitled, excluded variant not entitled |
+| O4 | Apply on a cart (eligible + excluded piece) | A code exists in Shopify with: amount = diamond + capped making discount incl. GST, single use, expiry ≤ 2h, combines with order discounts only, eligible variant entitled, excluded variant not entitled |
 | O5 | Same cart again | The same code comes back, not a new one |
 | O6 | Below tier | Refused: "Spend ₹… more to unlock" |
 | O7 | Vouchers | Every open voucher is set to combine with a loyalty code. If not, run `POST /api/loyalty/voucher-combos` |
@@ -140,7 +140,7 @@ Use the UAT customer at **tier 2**. To set it: `POST /api/loyalty/adjust` with `
 | ID | Steps | Expected | Pass? |
 |---|---|---|---|
 | U1 | Make a draft for the UAT customer with a diamond piece → More actions → all-fields panel → Discounts | The "Loyalty" box shows the name, tier, lifetime spend, each piece with its saving, and the estimated total | |
-| U2 | Click **Apply loyalty**, wait about 5 s | "Applied: Gold 5%…" appears. The line props show Discount on Diamond | |
+| U2 | Click **Apply loyalty**, wait about 5 s | "Applied: Gold 7% off the diamond value + 20% off making (up to ₹5,000 a bill)…" appears. The line props show Discount on Diamond and Discount on Making | |
 | U3 | Try "Apply discount" in the same panel | Refused (`discount-invalid: loyalty applied`) | |
 | U4 | Click **Remove loyalty** | Prices go back. The box offers Apply again | |
 | U5 | Draft for a customer below tier | The box says how much more spend is needed. Apply is disabled | |
@@ -150,7 +150,7 @@ Use the UAT customer at **tier 2**. To set it: `POST /api/loyalty/adjust` with `
 
 | ID | Steps | Expected | Pass? |
 |---|---|---|---|
-| V1 | Log in as the UAT customer → Profile | A "Timanti Loyalty" block shows the tier badge, the % off the diamond value, lifetime purchases, and the spend to the next tier | |
+| V1 | Log in as the UAT customer → Profile | A "Timanti Loyalty" block shows the tier badge, the % off the diamond value and the % off making with its cap, lifetime purchases, and the spend to the next tier | |
 | V2 | Set the UAT customer below tier and reload | It reads "You are a Timanti member…" with no badge | |
 | V3 | Check on a phone | Readable, no overflow | |
 
@@ -159,7 +159,7 @@ Use the UAT customer at **tier 2**. To set it: `POST /api/loyalty/adjust` with `
 | ID | Steps | Expected | Pass? |
 |---|---|---|---|
 | W1 | Logged out, add a diamond piece, open the cart | "Log in to see your loyalty benefit and vouchers" with a Log in button. After login it returns to the cart | |
-| W2 | Logged in as tier 2 | "Gold member: 5% off the diamond value" with Apply. Any open vouchers are listed with value and expiry | |
+| W2 | Logged in as tier 2 | "Gold member · 7% off diamonds + 20% off making (up to ₹5,000)" with Apply. Any open vouchers are listed with value and expiry | |
 | W3 | Apply loyalty | The cart reloads. The discount shows on the eligible piece only, and equals the panel / simulate figure | |
 | W4 | Apply a voucher as well | Both codes on the cart. Totals reduce by both | |
 | W5 | Type a promo code in the cart's own code box | Shopify refuses to combine it with loyalty | |

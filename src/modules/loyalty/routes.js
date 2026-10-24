@@ -11,7 +11,7 @@
  * ENDPOINTS
  *   Storefront, through the Shopify app proxy (signed by Shopify; /apps/loyalty/* on the store):
  *     GET  /api/loyalty/proxy/benefits      the logged-in customer's tier, rate and open vouchers
- *     POST /api/loyalty/proxy/apply         one-time diamond-only code for the cart's pieces
+ *     POST /api/loyalty/proxy/apply         one-time code for the cart's pieces: tier % off diamond + capped % off making
  *     POST /api/loyalty/proxy/promo         typed promo code (e.g. ISB10) -> one-time diamond-only code
  *   Staff panel (Shopify admin session token):
  *     GET  /api/loyalty/draft-preview?draft=<id>   what "Apply loyalty" would do on this draft
@@ -112,6 +112,8 @@ const CUSTOMER_DEFINITIONS = [
   ['tier_name', 'Loyalty tier', 'single_line_text_field', 'Display name of the tier.'],
   ['tier_since', 'Loyalty tier since', 'date', 'When the current tier was reached.'],
   ['discount_pct', 'Loyalty diamond discount %', 'number_decimal', 'Tier discount on diamond value, before occasion bonus.'],
+  ['making_pct', 'Loyalty making discount %', 'number_decimal', 'Tier discount on making charges.'],
+  ['making_cap', 'Loyalty making discount cap', 'number_integer', 'Most the making discount takes off one purchase, pre-tax rupees (0 = no cap).'],
   ['next_tier_name', 'Next loyalty tier', 'single_line_text_field', ''],
   ['next_tier_gap', 'Spend to next tier', 'number_integer', 'Rupees still to spend for the next tier.'],
 ];

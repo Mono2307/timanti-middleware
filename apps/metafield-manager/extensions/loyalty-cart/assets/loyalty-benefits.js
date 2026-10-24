@@ -5,7 +5,7 @@
  * the theme's type, borders and buttons:
  *
  *   Your Benefits
- *   Gold member · 5% off diamonds                 [ Apply ]   → "Gold benefit applied · ₹984 off   Remove"
+ *   Gold member · 7% off diamonds + 20% off making (up to ₹5,000)   [ Apply ]   → "Gold benefit applied · ₹984 off   Remove"
  *   [ Voucher or discount code ]                  [ Apply ]
  *   Other available offers ›                                  → click to list the customer's vouchers
  *

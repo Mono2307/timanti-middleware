@@ -741,14 +741,22 @@ function loyaltyHowTo(inStoreOnly) {
     : 'Online, log in and tap Apply in your cart. In store, just let us know.';
 }
 
-function buildLoyaltyTierUpHtml({ firstName, tierName, pct, nextName, nextPct, nextGap, inStoreOnly = true }) {
+// "7% off the diamond value and 20% off making (up to ₹5,000 a purchase)" — the tier's two cuts.
+function loyaltyBenefitText(pct, makingPct, makingCap) {
+  const mk = Number(makingPct) > 0
+    ? ` and ${esc(makingPct)}% off making${Number(makingCap) > 0 ? ` (up to ${money(makingCap)} a purchase)` : ''}`
+    : '';
+  return `${esc(pct)}% off the diamond value${mk}`;
+}
+
+function buildLoyaltyTierUpHtml({ firstName, tierName, pct, makingPct, makingCap, nextName, nextPct, nextMakingPct, nextMakingCap, nextGap, inStoreOnly = true }) {
   const next = nextName && nextGap > 0
-    ? `<br>${money(nextGap)} more to ${esc(nextName)} (${esc(nextPct)}% off).`
+    ? `<br>${money(nextGap)} more to ${esc(nextName)} (${loyaltyBenefitText(nextPct, nextMakingPct, nextMakingCap)}).`
     : '';
   return head()
     + contentBlock({
         heading: `Welcome to ${esc(tierName)}${firstName ? ', ' + esc(firstName) : ''}`,
-        body: `You now get <strong>${esc(pct)}% off the diamond value</strong> on every purchase.`,
+        body: `You now get <strong>${loyaltyBenefitText(pct, makingPct, makingCap)}</strong> on every purchase.`,
         buttonsHtml: button('Browse New Arrivals', CATALOGUE_URL),
         timelineHtml: timeline(`${loyaltyHowTo(inStoreOnly)}${next}`),
       })
@@ -761,7 +769,7 @@ function buildLoyaltyOccasionHtml({ firstName, occasion, totalPct, bonusPct, mon
   return head()
     + contentBlock({
         heading: `Happy ${label} month${firstName ? ', ' + esc(firstName) : ''}`,
-        body: `This month you get <strong>${esc(totalPct)}% off the diamond value</strong>, ${esc(bonusPct)}% more than usual.`,
+        body: `This month you get <strong>${esc(totalPct)}% off the diamond value</strong>, ${esc(bonusPct)}% more than usual, on top of your making discount.`,
         buttonsHtml: button('Browse New Arrivals', CATALOGUE_URL),
         storeLinkHtml: storeLink('or visit our HSR Layout store', STORE_MAP_URL),
         timelineHtml: timeline(`Valid until ${esc(monthEnd)}. ${loyaltyHowTo(inStoreOnly)}`),

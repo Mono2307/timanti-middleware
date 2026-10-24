@@ -15,7 +15,7 @@ Run `src/modules/loyalty/migration.sql` in the Supabase SQL editor. It creates `
   - Creates the customer metafield definitions `loyalty.*`. They are readable by the storefront and by customer accounts, and pinned on the admin customer page.
   - Seeds the shop metafield `loyalty.program_config` with the founder's grid. It never overwrites an edited copy.
 - **Edit tier names and rules** in Shopify admin → Settings → Custom data → Shop → `loyalty.program_config`.
-  - The defaults are Silver ₹2L 3%, Gold ₹5L 5% and Platinum ₹10L 7%, plus 2% in the birthday or anniversary month. The bonus applies once even if both fall in the same month.
+  - The defaults (founder, 2026-10-24) are Silver ₹2L: 5% off diamond + 15% off making (capped at ₹2,000 a bill); Gold ₹5L: 7% + 20% (cap ₹5,000); Platinum ₹10L: 10% + 30% (cap ₹10,000). Caps are pre-GST across the whole bill. Plus 2% off diamond in the birthday or anniversary month, for tier members only. The bonus applies once even if both fall in the same month.
   - The gold coin (`SCOIN`) and the `no-loyalty` product tag are excluded.
   - The tier names are placeholders. Rename them here.
   - Changes take effect within 5 minutes.
@@ -46,7 +46,7 @@ Run `POST /api/loyalty/voucher-combos` once. It sets every open voucher code to 
 
 ## 7. GoKwik checks (before announcing online)
 1. In GoKwik, turn off its own coupon entry and its offers list. It must only carry the cart's codes.
-2. Logged-in tier customer → My benefits → Apply → GoKwik checkout. The Shopify order should carry `LOY-…` and show the diamond-only amount.
+2. Logged-in tier customer → My benefits → Apply → GoKwik checkout. The Shopify order should carry `LOY-…` and show the diamond + capped making amount.
 3. Do the same with a voucher applied too. The order should carry both codes.
 4. A promo code plus loyalty on the cart: Shopify should refuse the pair.
 5. Check with a GoKwik phone number that differs from the Shopify account. `GET /api/loyalty/redemptions?mismatch=1` should list the order, and the points should go to the account that applied the code.

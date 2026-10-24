@@ -14,7 +14,7 @@ export default async () => {
   render(<LoyaltyTier />, document.body);
 };
 
-const KEYS = ["tier", "tier_name", "points", "discount_pct", "next_tier_name", "next_tier_gap"];
+const KEYS = ["tier", "tier_name", "points", "discount_pct", "making_pct", "making_cap", "next_tier_name", "next_tier_gap"];
 
 const MIDDLEWARE = "https://timanti-middleware.fly.dev";
 
@@ -54,15 +54,19 @@ function LoyaltyTier() {
   const graphic = `${MIDDLEWARE}/api/loyalty/tier.svg?p=${points}`;
   const toNext = data.next_tier_name && data.next_tier_name !== "-" && gap > 0
     ? `${inr(gap)} to ${data.next_tier_name}` : "";
-  const details = [`Lifetime purchases ${inr(points)}`, toNext, hasTier ? "+2% in birthday and anniversary months" : ""]
+  // The tier's making discount, capped per purchase (2026-10-24). Hidden until the middleware has published it.
+  const makingPct = Number(data.making_pct) || 0;
+  const makingCap = Number(data.making_cap) || 0;
+  const making = makingPct > 0 ? ` + ${makingPct}% off making${makingCap > 0 ? ` (up to ${inr(makingCap)} a purchase)` : ""}` : "";
+  const details = [`Lifetime purchases ${inr(points)}`, toNext, hasTier ? "+2% off diamonds in birthday and anniversary months" : ""]
     .filter(Boolean).join(" · ");
   return (
     <s-section heading="Timanti Loyalty">
       <s-stack direction="block" gap="small-200">
         <s-text type="strong">
           {hasTier
-            ? `${data.tier_name} member · ${Number(data.discount_pct) || 0}% off the diamond value of eligible pieces`
-            : "Your first tier unlocks a discount on diamonds"}
+            ? `${data.tier_name} member · ${Number(data.discount_pct) || 0}% off the diamond value${making} on eligible pieces`
+            : "Your first tier unlocks a discount on diamonds and making"}
         </s-text>
         <s-image src={graphic} alt={hasTier ? `${data.tier_name} member` : "Timanti Loyalty"} inlineSize="fill" aspectRatio="15" />
         <s-text type="small" color="subdued">{details}</s-text>

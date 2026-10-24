@@ -13,6 +13,8 @@
  *   loyalty.tier_name       single_line_text display name
  *   loyalty.tier_since      date             when the current tier was reached
  *   loyalty.discount_pct    number_decimal   the tier's diamond discount, excluding occasions
+ *   loyalty.making_pct      number_decimal   the tier's making discount
+ *   loyalty.making_cap      number_integer   most the making discount takes off one purchase (pre-tax Rs, 0 = none)
  *   loyalty.next_tier_name  single_line_text
  *   loyalty.next_tier_gap   number_integer   rupees still to spend for the next tier
  *
@@ -41,6 +43,9 @@ async function readCustomer(customerId) {
       tier:        metafield(namespace: "loyalty", key: "tier")         { value }
       tierSince:   metafield(namespace: "loyalty", key: "tier_since")   { value }
       points:      metafield(namespace: "loyalty", key: "points")       { value }
+      discountPct: metafield(namespace: "loyalty", key: "discount_pct") { value }
+      makingPct:   metafield(namespace: "loyalty", key: "making_pct")   { value }
+      makingCap:   metafield(namespace: "loyalty", key: "making_cap")   { value }
     } }`, { id: gid(customerId) });
   const c = data && data.customer;
   if (!c) return null;
@@ -55,6 +60,8 @@ async function readCustomer(customerId) {
     tierKey: c.tier ? c.tier.value : 'none',
     tierSince: c.tierSince ? c.tierSince.value : null,
     points: c.points ? Number(c.points.value) : null,
+    // The rates last published, so a change of grid republishes customers whose tier did not move.
+    rates: [c.discountPct, c.makingPct, c.makingCap].map(m => (m ? Number(m.value) : null)),
   };
 }
 
@@ -68,6 +75,8 @@ async function publishToCustomer(customerId, { points, info, tierSince }) {
     mf('tier', 'single_line_text_field', tier ? tier.key : 'none'),
     mf('tier_name', 'single_line_text_field', tier ? tier.name : 'Member'),
     mf('discount_pct', 'number_decimal', tier ? tier.pct : 0),
+    mf('making_pct', 'number_decimal', tier ? tier.making_pct || 0 : 0),
+    mf('making_cap', 'number_integer', tier ? Math.round(tier.making_cap || 0) : 0),
     mf('next_tier_name', 'single_line_text_field', info.next ? info.next.name : '-'),
     mf('next_tier_gap', 'number_integer', Math.max(0, Math.ceil(info.gapToNext || 0))),
   ];
@@ -111,7 +120,9 @@ async function refreshCustomer(customerId, { notify = false } = {}) {
   const tagOk = newKey === 'none'
     ? !customer.tags.some(t => TIER_TAG_RE.test(t))
     : customer.tags.includes(`loyalty-${newKey}`) && customer.tags.filter(t => TIER_TAG_RE.test(t)).length === 1;
-  if (!tierChanged && customer.points === Math.floor(points) && tagOk) {
+  const want = info.tier ? [info.tier.pct, info.tier.making_pct || 0, Math.round(info.tier.making_cap || 0)] : [0, 0, 0];
+  const ratesOk = (customer.rates || []).every((v, i) => v === want[i]);
+  if (!tierChanged && customer.points === Math.floor(points) && tagOk && ratesOk) {
     return { customerId, points, tier: info.tier, changed: false };
   }
 
@@ -133,8 +144,12 @@ function tierEmailHtml(customer, info, cfg = {}) {
     firstName: customer.firstName,
     tierName: info.tier.name,
     pct: info.tier.pct,
+    makingPct: info.tier.making_pct,
+    makingCap: info.tier.making_cap,
     nextName: info.next ? info.next.name : null,
     nextPct: info.next ? info.next.pct : null,
+    nextMakingPct: info.next ? info.next.making_pct : null,
+    nextMakingCap: info.next ? info.next.making_cap : null,
     nextGap: info.next ? Math.ceil(info.gapToNext) : 0,
     inStoreOnly: !((cfg.emails || {}).online_live),
   });

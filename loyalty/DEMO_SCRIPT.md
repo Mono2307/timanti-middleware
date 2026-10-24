@@ -36,11 +36,11 @@ open discussion point at the end, shown with screenshots only.
 
 **Show:** this table, either on screen or as a slide.
 
-| Tier | Lifetime spend | Off diamond value | In birthday or anniversary month |
-|---|---|---|---|
-| Silver | ₹2,00,000 | 3% | 5% |
-| Gold | ₹5,00,000 | 5% | 7% |
-| Platinum | ₹10,00,000 | 7% | 9% |
+| Tier | Lifetime spend | Off diamond value | In birthday or anniversary month | Off making | Making cap per bill |
+|---|---|---|---|---|---|
+| Silver | ₹2,00,000 | 5% | 7% | 15% | ₹2,000 |
+| Gold | ₹5,00,000 | 7% | 9% | 20% | ₹5,000 |
+| Platinum | ₹10,00,000 | 10% | 12% | 30% | ₹10,000 |
 
 ---
 
@@ -50,11 +50,11 @@ open discussion point at the end, shown with screenshots only.
 **Click:** Draft orders → the demo draft → **More actions → Jewellery Workspace** → scroll to **Loyalty & offers**.
 
 **Point out:**
-- **Who and what tier:** the customer's name, and a **Gold member** badge with "5% off diamond (+2% birthday month)". This is read from the customer on the draft; staff look nothing up.
+- **Who and what tier:** the customer's name, and a **Gold member** badge with "7% off diamond + 20% off making (up to ₹5,000 a bill)", and +2% off diamond in the birthday month. This is read from the customer on the draft; staff look nothing up.
 - **The timeline:** ₹0 → Silver → Gold → Platinum, filled to their lifetime spend.
 - **Progress:** "Lifetime spend ₹6,00,000 · ₹4,00,000 more to Platinum · 20% of the way". **Say:** "Staff can tell the customer exactly how close they are to the next tier."
 - **The preview, piece by piece:**
-  - Pendant: "₹X off diamond ₹Y".
+  - Pendant: "₹X off diamond ₹Y + ₹Z off making ₹W".
   - Silver coin: "not eligible". Coins (SCOIN) are excluded.
   - "Estimated saving ₹Z before GST."
 
@@ -150,7 +150,7 @@ Change the pendant's Diamond value in the panel → save → after about 5 secon
 
 **Talk track:**
 - **The cart:** shows a "Your Benefits" card under the price breakdown. The customer taps **Apply** for their loyalty saving, can add a voucher code, and can open "Other available offers".
-- **Behind the button:** it creates a one-time loyalty code for that cart (single use, 2-hour expiry), so the same diamond-only maths reaches the GoKwik checkout.
+- **Behind the button:** it creates a one-time loyalty code for that cart (single use, 2-hour expiry), so the same diamond + capped making maths reaches the GoKwik checkout.
 - **What we need from GoKwik**, i.e. the email:
   1. KwikPass login (replacing Simply OTP).
   2. Removing their coupon bar at checkout.
@@ -181,6 +181,6 @@ Change the pendant's Diamond value in the panel → save → after about 5 secon
 | Where do birthdays come from? | The customer's Shopify record, filled in by the Typeform integration. No date means no bonus |
 | Can a tier go down? | Only if refunds or exchanges take lifetime spend back below the threshold. There's no annual reset |
 | Which products are excluded? | Silver coins (SCOIN) and anything tagged `no-loyalty`. Pieces with no diamond value get nothing |
-| What about the auto diamond discount? | Loyalty stacks on top of it, and both are diamond-only |
+| What about the auto diamond discount? | Loyalty stacks on top of it: the campaign takes off the diamond, loyalty off the diamond and making |
 | What if the customer pays in installments? | The points come when the draft becomes an order, at the order value |
 | What does it cost to run? | No new subscriptions; it runs on our own system |

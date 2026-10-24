@@ -27,7 +27,7 @@ const { handleTypeformWebhook } = require('./src/integrations/typeform');
 // Pine Labs card terminals — push, poll, cancel, callbacks. Lifted out of this file wholesale.
 // What remains here is the draft-created auto-push (a mixed concern) and /api/test-db's readout.
 const pine = require('./src/integrations/pine');
-// Loyalty programme: tiers on lifetime spend, diamond-only discount online and in-store.
+// Loyalty programme: tiers on lifetime spend, % off diamond + % off making (capped per bill), online and in-store.
 const loyaltyDraft = require('./src/modules/loyalty/draft');
 const loyaltyEngine = require('./src/modules/loyalty/engine');
 const buyPlanLock = require('./src/modules/payments/buy-plan/lock');
@@ -1634,7 +1634,7 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
   for (const mf of (mfData.metafields || [])) {
     if (mf.namespace === 'custom') mfMap[mf.key] = mf.value;
   }
-  // Loyalty is an exclusive diamond-only % per eligible line. When it is applied this rewrites the
+  // Loyalty is a diamond % and a making % per eligible line. When it is applied this rewrites the
   // in-memory map (order-level discount keys dropped, loyalty entries added to line_discounts) so the
   // engine below prices it like any per-line discount. No-op otherwise. See src/modules/loyalty/draft.js.
   loyaltyDraft.applyLoyaltyToPricingInputs(mfMap, draft);

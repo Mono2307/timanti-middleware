@@ -27,7 +27,7 @@ Layout, placed directly **under "Price Breakdown"** inside the drawer's scroll a
 ```
 Your Benefits
 ─────────────────────────────────────
-Gold member · 5% off diamonds     [ Apply ]     → "Applied · ₹984 off   Remove"
+Gold member · 7% off diamonds + 20% off making (up to ₹5,000)     [ Apply ]     → "Applied · ₹984 off   Remove"
 [ Voucher or discount code   ]    [ Apply ]     → the cart's own code box
 Your vouchers
 [₹61,960 · tap to use] [₹47,533 · tap to use] [₹39,640 · tap to use]  +3 more
@@ -43,7 +43,7 @@ Your vouchers
 ## Profile block (customer account)
 Already redeployed (app version 50):
 - a "Gold member" line in bold;
-- "5% off the diamond value of eligible pieces";
+- "7% off the diamond value + 20% off making (up to ₹5,000 a purchase) on eligible pieces";
 - "Lifetime purchases ₹…" and "₹… more to reach Platinum";
 - "Extra 2% in your birthday and anniversary months";
 - no semicolon, and every line in the same text colour.

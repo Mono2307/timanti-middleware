@@ -274,7 +274,7 @@ async function run(p) {
   };
 
   let appliedRate = 0;
-  await check('D1', 'Apply loyalty on a tier customer: diamond-only discount, GST on reduced value', async () => {
+  await check('D1', 'Apply loyalty on a tier customer: diamond + making discount, GST on reduced value', async () => {
     needDraft();
     await setPoints(runId, cust, (t2 || t1).min + 1000);
     const ev = await draftMod.evaluateDraft(await getDraft(draftId), (await draftMod.readDraftMetafields(draftId)).map);
@@ -400,7 +400,7 @@ async function run(p) {
     const r = await proxyCall('get', 'benefits', '');
     assert(r.status === 200 && r.data.loggedIn === false, JSON.stringify(r.data));
   });
-  await check('O4', 'Apply on a cart: one-time code worth exactly the diamond-only amount', async () => {
+  await check('O4', 'Apply on a cart: one-time code worth exactly the diamond + capped making amount', async () => {
     if (!config.loyalty.proxySecrets.length) skip('no proxy secret'); if (!eligibleVariant) skip('eligibleVariantId not given');
     const lines = [{ variant_id: eligibleVariant, quantity: 1 }, ...(excludedVariant ? [{ variant_id: excludedVariant, quantity: 1 }] : [])];
     const r = await proxyCall('post', 'apply', cust, { lines });
