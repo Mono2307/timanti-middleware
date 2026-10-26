@@ -270,14 +270,16 @@ ${SHELL_CSS}
   var FACET_LABELS = { subCategory:'Type', karat:'Karat', tone:'Metal', size:'Size',
                        stoneCut:'Stone cut', grade:'Diamond grade', priceBand:'Price',
                        cstBand:'Centre stone', cstCount:'Centre stones',
-                       weightBand:'Gold weight', caratBand:'Total diamonds' };
+                       weightBand:'Gold weight', caratBand:'Total diamonds',
+                       channel:'Sales channel', photo:'Photos' };
   /* Category is promoted out of the filter bar and into the nav, the way the storefront does it. */
   var BAR_ORDER = ['subCategory','karat','tone','size','stoneCut','cstBand','cstCount',
-                   'grade','priceBand','weightBand','caratBand'];
+                   'grade','priceBand','weightBand','caratBand','channel','photo'];
   var ITEM_FIELD = { category:'category', subCategory:'subCategory', karat:'karats', tone:'tones',
                      size:'sizes', stoneCut:'stoneCuts', grade:'grades', priceBand:'priceBand',
                      cstBand:'cstBand', cstCount:'cstCount',
-                     weightBand:'weightBand', caratBand:'caratBand' };
+                     weightBand:'weightBand', caratBand:'caratBand',
+                     channel:'channels', photo:'photo' };
   var TONE_HEX = { 'Yellow Gold':'#e3c04a', 'White Gold':'#dcdde0', 'Rose Gold':'#e3b19d' };
 
   var $ = function (id) { return document.getElementById(id); };

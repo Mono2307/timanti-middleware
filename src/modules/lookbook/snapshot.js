@@ -33,7 +33,7 @@ const { log } = require('../../core/logger');
  * of a customer. A version stamp makes a deploy that changes the shape of the data rebuild on boot
  * instead of waiting for the clock.
  */
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 const PRODUCT_PAGE = 100;
 const VARIANT_PAGE = 100;
@@ -56,6 +56,7 @@ const PRODUCTS_QUERY = `
         cstWeight:  metafield(namespace: "custom", key: "cst_weight")           { value }
         cstCount:   metafield(namespace: "custom", key: "cst_count")            { value }
         stoneCut:   metafield(namespace: "custom", key: "stone_cut")            { value }
+        channels:   resourcePublicationsV2(first: 10) { nodes { isPublished publication { name } } }
       }
     }
   }`;
@@ -225,6 +226,24 @@ function parseList(mf) {
   }
 }
 
+/** Label for a product published nowhere, so it is still a selectable chip rather than unfindable. */
+const NO_CHANNEL = 'No sales channel';
+
+/**
+ * Sales channels the product is live on, by the name Shopify Admin shows. A publication that is
+ * merely scheduled comes back with isPublished false and is not live yet, so it does not count.
+ * Measured 2026-10-26: this connection takes a 100-product page from 200 to 290 requested points.
+ */
+function channelsOf(p) {
+  const nodes = p.channels && p.channels.nodes ? p.channels.nodes : [];
+  const names = nodes
+    .filter((n) => n && n.isPublished && n.publication && n.publication.name)
+    .map((n) => n.publication.name);
+  return names.length ? [...new Set(names)] : [NO_CHANNEL];
+}
+
+const PHOTO_LABELS = { yes: 'With photos', no: 'No photos' };
+
 function bandOf(value, bands) {
   if (!(value > 0)) return null;
   for (const pair of bands) if (value < pair[0]) return pair[1];
@@ -330,6 +349,7 @@ function normalize(products, variants) {
       cstCount: mfNum(p.cstCount),
       cstBand: bandOf(mfNum(p.cstWeight), BANDS.cst),
       stoneCuts: parseList(p.stoneCut),
+      channels: channelsOf(p),
       vendor: p.vendor || null,
       tags: p.tags || [],
       family: firstSku.family,
@@ -361,7 +381,10 @@ function normalize(products, variants) {
   // products have no image in Shopify at all; removing them means a staff member searches for one
   // and it simply is not there, with no explanation. The UI sorts them to the very end instead, so
   // the lookbook still leads with photography without pretending the rest do not exist.
-  for (const it of items) it.noImage = !(it.media.length || it.variants.some((v) => v.image));
+  for (const it of items) {
+    it.noImage = !(it.media.length || it.variants.some((v) => v.image));
+    it.photo = it.noImage ? PHOTO_LABELS.no : PHOTO_LABELS.yes;
+  }
   return { items, droppedNoImage: items.filter((i) => i.noImage).length };
 }
 
@@ -403,6 +426,10 @@ function buildFacets(items) {
     category: tally(flat((i) => i.category)),
     subCategory,
     stoneCut: tally(flat((i) => i.stoneCuts)),
+    // "No sales channel" always sorts last: it is the exception staff go looking for, not a channel.
+    channel: tally(flat((i) => i.channels))
+      .sort((a, b) => (a.value === NO_CHANNEL) - (b.value === NO_CHANNEL)),
+    photo: ordered(flat((i) => i.photo), [PHOTO_LABELS.yes, PHOTO_LABELS.no]),
     cstBand: ordered(flat((i) => i.cstBand), BANDS.cst.map((b) => b[1])),
     cstCount: tally(flat((i) => (i.cstCount > 0 ? String(i.cstCount) : null)))
       .sort((a, b) => Number(a.value) - Number(b.value)),
@@ -456,4 +483,5 @@ module.exports = {
   SCHEMA_VERSION,
   buildSnapshot, normalize, buildFacets, parseList,
   parseSku, optionsOf, pickOption, toneLabel, grossWeightOf, bandOf, numericId, BANDS,
+  channelsOf, NO_CHANNEL, PHOTO_LABELS,
 };

@@ -220,6 +220,51 @@ t('a variant image alone still counts as photographed', () => {
   assert.strictEqual(out.droppedNoImage, 0);
 });
 
+t('photo status is a filterable value, not only a sort key', () => {
+  const out = snap.normalize(
+    [product({ id: 'gid://shopify/Product/1' }), product({ id: 'gid://shopify/Product/2', media: { nodes: [] } })],
+    [variant({ product: { id: 'gid://shopify/Product/1' } }), variant({ product: { id: 'gid://shopify/Product/2' } })]);
+  assert.deepStrictEqual(out.items.map((i) => i.photo), ['With photos', 'No photos']);
+  assert.deepStrictEqual(snap.buildFacets(out.items).photo,
+    [{ value: 'With photos', count: 1 }, { value: 'No photos', count: 1 }]);
+});
+
+console.log('sales channels come from live publications');
+
+const pub = (name, isPublished = true) => ({ isPublished, publication: { name } });
+
+t('only publications that are actually live count as a channel', () => {
+  const ch = snap.channelsOf({ channels: { nodes: [pub('Online Store'), pub('Point of Sale', false)] } });
+  assert.deepStrictEqual(ch, ['Online Store']);
+});
+
+t('a product published nowhere is still selectable, under its own label', () => {
+  assert.deepStrictEqual(snap.channelsOf({ channels: { nodes: [] } }), [snap.NO_CHANNEL]);
+  assert.deepStrictEqual(snap.channelsOf({}), [snap.NO_CHANNEL]);
+  assert.deepStrictEqual(snap.channelsOf({ channels: { nodes: [pub('Online Store', false)] } }), [snap.NO_CHANNEL]);
+});
+
+t('the channel facet counts every channel and puts "No sales channel" last', () => {
+  const items = [
+    { channels: [snap.NO_CHANNEL] },
+    { channels: [snap.NO_CHANNEL] },
+    { channels: ['Online Store', 'Point of Sale'] },
+    { channels: ['Point of Sale'] },
+  ];
+  assert.deepStrictEqual(snap.buildFacets(items).channel, [
+    { value: 'Point of Sale', count: 2 },
+    { value: 'Online Store', count: 1 },
+    { value: snap.NO_CHANNEL, count: 2 },
+  ]);
+});
+
+t('the page offers both new filters', () => {
+  const html = appPage();
+  assert.ok(html.includes("channel:'Sales channel'"));
+  assert.ok(html.includes("photo:'Photos'"));
+  assert.ok(html.includes("channel:'channels'"), 'the facet must map to the item field it filters');
+});
+
 console.log('design-level metafields drive the new filters');
 
 t('stone_cut arrives as a JSON list and is parsed to real values', () => {
