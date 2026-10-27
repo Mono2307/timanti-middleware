@@ -17,8 +17,12 @@
  * or a new code is a metafield edit, not a deploy. The earn webhook settles the code when the order
  * arrives (earn.js settlePromoCode).
  *
- * Like the loyalty code it is a PRODUCT-class discount that combines with ORDER discounts only, so a
- * promo code and a loyalty code cannot sit on the same cart. The drawer swaps one for the other.
+ * Like the loyalty code it is a PRODUCT-class discount that combines with ORDER discounts only. Promo and
+ * loyalty STACK (founder, 2026-10-26), but Shopify keeps one product discount per line, so for a
+ * logged-in member the code is worth BOTH: promo % of the diamond + the tier's diamond and capped making
+ * discount, each worked out on the pre-tax value, summed, then grossed up once. Asking for loyalty with
+ * a live promo code on the cart re-mints it the same way (online.js). The code it replaces is retired,
+ * so the drawer swapping one code for the other always leaves the combined one.
  */
 
 const crypto = require('crypto');
@@ -28,7 +32,7 @@ const { log } = require('../../core/logger');
 const E = require('./engine');
 const ledger = require('./ledger');
 const { loadConfig } = require('./config');
-const { cartLineFacts, deleteDiscountNode } = require('./online');
+const { cartLineFacts, deleteDiscountNode, loyaltyForCart, supersedeCodes } = require('./online');
 
 const CODE_PREFIX = 'PRM-';
 const MAX_CODES_PER_HOUR = 10;          // per logged-in customer (shared with loyalty codes)
@@ -84,26 +88,41 @@ async function createPromoCode(customerId, rawCode, lines) {
   const described = clean.map(l => {
     const f = facts[l.variant_id] || {};
     return { ...l, sku: f.sku, title: f.title, productType: f.productType, tags: f.tags, collections: f.collections,
-      jewelCode: f.jewelCode, diamond: (f.diamondUnit || 0) * l.quantity };
+      jewelCode: f.jewelCode, diamond: (f.diamondUnit || 0) * l.quantity, making: (f.makingUnit || 0) * l.quantity };
   });
   const r = computePromo({ promo, lines: described, cfg });
   if (!r.ok) return { ok: false, reason: `${key} applies to the diamond value of a piece, and none of the pieces in your cart is eligible.` };
+  const signature = described.map(l => `${l.variant_id}x${l.quantity}`).sort().join(',');
+
+  // This customer's live codes for the same cart. Never for guests: their rows share one bucket, so a
+  // live code could belong to somebody else's identical cart.
+  const sameCart = isGuest ? [] : (await ledger.pendingCodesFor(supabase, cid)).filter(p => p.lines && p.lines.signature === signature);
+
+  // A member's loyalty benefit rides on the same code. A loyalty failure never blocks the promo.
+  let loy = null;
+  if (!isGuest && cfg.enabled) {
+    try {
+      const got = await loyaltyForCart(cid, described, cfg, { excludeCodes: sameCart.map(p => p.code) });
+      if (got.r && got.r.ok) loy = got.r;
+    } catch (e) { log.warn('loyalty', `promo ${key}: loyalty for ${cid} not added: ${e.message}`); }
+  }
 
   // Shopify takes a code off the GST-INCLUSIVE price, so the pre-tax cut is grossed up by 1.03: 10% of
   // a Rs40,000 diamond is Rs4,000 off before GST = Rs4,120 off the final price. Without it the code
   // gave 9.7% (founder, 2026-10-24: exact % before GST, the same as loyalty and the in-store discounts).
-  const amountIncl = E.onlineAmount(r.total);
-  const eligibleVariants = described.filter((_, i) => r.perLine[i].eligible).map(l => l.variant_id);
-  const signature = described.map(l => `${l.variant_id}x${l.quantity}`).sort().join(',');
+  const totalPreTax = r2(r.total + (loy ? loy.total : 0));
+  const amountIncl = E.onlineAmount(totalPreTax);
+  const eligibleVariants = described.filter((_, i) => r.perLine[i].eligible || (loy && loy.perLine[i].eligible)).map(l => l.variant_id);
+  const result = (code, extra) => ({
+    ok: true, code, label: key, pct: promo.pct, amount: amountIncl, promo_amount: E.onlineAmount(r.total),
+    loyalty: loy ? { tier: loy.tier.name, rate: loy.rate, making_pct: loy.makingPct, amount: E.onlineAmount(loy.total) } : null,
+    ...(loy ? { rate: loy.rate, tier: loy.tier.name } : {}),
+    ...extra,
+  });
 
-  // Same cart, same customer, code still live -> hand back the same code. Not for guests: their
-  // rows share one bucket, so a live code could belong to somebody else's identical cart.
-  if (!isGuest) {
-    const live = await ledger.pendingCodesFor(supabase, cid);
-    const reuse = live.find(p => p.promo_code === key && p.lines && p.lines.signature === signature &&
-      Math.abs(Number(p.discount_incl_tax) - amountIncl) < 0.01);
-    if (reuse) return { ok: true, code: reuse.code, label: key, pct: promo.pct, amount: amountIncl, reused: true };
-  }
+  // Same cart, code still live, same amount -> hand back the same code.
+  const reuse = sameCart.find(p => p.promo_code === key && !!p.tier === !!loy && Math.abs(Number(p.discount_incl_tax) - amountIncl) < 0.01);
+  if (reuse) return result(reuse.code, { reused: true });
 
   const code = `${CODE_PREFIX}${crypto.randomBytes(5).toString('hex').toUpperCase()}`;
   const startsAt = new Date();
@@ -112,7 +131,7 @@ async function createPromoCode(customerId, rawCode, lines) {
       discountCodeBasicCreate(basicCodeDiscount: $d) {
         codeDiscountNode { id } userErrors { field message } } }`, {
     d: {
-      title: `Promo ${key} ${promo.pct}% on diamond${isGuest ? '' : ' - customer ' + cid}`,
+      title: `Promo ${key} ${promo.pct}% on diamond${loy ? ` + Loyalty ${loy.tier.name} ${loy.rate}% dia + ${loy.makingPct}% making` : ''}${isGuest ? '' : ' - customer ' + cid}`,
       code,
       startsAt: startsAt.toISOString(),
       endsAt: endsAt.toISOString(),
@@ -135,10 +154,21 @@ async function createPromoCode(customerId, rawCode, lines) {
   try {
     await ledger.insertRedemption(supabase, {
     code, discount_node_id: out.codeDiscountNode.id, channel: 'online', status: 'pending',
-    customer_id: cid, promo_code: key, rate: promo.pct,
-    diamond_base: r.perLine.filter(l => l.eligible).reduce((s, l) => s + l.diamond, 0),
-    discount_pre_tax: r.total, discount_incl_tax: amountIncl,
-    lines: { signature, perLine: r.perLine.map((l, i) => ({ variant_id: described[i].variant_id, diamond: l.diamond, discount: l.discount, eligible: l.eligible })) },
+    customer_id: cid, promo_code: key,
+    // With loyalty on the code: tier/rate/occasion as a loyalty code records them (earn.js credits the
+    // member and the bonus counts as used); the promo's own % and amount sit in lines.promo.
+    ...(loy ? { tier: loy.tier.key, rate: loy.rate, occasion: loy.occasion.occasions.join('+') || null } : { rate: promo.pct }),
+    diamond_base: r2(r.perLine.reduce((s, l, i) => s + (l.eligible || (loy && loy.perLine[i].eligible) ? l.diamond : 0), 0)),
+    discount_pre_tax: totalPreTax, discount_incl_tax: amountIncl,
+    lines: {
+      signature,
+      promo: { code: key, pct: promo.pct, pre_tax: r.total },
+      loyalty: loy ? { tier: loy.tier.key, rate: loy.rate, making_pct: loy.makingPct, making_cap: loy.makingCap, pre_tax: loy.total } : null,
+      perLine: r.perLine.map((l, i) => ({
+        variant_id: described[i].variant_id, diamond: l.diamond, discount: l.discount, eligible: l.eligible,
+        ...(loy ? { loyalty_discount: loy.perLine[i].discount, making: loy.perLine[i].making, making_discount: loy.perLine[i].makingDiscount } : {}),
+      })),
+    },
     expires_at: endsAt.toISOString(),
     });
   } catch (e) {
@@ -148,8 +178,10 @@ async function createPromoCode(customerId, rawCode, lines) {
     log.error('loyalty', `promo ${key}: could not record redemption for ${code}, discount removed: ${e.message}`);
     return { ok: false, reason: 'We could not apply this code just now. Please try again.' };
   }
-  log.info('loyalty', `promo ${key}: code ${code} for ${isGuest ? 'a guest' : 'customer ' + cid} = Rs${amountIncl} incl. GST on ${eligibleVariants.length} variant(s)`);
-  return { ok: true, code, label: key, pct: promo.pct, amount: amountIncl, expires_at: endsAt.toISOString() };
+  // The code(s) this one replaces on the same cart (a loyalty-only code, an older promo code) go.
+  if (sameCart.length) await supersedeCodes(sameCart);
+  log.info('loyalty', `promo ${key}${loy ? ` + loyalty ${loy.tier.key} ${loy.rate}%` : ''}: code ${code} for ${isGuest ? 'a guest' : 'customer ' + cid} = Rs${amountIncl} incl. GST on ${eligibleVariants.length} variant(s)`);
+  return result(code, { expires_at: endsAt.toISOString() });
 }
 
 module.exports = { CODE_PREFIX, computePromo, createPromoCode };

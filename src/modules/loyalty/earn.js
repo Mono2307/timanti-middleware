@@ -58,16 +58,28 @@ async function amountRefundedFor(orderId) {
   }
 }
 
-/** Settle a LOY- code on this order. Returns the customer id the order should be credited to. */
+/**
+ * Settle the loyalty code on this order: a LOY- code, or a PRM- code that carries a member's loyalty
+ * too (promo + loyalty stacked on one code). Returns the customer id the order should be credited to.
+ */
 async function settleOnlineCode(order, cfg) {
-  const prefix = (cfg.online && cfg.online.code_prefix) || 'LOY-';
-  const codeEntry = (order.discount_codes || []).find(c => String(c.code || '').toUpperCase().startsWith(prefix.toUpperCase()));
-  if (!codeEntry) return null;
-  const red = await ledger.getRedemptionByCode(supabase, codeEntry.code);
-  if (!red) {
-    log.warn('loyalty', `order ${order.name}: code ${codeEntry.code} has no redemption record`);
-    return null;
+  const prefix = ((cfg.online && cfg.online.code_prefix) || 'LOY-').toUpperCase();
+  let codeEntry = null;
+  let red = null;
+  for (const c of (order.discount_codes || [])) {
+    const up = String(c.code || '').toUpperCase();
+    const isLoy = up.startsWith(prefix);
+    if (!isLoy && !up.startsWith(promo.CODE_PREFIX)) continue;
+    const row = await ledger.getRedemptionByCode(supabase, c.code);
+    if (!row) {
+      if (isLoy) log.warn('loyalty', `order ${order.name}: code ${c.code} has no redemption record`);
+      continue;
+    }
+    if (!isLoy && !row.tier) continue; // a plain promo code: settlePromoCode's job
+    codeEntry = c; red = row;
+    break;
   }
+  if (!red) return null;
   if (red.status === 'used') return red.customer_id;
 
   const orderCustomer = order.customer && order.customer.id ? String(order.customer.id) : null;
@@ -105,6 +117,7 @@ async function settlePromoCode(order) {
   if (!entry) return;
   const red = await ledger.getRedemptionByCode(supabase, entry.code);
   if (!red) { log.warn('loyalty', `order ${order.name}: promo code ${entry.code} has no redemption record`); return; }
+  if (red.tier) return; // promo + loyalty on one code: settled (and the member credited) by settleOnlineCode
   if (red.status === 'used') return;
   const appliedIncl = Number(entry.amount) || 0;
   await ledger.updateRedemption(supabase, red.id, {

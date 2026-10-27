@@ -122,9 +122,9 @@ async function codesIssuedSince(supabase, customerId, sinceIso) {
  * online code that was used — or is still live, so the cart and the counter cannot both take it.
  * monthStartIso is the first instant of the IST month; excludeDraftId skips the draft being priced.
  */
-async function occasionRedemptionSince(supabase, customerId, monthStartIso, { excludeDraftId = null } = {}) {
+async function occasionRedemptionSince(supabase, customerId, monthStartIso, { excludeDraftId = null, excludeCodes = [] } = {}) {
   const { data, error } = await supabase.from(REDEMPTIONS)
-    .select('order_name, channel, status, draft_id, used_at, created_at, expires_at')
+    .select('code, order_name, channel, status, draft_id, used_at, created_at, expires_at')
     .eq('customer_id', String(customerId)).not('occasion', 'is', null).neq('occasion', '')
     .in('status', ['used', 'pending']).gte('created_at', monthStartIso)
     .order('created_at', { ascending: true }).limit(20);
@@ -132,6 +132,7 @@ async function occasionRedemptionSince(supabase, customerId, monthStartIso, { ex
   const now = Date.now();
   return (data || []).find(r =>
     !(excludeDraftId && String(r.draft_id) === String(excludeDraftId)) &&
+    !(r.code && excludeCodes.includes(r.code)) &&
     (r.status === 'used' || (r.expires_at && Date.parse(r.expires_at) > now))) || null;
 }
 

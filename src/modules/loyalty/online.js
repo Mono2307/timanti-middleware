@@ -14,7 +14,9 @@
  *
  * The code is a fixed amount, limited to the eligible variants, single use, expiring in two hours,
  * PRODUCT class combining with ORDER-class discounts only — so a voucher code (order class) can sit
- * beside it on the cart and a promo code cannot. It is NOT locked to the customer: GoKwik logs the
+ * beside it on the cart. A promo code (ISB10) STACKS with loyalty (founder, 2026-10-26): Shopify keeps
+ * one product discount per line, so a member's promo and loyalty go on ONE code worth both (promo.js),
+ * whichever of the two the customer applies second. It is NOT locked to the customer: GoKwik logs the
  * buyer in by phone and may attach the order to a different Shopify customer, which would make a
  * customer-locked code fail at checkout. The order webhook credits whoever asked for it instead
  * (earn.js).
@@ -112,9 +114,9 @@ async function benefitsFor(customerId) {
  * The redemption that already took this month's birthday/anniversary bonus, or null. A ledger
  * outage gives the bonus rather than refusing it.
  */
-async function occasionUsed(customerId) {
+async function occasionUsed(customerId, { excludeCodes = [] } = {}) {
   try {
-    const r = await ledger.occasionRedemptionSince(supabase, customerId, E.istMonthStartIso());
+    const r = await ledger.occasionRedemptionSince(supabase, customerId, E.istMonthStartIso(), { excludeCodes });
     return r ? { order_name: r.order_name || null, channel: r.channel } : null;
   } catch (e) {
     log.warn('loyalty', `occasion-use read failed for ${customerId}: ${e.message}`);
@@ -132,6 +134,30 @@ async function deleteDiscountNode(nodeId) {
   } catch (e) {
     log.warn('loyalty', `discount ${nodeId} delete failed: ${e.message}`);
     return false;
+  }
+}
+
+/**
+ * The member's loyalty benefit on described cart lines (diamond + making per line). excludeCodes are
+ * this cart's live codes about to be replaced: a bonus they carry is not "already used".
+ * Returns { r } (r.ok false when nothing applies) or { r: null } when there is no such customer.
+ */
+async function loyaltyForCart(customerId, described, cfg, { excludeCodes = [] } = {}) {
+  const customer = await readCustomer(customerId);
+  if (!customer) return { r: null };
+  const points = await ledger.customerPoints(supabase, customerId);
+  const r = E.computeLoyalty({ points, birthday: customer.birthday, anniversary: customer.anniversary, lines: described, cfg,
+    occasionUsed: await occasionUsed(customerId, { excludeCodes }) });
+  return { r };
+}
+
+/** Retire live codes a new code replaces: the Shopify discount goes, the row is marked expired. */
+async function supersedeCodes(rows) {
+  for (const p of rows) {
+    try {
+      if (p.discount_node_id) await deleteDiscountNode(p.discount_node_id);
+      await ledger.updateRedemption(supabase, p.id, { status: 'expired' });
+    } catch (e) { log.warn('loyalty', `could not retire code ${p.code}: ${e.message}`); }
   }
 }
 
@@ -156,17 +182,17 @@ async function createCartCode(customerId, lines) {
     return { ok: false, reason: 'Too many attempts. Please try again in a while.' };
   }
 
-  const customer = await readCustomer(customerId);
-  if (!customer) return { ok: false, reason: 'We could not find your account.' };
-  const points = await ledger.customerPoints(supabase, customerId);
   const facts = await cartLineFacts(clean);
   const described = clean.map(l => {
     const f = facts[l.variant_id] || {};
     return { ...l, sku: f.sku, title: f.title, productType: f.productType, tags: f.tags, collections: f.collections,
       jewelCode: f.jewelCode, diamond: (f.diamondUnit || 0) * l.quantity, making: (f.makingUnit || 0) * l.quantity };
   });
-  const r = E.computeLoyalty({ points, birthday: customer.birthday, anniversary: customer.anniversary, lines: described, cfg,
-    occasionUsed: await occasionUsed(customerId) });
+  const signature = described.map(l => `${l.variant_id}x${l.quantity}`).sort().join(',');
+  const live = await ledger.pendingCodesFor(supabase, customerId);
+  const sameCart = live.filter(p => p.lines && p.lines.signature === signature);
+  const { r } = await loyaltyForCart(customerId, described, cfg, { excludeCodes: sameCart.map(p => p.code) });
+  if (!r) return { ok: false, reason: 'We could not find your account.' };
   if (!r.ok) {
     const reason = r.reason === 'below the first tier'
       ? `Spend ₹${Math.round(r.gapToNext).toLocaleString('en-IN')} more to unlock your first loyalty benefit.`
@@ -175,13 +201,19 @@ async function createCartCode(customerId, lines) {
     return { ok: false, reason };
   }
 
+  // A promo code (ISB10) already on this cart → re-mint it with the loyalty benefit on the same code,
+  // so the two stack. If the promo no longer applies, loyalty goes on alone as before.
+  const promoRow = sameCart.find(p => p.promo_code);
+  if (promoRow) {
+    const both = await require('./promo').createPromoCode(customerId, promoRow.promo_code, clean);
+    if (both.ok && both.loyalty) return both;
+  }
+
   const amountIncl = E.onlineAmount(r.total);
   const eligibleVariants = described.filter((_, i) => r.perLine[i].eligible).map(l => l.variant_id);
-  const signature = described.map(l => `${l.variant_id}x${l.quantity}`).sort().join(',');
 
   // Same cart, same customer, code still live → hand back the same code instead of minting another.
-  const live = await ledger.pendingCodesFor(supabase, customerId);
-  const reuse = live.find(p => !p.promo_code && p.lines && p.lines.signature === signature && Math.abs(Number(p.discount_incl_tax) - amountIncl) < 0.01);
+  const reuse = sameCart.find(p => !p.promo_code && Math.abs(Number(p.discount_incl_tax) - amountIncl) < 0.01);
   if (reuse) return { ok: true, code: reuse.code, amount: amountIncl, rate: r.rate, tier: r.tier.name, reused: true };
 
   const prefix = cfg.online.code_prefix;
@@ -225,4 +257,4 @@ async function createCartCode(customerId, lines) {
   return { ok: true, code, amount: amountIncl, rate: r.rate, tier: r.tier.name, expires_at: endsAt.toISOString() };
 }
 
-module.exports = { verifyProxySignature, benefitsFor, createCartCode, deleteDiscountNode, cartLineFacts };
+module.exports = { verifyProxySignature, benefitsFor, createCartCode, deleteDiscountNode, cartLineFacts, loyaltyForCart, supersedeCodes };
