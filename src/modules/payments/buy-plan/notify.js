@@ -15,9 +15,10 @@ const { todayIst, adminDraftUrl } = require('./draft');
 
 const rupees = (n) => `Rs${Number(n || 0).toLocaleString('en-IN')}`;
 const planView = (plan, d) => {
-  const state = S.replay(plan.total, d.legs);
+  const state = S.planState(plan, d.legs);
   return { state, rows: S.scheduleRows(plan, d.legs, todayIst()) };
 };
+const finalDate = (plan) => (plan.due_dates || [])[S.PLAN_INSTALLMENTS - 1];
 
 async function sendStarted(plan, d) {
   const { state, rows } = planView(plan, d);
@@ -27,6 +28,68 @@ async function sendStarted(plan, d) {
     html: T.buildBuyPlanStartedHtml({
       customerName: plan.customer_name, draftName: plan.draft_name, total: Number(plan.total),
       rows, paid: state.paid, balance: state.balance, customPayUrl: customPayUrl(plan.id),
+      mode: plan.mode, goldValue: Number(plan.gold_value) || 0, finalDate: finalDate(plan),
+    }),
+  });
+}
+
+// Before a gold plan starts: the link for the gold value (installment 1). Paying it is what lets
+// staff start the plan and lock the rate.
+async function sendGoldLink(d, link, goldValue) {
+  const phone = String(d.customer.phone || '').replace(/D/g, '').slice(-10);
+  if (phone) await sendSMS(phone, `Timanti buy plan ${d.draft.name}: pay the gold value, ${rupees(link.amount)}, to lock today's gold rate. Pay: ${link.shortUrl}`);
+  await sendEmail({
+    to: d.customer.email,
+    subject: `Lock today's gold rate: ${rupees(link.amount)} (${d.draft.name})`,
+    html: T.buildBuyPlanGoldLinkHtml({
+      customerName: d.customer.name, draftName: d.draft.name, total: d.total, goldValue,
+      amount: link.amount, payUrl: link.shortUrl,
+    }),
+  });
+}
+
+// Equal plan, 3 days before installment 6: the last installment is priced on its date.
+async function sendFinalNotice(plan, d, estimate) {
+  const { state, rows } = planView(plan, d);
+  await sendEmail({
+    to: plan.customer_email,
+    subject: `Your last buy plan installment is priced on ${T.planDate(finalDate(plan))} (${plan.draft_name})`,
+    html: T.buildBuyPlanFinalNoticeHtml({
+      customerName: plan.customer_name, draftName: plan.draft_name, finalDate: finalDate(plan),
+      estimateTotal: estimate, estimateLast: Math.max(0, estimate - state.paid),
+      customPayUrl: customPayUrl(plan.id), rows, paid: state.paid, balance: state.balance,
+    }),
+  });
+}
+
+// Equal plan, on the date of installment 6: the final price, and a link for what is left.
+async function sendFinalPrice(plan, d, link) {
+  const { state, rows } = planView(plan, d);
+  const phone = String(plan.customer_phone || '').replace(/D/g, '').slice(-10);
+  if (link && phone) {
+    await sendSMS(phone, `Timanti buy plan ${plan.draft_name}: final price ${rupees(plan.final_total)} at today's gold rate. Installment ${state.next} of 6: ${rupees(link.amount)}. Pay: ${link.shortUrl}`);
+  }
+  await sendEmail({
+    to: plan.customer_email,
+    subject: `Your buy plan's final price: ${rupees(plan.final_total)} (${plan.draft_name})`,
+    html: T.buildBuyPlanFinalPriceHtml({
+      customerName: plan.customer_name, draftName: plan.draft_name, startTotal: Number(plan.total),
+      finalTotal: Number(plan.final_total), k: state.next, amount: link ? link.amount : 0,
+      payUrl: link ? link.shortUrl : null, customPayUrl: state.next ? customPayUrl(plan.id) : null,
+      rows, paid: state.paid, balance: state.balance, credit: state.credit,
+    }),
+  });
+}
+
+// Internal: gold fell and the customer has paid more than the final price.
+async function sendFinalCredit(plan, d, credit) {
+  await sendEmail({
+    to: config.email.store || 'hsrstore@timanti.in',
+    internal: true,
+    subject: `Buy plan ${plan.draft_name}: customer overpaid by ${rupees(credit)} after the final reprice`,
+    html: T.buildBuyPlanFinalCreditHtml({
+      draftName: plan.draft_name, adminUrl: adminDraftUrl(d.id), customerName: plan.customer_name,
+      phone: plan.customer_phone, startTotal: Number(plan.total), finalTotal: Number(plan.final_total), credit,
     }),
   });
 }
@@ -48,7 +111,7 @@ async function sendLink(plan, d, link, { overdue = false } = {}) {
     html: T.buildBuyPlanDueHtml({
       customerName: plan.customer_name, draftName: plan.draft_name, k, dueDate: due,
       amount: link.amount, payUrl: link.shortUrl, customPayUrl: customPayUrl(plan.id),
-      rows, paid: state.paid, balance: state.balance, overdue,
+      rows, paid: state.paid, balance: state.balance, overdue, mode: plan.mode,
     }),
   });
 }
@@ -62,6 +125,7 @@ async function sendReceived(plan, d) {
       customerName: plan.customer_name, draftName: plan.draft_name,
       nextK: state.next, nextDue: state.next ? (plan.due_dates || [])[state.next - 1] : null, nextAmount: state.owed,
       customPayUrl: state.next ? customPayUrl(plan.id) : null, rows, paid: state.paid, balance: state.balance,
+      mode: plan.mode, finalDate: finalDate(plan), awaitingFinal: S.awaitingFinalPrice(plan),
     }),
   });
 }
@@ -80,8 +144,9 @@ function whatsappUrl(row) {
   if (!phone) return null;
   const due = new Date(`${String(row.due).slice(0, 10)}T00:00:00Z`)
     .toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
+  const reserved = row.mode === 'equal' ? 'Your piece remains reserved for you.' : 'Your piece remains reserved at your locked price.';
   const text = row.overdue
-    ? `Hello ${row.customerName || ''}, a gentle reminder from Timanti: installment ${row.k} of your buy plan (${row.draftName}), ${rupees(row.amount)}, was due on ${due}. Your piece remains reserved at your locked price. The payment link is in your email.`
+    ? `Hello ${row.customerName || ''}, a gentle reminder from Timanti: installment ${row.k} of your buy plan (${row.draftName}), ${rupees(row.amount)}, was due on ${due}. ${reserved} The payment link is in your email.`
     : `Hello ${row.customerName || ''}, this is Timanti. Installment ${row.k} of your buy plan (${row.draftName}), ${rupees(row.amount)}, is due on ${due}. The payment link is in your email.`;
   return `https://wa.me/91${phone}?text=${encodeURIComponent(text.replace(/\s+/g, ' ').trim())}`;
 }
@@ -92,12 +157,12 @@ async function sendStaffDigest(rows) {
     to: config.email.store || 'hsrstore@timanti.in',
     internal: true,
     subject: `Buy plan follow-ups: ${rows.filter(r => r.overdue).length} overdue, ${rows.filter(r => !r.overdue).length} due soon`,
-    html: T.buildBuyPlanStaffDigestHtml({ dateLabel, rows: rows.map(r => ({ ...r, waUrl: whatsappUrl(r) })) }),
+    html: T.buildBuyPlanStaffDigestHtml({ dateLabel, rows: rows.map(r => ({ ...r, waUrl: r.note ? null : whatsappUrl(r) })) }),
   });
 }
 
 async function sendRestored({ plan, oldName, newName, newId, d }) {
-  const state = S.replay(plan.total, d ? d.legs : []);
+  const state = S.planState(plan, d ? d.legs : []);
   await sendEmail({
     to: config.email.store || 'hsrstore@timanti.in',
     internal: true,
@@ -109,4 +174,7 @@ async function sendRestored({ plan, oldName, newName, newId, d }) {
   });
 }
 
-module.exports = { sendStarted, sendLink, sendReceived, sendCompleted, sendStaffDigest, sendRestored, whatsappUrl };
+module.exports = {
+  sendStarted, sendGoldLink, sendLink, sendReceived, sendCompleted, sendFinalNotice, sendFinalPrice, sendFinalCredit,
+  sendStaffDigest, sendRestored, whatsappUrl,
+};

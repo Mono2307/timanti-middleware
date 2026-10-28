@@ -7,6 +7,7 @@
  *   GET  /api/buy-plan/draft/:draftId   the plan and its 6 rows, or a preview + what blocks starting
  *   POST /api/buy-plan/start            start the plan: record it, lock the price, stamp the dates,
  *                                       email the customer their schedule
+ *   POST /api/buy-plan/gold-link        before a gold-value-first plan: a link for the gold value
  *   POST /api/buy-plan/send-link        a GoKwik link for any amount from the amount due now (the
  *                                       minimum) to the balance — SMS + the plan email
  *
@@ -25,7 +26,7 @@
 
 const express = require('express');
 const { config } = require('../../../core/config');
-const { putJson } = require('../../../core/shopify');
+const { putJson, getBuyingRateTable } = require('../../../core/shopify');
 const { updateDraftOrderMetafields } = require('../../../core/metafields');
 const { log } = require('../../../core/logger');
 const { verifySessionToken } = require('../../after-sales/session_token');
@@ -36,7 +37,7 @@ const notify = require('./notify');
 const { createPlanLink, readPayToken, customPayUrl } = require('./links');
 const { runBuyPlanSweep } = require('./sweep');
 const { restoreDeletedPlanDraft } = require('./restore');
-const { todayIst, readDraft, startBlockers, snapshotOf, lockedGoldRate } = require('./draft');
+const { todayIst, readDraft, startBlockers, snapshotOf, lockedGoldRate, goldValue, paidSoFar } = require('./draft');
 
 function requireStaffSession(req, res, next) {
   try {
@@ -53,24 +54,40 @@ function requireStaffSession(req, res, next) {
   }
 }
 
+const MODES = ['gold', 'equal'];
+
 function view(d, plan) {
   if (plan) {
-    const state = S.replay(plan.total, d.legs);
+    const state = S.planState(plan, d.legs);
     return {
       ok: true, draft: d.draft.name, customer: d.customer, plan: {
-        status: plan.status, total: Number(plan.total), startDate: plan.start_date,
-        lockedGoldRate: plan.locked_gold_rate, paid: state.paid, balance: state.balance,
+        status: plan.status, mode: plan.mode, total: Number(plan.total),
+        finalTotal: plan.final_total === null || plan.final_total === undefined ? null : Number(plan.final_total),
+        awaitingFinalPrice: S.awaitingFinalPrice(plan), finalDate: (plan.due_dates || [])[S.PLAN_INSTALLMENTS - 1],
+        goldValue: Number(plan.gold_value) || null, startDate: plan.start_date,
+        lockedGoldRate: plan.locked_gold_rate, paid: state.paid, balance: state.balance, credit: state.credit,
         next: state.next, minPayment: state.owed, customPayUrl: customPayUrl(plan.id),
       },
       rows: S.scheduleRows(plan, d.legs, todayIst()),
     };
   }
+  // No plan yet: both ways of running it, side by side, with what blocks each.
   const start = todayIst();
+  const gv = goldValue(d);
+  const paid = paidSoFar(d);
+  const option = (mode) => {
+    const p = { mode, total: d.total, start_date: start, gold_value: mode === 'gold' ? Math.max(gv, paid) : null };
+    return { rows: S.scheduleRows(p, d.legs, start), blockers: startBlockers(d, mode) };
+  };
   return {
     ok: true, draft: d.draft.name, customer: d.customer, plan: null,
-    preview: { total: d.total, startDate: start, monthly: S.amountDue(1, d.total) },
-    rows: S.scheduleRows({ total: d.total, start_date: start }, d.legs, start),
-    blockers: startBlockers(d),
+    preview: {
+      total: d.total, startDate: start, finalDate: S.dueDates(start)[S.PLAN_INSTALLMENTS - 1],
+      goldValue: gv, paid, goldOutstanding: Math.max(0, gv - paid),
+      monthlyEqual: S.amountDue(1, d.total),
+      monthlyAfterGold: S.amountDue(2, Math.max(0, d.total - Math.max(gv, paid))),
+    },
+    options: { gold: option('gold'), equal: option('equal') },
   };
 }
 
@@ -94,26 +111,34 @@ async function getDraftPlan(req, res) {
 
 async function startPlan(req, res) {
   try {
+    const mode = String(req.body?.mode || '');
+    if (!MODES.includes(mode)) return res.status(400).json({ ok: false, error: 'Choose how the customer will pay: gold value first, or equal installments' });
     const d = await mustReadDraft(req.body?.draftId);
     if (await store.getPlanByDraft(d.id)) return res.status(409).json({ ok: false, error: `${d.draft.name} already has a buy plan` });
-    const blockers = startBlockers(d);
+    const blockers = startBlockers(d, mode);
     if (blockers.length) return res.status(400).json({ ok: false, error: 'Cannot start a buy plan', missing: blockers });
 
     const start = todayIst();
     const dueDates = S.dueDates(start);
+    const table = await getBuyingRateTable().catch(() => null);
     // Record first: the unique key makes this the one place two simultaneous starts are told apart.
     const plan = await store.insertPlan({
       draft_order_id: d.id, draft_name: d.draft.name,
       customer_id: d.customer.id, customer_email: d.customer.email,
       customer_phone: d.customer.phone, customer_name: d.customer.name,
-      total: d.total, locked_gold_rate: lockedGoldRate(d),
+      total: d.total, locked_gold_rate: lockedGoldRate(d), mode,
+      // Installment 1 of a gold plan: the gold value, or more if more was paid before the start.
+      gold_value: mode === 'gold' ? Math.max(goldValue(d), paidSoFar(d)) : null,
+      start_rates: table?.sale_rates || null,
       start_date: start, due_dates: dueDates, status: 'active',
       snapshot: snapshotOf(d), created_by: req.staff?.sub ? String(req.staff.sub) : null,
     });
 
     // Then lock the draft. If Shopify refuses, take the plan back out so the two never disagree.
+    // Both plans freeze the price (the buy-plan tag); only the gold plan has its rate locked for good.
+    const planTags = mode === 'gold' ? [BUY_PLAN_TAG, RATE_LOCK_TAG] : [BUY_PLAN_TAG];
     try {
-      const tags = [...new Set([...d.tags, BUY_PLAN_TAG, RATE_LOCK_TAG])].join(', ');
+      const tags = [...new Set([...d.tags, ...planTags])].join(', ');
       await putJson(`draft_orders/${d.id}.json`, { draft_order: { id: d.id, tags } });
     } catch (e) {
       await store.deletePlan(plan.id).catch(() => {});
@@ -123,12 +148,12 @@ async function startPlan(req, res) {
     await updateDraftOrderMetafields(d.id, { plan_due_dates: dueDates.join(','), plan_total: String(d.total) });
 
     // Payments already on the draft are not news to the customer: mark them confirmed.
-    const settled = S.replay(plan.total, d.legs).settled.length;
+    const settled = S.planState(plan, d.legs).settled.length;
     for (let k = 1; k <= settled; k++) await store.markSent(plan.id, k, 'customer', 'received');
     await notify.sendStarted(plan, d).catch(e => log.error('buy-plan', `started email ${d.draft.name}: ${e.message}`));
 
-    log.info('buy-plan', `${d.draft.name}: plan started — Rs${d.total} over ${S.PLAN_INSTALLMENTS}, from ${start}`);
-    return res.json(view({ ...d, tags: [...d.tags, BUY_PLAN_TAG, RATE_LOCK_TAG] }, plan));
+    log.info('buy-plan', `${d.draft.name}: ${mode} plan started — Rs${d.total} over ${S.PLAN_INSTALLMENTS}, from ${start}`);
+    return res.json(view({ ...d, tags: [...d.tags, ...planTags] }, plan));
   } catch (e) { return fail(res, e, 'start'); }
 }
 
@@ -137,7 +162,7 @@ async function sendLink(req, res) {
     const d = await mustReadDraft(req.body?.draftId);
     const plan = await store.getPlanByDraft(d.id);
     if (!plan) return res.status(404).json({ ok: false, error: `${d.draft.name} has no buy plan` });
-    const check = S.validatePayment(S.replay(plan.total, d.legs), req.body?.amount);
+    const check = S.validatePayment(S.planState(plan, d.legs), req.body?.amount);
     if (!check.ok) return res.status(400).json({ ok: false, error: check.reason, min: check.min, max: check.max });
 
     const link = await createPlanLink(plan, check.amount);
@@ -145,6 +170,28 @@ async function sendLink(req, res) {
     log.info('buy-plan', `${d.draft.name}: staff sent a link for Rs${check.amount}`);
     return res.json({ ok: true, amount: check.amount, phone: plan.customer_phone, url: link.shortUrl });
   } catch (e) { return fail(res, e, 'send-link'); }
+}
+
+// Before a gold plan starts: a link for the gold value still outstanding. Paying it is what lets
+// staff start the plan (startBlockers). It is an ordinary payment on the draft; nothing is locked yet.
+async function sendGoldLink(req, res) {
+  try {
+    const d = await mustReadDraft(req.body?.draftId);
+    if (await store.getPlanByDraft(d.id)) return res.status(409).json({ ok: false, error: `${d.draft.name} already has a buy plan` });
+    const basic = startBlockers(d, 'equal');
+    if (basic.length) return res.status(400).json({ ok: false, error: 'Cannot send the gold value link', missing: basic });
+    const gv = goldValue(d);
+    const amount = gv - paidSoFar(d);
+    if (gv <= 0) return res.status(400).json({ ok: false, error: 'No gold value on the draft lines' });
+    if (amount <= 0) return res.status(400).json({ ok: false, error: 'The gold value is already paid. Start the plan.' });
+    const link = await createPlanLink({
+      draft_order_id: d.id, draft_name: d.draft.name, total: d.total,
+      customer_phone: d.customer.phone, customer_name: d.customer.name, customer_email: d.customer.email,
+    }, amount);
+    await notify.sendGoldLink(d, link, gv);
+    log.info('buy-plan', `${d.draft.name}: gold value link for Rs${amount}`);
+    return res.json({ ok: true, amount, phone: d.customer.phone, url: link.shortUrl });
+  } catch (e) { return fail(res, e, 'gold-link'); }
 }
 
 // ── Customer page: pay a different amount ───────────────────────────────────────────────────────
@@ -176,13 +223,13 @@ async function loadForPayPage(token) {
   if (plan.status !== 'active') return { error: plan.status === 'completed' ? 'This plan is fully paid. Thank you!' : 'This plan is no longer active. Please contact the store.' };
   const d = await readDraft(plan.draft_order_id);
   if (!d) return { error: 'This plan is being updated. Please try again in a few minutes or contact the store.' };
-  return { plan, d, state: S.replay(plan.total, d.legs) };
+  return { plan, d, state: S.planState(plan, d.legs) };
 }
 
 function payForm(token, plan, state, error = '', amount = '') {
   return page('Pay your buy plan', `
     <h1>Buy plan ${escHtml(plan.draft_name)}</h1>
-    <p class="muted">Installment ${state.next} of 6. Pay the amount due or more. Anything extra lowers the installments after this one.</p>
+    <p class="muted">Installment ${state.next} of 6. Pay the amount due or more. Anything extra lowers the installments after this one.${S.awaitingFinalPrice(plan) ? " Your last installment is worked out on its due date at that day&#39;s gold rate." : ""}</p>
     <div class="row"><span>Paid so far</span><span>${inr(state.paid)}</span></div>
     <div class="row"><span>Balance</span><strong>${inr(state.balance)}</strong></div>
     <div class="row"><span>Amount due now (minimum)</span><span>${inr(state.owed)}</span></div>
@@ -237,6 +284,7 @@ function register(app) {
   app.get('/api/buy-plan/draft/:draftId', requireStaffSession, getDraftPlan);
   app.post('/api/buy-plan/start', requireStaffSession, startPlan);
   app.post('/api/buy-plan/send-link', requireStaffSession, sendLink);
+  app.post('/api/buy-plan/gold-link', requireStaffSession, sendGoldLink);
   app.get('/pay/plan/:token', payPageGet);
   app.post('/pay/plan/:token', express.urlencoded({ extended: false }), payPagePost);
   app.post('/api/buy-plan/sweep', sweepNow);

@@ -17,13 +17,26 @@
 const RATE_LOCK_TAG = 'rate-locked';
 const BUY_PLAN_TAG  = 'buy-plan';
 const REFUSED_NOTE  = 'rate locked: buy plan';
+// The equal plan's one sanctioned reprice: on the date of installment 6 the sweep sets today's rate in
+// custom.gold_rate and tags the draft buy-plan-final + reprice. While that tag is on, the lock steps
+// aside; the reprice swaps it for rate-locked, so the new price is locked the moment it is written.
+const FINAL_REPRICE_TAG = 'buy-plan-final';
 
 const tagList = (tags) => (Array.isArray(tags) ? tags : String(tags || '').split(','))
   .map(t => String(t).trim().toLowerCase()).filter(Boolean);
 
 function isRateLocked(tags) {
   const list = tagList(tags);
+  if (list.includes(FINAL_REPRICE_TAG)) return false;
   return list.includes(RATE_LOCK_TAG) || list.includes(BUY_PLAN_TAG);
 }
 
-module.exports = { RATE_LOCK_TAG, BUY_PLAN_TAG, REFUSED_NOTE, isRateLocked };
+// The tags a reprice writes back: buy-plan-final becomes rate-locked. Anything else is untouched.
+function relockAfterReprice(tags) {
+  const list = (Array.isArray(tags) ? tags : String(tags || '').split(',')).map(t => String(t).trim()).filter(Boolean);
+  if (!list.some(t => t.toLowerCase() === FINAL_REPRICE_TAG)) return list;
+  const kept = list.filter(t => t.toLowerCase() !== FINAL_REPRICE_TAG);
+  return kept.some(t => t.toLowerCase() === RATE_LOCK_TAG) ? kept : [...kept, RATE_LOCK_TAG];
+}
+
+module.exports = { RATE_LOCK_TAG, BUY_PLAN_TAG, FINAL_REPRICE_TAG, REFUSED_NOTE, isRateLocked, relockAfterReprice };

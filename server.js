@@ -1620,7 +1620,8 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
   const draftOrderId = draft.id;
   const token = await getShopifyToken();
   const headers = { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' };
-  const tagsWithoutRecalc = tags.filter(t => t && t.toLowerCase() !== tagToProcess).join(', ');
+  // relockAfterReprice: the equal buy plan's final reprice (buy-plan-final) re-locks as it writes.
+  const tagsWithoutRecalc = buyPlanLock.relockAfterReprice(tags.filter(t => t && t.toLowerCase() !== tagToProcess)).join(', ');
 
   // Buy plan: the price was locked when the plan started. Consume the trigger and leave every line
   // exactly as it is — whoever (or whatever) asked for this reprice. See src/modules/payments/buy-plan/lock.js.

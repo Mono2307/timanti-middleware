@@ -71,7 +71,7 @@ async function restoreDeletedPlanDraft(oldDraftId) {
   const snap = plan.snapshot;
   const legs = readInstallments(snap.metafields || {}).filter(l => l.type !== 'cad_advance');
   // Fully paid means the draft converted to an order — deleting the spent draft is housekeeping.
-  if (S.replay(plan.total, legs).balance <= 0) {
+  if (S.planState(plan, legs).balance <= 0 && !S.awaitingFinalPrice(plan)) {
     await store.updatePlan(plan.id, { status: 'completed' });
     log.info('buy-plan', `${plan.draft_name} deleted after full payment — plan marked completed, not restored`);
     return null;

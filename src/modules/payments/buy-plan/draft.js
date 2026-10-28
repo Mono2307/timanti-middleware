@@ -47,7 +47,28 @@ async function readDraft(draftId) {
   return { id, draft, mf, customer, total, legs, tags: splitTags(draft.tags) };
 }
 
-function startBlockers(d) {
+// The jewellery lines the pricing engine prices (server.js handleRecalculatePriceTag uses the same
+// filter, and custom.gold_rate is positional over exactly these lines, in this order): not an Exchange
+// Note line, not a negative discount line, and either hydrated (a Gold property) or a variant.
+const prop = (li, name) => (li.properties || []).find(p => p.name === name)?.value;
+const rs = (v) => parseFloat(String(v || '').replace(/Rs|,/g, '').trim()) || 0;
+function productLines(lineItems) {
+  return (lineItems || []).filter(li =>
+    !(String(li.title || '').startsWith('Exchange Note ') || prop(li, '_exc_ref') !== undefined) &&
+    !(String(li.title || '').toLowerCase().includes('discount') && parseFloat(li.price) < 0) &&
+    (prop(li, 'Gold') !== undefined || !!li.variant_id));
+}
+
+const GST = 1.03;
+// The gold plan's first installment: the gold in every piece (the line's Gold property, already
+// × quantity) plus 3% GST, in whole rupees.
+function goldValue(d) {
+  return Math.round(productLines(d.draft.line_items).reduce((sum, li) => sum + rs(prop(li, 'Gold')), 0) * GST);
+}
+
+const paidSoFar = (d) => (d.legs || []).reduce((sum, l) => sum + Math.max(0, Number(l.value) || 0), 0);
+
+function startBlockers(d, mode = 'equal') {
   const b = [];
   if (d.draft.status !== 'open') b.push(`${d.draft.name} is already ${d.draft.status}`);
   if (!d.customer.id) b.push('Add a customer to the draft');
@@ -55,6 +76,12 @@ function startBlockers(d) {
   if (!d.customer.email) b.push('The customer needs an email address (reminders go by email)');
   if (d.total <= 0) b.push('The draft has nothing to collect');
   else if (S.replay(d.total, d.legs).balance <= 0) b.push('The draft is already fully paid');
+  if (mode === 'gold' && !b.length) {
+    const gv = goldValue(d);
+    const paid = paidSoFar(d);
+    if (gv <= 0) b.push('No gold value on the draft lines (no Gold breakup), so the gold rate cannot be locked this way');
+    else if (paid < gv) b.push(`Collect the gold value first: Rs${gv.toLocaleString('en-IN')}${paid ? ` (Rs${paid.toLocaleString('en-IN')} paid so far)` : ''}`);
+  }
   return b;
 }
 
@@ -87,4 +114,7 @@ function lockedGoldRate(d) {
     .filter(Boolean).join(',') || null;
 }
 
-module.exports = { todayIst, daysBetween, splitTags, adminDraftUrl, readDraft, startBlockers, snapshotOf, lockedGoldRate };
+module.exports = {
+  todayIst, daysBetween, splitTags, adminDraftUrl, readDraft, startBlockers, snapshotOf, lockedGoldRate,
+  productLines, goldValue, paidSoFar, prop, rs, GST,
+};
