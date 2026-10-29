@@ -6,7 +6,7 @@
 // over six monthly installments. Installment 1 is due the day the plan starts; 2..6 fall on the same
 // day-of-month in the following five months. There are exactly two ways to run it (founder, 2026-10-24):
 //
-//   'gold'   GOLD VALUE FIRST. Installment 1 is the gold value of the pieces (incl. 3% GST) and is
+//   'gold'   GOLD VALUE FIRST. Installment 1 is the gold value of the pieces (before GST) and is
 //            paid before the plan starts. Paying it locks the gold rate: the price never changes
 //            again, and the rest is spread evenly over installments 2..6.
 //   'equal'  EQUAL INSTALLMENTS. Six equal installments of total/6 at today's price, but the gold

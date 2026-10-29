@@ -840,7 +840,7 @@ function buildBuyPlanGoldLinkHtml({ customerName, draftName, total, goldValue, a
     + contentBlock({
         ref: `Buy Plan — ${draftName}`,
         heading: "Lock today's gold rate",
-        body: `${customerName ? esc(customerName) + ', to' : 'To'} start your buy plan at today's price of <strong>${money(total)}</strong>, the first payment is the gold value of your piece, <strong>${money(goldValue)}</strong> (including GST). Once it is paid, your gold rate is locked and the rest is spread over five monthly installments.`,
+        body: `${customerName ? esc(customerName) + ', to' : 'To'} start your buy plan at today's price of <strong>${money(total)}</strong>, the first payment is the gold value of your piece, <strong>${money(goldValue)}</strong> (before GST). Once it is paid, your gold rate is locked and the rest, including the GST, is spread over five monthly installments.`,
         buttonsHtml: button(`Pay ${money(amount)}`, payUrl),
       })
     + standardFooter()

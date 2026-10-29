@@ -61,9 +61,10 @@ function productLines(lineItems) {
 
 const GST = 1.03;
 // The gold plan's first installment: the gold in every piece (the line's Gold property, already
-// × quantity) plus 3% GST, in whole rupees.
+// × quantity), in whole rupees, WITHOUT GST: the tax is collected over installments 2..6
+// (founder, 2026-10-29).
 function goldValue(d) {
-  return Math.round(productLines(d.draft.line_items).reduce((sum, li) => sum + rs(prop(li, 'Gold')), 0) * GST);
+  return Math.round(productLines(d.draft.line_items).reduce((sum, li) => sum + rs(prop(li, 'Gold')), 0));
 }
 
 const paidSoFar = (d) => (d.legs || []).reduce((sum, l) => sum + Math.max(0, Number(l.value) || 0), 0);

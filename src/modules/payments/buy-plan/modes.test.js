@@ -23,9 +23,9 @@ const draft = (over = {}) => ({
 });
 
 console.log('gold value');
-t('is the Gold breakup of every jewellery line plus 3% GST', () => {
+t('is the Gold breakup of every jewellery line, before GST', () => {
   const d = draft({ draft: { name: '#D1', status: 'open', line_items: [line(50000, 10000), line(10000, 7700, { variant_id: 8 })] } });
-  assert.strictEqual(goldValue(d), 61800);
+  assert.strictEqual(goldValue(d), 60000);
 });
 t('ignores Exchange Note and negative discount lines', () => {
   const d = draft({ draft: { name: '#D1', status: 'open', line_items: [
@@ -33,12 +33,12 @@ t('ignores Exchange Note and negative discount lines', () => {
     { title: 'Exchange Note EN-1', price: '-5000', properties: [{ name: 'Gold', value: 'Rs999' }] },
     { title: 'Discount', price: '-100', properties: [{ name: 'Gold', value: 'Rs999' }] },
   ] } });
-  assert.strictEqual(goldValue(d), 51500);
+  assert.strictEqual(goldValue(d), 50000);
 });
 t('a gold plan cannot start until the gold value is paid', () => {
-  assert.match(startBlockers(draft(), 'gold').join(), /Collect the gold value first: Rs51,500/);
+  assert.match(startBlockers(draft(), 'gold').join(), /Collect the gold value first: Rs50,000/);
   assert.match(startBlockers(draft({ legs: legs(20000) }), 'gold').join(), /Rs20,000 paid so far/);
-  assert.deepStrictEqual(startBlockers(draft({ legs: legs(51500) }), 'gold'), []);
+  assert.deepStrictEqual(startBlockers(draft({ legs: legs(50000) }), 'gold'), []);
 });
 t('an equal plan needs no payment to start', () => assert.deepStrictEqual(startBlockers(draft(), 'equal'), []));
 

@@ -4,7 +4,7 @@ import { useEffect, useState } from "preact/hooks";
 
 // Buy plan — the fixed 6-installment plan on a draft order. Two ways to run it (founder, 2026-10-24):
 //
-//   Gold value first   the customer pays the gold value of the pieces (incl. GST) before the plan
+//   Gold value first   the customer pays the gold value of the pieces (before GST) before the plan
 //                      starts; that locks the gold rate, and the rest is spread over installments 2..6.
 //   Equal installments six equal payments at today's price; the gold rate is NOT locked. On the date
 //                      of installment 6 the draft is repriced at that day's rate and the last
@@ -147,8 +147,8 @@ function BuyPlan() {
 
             {mode === "gold" ? (
               <s-text>
-                First payment: the gold value, {inr(pv.goldValue)} (incl. GST){pv.paid ? `, ${inr(pv.paid)} paid so far` : ""}.
-                Paying it locks today's gold rate. The rest, about {inr(pv.monthlyAfterGold)} a month, is spread over the next 5 months.
+                First payment: the gold value, {inr(pv.goldValue)} (before GST){pv.paid ? `, ${inr(pv.paid)} paid so far` : ""}.
+                Paying it locks today's gold rate. The rest, GST included, about {inr(pv.monthlyAfterGold)} a month, is spread over the next 5 months.
               </s-text>
             ) : (
               <s-text>
