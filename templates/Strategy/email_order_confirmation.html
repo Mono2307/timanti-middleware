@@ -8,10 +8,15 @@
   ROUTING. Read TAGS first. This email is sent ~2s after a draft converts, BEFORE the middleware copies
   the draft's custom.* metafields onto the order (#1075: email 14:46:18, channel written 14:46:21), so
   the metafields read blank here. The admin panel mirrors them onto the draft as tags, which travel
-  with the conversion: ch:offline|ch:online and ship:yes|ship:no (ot:mto|ot:in-stock also exists but
-  is unused here: the confirmation does not vary by order type). Metafields are only a fallback.
-    is_offline   ch:offline tag, custom.channel = Offline, or the in-store-sale tag
-    is_delivery  offline AND ship:yes (or custom.shipment = Yes), and NOT in-store-sale
+  with the conversion: ch:offline|ch:online, ship:yes|ship:no and ot:mto|ot:in-stock. Metafields are
+  only a fallback.
+    is_offline   ch:offline tag, custom.channel = Offline, or the in-store-sale tag. An offline
+                 confirmation ALWAYS carries the tax invoice (founder, 2026-10-30).
+    is_delivery  offline AND ship:yes (or custom.shipment = Yes). The in-store-sale tag no longer
+                 overrides it: Yes on a delivery order used to drop all the delivery copy.
+    is_mto       ot:mto tag or custom.order_type = mto. Only changes the DELIVERY sentence: a piece
+                 still to be made is not "dispatched in 2 to 3 business days". A handover (ship:no)
+                 reads the same for MTO and in-stock.
     otherwise an offline order is treated as collected in store: no delivery promise of any kind
 {% endcomment %}
 {% assign ch = order.metafields.custom.channel | downcase %}
@@ -23,7 +28,10 @@
 {% assign ship_yes = false %}
 {% if order.tags contains 'ship:yes' %}{% assign ship_yes = true %}{% elsif order.tags contains 'ship:no' %}{% assign ship_yes = false %}{% elsif sh == "yes" %}{% assign ship_yes = true %}{% endif %}
 {% assign is_delivery = false %}
-{% if is_offline and ship_yes and is_instore_sale == false %}{% assign is_delivery = true %}{% endif %}
+{% if is_offline and ship_yes %}{% assign is_delivery = true %}{% endif %}
+{% assign ot = order.metafields.custom.order_type | downcase %}
+{% assign is_mto = false %}
+{% if order.tags contains 'ot:mto' or ot == "mto" %}{% assign is_mto = true %}{% endif %}
 {% comment %} Offline and not delivered = collected in store: no shipping row, address, timeline or link. {% endcomment %}
 {% assign hide_shipping_footer = false %}
 {% if is_offline and is_delivery == false %}{% assign hide_shipping_footer = true %}{% endif %}
@@ -32,7 +40,7 @@
 {% comment %} ===== LOGO SIZE: change the number below to set the logo width in pixels ===== {% endcomment %}
 {% assign logo_width = 120 %}
 {% capture email_title %}Thank you for your purchase!{% endcapture %}
-{% capture email_body %}{% if has_pending_payment %}{% if buyer_action_required %}You'll get a confirmation email after completing your payment.{% else %}Your payment is being processed. You'll get an email when your order is confirmed.{% endif %}{% elsif is_delivery %}Hi <strong>{{ customer.first_name }}</strong>, your piece will be dispatched to you in 2 to 3 business days. Your tax invoice is below.{% elsif is_offline %}{% else %}Hi <strong>{{ customer.first_name }}</strong>, we are preparing your order and will notify you when it is on its way.{% endif %}{% endcapture %}
+{% capture email_body %}{% if has_pending_payment %}{% if buyer_action_required %}You'll get a confirmation email after completing your payment.{% else %}Your payment is being processed. You'll get an email when your order is confirmed.{% endif %}{% elsif is_delivery and is_mto %}Hi <strong>{{ customer.first_name }}</strong>, your piece is being crafted and will be shipped to you once it is ready. Your tax invoice is below.{% elsif is_delivery %}Hi <strong>{{ customer.first_name }}</strong>, your piece will be dispatched to you in 2 to 3 business days. Your tax invoice is below.{% elsif is_offline %}{% else %}Hi <strong>{{ customer.first_name }}</strong>, we are preparing your order and will notify you when it is on its way.{% endif %}{% endcapture %}
 <!DOCTYPE html>
 <html lang="en">
 <head>

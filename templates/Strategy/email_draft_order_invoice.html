@@ -10,15 +10,24 @@
 {% assign amt_pending = order.metafields.custom.amount_pending %}
 {% assign is_mto = false %}
 {% if ot == "mto" %}{% assign is_mto = true %}{% endif %}
+{% comment %} A CAD (design) advance: a line titled "CAD Advance" (custom line or the CAD Advance product) or a
+   SKU starting CAD-ADV, the same test as the middleware's isCadAdvanceLine. Nothing is being bought or made
+   yet, so it gets its own heading and copy, and neither the MTO timing box nor the balance note. {% endcomment %}
+{% assign is_cad = false %}
+{% for line in subtotal_line_items %}
+  {% assign cad_title = line.title | downcase %}
+  {% assign cad_sku = line.sku | upcase %}
+  {% if cad_title contains 'cad advance' or cad_sku contains 'CAD-ADV' %}{% assign is_cad = true %}{% break %}{% endif %}
+{% endfor %}
 {% assign support_phone = "7710938305" %}
 {% if ch == "offline" %}{% assign support_phone = "7710968305" %}{% endif %}
 {% comment %} ===== LOGO SIZE: change the number below to set the logo width in pixels ===== {% endcomment %}
 {% assign logo_width = 120 %}
-{% capture email_title %}Thank you for your purchase!{% endcapture %}
+{% if is_cad %}{% capture email_title %}We've received your design advance{% endcapture %}{% else %}{% capture email_title %}Thank you for your purchase!{% endcapture %}{% endif %}
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <title>Your Timanti Order Advance Receipt</title>
+  <title>{% if is_cad %}Your Timanti Design Advance Receipt{% else %}Your Timanti Order Advance Receipt{% endif %}</title>
   <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
   <meta name="viewport" content="width=device-width">
   <link rel="stylesheet" type="text/css" href="/assets/notifications/styles.css">
@@ -93,6 +102,9 @@
                   <tr>
                     <td style="text-align: center;">
                       <h2>{{ email_title }}</h2>
+                      {% if is_cad %}
+                        <p style="margin-top: 10px;">Thank you for your advance towards your custom design. Our team will share your design for approval. This advance will be adjusted against your final purchase and is valid for 12 months.</p>
+                      {% endif %}
                       {% if custom_message != blank %}
                         <p style="margin-top: 10px;">{{ custom_message }}</p>
                       {% endif %}
@@ -125,7 +137,7 @@
                         </tr>
                         {% endif %}
                       </table>
-                      {% if is_mto %}
+                      {% if is_mto and is_cad == false %}
                         <div style="background: #F6F6F6; padding: 14px 18px; margin: 16px auto; text-align: center; max-width: 480px; border-radius: 4px; font-size: 13px; line-height: 1.6; color: #333;">
                           Made to order pieces take up to 21 business days.
                         </div>
@@ -188,7 +200,7 @@
                         </tr>
                       </table>
                       {% endif %}
-                      <p style="font-size: 12px; color: #666; line-height: 1.5; margin: 14px 0 0 0; text-align: left;">We will let you know the exact balance amount to be paid once your jewellery is ready, based on its exact gold and diamond weight.</p>
+                      {% unless is_cad %}<p style="font-size: 12px; color: #666; line-height: 1.5; margin: 14px 0 0 0; text-align: left;">We will let you know the exact balance amount to be paid once your jewellery is ready, based on its exact gold and diamond weight.</p>{% endunless %}
                     </td>
                   </tr>
                 </table>
@@ -224,7 +236,17 @@
                             <h4>Payment method</h4>
                             <p class="customer-info__item-content">
                               {% assign payment_method_found = false %}
+                              {% comment %} pmodes:card/upi/... is written by the middleware from the installment legs and travels with the draft. {% endcomment %}
                               {% for tag in order.tags %}
+                                {% assign tag_lower = tag | downcase %}
+                                {% if tag_lower contains 'pmodes:' %}
+                                  {% assign pm_list = tag_lower | remove: 'pmodes:' | split: '/' %}
+                                  {% for pm in pm_list %}{% case pm %}{% when 'card', 'cards' %}Card Payment{% when 'upi' %}UPI{% when 'cash' %}Cash{% when 'netbanking' %}Net Banking{% when 'emi' %}EMI{% when 'online_link' %}Online Payment Link{% else %}{{ pm | replace: '_', ' ' | capitalize }}{% endcase %}{% unless forloop.last %} / {% endunless %}{% endfor %}
+                                  {% assign payment_method_found = true %}{% break %}
+                                {% endif %}
+                              {% endfor %}
+                              {% for tag in order.tags %}
+                                {% if payment_method_found %}{% break %}{% endif %}
                                 {% assign tag_lower = tag | downcase %}
                                 {% if tag_lower == 'cards' or tag_lower == 'card' %}Card Payment{% assign payment_method_found = true %}{% break %}
                                 {% elsif tag_lower == 'upi' %}UPI{% assign payment_method_found = true %}{% break %}

@@ -152,7 +152,7 @@
                       {% endunless %}
                       {% if fulfillment.tracking_numbers.size > 0 %}
                         <p style="font-size: 14px; color: #333; margin: 18px auto; max-width: 520px; line-height: 1.6;">
-                          Tracking Number: <a href="{{ tracking_url }}" style="color: #fc7d27; font-weight: 600; text-decoration: underline;">{{ fulfillment.tracking_numbers.first }}</a> ({% if fulfillment.tracking_company == "Other" %}Sequel Logistics{% else %}{{ fulfillment.tracking_company }}{% endif %})
+                          Tracking Number: <a href="{{ tracking_url }}" style="color: #fc7d27; font-weight: 600; text-decoration: underline;">{{ fulfillment.tracking_numbers.first }}</a> {% if fulfillment.tracking_company == "Other" %}(Sequel Logistics){% elsif fulfillment.tracking_company != blank %}({{ fulfillment.tracking_company }}){% endif %}
                         </p>
                       {% endif %}
                       {% if shop.url %}

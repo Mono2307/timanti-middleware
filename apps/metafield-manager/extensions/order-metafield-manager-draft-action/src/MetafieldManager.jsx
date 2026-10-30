@@ -89,6 +89,9 @@ const REQUIRED_FIELDS = [
 // choice, so a definition with a `choices` validation rejects the whole save.
 const BLANK_CHOICE_LABEL = "—";
 
+// The only required inputs that BLOCK a save, and only on drafts — see blankSaveGateFields().
+const SAVE_GATED_DRAFT_FIELDS = ["channel", "shipment"];
+
 const REQUIRED_SET = new Set(REQUIRED_FIELDS);
 const REQUIRED_SECTION = "Required Inputs";
 
@@ -841,8 +844,31 @@ export default function MetafieldManager({ surface = "block" } = {}) {
 
   const dirty = changedKeys().length > 0;
 
+  // Founder's rule: a DRAFT may not be saved while Channel or Ship to Customer is blank. Shopify's
+  // order-confirmation email routes on the ch:/ship: tags written at save time, and a blank Channel
+  // sends the online email for an in-store sale. Orders are not gated (their email has already gone),
+  // and the other required inputs stay asterisk-only — that is not part of this decision.
+  // editsRef holds the saved value for every untouched field and the pending value for edited ones,
+  // so this reads exactly what the document will carry after the save.
+  function blankSaveGateFields() {
+    if (ctx.scope !== "draft") return [];
+    return SAVE_GATED_DRAFT_FIELDS.filter((key) => {
+      const raw = String(editsRef.current?.[key] ?? values[key] ?? "").trim();
+      return raw === "" || raw === BLANK_CHOICE_LABEL;
+    });
+  }
+
   async function save() {
     if (!ownerId) return;
+    const blankGated = blankSaveGateFields();
+    if (blankGated.length) {
+      const names = blankGated.map((k) => FIELD_CONFIG[k]?.label || k);
+      setSaved(false);
+      setError(blankGated.length > 1
+        ? `${names.join(" and ")} must be set before saving — they decide which confirmation email the customer gets.`
+        : `${names[0]} must be set before saving — it decides which confirmation email the customer gets.`);
+      return;
+    }
     setSaving(true);
     setError("");
     setSaved(false);
