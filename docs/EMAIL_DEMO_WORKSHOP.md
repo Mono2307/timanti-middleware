@@ -104,7 +104,44 @@ Both versions behave the same. Note the chain: today an offline sale with the to
 invoice in its confirmation (§1.2) and the shipping email then says "your tax invoice was sent
 earlier" — **the customer never receives the invoice.**
 
-### 1.5 Phone numbers
+### 1.5 Three questions answered
+
+**Online checkout orders — who sets Channel = Online?** Nobody, and nothing needs to. A web order
+never passes through a draft, so it carries no `ch:` tag, and no middleware code writes
+`custom.channel` on it (only loyalty reads `source_name`). The template treats "not marked offline"
+as online: the online branch is the default. There is no advance receipt for web orders (that email
+is the Draft order invoice, sent only from drafts); the order confirmation is the payment
+confirmation — "Your Timanti order #… confirmed", totals, GST, payment method. The shipping
+confirmation then falls to its online variant (Tax Invoice button) for the same reason. Risk: the
+default is online, so any OFFLINE draft that reaches conversion without `ch:offline` looks like a web
+order.
+
+**Why "Ship to Customer has no effect" — and #1075.** The field was added for exactly the right
+reason. The problem is where the live template reads it from: `order.metafields.custom.shipment`.
+That metafield reaches the order 4–20s AFTER the email, so it is always blank at send time. The live
+template reads Channel the same way, so on #1075 Channel read blank → online branch → body "we are
+preparing your order and will notify you when it is on its way" + "Items are usually shipped within
+21 business days". Note the live template has no in-store-sale branch in the BODY: even with Send Tax
+Invoice = Yes, that "on its way" sentence still prints. The repo template reads `ship:`/`ch:` TAGS,
+which are on the draft before conversion — that is the version where Ship to Customer works. It was
+written 10 Oct and never pasted into admin.
+
+**MTO handed over at the second payment.** Order Type does NOT change the order confirmation in
+either version (`is_mto` is assigned in the live file and never used). So leaving the draft as MTO
+cannot produce "being made / gone to the workshop / wait" copy — and should be left as MTO, because
+procurement sync uses order_type for the PO-queue tab. The "wait / shipped" wording a handover
+customer sees today comes from the online default described above. With the repo template, a
+handover = **Channel Offline + Ship to Customer No** → "Thank you for your purchase!", Tax Invoice
+button, weights, no greeting sentence, no timeline, no shipping row/address/policy, phone 968 —
+identical for MTO and in-stock. Two MTO traps remain:
+- If the balance is collected with **Send invoice** (draft invoice) instead of converting, the
+  advance-receipt template DOES read Order Type, and prints "Made to order pieces take up to 21
+  business days" on a piece being handed over. Collect the final payment by converting, or switch
+  Order Type before sending — confirm the effect on the PO queue first.
+- Ship to Customer left blank is treated as pickup (safe for handover); Channel left blank is
+  treated as online (wrong for handover). Channel must be enforced.
+
+### 1.6 Phone numbers
 
 Templates use 7710**93**8305 for online/default and 7710**96**8305 for offline. 938 is also the
 "Tel" on all 7 Order Printer documents; 968 is in every Resend email. Confirm which number is the
