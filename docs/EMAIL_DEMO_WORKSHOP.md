@@ -143,9 +143,7 @@ identical for MTO and in-stock. Two MTO traps remain:
 
 ### 1.6 Phone numbers
 
-Templates use 7710**93**8305 for online/default and 7710**96**8305 for offline. 938 is also the
-"Tel" on all 7 Order Printer documents; 968 is in every Resend email. Confirm which number is the
-customer WhatsApp line before the workshop.
+Confirmed by the founder 2026-10-30: **7710938305 for online, 7710968305 for offline** — both are correct and intentional. Check each email shows the number for its channel. Resend after-sales emails use 968 (store-led flows).
 
 ---
 
@@ -244,4 +242,3 @@ Check every Resend email on a phone: logo centred, no horizontal clipping (fixed
 8. **Voucher-expiry guard is in memory** — restart re-sends, downtime skips.
 9. **Repair wallet-refund vouchers print exchange-only terms 7–8.**
 10. **Refund template** (Shopify) — logo left-align + fixed 600 width; replace before demo.
-11. **Phone number** 938 vs 968 — confirm.
