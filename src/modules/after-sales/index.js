@@ -548,6 +548,63 @@ async function updateDraftOrderTags(draftOrderId, newTags, token) {
   );
 }
 
+// A metafield/form amount as a number, or null when nothing was entered. "0" is an answer — a
+// repair that came in at nothing — and must not be read as blank; only absent/empty/non-numeric is.
+function parseEnteredAmount(v) {
+  if (v === undefined || v === null) return null;
+  const s = String(v).replace(/,/g, '').trim();
+  if (s === '' || isNaN(parseFloat(s))) return null;
+  return parseFloat(s);
+}
+
+// The money side of the ready+final email, kept pure so the branch table can be tested.
+//
+//   finalCost      — repair_final_cost as recorded at Mark Complete, or null if never entered
+//   paidAmount     — what was collected against the estimate (0 if never prepaid)
+//   storedEstimate — repair_estimate_amount, the figure the estimate email quoted (null on older drafts)
+//   draftTotal     — draft.total_price; the estimate form priced the line at the estimate, and
+//                    Mark Complete does not reprice, so this is the estimate when nothing was stored
+//   isFree         — tagged repair-free / free-repair: complimentary, never asks for payment
+//
+// Modes:
+//   collect — never prepaid                        → payable on collection
+//   refund  — prepaid, final came in LOWER         → wallet voucher / original method
+//   balance — prepaid, final came in HIGHER        → payment link for the difference
+//   settled — prepaid, exact                       → nothing further to pay
+//   free    — nothing to charge at all (complimentary, or no amount anywhere)
+function resolveRepairCompletion({ finalCost = null, paidAmount = 0, storedEstimate = null, draftTotal = 0, isFree = false }) {
+  if (isFree) {
+    return { mode: 'free', effectiveFinal: 0, delta: 0, estimateAmount: 0, derivedFrom: 'free-tag' };
+  }
+
+  // If the final cost is missing, we do not give up — we derive it, in order of authority: what
+  // was actually collected, then the draft total. Both are the correct number in the case where
+  // nobody edited anything. An explicit 0 is NOT missing.
+  let effectiveFinal = finalCost;
+  let derivedFrom    = 'repair_final_cost';
+  if (effectiveFinal === null) {
+    effectiveFinal = paidAmount > 0 ? paidAmount : (draftTotal || 0);
+    derivedFrom    = paidAmount > 0 ? 'payment_amount' : 'draft total';
+  }
+
+  const delta = Math.round(paidAmount - effectiveFinal);
+
+  let mode;
+  if (paidAmount <= 0)  mode = effectiveFinal > 0 ? 'collect' : 'free';
+  else if (delta > 0)   mode = 'refund';    // includes a prepaid repair finalised at 0 — refund it all
+  else if (delta < 0)   mode = 'balance';
+  else                  mode = 'settled';
+
+  // "Estimated charges" line. Prepaid: what was paid against the estimate, so the email's
+  // estimate − final = delta arithmetic holds. Pay-at-store: the estimate actually quoted —
+  // never the final, which is what this used to show, losing the original figure.
+  const estimateAmount = paidAmount > 0
+    ? paidAmount
+    : (storedEstimate > 0 ? storedEstimate : (draftTotal || effectiveFinal));
+
+  return { mode, effectiveFinal, delta, estimateAmount, derivedFrom };
+}
+
 // ── Called from server.js GoKwik webhook when draft has repair tags ─────────
 async function handleRepairPayment(draft, { transactionId, gatewayRef }, getShopifyToken) {
   const token      = await getShopifyToken();
@@ -979,8 +1036,11 @@ async function processRepairDraftUpdate(incomingDraft, getShopifyToken, assignRe
     }
 
     await updateDraftOrderTags(draft.id, [...tags, 'repair-estimate-sent'], token);
+    // The quoted figure is kept so the ready+final email can still show "Estimated charges"
+    // when the final differs and nothing was prepaid.
     await writeDraftOrderMetafields(draft.id, {
-      repair_estimate_sent_at: new Date().toISOString()
+      repair_estimate_sent_at: new Date().toISOString(),
+      repair_estimate_amount:  String(Math.round(amount))
     }, token);
 
     console.log(`✅ Repair estimate sent: ${draft.name}`);
@@ -999,7 +1059,8 @@ async function processRepairDraftUpdate(incomingDraft, getShopifyToken, assignRe
     let trackingUrl = null;
     let storePickup = false;
     let paidAmount  = 0;
-    let finalCost   = 0;
+    let finalCost   = null;   // null = never entered; 0 = entered as nothing to charge
+    let storedEstimate = null;
     try {
       const { data: mfData } = await axios.get(
         `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draft.id}/metafields.json`,
@@ -1013,7 +1074,8 @@ async function processRepairDraftUpdate(incomingDraft, getShopifyToken, assignRe
         }
         if (mf.key === 'repair_store_pickup' && mf.value === 'true') storePickup = true;
         if (mf.key === 'payment_amount')     paidAmount = parseFloat(mf.value) || 0;
-        if (mf.key === 'repair_final_cost')  finalCost  = parseFloat(mf.value) || 0;
+        if (mf.key === 'repair_final_cost')  finalCost  = parseEnteredAmount(mf.value);
+        if (mf.key === 'repair_estimate_amount') storedEstimate = parseEnteredAmount(mf.value);
       }
     } catch (err) {
       console.warn(`⚠️  Could not fetch metafields for ${draft.name}:`, err.message);
@@ -1022,33 +1084,20 @@ async function processRepairDraftUpdate(incomingDraft, getShopifyToken, assignRe
     // ── v2 ready+final email — the ONLY completion email ────────────────────
     // Every completed repair gets this. There is no fallback to the v1 template:
     // a customer's experience must not depend on whether a staff member happened
-    // to fill one box.
-    //
-    // If the final cost is missing, we do not give up — we derive it, in order of
-    // authority: what was actually collected, then the draft total (which is the
-    // estimate, since that is what the estimate form priced the line item at).
-    // Both are the correct number in the case where nobody edited anything.
-    let effectiveFinal = finalCost;
-    if (!(effectiveFinal > 0)) {
-      effectiveFinal = paidAmount > 0 ? paidAmount : (parseFloat(draft.total_price) || 0);
-      if (effectiveFinal > 0) {
-        console.log(`[repair-complete] ${draft.name}: no repair_final_cost recorded — derived Rs.${effectiveFinal} from ${paidAmount > 0 ? 'payment_amount' : 'draft total'}`);
-      }
+    // to fill one box. See resolveRepairCompletion for how a missing final is derived.
+    // A complimentary repair resolves to 'free' whatever any amount field says.
+    const {
+      mode: readyFinalMode, effectiveFinal, delta, estimateAmount, derivedFrom
+    } = resolveRepairCompletion({
+      finalCost,
+      paidAmount,
+      storedEstimate,
+      draftTotal: parseFloat(draft.total_price) || 0,
+      isFree:     hasFreeTag
+    });
+    if (finalCost === null && !hasFreeTag && effectiveFinal > 0) {
+      console.log(`[repair-complete] ${draft.name}: no repair_final_cost recorded — derived Rs.${effectiveFinal} from ${derivedFrom}`);
     }
-
-    const delta = Math.round(paidAmount - effectiveFinal);
-
-    //   collect — never prepaid                        → payable on collection
-    //   refund  — prepaid, final came in LOWER         → wallet voucher / original method
-    //   balance — prepaid, final came in HIGHER        → payment link for the difference
-    //   settled — prepaid, exact                       → nothing further to pay
-    //   free    — nothing to charge at all (complimentary, or no amount anywhere)
-    let readyFinalMode;
-    if (effectiveFinal <= 0)    readyFinalMode = 'free';
-    else if (paidAmount <= 0)   readyFinalMode = 'collect';
-    else if (delta > 0)         readyFinalMode = 'refund';
-    else if (delta < 0)         readyFinalMode = 'balance';
-    else                        readyFinalMode = 'settled';
 
     const serverUrl = process.env.SERVER_URL || 'https://timanti-middleware.fly.dev';
     let refundWalletUrl = null;
@@ -1087,7 +1136,7 @@ async function processRepairDraftUpdate(incomingDraft, getShopifyToken, assignRe
           draftRef:       draft.name,
           items:          repairItemsFromDraft(draft),
           mode:           readyFinalMode,
-          estimateAmount: Math.round(paidAmount > 0 ? paidAmount : effectiveFinal),
+          estimateAmount: Math.round(estimateAmount),
           finalAmount:    Math.round(effectiveFinal),
           delta:          Math.abs(delta),
           refundWalletUrl,
@@ -1226,7 +1275,7 @@ function registerRepairRoutes(app, getShopifyToken) {
       const notes         = d.note || '';
       // A draft already tagged complimentary opens with the box ticked and the money field locked,
       // so the form cannot be used to put a price back on a repair that was agreed as free.
-      const alreadyFree   = /(^|,)s*(repair-free|free-repair)s*(,|$)/i.test(d.tags || '');
+      const alreadyFree   = /(^|,)\s*(repair-free|free-repair)\s*(,|$)/i.test(d.tags || '');
       // Prefill the breakdown's metal rate with today's sale rate for the piece's karat. Best
       // effort: an unknown karat or an unreadable table just leaves the box for staff to type.
       const metalStr = (d.line_items?.[0]?.properties || []).find(p => p.name === '_variant_title')?.value || '';
@@ -1610,8 +1659,10 @@ function registerRepairRoutes(app, getShopifyToken) {
       // Final cost as entered by HQ at completion. Recorded on the SAME basis as the estimate
       // (see the form hint), so the delta against payment_amount is a like-for-like comparison
       // and stays correct whichever GST basis the estimate was quoted on.
-      if (finalCost && String(finalCost).trim() && !isNaN(parseFloat(finalCost))) {
-        completeMf.repair_final_cost = String(Math.round(parseFloat(finalCost)));
+      // "0" is recorded as 0 (nothing to charge); only a blank box is left unrecorded.
+      const enteredFinal = parseEnteredAmount(finalCost);
+      if (enteredFinal !== null) {
+        completeMf.repair_final_cost = String(Math.round(enteredFinal));
       }
       if (Object.keys(completeMf).length > 0) {
         await writeDraftOrderMetafields(draft.id, completeMf, shopifyToken);
@@ -1985,4 +2036,6 @@ module.exports = {
   parseRepairItemIds, repairItemsFromDraft, SPEC_SEP,
   // Exported for outside/outside.test.js: the branch between copying specs and reading them back.
   resolveRepairSpecs,
+  // Exported for repair_completion.test.js: the ready+final money branch table.
+  resolveRepairCompletion, parseEnteredAmount,
 };
