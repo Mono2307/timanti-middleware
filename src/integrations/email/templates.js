@@ -53,11 +53,16 @@ function head() {
 </head>
 <body style="background:#d8d8d8; margin:0; padding:20px 0;">
   <table width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td align="center">
-  <table width="600" cellpadding="0" cellspacing="0" border="0" style="max-width:600px; background:#ffffff; border:1px solid #cccccc;">
+  <!--[if mso]><table width="600" align="center" cellpadding="0" cellspacing="0" border="0"><tr><td><![endif]-->
+  <!-- Fluid up to 600px: a fixed width="600" overflowed phone screens and clipped the copy.
+       Outlook desktop ignores max-width, hence the fixed-width MSO wrapper above. -->
+  <table width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%; max-width:600px; margin:0 auto; background:#ffffff; border:1px solid #cccccc;">
     <tr><td>
       <table width="100%" cellpadding="0" cellspacing="0" border="0">
-        <tr><td align="center" style="padding:18px 40px 14px;">
-          <img src="${LOGO_URL}" alt="Timanti" width="120" style="max-width:120px; height:auto; display:block;">
+        <tr><td align="center" style="padding:18px 40px 14px; text-align:center;">
+          <!-- margin:0 auto, not just align="center": a display:block image is only centred by the
+               align attribute, and clients that strip it showed the logo hard left. -->
+          <img src="${LOGO_URL}" alt="Timanti" width="120" style="max-width:120px; height:auto; display:block; margin:0 auto;">
         </td></tr>
       </table>`;
 }
@@ -66,6 +71,7 @@ function foot() {
   return `
     </td></tr>
   </table>
+  <!--[if mso]></td></tr></table><![endif]-->
   </td></tr></table>
 </body>
 </html>`;
