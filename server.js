@@ -1604,6 +1604,10 @@ function readDiscountIntent(mfMap) {
       rate,
     };
   }
+  // A draft that has ever carried per-line entries (custom.line_discounts exists, even emptied) is not a
+  // legacy draft: its discount_applied is the reprice's own mirror of those entries. Reading it back as
+  // an intent kept a removed auto/loyalty/manual discount alive as a "Code Discount".
+  if (mfMap['line_discounts'] != null) return null;
   const legacy = Math.abs(parseFloat(mfMap['discount_applied'] || 0)) || 0;
   return legacy > 0 ? { kind: 'custom', mode: 'flat', rate: legacy, legacy: true } : null;
 }
@@ -1911,9 +1915,10 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
     await gqlSetDraftLineItems(draftOrderId, allUpdatedItems, token, { tags: tagsWithoutRecalc, clearDiscount: true });
     console.log(`Draft ${draftOrderId}: reprice (no weights${anyGoldRecalc ? ', gold rate recalc' : ''}) — ${hydratedItems.length} items updated${(discIntent || lineDiscArr.length) ? `, discount Rs${appliedDiscountTotal.toFixed(2)}` : ''}`);
 
-    if (discIntent || lineDiscArr.length) {
+    {
+      // Also when every discount was removed: the mirror drops to 0 instead of advertising the old total.
       const prior = Math.abs(parseFloat(mfMap['discount_applied'] || 0)) || 0;
-      if (Math.abs(prior - appliedDiscountTotal) >= 0.01) {
+      if ((discIntent || lineDiscArr.length || prior > 0) && Math.abs(prior - appliedDiscountTotal) >= 0.01) {
         await updateDraftOrderMetafields(draftOrderId, { discount_applied: appliedDiscountTotal.toFixed(2) });
         console.log(`Draft ${draftOrderId}: discount re-resolved — was Rs${prior.toFixed(2)}, now Rs${appliedDiscountTotal.toFixed(2)}`);
       }
@@ -2215,9 +2220,10 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
   // came from the order-level intent or per-line entries — so the invoice/reports read what we priced
   // against, not the value resolved when staff clicked Apply.
   const appliedDiscountTotal = [...discByIdx.values()].reduce((s, d) => s + (d.total || 0), 0);
-  if (discIntent || lineDiscArr.length) {
+  {
+    // Also when every discount was removed: the mirror drops to 0 instead of advertising the old total.
     const prior = Math.abs(parseFloat(mfMap['discount_applied'] || 0)) || 0;
-    if (Math.abs(prior - appliedDiscountTotal) >= 0.01) {
+    if ((discIntent || lineDiscArr.length || prior > 0) && Math.abs(prior - appliedDiscountTotal) >= 0.01) {
       await updateDraftOrderMetafields(draftOrderId, { discount_applied: appliedDiscountTotal.toFixed(2) });
       console.log(`Draft ${draftOrderId}: discount re-resolved — was Rs${prior.toFixed(2)}, now Rs${appliedDiscountTotal.toFixed(2)}`);
     }
