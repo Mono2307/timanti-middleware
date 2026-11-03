@@ -1,8 +1,9 @@
 'use strict';
 
-// Buy plan — the equal plan's final reprice (see schedule.js for the two plan types).
+// Buy plan — repricing a plan draft at today's gold rate: the equal plan's final reprice, and a
+// product change (see schedule.js for the plan types).
 //
-// On the date of installment 6 the draft is repriced at that day's gold rate, the same way staff
+// Three days before the last installment's date the draft is repriced at that day's gold rate, the same way staff
 // reprice any draft: today's rate per piece goes into custom.gold_rate (positional over the jewellery
 // lines) and the draft is tagged `reprice`. The `buy-plan-final` tag lets that one reprice through the
 // lock, and the reprice itself swaps it for `rate-locked` (lock.js), so the new price is locked as soon
@@ -15,7 +16,7 @@
 const { getJson, putJson, getBuyingRateTable } = require('../../../core/shopify');
 const { updateDraftOrderMetafields } = require('../../../core/metafields');
 const { productLines, prop, rs, GST } = require('./draft');
-const { RATE_LOCK_TAG, FINAL_REPRICE_TAG } = require('./lock');
+const { RATE_LOCK_TAG, FINAL_REPRICE_TAG, CHANGE_REPRICE_TAG } = require('./lock');
 
 function nearestKarat(rate, table) {
   let best = null;
@@ -73,21 +74,29 @@ async function estimateFinal(plan, d) {
 }
 
 // Write today's rates and ask for the reprice. Throws (and changes nothing) if any piece has no rate.
-async function startFinalReprice(plan, d) {
+// tag: FINAL_REPRICE_TAG (the result is locked) or CHANGE_REPRICE_TAG (a product change; it floats).
+async function startReprice(plan, d, tag = FINAL_REPRICE_TAG) {
   const rates = await todaysRates(plan, d);
   if (!rates.length) throw new Error('no jewellery lines to reprice');
   const missing = rates.filter(r => !r.newRate);
   if (missing.length) throw new Error(`no gold rate today for: ${missing.map(r => r.title || `line ${r.idx + 1}`).join(', ')}`);
   await updateDraftOrderMetafields(d.id, { gold_rate: rates.map(r => r.newRate.toFixed(2)).join(',') });
-  const tags = [...new Set([...d.tags.filter(t => t.toLowerCase() !== RATE_LOCK_TAG), FINAL_REPRICE_TAG, 'reprice'])];
+  const tags = [...new Set([...d.tags.filter(t => t.toLowerCase() !== RATE_LOCK_TAG), tag, 'reprice'])];
   await putJson(`draft_orders/${d.id}.json`, { draft_order: { id: d.id, tags: tags.join(', ') } });
   return rates;
 }
 
-// The reprice has run once the draft carries rate-locked again and no longer carries the final tag.
+const startFinalReprice = (plan, d) => startReprice(plan, d, FINAL_REPRICE_TAG);
+
+// The final reprice has run once the draft carries rate-locked again and no longer the final tag.
 const finalRepriceDone = (tags) => {
   const list = (tags || []).map(t => String(t).toLowerCase());
   return list.includes(RATE_LOCK_TAG) && !list.includes(FINAL_REPRICE_TAG) && !list.includes('reprice');
 };
+// A product-change reprice has run once both its tags are gone.
+const changeRepriceDone = (tags) => {
+  const list = (tags || []).map(t => String(t).toLowerCase());
+  return !list.includes(CHANGE_REPRICE_TAG) && !list.includes('reprice');
+};
 
-module.exports = { lineRates, estimateDelta, nearestKarat, estimateFinal, startFinalReprice, finalRepriceDone };
+module.exports = { lineRates, estimateDelta, nearestKarat, estimateFinal, startReprice, startFinalReprice, finalRepriceDone, changeRepriceDone };

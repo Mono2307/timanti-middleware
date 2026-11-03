@@ -4,9 +4,10 @@ process.env.SHOPIFY_STORE_URL    ||= 'https://buy-plan-test.invalid';
 
 // The two kinds of buy plan: gold value first, and equal installments with a final reprice.
 const assert = require('assert');
-const S = require('./schedule');
 const { goldValue, startBlockers } = require('./draft');
-const { lineRates, estimateDelta, finalRepriceDone } = require('./final');
+const { lineRates, estimateDelta, finalRepriceDone, changeRepriceDone } = require('./final');
+const { linesKey } = require('./draft');
+const { planLegPatch } = require('../installments');
 const { isRateLocked, relockAfterReprice } = require('./lock');
 
 let n = 0;
@@ -42,60 +43,6 @@ t('a gold plan cannot start until the gold value is paid', () => {
 });
 t('an equal plan needs no payment to start', () => assert.deepStrictEqual(startBlockers(draft(), 'equal'), []));
 
-console.log('gold plan schedule');
-const goldPlan = { mode: 'gold', total: 120000, gold_value: 51500, start_date: '2026-10-28' };
-t('installment 1 is the gold value; the rest is spread over 2..6', () => {
-  const s = S.planState(goldPlan, legs(51500));
-  assert.strictEqual(s.next, 2);
-  assert.strictEqual(s.owed, 13700);   // 68,500 / 5
-  const rows = S.scheduleRows(goldPlan, legs(51500), '2026-10-28');
-  assert.deepStrictEqual(rows.map(r => r.amount), [null, 13700, 13700, 13700, 13700, 13700]);
-});
-t('paying the gold value in two parts still settles installment 1', () => {
-  const s = S.planState(goldPlan, legs(30000, 21500));
-  assert.strictEqual(s.next, 2);
-  assert.deepStrictEqual(s.settled.map(x => x.k), [1]);
-});
-t('paying more than the gold value lowers installments 2..6', () => {
-  assert.strictEqual(S.planState({ ...goldPlan, gold_value: 70000 }, legs(70000)).owed, 10000);
-});
-
-console.log('equal plan schedule');
-const eq = { mode: 'equal', total: 120000, start_date: '2026-10-28', final_total: null };
-t('six equal installments; installment 6 is marked an estimate until repriced', () => {
-  const rows = S.scheduleRows(eq, [], '2026-10-28');
-  assert.deepStrictEqual(rows.map(r => r.amount), [20000, 20000, 20000, 20000, 20000, 20000]);
-  assert.strictEqual(rows[5].estimate, true);
-  assert.strictEqual(rows[4].estimate, false);
-  assert.strictEqual(S.awaitingFinalPrice(eq), true);
-});
-t('gold up: the last installment carries the whole difference', () => {
-  const s = S.planState({ ...eq, final_total: 126000 }, legs(20000, 20000, 20000, 20000, 20000));
-  assert.strictEqual(s.next, 6);
-  assert.strictEqual(s.owed, 26000);
-  assert.strictEqual(s.credit, 0);
-});
-t('gold down: the last installment shrinks', () => {
-  assert.strictEqual(S.planState({ ...eq, final_total: 114000 }, legs(20000, 20000, 20000, 20000, 20000)).owed, 14000);
-});
-t('earlier installments stay settled against the starting price', () => {
-  const s = S.planState({ ...eq, final_total: 150000 }, legs(20000, 20000));
-  assert.deepStrictEqual(s.settled.map(x => x.k), [1, 2]);
-  assert.strictEqual(s.next, 3);
-  assert.strictEqual(s.owed, 20000);
-  assert.strictEqual(s.balance, 110000);
-});
-t('paid in full early, gold fell: no balance, the store owes a credit', () => {
-  const s = S.planState({ ...eq, final_total: 110000 }, legs(120000));
-  assert.strictEqual(s.next, null);
-  assert.strictEqual(s.credit, 10000);
-});
-t('paid in full early, gold rose: installment 6 is the difference', () => {
-  const s = S.planState({ ...eq, final_total: 125000 }, legs(120000));
-  assert.strictEqual(s.next, 6);
-  assert.strictEqual(s.owed, 5000);
-});
-
 console.log('final reprice');
 t("today's rate comes from the variant; a custom line falls back to its karat's sale rate", () => {
   const rates = lineRates([
@@ -120,6 +67,40 @@ t('the lock steps aside for buy-plan-final, and the reprice puts rate-locked bac
 t('done once rate-locked is back and the trigger tags are gone', () => {
   assert.strictEqual(finalRepriceDone(['buy-plan', 'buy-plan-final', 'reprice']), false);
   assert.strictEqual(finalRepriceDone(['buy-plan', 'rate-locked']), true);
+});
+
+console.log('product change');
+t('the lock steps aside for buy-plan-change, and the reprice drops it WITHOUT locking', () => {
+  assert.strictEqual(isRateLocked(['buy-plan', 'buy-plan-change', 'reprice']), false);
+  assert.deepStrictEqual(relockAfterReprice(['buy-plan', 'buy-plan-change']), ['buy-plan']);
+  assert.strictEqual(isRateLocked(['buy-plan']), true);
+});
+t('done once both its tags are gone', () => {
+  assert.strictEqual(changeRepriceDone(['buy-plan', 'buy-plan-change', 'reprice']), false);
+  assert.strictEqual(changeRepriceDone(['buy-plan']), true);
+});
+t('the pieces key ignores order and non-jewellery lines', () => {
+  const a = [line(1, 1, { variant_id: 7 }), line(1, 1, { variant_id: 8 })];
+  const b = [line(1, 1, { variant_id: 8 }), { title: 'Exchange Note EN-1', price: '-5', properties: [] }, line(1, 1, { variant_id: 7 })];
+  assert.strictEqual(linesKey(a), linesKey(b));
+  assert.notStrictEqual(linesKey(a), linesKey([line(1, 1, { variant_id: 9 })]));
+});
+
+console.log('payments land in their installment slot');
+const dates = '2026-10-22,2026-11-22,2026-12-22,2027-01-22,2027-02-22,2027-03-22';
+t('a payment goes in the slot of the installment its date falls in', () => {
+  assert.deepStrictEqual(planLegPatch([], { value: 5000, mode: 'card', date: '2026-12-25' }, dates),
+    { installment_3_value: '5000.00', installment_3_mode: 'card', installment_3_date: '2026-12-25' });
+});
+t('a second payment in the same installment is added to it', () => {
+  const rows = [{ slot: 3, value: 5000, mode: 'card', date: '2026-12-25', type: 'payment' }];
+  assert.deepStrictEqual(planLegPatch(rows, { value: 2000, mode: 'upi', date: '2027-01-05' }, dates),
+    { installment_3_value: '7000.00', installment_3_mode: 'upi', installment_3_date: '2027-01-05' });
+});
+t('a slot holding a deposit from before the plan is not merged into', () => {
+  const rows = [{ slot: 1, value: 1000, mode: 'cash', date: '2026-10-01', type: 'payment' },
+                { slot: 2, value: 1000, mode: 'cash', date: '2026-10-05', type: 'payment' }];
+  assert.strictEqual(planLegPatch(rows, { value: 3000, mode: 'card', date: '2026-11-23' }, dates).installment_3_value, '3000.00');
 });
 
 console.log(`\n${n} passed`);

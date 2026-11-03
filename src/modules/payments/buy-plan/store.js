@@ -74,7 +74,21 @@ async function setConfigValue(key, value) {
   if (error) console.error(`[buy-plan] config ${key} write failed: ${error.message}`);
 }
 
+// Every payment recorded against the draft by the middleware (GoKwik, Pine, the Buy plan screen),
+// newest first — the plan's own payment list. Payments typed straight into the Metafield Manager are
+// not here; the draft's installment slots are the money of record either way.
+async function listPayments(draftId) {
+  const { data, error } = await supabase.from('store_deposit_payments')
+    .select('amount, payment_mode, payment_source, created_at')
+    .eq('draft_order_id', String(draftId)).order('created_at', { ascending: false });
+  if (error) { console.error(`[buy-plan] payments read: ${error.message}`); return []; }
+  return (data || []).map(p => ({
+    amount: Number(p.amount) || 0, mode: p.payment_mode || '', source: p.payment_source || '', at: p.created_at,
+  }));
+}
+
 module.exports = {
+  listPayments,
   getPlanByDraft, getPlan, listActivePlans, insertPlan, updatePlan, deletePlan,
   wasSent, markSent, getConfigValue, setConfigValue,
 };

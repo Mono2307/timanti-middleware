@@ -2,18 +2,23 @@ import "@shopify/ui-extensions/preact";
 import { render } from "preact";
 import { useEffect, useState } from "preact/hooks";
 
-// Buy plan — the fixed 6-installment plan on a draft order. Two ways to run it (founder, 2026-10-24):
+// Buy plan — 4, 5 or 6 monthly installments on a draft order. Two ways to run it (founder):
 //
 //   Gold value first   the customer pays the gold value of the pieces (before GST) before the plan
-//                      starts; that locks the gold rate, and the rest is spread over installments 2..6.
-//   Equal installments six equal payments at today's price; the gold rate is NOT locked. On the date
-//                      of installment 6 the draft is repriced at that day's rate and the last
+//                      starts; that locks the gold rate, and the rest (GST included) is spread over
+//                      the installments after it.
+//   Equal installments equal payments at today's price; the gold rate is NOT locked. 3 days before
+//                      the last installment the draft is repriced at that day's rate, and the last
 //                      installment is whatever the new price leaves.
 //
-// Before a plan exists: staff pick one, see the schedule, send the gold value link if needed, and
-// start it on a deliberate click. Starting is the ONLY way a draft becomes a buy plan.
-// Once started: the schedule, what is paid, the balance, and a GoKwik link for any amount from the
-// amount due now (the minimum — no underpaying) up to the balance.
+// Any payment from Rs1,000 counts; a missed installment is added to the next; after any payment the
+// balance is re-spread over the installments left. 60 days with no payment (or unpaid 30 days after
+// the last date) closes the plan and what was paid becomes a voucher.
+//
+// Before a plan exists: staff pick the type and the number of installments, see the schedule, send
+// the gold value link if needed, and start it on a deliberate click (the ONLY way a plan starts).
+// Once started: the schedule, the payments, a GoKwik link for any amount, recording a payment taken
+// in store, and Change product after the pieces on the draft are changed.
 //
 // All maths lives in the middleware (src/modules/payments/buy-plan/schedule.js); this only displays.
 
@@ -26,14 +31,17 @@ const fmtDate = (iso) => {
   return d.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
 };
 const val = (e) => e?.currentTarget?.value ?? e?.target?.value ?? "";
+const checked = (e) => Boolean(e?.currentTarget?.checked ?? e?.target?.checked);
 
 const STATUS = {
   paid: { tone: "success", label: "Paid" },
-  open: { tone: "info", label: "Due now" },
+  due: { tone: "info", label: "Due now" },
   overdue: { tone: "critical", label: "Overdue" },
+  missed: { tone: "critical", label: "Missed, added to next" },
   upcoming: { tone: "neutral", label: "Upcoming" },
 };
 const MODE_LABEL = { gold: "Gold value first", equal: "Equal installments" };
+const MODE_NAMES = { cash: "Cash", card: "Card", upi: "UPI", "bank transfer": "Bank transfer" };
 
 async function middleware(path, init = {}) {
   const idToken = await shopify.auth.idToken();
@@ -52,15 +60,32 @@ const post = (path, payload) => middleware(path, {
 });
 
 function Schedule({ rows }) {
+  const n = rows.length;
   return (
     <s-stack direction="block" gap="small-200">
       {rows.map((r) => (
         <s-stack direction="inline" gap="base" alignItems="center">
-          <s-text type="strong">{r.k}.</s-text>
+          <s-text type="strong">{r.k} of {n}</s-text>
           <s-text>{fmtDate(r.due)}</s-text>
-          <s-text>{r.status === "paid" ? (r.paidOn ? `paid ${fmtDate(r.paidOn)}` : "paid") : `${inr(r.amount)}${r.estimate ? " (estimate)" : ""}`}</s-text>
+          <s-text>
+            {r.status === "missed" ? "—"
+              : r.status === "paid" ? `${inr(r.amount)}${r.paidOn ? ` paid ${fmtDate(r.paidOn)}` : " paid"}`
+              : `${inr(r.amount)}${r.estimate ? " (estimate)" : ""}`}
+          </s-text>
           {STATUS[r.status] ? <s-badge tone={STATUS[r.status].tone}>{STATUS[r.status].label}</s-badge> : null}
         </s-stack>
+      ))}
+    </s-stack>
+  );
+}
+
+function Payments({ list }) {
+  if (!list?.length) return null;
+  return (
+    <s-stack direction="block" gap="small-100">
+      <s-text type="strong">Payments</s-text>
+      {list.map((p) => (
+        <s-text color="subdued">{fmtDate(p.at)} · {inr(p.amount)} · {MODE_NAMES[p.mode] || p.mode || "—"}{p.source === "buy-plan" ? " (in store)" : ""}</s-text>
       ))}
     </s-stack>
   );
@@ -73,22 +98,26 @@ function BuyPlan() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const [mode, setMode] = useState("gold");
+  const [mode, setMode] = useState(null);
+  const [count, setCount] = useState(6);
   const [agreed, setAgreed] = useState(false);
   const [amount, setAmount] = useState("");
+  const [storeAmount, setStoreAmount] = useState("");
+  const [storeMode, setStoreMode] = useState("card");
+  const [changeAgreed, setChangeAgreed] = useState(false);
+
+  function take(body) {
+    setData(body);
+    if (body.plan) setAmount(String(body.plan.suggested || ""));
+    if (!body.plan && body.preview && !mode) setMode(body.preview.suggestedMode || "equal");
+  }
 
   async function load() {
     setLoading(true);
     setError("");
-    try {
-      const body = await middleware(`/api/buy-plan/draft/${draftId}`);
-      setData(body);
-      if (body.plan) setAmount(String(body.plan.minPayment || ""));
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setLoading(false);
-    }
+    try { take(await middleware(`/api/buy-plan/draft/${draftId}`)); }
+    catch (e) { setError(e.message); }
+    finally { setLoading(false); }
   }
   useEffect(() => { load(); }, []);
 
@@ -100,12 +129,11 @@ function BuyPlan() {
   }
 
   const start = () => run(async () => {
-    const body = await post("/api/buy-plan/start", { draftId, mode });
-    setData(body);
-    setAmount(String(body.plan?.minPayment || ""));
+    const body = await post("/api/buy-plan/start", { draftId, mode, installments: count });
+    take(body);
     setNotice(mode === "gold"
       ? "Buy plan started. The gold rate is locked and the customer has been emailed their schedule."
-      : "Buy plan started. The price is held at today's rate until the last installment, which is repriced on its date. The customer has been emailed their schedule.");
+      : "Buy plan started. The price is held at today's rate until 3 days before the last installment, when it is repriced. The customer has been emailed their schedule.");
   });
 
   const sendGoldLink = () => run(async () => {
@@ -118,18 +146,39 @@ function BuyPlan() {
     setNotice(`A payment link for ${inr(body.amount)} is on its way to ${body.phone} by SMS and email.`);
   });
 
+  const recordPayment = () => run(async () => {
+    const body = await post("/api/buy-plan/record-payment", { draftId, amount: Number(storeAmount), mode: storeMode });
+    take(body);
+    setStoreAmount("");
+    setNotice(`${inr(Number(storeAmount))} by ${MODE_NAMES[storeMode]} recorded. The customer's thank-you email follows within a few hours.`);
+  });
+
+  const changeProduct = () => run(async () => {
+    const body = await post("/api/buy-plan/change-product", { draftId, confirm: true });
+    setChangeAgreed(false);
+    setNotice(body.message);
+    await load();
+  });
+
   const heading = `Buy plan${data?.draft ? ` — ${data.draft}` : ""}`;
   const plan = data?.plan;
   const pv = data?.preview;
-  const option = data?.options?.[mode];
+  const option = mode ? data?.options?.[mode] : null;
+  const rows = option?.rows?.[count] || [];
   const goldUnpaid = Boolean(mode === "gold" && pv && pv.goldValue > 0 && pv.goldOutstanding > 0);
-  const amt = Number(amount);
-  const amountProblem = plan && plan.next
-    ? (!(amt > 0) ? "Enter an amount"
-      : amt < plan.minPayment ? `At least ${inr(plan.minPayment)} — the amount due now`
-      : amt > plan.balance ? `At most ${inr(plan.balance)} — the balance` : "")
-    : "";
+  const active = plan?.status === "active";
+  const amountProblem = (v) => {
+    const a = Number(v);
+    if (!plan || !(plan.balance > 0)) return "";
+    if (!(a > 0)) return "Enter an amount";
+    if (a < plan.minPayment) return `At least ${inr(plan.minPayment)}`;
+    if (a > plan.balance) return `At most ${inr(plan.balance)}, the balance`;
+    return "";
+  };
+  const linkProblem = amountProblem(amount);
+  const storeProblem = amountProblem(storeAmount);
   const pick = (m) => { setMode(m); setAgreed(false); setNotice(""); setError(""); };
+  const pickCount = (c) => { setCount(c); setAgreed(false); };
 
   return (
     <s-admin-action heading={heading} loading={loading}>
@@ -139,25 +188,35 @@ function BuyPlan() {
 
         {data && !plan && option ? (
           <s-stack direction="block" gap="base">
-            <s-text>{inr(pv.total)} to collect over 6 months. How will the customer pay?</s-text>
+            <s-text>{inr(pv.total)} to collect. How will the customer pay?</s-text>
             <s-stack direction="inline" gap="small-200">
               <s-button variant={mode === "gold" ? "primary" : "secondary"} onClick={() => pick("gold")}>{MODE_LABEL.gold}</s-button>
               <s-button variant={mode === "equal" ? "primary" : "secondary"} onClick={() => pick("equal")}>{MODE_LABEL.equal}</s-button>
+            </s-stack>
+            <s-stack direction="inline" gap="small-200" alignItems="center">
+              <s-text>Installments:</s-text>
+              {(data.installmentChoices || [4, 5, 6]).map((c) => (
+                <s-button variant={count === c ? "primary" : "secondary"} onClick={() => pickCount(c)}>{String(c)}</s-button>
+              ))}
             </s-stack>
 
             {mode === "gold" ? (
               <s-text>
                 First payment: the gold value, {inr(pv.goldValue)} (before GST){pv.paid ? `, ${inr(pv.paid)} paid so far` : ""}.
-                Paying it locks today's gold rate. The rest, GST included, about {inr(pv.monthlyAfterGold)} a month, is spread over the next 5 months.
+                Paying it locks today's gold rate. The rest, GST included, is spread over the next {count - 1} months.
               </s-text>
             ) : (
               <s-text>
-                6 payments of about {inr(pv.monthlyEqual)} at today's price. The gold rate is not locked: on {fmtDate(pv.finalDate)} the
+                {count} payments at today's price. The gold rate is not locked: 3 days before {fmtDate(pv.finalDates?.[count])} the
                 draft is repriced at that day's rate, and the last payment covers the difference (more if gold rises, less if it falls).
               </s-text>
             )}
-            <Schedule rows={option.rows} />
-            <s-text color="subdued">Paying more than the amount due lowers the payments after it; paying less is not allowed.</s-text>
+            <Schedule rows={rows} />
+            <s-text color="subdued">
+              Any payment from ₹1,000 counts. Paying more lowers the payments after it, paying less raises them, and a missed
+              installment is added to the next. No payment for 60 days, or the plan unpaid 30 days after the last date, closes
+              the plan and what was paid becomes a voucher valid for a year.
+            </s-text>
 
             {goldUnpaid && !data.options.equal.blockers?.length ? (
               <s-banner tone="info" heading={`Collect the gold value first: ${inr(pv.goldOutstanding)}`}>
@@ -168,10 +227,10 @@ function BuyPlan() {
             ) : (
               <s-checkbox
                 label={mode === "gold"
-                  ? "The customer has agreed: gold rate locked today, the rest over 5 monthly payments, never less than the amount due"
-                  : "The customer has agreed: 6 monthly payments, last payment repriced at the gold rate on its date, never less than the amount due"}
+                  ? `The customer has agreed: gold rate locked today, the rest over ${count - 1} monthly payments, and the closing rules above`
+                  : `The customer has agreed: ${count} monthly payments, the last repriced at the gold rate 3 days before it is due, and the closing rules above`}
                 checked={agreed}
-                onChange={(e) => setAgreed(Boolean(e?.currentTarget?.checked ?? e?.target?.checked))}
+                onChange={(e) => setAgreed(checked(e))}
               />
             )}
           </s-stack>
@@ -179,33 +238,81 @@ function BuyPlan() {
 
         {plan ? (
           <s-stack direction="block" gap="base">
-            <s-text type="strong">{MODE_LABEL[plan.mode] || "Buy plan"}</s-text>
+            {plan.status === "forfeited" ? (
+              <s-banner tone="critical" heading="This plan has closed">
+                {plan.closedReason ? `Closed: ${plan.closedReason}. ` : ""}
+                {plan.voucherCode
+                  ? `What the customer paid, ${inr(plan.voucherValue || plan.paid)}, is voucher ${plan.voucherCode}. Delete this draft; do not complete it.`
+                  : "The voucher could not be created automatically. Create it by hand, then delete this draft."}
+              </s-banner>
+            ) : null}
+            {plan.status === "completed" ? <s-banner tone="success">This plan is complete.</s-banner> : null}
+
+            <s-text type="strong">{MODE_LABEL[plan.mode] || "Buy plan"} · {plan.n} installments</s-text>
             <s-text>
-              {inr(plan.finalTotal ?? plan.total)} · paid {inr(plan.paid)} · balance {inr(plan.balance)}
-              {plan.mode === "gold" && plan.lockedGoldRate ? ` · gold rate locked at ${plan.lockedGoldRate}` : ""}
+              {inr(plan.total)} · paid {inr(plan.paid)} · balance {inr(plan.balance)}
+              {plan.lockedGoldRate ? ` · gold rate locked at ${plan.lockedGoldRate}` : ""}
             </s-text>
             {plan.awaitingFinalPrice ? (
               <s-text color="subdued">
-                Price held at today's rate until {fmtDate(plan.finalDate)}, when the draft is repriced at that day's gold rate and the
-                last payment is worked out. Do not complete the draft before then.
+                Price held at the starting rate until 3 days before {fmtDate(plan.finalDate)}, when the draft is repriced at that
+                day's gold rate and the last payment is worked out. Do not complete the draft before then.
               </s-text>
             ) : null}
-            {plan.mode === "equal" && plan.finalTotal != null ? (
-              <s-text color="subdued">Final price set on {fmtDate(plan.finalDate)}: {inr(plan.finalTotal)} (was {inr(plan.total)}).</s-text>
+            {plan.finalTotal != null && plan.mode === "equal" ? (
+              <s-text color="subdued">Final price: {inr(plan.finalTotal)} (started at {inr(plan.startTotal)}).</s-text>
+            ) : null}
+            {plan.changePending ? (
+              <s-banner tone="info">Repricing the new pieces at today's gold rate. Reopen in a few minutes to see the new schedule.</s-banner>
+            ) : null}
+            {active && plan.warn ? (
+              <s-banner tone="critical" heading={`Closes on ${fmtDate(plan.closeOn)} unless paid`}>
+                No payment has come in for a while. Any payment from ₹1,000 keeps the plan going. The customer has been warned.
+              </s-banner>
             ) : null}
             {plan.credit > 0 ? (
-              <s-banner tone="warning">The customer has paid {inr(plan.credit)} more than the final price. Settle it with them before completing the draft.</s-banner>
+              <s-banner tone="warning">The customer has paid {inr(plan.credit)} more than the price. Settle it with them before completing the draft.</s-banner>
             ) : null}
+
+            {active && plan.piecesChanged && !plan.changePending ? (
+              <s-banner tone="warning" heading="The pieces on the draft are not the plan's">
+                <s-stack direction="block" gap="small-200">
+                  <s-text>
+                    If the customer is changing product: everything paid carries over and the dates stay. The draft is repriced at
+                    today's gold rate and the balance spread over the installments left.
+                    {plan.mode === "gold" ? " The locked gold rate is given up for good; the last installment is then repriced 3 days before it is due." : ""}
+                    {" "}If they have already paid more than the new price, the difference becomes a voucher. If the change was a mistake, put the original pieces back instead.
+                  </s-text>
+                  <s-checkbox label="The customer has agreed to the change of product" checked={changeAgreed} onChange={(e) => setChangeAgreed(checked(e))} />
+                  <s-button onClick={changeProduct} loading={busy} disabled={Boolean(busy || !changeAgreed)}>Change product</s-button>
+                </s-stack>
+              </s-banner>
+            ) : null}
+
             <Schedule rows={data.rows} />
-            {plan.next ? (
+            <Payments list={data.payments} />
+
+            {active && plan.balance > 0 ? (
               <s-stack direction="block" gap="small-200">
                 <s-divider />
+                <s-text type="strong">Record a payment taken in store</s-text>
+                <s-stack direction="inline" gap="small-200" alignItems="end">
+                  <s-number-field label="Amount" min={String(plan.minPayment)} max={String(plan.balance)} step="1"
+                    value={storeAmount} onInput={(e) => setStoreAmount(val(e))} />
+                  <s-select label="Paid by" value={storeMode} onChange={(e) => setStoreMode(val(e))}>
+                    {(data.storeModes || Object.keys(MODE_NAMES)).map((m) => <s-option value={m}>{MODE_NAMES[m] || m}</s-option>)}
+                  </s-select>
+                </s-stack>
+                {storeAmount && storeProblem ? <s-text color="subdued">{storeProblem}</s-text> : null}
+                <s-button onClick={recordPayment} loading={busy} disabled={Boolean(busy || !storeAmount || storeProblem)}>Record payment</s-button>
+
+                <s-divider />
                 <s-number-field
-                  label={`Send a payment link (installment ${plan.next}: at least ${inr(plan.minPayment)})`}
+                  label={`Send a payment link (${plan.dueNow > 0 ? `due now ${inr(plan.dueNow)}` : plan.upcoming ? `next: ${inr(plan.upcoming.amount)} on ${fmtDate(plan.upcoming.due)}` : "the balance"}; at least ${inr(plan.minPayment)})`}
                   min={String(plan.minPayment)} max={String(plan.balance)} step="1"
                   value={amount} onInput={(e) => setAmount(val(e))}
                 />
-                {amountProblem ? <s-text color="subdued">{amountProblem}</s-text> : null}
+                {linkProblem ? <s-text color="subdued">{linkProblem}</s-text> : null}
                 <s-text color="subdued">
                   The link goes to the customer by SMS and email, and replaces any earlier link that is still unpaid.
                   Reminders with a link also go automatically 3 days before each due date.
@@ -214,7 +321,7 @@ function BuyPlan() {
                   <s-text-field label="Customer's own link to pay a different amount (share on WhatsApp)" value={plan.customPayUrl} readOnly />
                 ) : null}
               </s-stack>
-            ) : (!plan.awaitingFinalPrice && !(plan.credit > 0)) ? (
+            ) : active && !plan.awaitingFinalPrice && !(plan.credit > 0) ? (
               <s-banner tone="success">Fully paid. The draft can be completed.</s-banner>
             ) : null}
           </s-stack>
@@ -229,9 +336,9 @@ function BuyPlan() {
         <s-button slot="primary-action" variant="primary" onClick={start} loading={busy}
           disabled={Boolean(busy || option?.blockers?.length || !agreed)}>Start buy plan</s-button>
       ) : null}
-      {plan?.next ? (
+      {active && plan.balance > 0 ? (
         <s-button slot="primary-action" variant="primary" onClick={sendLink} loading={busy}
-          disabled={Boolean(busy || amountProblem)}>Send payment link</s-button>
+          disabled={Boolean(busy || linkProblem)}>Send payment link</s-button>
       ) : null}
       <s-button slot="secondary-actions" onClick={() => shopify.close?.()}>Close</s-button>
     </s-admin-action>

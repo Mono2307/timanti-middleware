@@ -17,7 +17,7 @@ const { supabase } = require('../../../core/supabase');
 const { log } = require('../../../core/logger');
 const { createPaymentLink, cancelPaymentLink } = require('../../../integrations/gokwik');
 
-const TOKEN_DAYS = 200;   // outlives the plan (6 months) with room for an overdue last installment
+const TOKEN_DAYS = 300;   // outlives the longest plan (6 months + 60 days to close) with room to spare
 
 const tokenKey = () => crypto.createHmac('sha256', String(config.supabase.serviceKey || ''))
   .update('buy-plan-pay-link').digest();

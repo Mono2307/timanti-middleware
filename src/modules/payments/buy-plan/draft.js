@@ -6,7 +6,6 @@
 const { getJson } = require('../../../core/shopify');
 const { config } = require('../../../core/config');
 const { readInstallments } = require('../installments');
-const S = require('./schedule');
 
 // Today in IST, YYYY-MM-DD — the store's calendar day, which is what a due date means to a customer.
 const todayIst = (now = Date.now()) => new Date(now + 330 * 60 * 1000).toISOString().slice(0, 10);
@@ -76,7 +75,7 @@ function startBlockers(d, mode = 'equal') {
   if (!d.customer.phone) b.push('The customer needs a phone number (payment links go by SMS)');
   if (!d.customer.email) b.push('The customer needs an email address (reminders go by email)');
   if (d.total <= 0) b.push('The draft has nothing to collect');
-  else if (S.replay(d.total, d.legs).balance <= 0) b.push('The draft is already fully paid');
+  else if (paidSoFar(d) >= d.total) b.push('The draft is already fully paid');
   if (mode === 'gold' && !b.length) {
     const gv = goldValue(d);
     const paid = paidSoFar(d);
@@ -85,6 +84,12 @@ function startBlockers(d, mode = 'equal') {
   }
   return b;
 }
+
+// Which pieces are on the draft: the jewellery lines by variant (or title) and quantity, sorted.
+// A plan's pieces change only through "Change product" (routes.js); the sweep compares this against
+// the snapshot to catch a draft edited without it.
+const linesKey = (lineItems) => productLines(lineItems)
+  .map(li => `${li.variant_id || String(li.title || '').trim()}x${li.quantity || 1}`).sort().join('|');
 
 // What the draft would be restored from if it were deleted. Taken when the plan starts and
 // refreshed by the sweep as payments land.
@@ -117,5 +122,5 @@ function lockedGoldRate(d) {
 
 module.exports = {
   todayIst, daysBetween, splitTags, adminDraftUrl, readDraft, startBlockers, snapshotOf, lockedGoldRate,
-  productLines, goldValue, paidSoFar, prop, rs, GST,
+  productLines, goldValue, paidSoFar, prop, rs, GST, linesKey,
 };

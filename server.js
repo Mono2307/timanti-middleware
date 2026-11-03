@@ -298,7 +298,7 @@ async function getCollectionBase(draftOrderId, fallbackTotal) {
 // Payment installments — pure helpers live in src/modules/payments/installments.js so the
 // backfill script and unit tests can use the same arithmetic. See that file for the data model.
 const {
-  MAX_INSTALLMENTS, maxInstallmentsFor, readInstallments, sumInstallments, installmentModes, installmentLegPatch,
+  MAX_INSTALLMENTS, maxInstallmentsFor, readInstallments, sumInstallments, installmentModes, installmentLegPatch, planLegPatch,
   materializeLegacyLeg,
 } = require('./src/modules/payments/installments');
 const { isCommsTag, commsTagsFromMetafields } = require('./src/core/comms_tags');
@@ -376,7 +376,11 @@ function paymentLegPatch(state, { value, mode, date }, cumulativePaid) {
   // no leg, and the next recompute writes the balance down by exactly that amount.
   const { rows, patch: legacyPatch } = materializeLegacyLeg(state.map, state.rows);
   // A buy-plan draft has 6 slots; anything else 4 (maxInstallmentsFor, payments/installments.js).
-  const patch = Object.assign({}, legacyPatch, installmentLegPatch(rows, { value, mode, date }, { max: maxInstallmentsFor(state.map) }));
+  // A buy plan adds the payment to its installment's own slot instead (planLegPatch).
+  const dueDatesCsv = String((state.map || {}).plan_due_dates || '').trim();
+  const leg = dueDatesCsv ? planLegPatch(rows, { value, mode, date }, dueDatesCsv)
+    : installmentLegPatch(rows, { value, mode, date }, { max: maxInstallmentsFor(state.map) });
+  const patch = Object.assign({}, legacyPatch, leg);
   patch.amount_paid = cumulativePaid.toFixed(2);
   patch.amount_paid_final = '0'; // legacy field, retired at rollout step 6
   return patch;

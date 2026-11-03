@@ -785,32 +785,36 @@ function buildLoyaltyOccasionHtml({ firstName, occasion, totalPct, bonusPct, mon
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// BUY PLAN — the fixed 6-installment plan (src/modules/payments/buy-plan)
+// BUY PLAN — 4 to 6 monthly installments (src/modules/payments/buy-plan)
 // ═════════════════════════════════════════════════════════════════════════════
-// rows: [{ k, due (YYYY-MM-DD), amount, status: paid|open|overdue|upcoming }] from schedule.scheduleRows.
+// rows: [{ k, due (YYYY-MM-DD), amount, status: paid|due|overdue|missed|upcoming, estimate }] from
+// schedule.planState(...).rows. n is the plan's number of installments.
 
 const planDate = (d) => (d ? new Date(`${String(d).slice(0, 10)}T00:00:00Z`)
   .toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' }) : '—');
 
 function planScheduleTable(rows) {
-  const label = { paid: 'Paid', open: 'Due', overdue: 'Overdue', upcoming: 'Upcoming' };
-  const colour = { paid: '#16a34a', open: '#111111', overdue: '#dc2626', upcoming: '#999999' };
+  const n = rows.length;
+  const label = { paid: 'Paid', due: 'Due', overdue: 'Overdue', missed: 'Missed — added to the next', upcoming: 'Upcoming' };
+  const colour = { paid: '#16a34a', due: '#111111', overdue: '#dc2626', missed: '#dc2626', upcoming: '#999999' };
   return `
     <table width="100%" cellpadding="0" cellspacing="0" border="0" style="font-size:14px; color:#333333;">
       ${rows.map(r => `
       <tr style="border-top:1px solid #f0f0f0;">
-        <td style="padding:8px 0; color:#999999;">${r.k} of 6</td>
+        <td style="padding:8px 0; color:#999999;">${r.k} of ${n}</td>
         <td style="padding:8px 0;">${esc(planDate(r.due))}</td>
-        <td style="padding:8px 0; text-align:right;">${r.status === 'paid' ? '—' : money(r.amount) + (r.estimate ? '*' : '')}</td>
+        <td style="padding:8px 0; text-align:right;">${r.status === 'missed' ? '—' : money(r.amount) + (r.estimate ? '*' : '')}</td>
         <td style="padding:8px 0 8px 12px; text-align:right; color:${colour[r.status] || '#333333'};">${label[r.status] || ''}</td>
       </tr>`).join('')}
     </table>${rows.some(r => r.estimate && r.status !== 'paid')
-      ? `<p style="font-size:12px; color:#999999; margin:8px 0 0;">* At today's gold rate. Your last installment is set on its due date at that day's rate.</p>` : ''}`;
+      ? `<p style="font-size:12px; color:#999999; margin:8px 0 0;">* At today's gold rate. Your last installment is set 3 days before it is due, at that day's rate.</p>` : ''}`;
 }
 
-const PLAN_RULES = 'Your price was locked on the day the plan started and will not change. You can pay more than the amount due at any time (the payments after it get smaller), but never less.';
-const PLAN_RULES_EQUAL = "Your installments are at the price on the day the plan started. Your last installment is worked out on its due date at that day's gold rate, so it may be a little more or less. You can pay more than the amount due at any time (the payments after it get smaller), but never less.";
-const rulesFor = (mode) => (mode === 'equal' ? PLAN_RULES_EQUAL : PLAN_RULES);
+const PLAN_PAYING = 'You can pay any amount from ₹1,000 at any time: paying more makes the installments after it smaller, paying less makes them larger, and a missed installment is added to the next one.';
+const PLAN_CLOSING = 'If no payment is made for 60 days, or the plan is not paid off 30 days after the last installment, the plan closes and everything you have paid comes back to you as a voucher valid for a year.';
+const rulesFor = (mode) => (mode === 'equal'
+  ? `Your installments are at the price on the day the plan started. Your last installment is worked out 3 days before it is due, at that day's gold rate, so it may be a little more or less. ${PLAN_PAYING} ${PLAN_CLOSING}`
+  : `Your gold rate was locked when you paid the gold value and will not change. ${PLAN_PAYING} ${PLAN_CLOSING}`);
 
 function planBody({ heading, ref, body, payUrl, amount, customPayUrl, rows, paid, balance, timelineText, mode }) {
   return head()
@@ -834,9 +838,10 @@ function planBody({ heading, ref, body, payUrl, amount, customPayUrl, rows, paid
 
 function buildBuyPlanStartedHtml({ customerName, draftName, total, rows, paid, balance, customPayUrl, mode, goldValue, finalDate }) {
   const who = customerName ? esc(customerName) + ', your' : 'Your';
+  const n = rows.length;
   const body = mode === 'equal'
-    ? `${who} piece is reserved for you. You pay in six monthly installments at today's price of <strong>${money(total)}</strong>. Your last installment, on <strong>${esc(planDate(finalDate))}</strong>, is worked out at that day's gold rate. We will email you a payment link a few days before each one is due.`
-    : `${who} gold value payment of <strong>${money(goldValue)}</strong> has locked today's gold rate. Your price is <strong>${money(total)}</strong> and will not change; the rest is spread over five monthly installments. We will email you a payment link a few days before each one is due.`;
+    ? `${who} piece is reserved for you. You pay in ${n} monthly installments at today's price of <strong>${money(total)}</strong>. Your last installment, due on <strong>${esc(planDate(finalDate))}</strong>, is worked out 3 days before at that day's gold rate. We will email you a payment link a few days before each one is due.`
+    : `${who} gold value payment of <strong>${money(goldValue)}</strong> has locked today's gold rate. Your price is <strong>${money(total)}</strong> and will not change; the rest, including GST, is spread over ${n - 1} monthly installments. We will email you a payment link a few days before each one is due.`;
   return planBody({ ref: `Buy Plan — ${draftName}`, heading: 'Your buy plan has started', body, rows, paid, balance, customPayUrl, mode });
 }
 
@@ -846,36 +851,26 @@ function buildBuyPlanGoldLinkHtml({ customerName, draftName, total, goldValue, a
     + contentBlock({
         ref: `Buy Plan — ${draftName}`,
         heading: "Lock today's gold rate",
-        body: `${customerName ? esc(customerName) + ', to' : 'To'} start your buy plan at today's price of <strong>${money(total)}</strong>, the first payment is the gold value of your piece, <strong>${money(goldValue)}</strong> (before GST). Once it is paid, your gold rate is locked and the rest, including the GST, is spread over five monthly installments.`,
+        body: `${customerName ? esc(customerName) + ', to' : 'To'} start your buy plan at today's price of <strong>${money(total)}</strong>, the first payment is the gold value of your piece, <strong>${money(goldValue)}</strong> (before GST). Once it is paid, your gold rate is locked and the rest, including the GST, is spread over the following months.`,
         buttonsHtml: button(`Pay ${money(amount)}`, payUrl),
       })
     + standardFooter()
     + foot();
 }
 
-// Equal plan, 3 days before installment 6.
-function buildBuyPlanFinalNoticeHtml({ customerName, draftName, finalDate, estimateTotal, estimateLast, rows, paid, balance }) {
-  return planBody({
-    ref: `Buy Plan — ${draftName}`,
-    heading: `Your last installment is priced on ${esc(planDate(finalDate))}`,
-    body: `${customerName ? esc(customerName) + ', your' : 'Your'} last installment is worked out on <strong>${esc(planDate(finalDate))}</strong> at that day's gold rate. At today's rate your price would be about <strong>${money(estimateTotal)}</strong>, leaving about <strong>${money(estimateLast)}</strong> to pay. We will send you the exact amount and a payment link on the day.`,
-    rows, paid, balance, mode: 'equal',
-  });
-}
-
-// Equal plan, on the date of installment 6: the repriced, now final, price.
-function buildBuyPlanFinalPriceHtml({ customerName, draftName, startTotal, finalTotal, k, amount, payUrl, customPayUrl, rows, paid, balance, credit }) {
+// Equal plan, 3 days before the last installment: the repriced, now final, price and its link.
+function buildBuyPlanFinalPriceHtml({ customerName, draftName, startTotal, finalTotal, k, dueDate, amount, payUrl, customPayUrl, rows, paid, balance, credit }) {
   const who = customerName ? esc(customerName) + ', at' : 'At';
   const tail = credit > 0
     ? ` You have paid <strong>${money(credit)}</strong> more than this. Our store team will contact you to settle the difference.`
-    : k ? ` You have paid <strong>${money(paid)}</strong>, so <strong>${money(balance)}</strong> is left${amount && amount < balance ? `, and installment ${k} is <strong>${money(amount)}</strong>` : ''}.`
+    : balance > 0 ? ` You have paid <strong>${money(paid)}</strong>, so your last installment ${k ? `(${k} of ${rows.length}) ` : ''}is <strong>${money(balance)}</strong>, due on <strong>${esc(planDate(dueDate))}</strong>.`
     : ' You have paid it in full. Thank you!';
   return planBody({
     ref: `Buy Plan — ${draftName}`,
     heading: `Your final price: ${money(finalTotal)}`,
     body: `${who} today's gold rate your piece is <strong>${money(finalTotal)}</strong> (it was ${money(startTotal)} when your plan started).${tail}`,
     payUrl, amount, customPayUrl, rows, paid, balance,
-    timelineText: 'Your price is now final and will not change again.',
+    timelineText: `Your price is now final and will not change again. ${PLAN_CLOSING}`,
   });
 }
 
@@ -885,7 +880,7 @@ function buildBuyPlanFinalCreditHtml({ draftName, adminUrl, customerName, phone,
     + contentBlock({
         ref: 'Store — internal',
         heading: `${esc(draftName)}: customer overpaid by ${money(credit)}`,
-        body: 'Gold fell before the last installment of this equal-installment buy plan, so the final price is below what the customer has paid. Settle the difference with the customer (refund or credit) before completing the draft. The customer has been told the store will be in touch.',
+        body: 'Gold fell before the last installment of this buy plan, so the final price is below what the customer has paid. Settle the difference with the customer (refund or credit) before completing the draft. The customer has been told the store will be in touch.',
         buttonsHtml: button('Open the draft', adminUrl),
       })
     + section(summary([
@@ -903,25 +898,25 @@ function buildBuyPlanDueHtml({ customerName, draftName, k, dueDate, amount, payU
     ref: `Buy Plan — ${draftName}`,
     heading: overdue ? `Installment ${k} is overdue` : `Installment ${k} is due on ${esc(planDate(dueDate))}`,
     body: overdue
-      ? `${who} ${k} of your buy plan was due on <strong>${esc(planDate(dueDate))}</strong>. Your piece is still reserved${mode === 'equal' ? '' : ' at the price you locked in'}. Please pay <strong>${money(amount)}</strong> when you can.`
-      : `${who} ${k} of 6 on your buy plan is <strong>${money(amount)}</strong>, due on <strong>${esc(planDate(dueDate))}</strong>.`,
+      ? `${who} ${k} of your buy plan was due on <strong>${esc(planDate(dueDate))}</strong>. Your piece is still reserved${mode === 'equal' ? '' : ' at the price you locked in'}. Please pay <strong>${money(amount)}</strong>, or any amount from ₹1,000, when you can.`
+      : `${who} ${k} of ${rows.length} on your buy plan is <strong>${money(amount)}</strong>, due on <strong>${esc(planDate(dueDate))}</strong>.`,
     payUrl, amount, customPayUrl, rows, paid, balance, mode,
   });
 }
 
-function buildBuyPlanReceivedHtml({ customerName, draftName, nextK, nextDue, nextAmount, customPayUrl, rows, paid, balance, mode, finalDate, awaitingFinal = false }) {
-  const unpriced = awaitingFinal;
-  const nextLine = unpriced && nextK === 6
-    ? ` Your last installment is worked out on <strong>${esc(planDate(finalDate))}</strong> at that day's gold rate, and we will send you the amount and a link then.`
+function buildBuyPlanReceivedHtml({ customerName, draftName, amount, nextK, nextDue, nextAmount, customPayUrl, rows, paid, balance, mode, finalDate, awaitingFinal = false }) {
+  const n = rows.length;
+  const nextLine = awaitingFinal && nextK === n
+    ? ` Your last installment is worked out 3 days before <strong>${esc(planDate(finalDate))}</strong> at that day's gold rate, and we will send you the amount and a link then.`
     : nextK
     ? ` Your next installment, <strong>${money(nextAmount)}</strong>, is due on <strong>${esc(planDate(nextDue))}</strong>. We will send you a link a few days before.`
-    : unpriced
-    ? ` You have paid the plan at the starting price. Your final price is worked out on <strong>${esc(planDate(finalDate))}</strong> at that day's gold rate, and we will let you know of any difference.`
+    : awaitingFinal
+    ? ` You have paid the plan at the starting price. Your final price is worked out 3 days before <strong>${esc(planDate(finalDate))}</strong> at that day's gold rate, and we will let you know of any difference.`
     : '';
   return planBody({
     ref: `Buy Plan — ${draftName}`,
     heading: 'Payment received, thank you',
-    body: `${customerName ? esc(customerName) + ', we' : 'We'} have received your payment.${nextLine}`,
+    body: `${customerName ? esc(customerName) + ', we' : 'We'} have received your payment${amount ? ` of <strong>${money(amount)}</strong>` : ''}.${nextLine}`,
     customPayUrl, rows, paid, balance, mode,
   });
 }
@@ -938,8 +933,77 @@ function buildBuyPlanCompletedHtml({ customerName, draftName, total }) {
     + foot();
 }
 
-// Internal, one mail a day to the store. rows: [{ draftName, adminUrl, customerName, phone, k, due,
-// amount, overdue, waUrl }]
+// Customer: the plan will close soon for lack of payment.
+function buildBuyPlanClosingSoonHtml({ customerName, draftName, closeOn, amount, payUrl, customPayUrl, rows, paid, balance, mode, lastInstallment = false }) {
+  const who = customerName ? esc(customerName) + ', we' : 'We';
+  const body = lastInstallment
+    ? `${who} have not yet received the rest of your buy plan, <strong>${money(balance)}</strong>. If it is not paid by <strong>${esc(planDate(closeOn))}</strong>, the plan will close and the <strong>${money(paid)}</strong> you have paid will come back to you as a voucher valid for a year.`
+    : `${who} have not received a payment on your buy plan for a while. If no payment is made by <strong>${esc(planDate(closeOn))}</strong>, the plan will close and the <strong>${money(paid)}</strong> you have paid will come back to you as a voucher valid for a year. Any payment from ₹1,000 keeps your plan going.`;
+  return planBody({ ref: `Buy Plan — ${draftName}`, heading: `Your buy plan closes on ${esc(planDate(closeOn))}`, body, payUrl, amount, customPayUrl, rows, paid, balance, mode });
+}
+
+// Customer: the plan closed; what they paid is a voucher.
+function buildBuyPlanForfeitedHtml({ customerName, draftName, paid, voucherCode, validUntil }) {
+  return head()
+    + contentBlock({
+        ref: `Buy Plan — ${draftName}`,
+        heading: 'Your buy plan has closed',
+        body: `${customerName ? esc(customerName) + ', your' : 'Your'} buy plan has closed because it was not paid as agreed. Everything you paid, <strong>${money(paid)}</strong>, is now a Timanti voucher: <strong>${esc(voucherCode)}</strong>, valid until <strong>${esc(planDate(validUntil))}</strong>. Use it in one purchase worth ${money(paid)} or more, in store or online.`,
+        buttonsHtml: button('Browse New Arrivals', CATALOGUE_URL),
+        storeLinkHtml: storeLink('or visit our HSR Layout store', STORE_MAP_URL),
+      })
+    + standardFooter()
+    + foot();
+}
+
+// Internal: a plan closed for non-payment.
+function buildBuyPlanForfeitedStaffHtml({ draftName, adminUrl, customerName, phone, paid, total, voucherCode, validUntil, reason, voucherError }) {
+  return head()
+    + contentBlock({
+        ref: 'Store — internal',
+        heading: `Buy plan ${esc(draftName)} closed: ${esc(reason)}`,
+        body: voucherError
+          ? `The plan closed, but the voucher could NOT be created (${esc(voucherError)}). Create a voucher for ${money(paid)} for the customer by hand, valid one year. Then delete the draft. Do not complete it.`
+          : `The plan closed and the customer has been sent voucher <strong>${esc(voucherCode)}</strong> for everything paid, valid until ${esc(planDate(validUntil))}. The draft's payments now live in that voucher: delete the draft. Do not complete it.`,
+        buttonsHtml: button('Open the draft', adminUrl),
+      })
+    + section(summary([
+        { label: 'Customer', value: `${customerName || '—'} ${phone || ''}` },
+        { label: 'Plan price', value: money(total) },
+        { label: 'Paid (voucher value)', value: money(paid), total: true },
+      ]))
+    + foot();
+}
+
+// Customer: the piece on the plan was changed.
+function buildBuyPlanChangedHtml({ customerName, draftName, oldTotal, newTotal, lostLock, voucherCode, credit, validUntil, customPayUrl, rows, paid, balance }) {
+  const who = customerName ? esc(customerName) + ', your' : 'Your';
+  const lock = lostLock ? ' Because the piece changed, the gold rate is no longer locked: your last installment is worked out 3 days before it is due, at that day\'s gold rate.' : '';
+  const tail = credit > 0
+    ? ` You have already paid <strong>${money(credit)}</strong> more than the new price, so that amount comes back to you as voucher <strong>${esc(voucherCode)}</strong>, valid until ${esc(planDate(validUntil))}.`
+    : ` Everything you have paid counts towards it, and the balance of <strong>${money(balance)}</strong> is spread over the installments left.`;
+  return planBody({
+    ref: `Buy Plan — ${draftName}`,
+    heading: 'Your buy plan has been updated',
+    body: `${who} buy plan is now for a different piece, at <strong>${money(newTotal)}</strong> (it was ${money(oldTotal)}).${tail}${lock}`,
+    customPayUrl: balance > 0 ? customPayUrl : null, rows, paid, balance, mode: lostLock ? 'equal' : undefined,
+  });
+}
+
+// Internal: a plan draft's pieces were edited without "Change product".
+function buildBuyPlanLinesChangedHtml({ draftName, adminUrl, customerName }) {
+  return head()
+    + contentBlock({
+        ref: 'Store — internal',
+        heading: `${esc(draftName)}: the pieces on a buy-plan draft were changed`,
+        body: `Someone edited the pieces on ${esc(customerName || 'a customer')}'s buy-plan draft without using <strong>Change product</strong>. The plan still holds the old pieces and price, and a deleted draft would be restored with the old pieces. If the change is meant, open the draft → More actions → Buy plan → Change product. If not, put the original pieces back.`,
+        buttonsHtml: button('Open the draft', adminUrl),
+      })
+    + foot();
+}
+
+// Internal, one mail a day to the store. rows: [{ draftName, adminUrl, customerName, phone, k, n, due,
+// amount, overdue, note, waUrl }]
 function buildBuyPlanStaffDigestHtml({ dateLabel, rows }) {
   const block = (title, list, blurb) => section(
     h3(`${title} — ${list.length}`)
@@ -955,9 +1019,9 @@ function buildBuyPlanStaffDigestHtml({ dateLabel, rows }) {
       <tr style="border-top:1px solid #f0f0f0;">
         <td style="padding:8px 0;"><a href="${r.adminUrl}" style="color:#fc7d27;">${esc(r.draftName)}</a></td>
         <td style="padding:8px 0;">${esc(r.customerName || '—')}<br><span style="color:#999999;">${esc(r.phone || '')}</span></td>
-        <td style="padding:8px 0;">${r.k} of 6</td>
+        <td style="padding:8px 0;">${r.k} of ${r.n || 6}</td>
         <td style="padding:8px 0;">${esc(planDate(r.due))}</td>
-        <td style="padding:8px 0; text-align:right;">${r.note ? esc(r.note) : money(r.amount)}</td>
+        <td style="padding:8px 0; text-align:right;">${money(r.amount)}${r.note ? `<br><span style="color:#dc2626;">${esc(r.note)}</span>` : ''}</td>
         <td style="padding:8px 0; text-align:right;">${r.waUrl ? `<a href="${r.waUrl}" style="color:#16a34a;">WhatsApp</a>` : ''}</td>
       </tr>`).join('')}
     </table>` : `<p style="font-size:13px; color:#999999; margin:0;">None today.</p>`)
@@ -968,9 +1032,9 @@ function buildBuyPlanStaffDigestHtml({ dateLabel, rows }) {
     + contentBlock({
         ref: 'Store — internal',
         heading: `Buy plan follow-ups — ${esc(dateLabel)}`,
-        body: 'Customers on a buy plan with an installment due in the next 3 days, or already overdue. Each has been emailed a payment link. The WhatsApp link opens a ready-written message to send from the store phone.',
+        body: 'Customers on a buy plan with an installment due in the next 3 days, overdue, or close to being closed for non-payment. Each has been emailed. The WhatsApp link opens a ready-written message to send from the store phone.',
       })
-    + block('Overdue', overdue, 'Past the due date and not yet paid. The piece stays reserved and the price stays locked. Call the customer.')
+    + block('Overdue', overdue, 'Past the due date and not yet paid. A plan with no payment for 60 days, or unpaid 30 days after its last installment, closes and the customer gets a voucher. Call the customer.')
     + block('Due in the next 3 days', soon, 'The customer has their reminder and link. A short WhatsApp nudge helps.')
     + foot();
 }
@@ -981,7 +1045,7 @@ function buildBuyPlanRestoredHtml({ oldName, newName, adminUrl, customerName, to
     + contentBlock({
         ref: 'Store — internal',
         heading: `Buy plan draft ${esc(oldName)} was deleted and restored as ${esc(newName)}`,
-        body: 'A draft on an active buy plan was deleted. The middleware rebuilt it at the locked prices with its payments, and the plan now follows the new draft. If the deletion was intentional, cancel the plan with HQ rather than deleting the draft.',
+        body: 'A draft on an active buy plan was deleted. The middleware rebuilt it at the plan\'s prices with its payments, and the plan now follows the new draft. If the deletion was intentional, cancel the plan with HQ rather than deleting the draft.',
         buttonsHtml: button('Open the restored draft', adminUrl),
       })
     + section(summary([
@@ -993,11 +1057,11 @@ function buildBuyPlanRestoredHtml({ oldName, newName, adminUrl, customerName, to
     + foot();
 }
 
+
 module.exports = {
   buildLoyaltyTierUpHtml,
   buildBuyPlanStartedHtml,
   buildBuyPlanGoldLinkHtml,
-  buildBuyPlanFinalNoticeHtml,
   buildBuyPlanFinalPriceHtml,
   buildBuyPlanFinalCreditHtml,
   planDate,
@@ -1006,6 +1070,11 @@ module.exports = {
   buildBuyPlanCompletedHtml,
   buildBuyPlanStaffDigestHtml,
   buildBuyPlanRestoredHtml,
+  buildBuyPlanClosingSoonHtml,
+  buildBuyPlanForfeitedHtml,
+  buildBuyPlanForfeitedStaffHtml,
+  buildBuyPlanChangedHtml,
+  buildBuyPlanLinesChangedHtml,
   buildLoyaltyOccasionHtml,
   buildCadAdvanceDigestHtml,
   buildCadAdvanceExpiryHtml,

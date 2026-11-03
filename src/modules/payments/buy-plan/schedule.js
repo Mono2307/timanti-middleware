@@ -1,148 +1,229 @@
 'use strict';
 
-// Buy plan — the schedule and the money rule. Pure functions, no I/O.
+// Buy plan — the schedule and the money rules. Pure functions, no I/O.
 //
-// A buy plan is the fixed, non-configurable 6-installment plan: the customer pays the net-to-collect
-// over six monthly installments. Installment 1 is due the day the plan starts; 2..6 fall on the same
-// day-of-month in the following five months. There are exactly two ways to run it (founder, 2026-10-24):
+// A buy plan is 4, 5 or 6 monthly installments (staff choose at the start; 6 by default).
+// Installment 1 is due the day the plan starts; the rest fall on the same day-of-month in the
+// months after. Each installment owns the PERIOD from its due date to the next one. Two ways to run
+// it (founder, 2026-10-24 / 2026-10-30):
 //
-//   'gold'   GOLD VALUE FIRST. Installment 1 is the gold value of the pieces (before GST) and is
-//            paid before the plan starts. Paying it locks the gold rate: the price never changes
-//            again, and the rest is spread evenly over installments 2..6.
-//   'equal'  EQUAL INSTALLMENTS. Six equal installments of total/6 at today's price, but the gold
-//            rate is NOT locked: on the date of installment 6 the draft is repriced at that day's
-//            rate, and the last installment is whatever the new price leaves (more or less).
+//   'gold'   GOLD VALUE FIRST. Installment 1 is the gold value of the pieces (before GST), paid
+//            before the plan starts. That locks the gold rate; the rest, GST included, is spread
+//            over the installments after it.
+//   'equal'  EQUAL INSTALLMENTS. total/n each at today's price, the gold rate NOT locked: 3 days
+//            before the last due date the draft is repriced at that day's rate, and the last
+//            installment is whatever the new price leaves. A gold plan whose product is changed
+//            becomes this kind (its lock is gone for good).
 //
-// THE MONEY RULE. The amount due on installment k is the balance spread evenly over the installments
-// still to come — ceil(balance / (6 - k + 1)), the last one taking whatever is left. On day 1 that is
-// total/6. Paying MORE lowers every later installment (the balance is smaller, the divisor the same).
-// Paying LESS is not allowed: the amount due is also the minimum a payment link may be raised for.
+// THE MONEY RULES (founder, 2026-10-30).
+//   - The plan keeps a standing installment amount A. On day 1, A = total/n (gold: the gold value).
+//   - A period with NO payment carries its whole amount forward: the next one asks for both.
+//   - ANY payment in a period (at least MIN_PAYMENT, or the balance if smaller) counts for that
+//     period, and whatever is still unpaid is re-spread evenly over the installments after it.
+//     So paying more lowers the later ones and paying less raises them; a missed month doubles the
+//     next, and paying again re-spreads.
+//   - The last installment is always the whole balance.
+//   - A price change (product change, the equal plan's final reprice) re-spreads the new balance
+//     over the installments still to come.
 //
-// Staff can still record a short cash/UPI leg by hand in the panel, so the replay below has to cope
-// with one: a short leg leaves the installment open with the shortfall still owed, and the next leg
-// settles it. It never shifts the schedule.
+// FORFEITURE. The plan closes (the money paid becomes a voucher, see forfeit.js) when either:
+//   - CLOSE_AFTER_DAYS pass with no payment while an installment is unpaid, counted from the first
+//     due date after the last period that saw a payment; or
+//   - the balance is still unpaid LAST_CLOSE_AFTER_DAYS after the last due date.
+// The customer is warned at WARN_DAYS / LAST_WARN_DAYS.
 
 const { addMonths } = require('../../adjustments/cad_advance');
 
 const PLAN_INSTALLMENTS = 6;
+const INSTALLMENT_CHOICES = [4, 5, 6];
+const MIN_PAYMENT = 1000;
+const CLOSE_AFTER_DAYS = 60;
+const WARN_DAYS = [30, 45];
+const LAST_CLOSE_AFTER_DAYS = 30;
+const LAST_WARN_DAYS = [15, 25];
 
-// Six YYYY-MM-DD due dates, the first being the start date itself.
-function dueDates(startDate) {
-  const start = String(startDate || '').slice(0, 10);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(start)) return [];
-  return Array.from({ length: PLAN_INSTALLMENTS }, (_, i) => (i === 0 ? start : addMonths(start, i)));
+const iso = (v) => String(v || '').slice(0, 10);
+const isIso = (v) => /^\d{4}-\d{2}-\d{2}$/.test(iso(v));
+const daysBetween = (fromIso, toIso) =>
+  Math.round((Date.parse(`${iso(toIso)}T00:00:00Z`) - Date.parse(`${iso(fromIso)}T00:00:00Z`)) / 86400000);
+const addDays = (d, n) => new Date(Date.parse(`${iso(d)}T00:00:00Z`) + n * 86400000).toISOString().slice(0, 10);
+const r0 = (v) => Math.round(Number(v) || 0);
+
+// n YYYY-MM-DD due dates, the first being the start date itself.
+function dueDates(startDate, n = PLAN_INSTALLMENTS) {
+  const start = iso(startDate);
+  if (!isIso(start)) return [];
+  return Array.from({ length: n }, (_, i) => (i === 0 ? start : addMonths(start, i)));
 }
 
-// Amount due on installment k (1-based) given the balance outstanding when it opens.
-function amountDue(k, balance) {
-  const bal = Math.max(0, Math.round(Number(balance) || 0));
-  if (bal === 0) return 0;
-  if (k >= PLAN_INSTALLMENTS) return bal;
-  return Math.min(bal, Math.ceil(bal / (PLAN_INSTALLMENTS - k + 1)));
-}
+const countOf = (plan) => Number(plan.installments) || (plan.due_dates || []).length || PLAN_INSTALLMENTS;
+const datesOf = (plan) => ((plan.due_dates || []).length ? plan.due_dates.map(iso) : dueDates(plan.start_date, countOf(plan)));
 
-// Replay the payment legs (oldest first) against the plan total.
-// Returns where the plan stands right now:
-//   next     — the open installment (1..6), or null once the balance is cleared
-//   owed     — what is still owed on that installment = the minimum the next payment may be
-//   balance  — total minus everything paid
-//   paid     — sum of the legs
-//   settled  — [{ k, settledOn }] for every installment closed so far
-//   credit   — paid beyond the final price (equal plan, gold fell): the store owes this back
-// opts.firstDue   — installment 1 is this amount instead of total/6 (the gold plan's gold value)
-// opts.finalTotal — the equal plan's price after its final reprice. Installments 1..5 stay measured
-//                   against the original total (a payment made in month 2 cannot become "short"
-//                   because gold moved in month 6); only the balance, and so installment 6, moves.
-function replay(total, legs, { firstDue = null, finalTotal = null } = {}) {
-  const planTotal = Math.max(0, Math.round(Number(total) || 0));
-  const first = Math.round(Number(firstDue) || 0);
-  const dueOn = (k, bal) => (k === 1 && first > 0 ? Math.min(bal, first) : amountDue(k, bal));
-  let balance = planTotal;
+// The installment whose period a date falls in (1..n). Before the start counts as installment 1.
+function periodOf(date, dates) {
   let k = 1;
-  let owed = dueOn(k, balance);
-  const settled = [];
+  for (let i = 0; i < dates.length; i++) if (dates[i] <= iso(date)) k = i + 1;
+  return k;
+}
 
+// Floating = repriced on the last date: an equal plan, or a gold plan whose product was changed.
+const floats = (plan) => plan.mode === 'equal';
+const hasFinalPrice = (plan) => plan.final_total !== null && plan.final_total !== undefined && plan.final_total !== '';
+const awaitingFinalPrice = (plan) => floats(plan) && !hasFinalPrice(plan);
+
+// Every price the plan has had after its start, oldest first: product changes and the final reprice.
+function priceChanges(plan) {
+  const list = (plan.price_changes || []).filter(c => c && isIso(c.date) && Number(c.total) >= 0)
+    .map(c => ({ date: iso(c.date), total: r0(c.total) }));
+  if (hasFinalPrice(plan) && !list.length) {
+    // Plans priced before price_changes existed: the final price, dated when it was set.
+    const dates = datesOf(plan);
+    list.push({ date: iso(plan.final_repriced_at) || dates[dates.length - 1], total: r0(plan.final_total) });
+  }
+  return list.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+}
+const currentTotal = (plan) => { const c = priceChanges(plan); return c.length ? c[c.length - 1].total : r0(plan.total); };
+
+// Where the plan stands on `today`, from its payments (the draft's installment legs).
+// Returns:
+//   n, k          the number of installments; the one whose period today is in
+//   total         the price now (after any product change / final reprice)
+//   paid, balance, credit (paid beyond the price: owed back to the customer)
+//   dueNow        what installment k still asks for (0 once anything was paid in its period, except
+//                 on the last installment, which is always the whole balance)
+//   upcoming      { k, due, amount } — the next due date and what it will ask for if nothing more is
+//                 paid before it (a carried-forward amount included), or null on the last one
+//   paidIn[k]     paid in each installment's period (1-based)
+//   closure       { overdueSince, closeOn, close, warn } — see FORFEITURE above
+//   rows          the schedule for display (see scheduleRows)
+function planState(plan, legs, today = new Date().toISOString()) {
+  const n = countOf(plan);
+  const dates = datesOf(plan);
+  const now = iso(today);
+  // A gold plan's installment 1 is its gold value. (Once a gold plan's product is changed it is an
+  // equal plan, but installment 1 was paid before it started, so the history replays the same.)
+  const firstDue = plan.mode === 'gold' ? r0(plan.gold_value) : 0;
+
+  const events = [];
+  for (let q = 2; q <= n; q++) if (dates[q - 1] <= now) events.push({ date: dates[q - 1], order: 0, kind: 'period' });
   for (const leg of legs || []) {
-    const v = Math.round(Number(leg && leg.value) || 0);
-    if (v <= 0 || balance <= 0) continue;
-    balance = Math.max(0, balance - v);
-    if (v >= owed || balance === 0) {
-      settled.push({ k, settledOn: (leg && leg.date) || null });
-      k++;
-      owed = k > PLAN_INSTALLMENTS ? balance : dueOn(k, balance);
+    const v = r0(leg && leg.value);
+    if (v <= 0) continue;
+    const date = isIso(leg.date) ? iso(leg.date) : dates[Math.min(n, Math.max(1, Number(leg.slot) || 1)) - 1];
+    events.push({ date, order: 1, kind: 'pay', value: v });
+  }
+  for (const c of priceChanges(plan)) events.push({ date: c.date, order: 2, kind: 'price', total: c.total });
+  events.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.order - b.order));
+
+  let total = r0(plan.total);
+  let paid = 0;
+  let k = 1;
+  let paidThis = false;
+  let arrears = 0;
+  let A = firstDue > 0 ? firstDue : Math.ceil(total / n);
+  const paidIn = Array(n + 1).fill(0);
+  const lastPaidOn = Array(n + 1).fill(null);
+  const respread = (left) => { A = left > 0 ? Math.ceil(Math.max(0, total - paid) / left) : 0; };
+
+  for (const e of events) {
+    if (e.kind === 'period') {
+      arrears = paidThis ? 0 : arrears + A;
+      k = Math.min(n, k + 1);
+      paidThis = false;
+    } else if (e.kind === 'pay') {
+      paid += e.value;
+      paidIn[k] += e.value;
+      lastPaidOn[k] = e.date;
+      paidThis = true;
+      arrears = 0;
+      respread(n - k);
     } else {
-      owed -= v;
+      total = e.total;
+      arrears = 0;
+      respread(paidThis ? n - k : n - k + 1);
     }
   }
 
-  // Overflow: more installments settled than the plan has (only possible if staff split a payment
-  // oddly). Whatever balance remains is owed against the last installment.
-  if (k > PLAN_INSTALLMENTS && balance > 0) { k = PLAN_INSTALLMENTS; owed = balance; }
+  const balance = Math.max(0, total - paid);
+  const credit = Math.max(0, paid - total);
+  const last = k === n;
+  const dueNow = balance <= 0 ? 0 : last ? balance : (paidThis ? 0 : Math.min(balance, arrears + A));
+  const upcoming = balance > 0 && !last
+    ? { k: k + 1, due: dates[k], amount: k + 1 === n ? balance : Math.min(balance, dueNow + A) }
+    : null;
 
-  const base = {
-    next: balance > 0 ? k : null,
-    owed: balance > 0 ? owed : 0,
-    balance,
-    paid: planTotal - balance,
-    settled,
-    credit: 0,
+  // Forfeiture clock.
+  let lastPaid = 0;
+  for (let q = 1; q <= n; q++) if (paidIn[q] > 0) lastPaid = q;
+  let overdueSince = null;
+  let closeOn = null;
+  let warn = null;
+  if (balance > 0) {
+    if (lastPaid < n && dates[lastPaid] && dates[lastPaid] <= now) overdueSince = dates[lastPaid];
+    const byGap = overdueSince ? addDays(overdueSince, CLOSE_AFTER_DAYS) : null;
+    const byLast = addDays(dates[n - 1], LAST_CLOSE_AFTER_DAYS);
+    closeOn = byGap && byGap < byLast ? byGap : byLast;
+    const gap = overdueSince ? daysBetween(overdueSince, now) : -1;
+    const afterLast = daysBetween(dates[n - 1], now);
+    for (const w of WARN_DAYS) if (gap >= w) warn = { kind: `warn${w}`, k: lastPaid + 1 };
+    for (const w of LAST_WARN_DAYS) if (afterLast >= w) warn = { kind: `last${w}`, k: n };
+  }
+  const close = Boolean(closeOn && now >= closeOn);
+
+  const state = {
+    n, k, dates, total, paid, balance, credit, dueNow, upcoming, paidIn, lastPaidOn,
+    closure: { overdueSince, closeOn, close, warn },
+    // The smallest payment a link may be raised for; the balance when less is left.
+    minPayment: balance > 0 ? Math.min(MIN_PAYMENT, balance) : 0,
+    // What staff and the customer are pointed at: what is due now, else the next installment.
+    suggested: balance > 0 ? (dueNow || (upcoming ? upcoming.amount : balance)) : 0,
   };
-  if (finalTotal === null || finalTotal === undefined || finalTotal === '') return base;
-
-  const fin = Math.max(0, Math.round(Number(finalTotal) || 0));
-  const paid = (legs || []).reduce((sum, l) => sum + Math.max(0, Math.round(Number(l && l.value) || 0)), 0);
-  const bal = Math.max(0, fin - paid);
-  if (bal === 0) return { ...base, next: null, owed: 0, balance: 0, paid, credit: paid - fin };
-  // Installments 1..5 still open: the old amount due stands. Otherwise installment 6 is the rest.
-  if (base.next && base.next < PLAN_INSTALLMENTS) return { ...base, owed: Math.min(base.owed, bal), balance: bal, paid };
-  return { ...base, next: PLAN_INSTALLMENTS, owed: bal, balance: bal, paid };
+  state.rows = scheduleRows(plan, state, now, A);
+  return state;
 }
 
-// The plan's state from its row: the gold plan's first installment, the equal plan's final price.
-function planState(plan, legs) {
-  return replay(plan.total, legs, {
-    firstDue: plan.mode === 'gold' ? plan.gold_value : null,
-    finalTotal: plan.mode === 'equal' ? plan.final_total : null,
+// The installment rows for display. Past periods show what was paid in them (or "missed" — the
+// amount moved forward); the current one what it asks for now; later ones a projection that
+// assumes each is paid exactly as asked (paying more or less changes them, which is the point).
+function scheduleRows(plan, state, now, A) {
+  const { n, k, dates, paidIn, lastPaidOn, balance, dueNow } = state;
+  const estimate = awaitingFinalPrice(plan);
+  let bal = balance - dueNow;
+  let standing = k < n ? (dueNow > 0 ? Math.ceil(Math.max(0, bal) / (n - k)) : A) : 0;
+  return dates.map((due, i) => {
+    const q = i + 1;
+    const est = estimate && q === n;
+    if (q < k) {
+      return paidIn[q] > 0
+        ? { k: q, due, amount: paidIn[q], status: 'paid', paidOn: lastPaidOn[q] }
+        : { k: q, due, amount: 0, status: 'missed' };
+    }
+    if (q === k) {
+      if (balance <= 0 || (dueNow === 0 && paidIn[q] > 0)) return { k: q, due, amount: paidIn[q], status: 'paid', paidOn: lastPaidOn[q] };
+      return { k: q, due, amount: dueNow, status: due < now ? 'overdue' : 'due', paid: paidIn[q], estimate: est };
+    }
+    if (bal <= 0) return { k: q, due, amount: 0, status: 'upcoming', estimate: est };
+    const amount = q === n ? bal : Math.min(bal, standing);
+    bal -= amount;
+    if (q < n) standing = Math.ceil(Math.max(0, bal) / (n - q));
+    return { k: q, due, amount, status: 'upcoming', estimate: est };
   });
 }
-
-// An equal plan whose last installment has not been priced yet.
-const awaitingFinalPrice = (plan) => plan.mode === 'equal' && (plan.final_total === null || plan.final_total === undefined);
 
 // Validate a requested payment amount against the plan's current state.
 // Returns { ok: true, amount } or { ok: false, reason, min, max }.
 function validatePayment(state, amount) {
-  const amt = Math.round(Number(amount) || 0);
-  const min = state.owed;
+  const amt = r0(amount);
+  const min = state.minPayment;
   const max = state.balance;
-  if (!state.next || max <= 0) return { ok: false, reason: 'Plan is fully paid', min: 0, max: 0 };
-  if (amt < min) return { ok: false, reason: `Minimum payment is Rs${min}`, min, max };
-  if (amt > max) return { ok: false, reason: `Maximum payment is the balance, Rs${max}`, min, max };
+  if (max <= 0) return { ok: false, reason: 'Plan is fully paid', min: 0, max: 0 };
+  if (amt < min) return { ok: false, reason: `The smallest payment is Rs${min.toLocaleString('en-IN')}`, min, max };
+  if (amt > max) return { ok: false, reason: `The most you can pay is the balance, Rs${max.toLocaleString('en-IN')}`, min, max };
   return { ok: true, amount: amt };
 }
 
-// The full 6-row schedule for display: due date, amount due (projected from the current balance for
-// installments not yet open) and status. "Projected" because a future overpayment changes them.
-function scheduleRows(plan, legs, today) {
-  const dates = plan.due_dates && plan.due_dates.length ? plan.due_dates : dueDates(plan.start_date);
-  const state = planState(plan, legs);
-  const now = String(today || new Date().toISOString()).slice(0, 10);
-  const estimate = awaitingFinalPrice(plan);
-  const settledBy = new Map(state.settled.map(s => [s.k, s.settledOn]));
-
-  // Later installments: project by paying each open one at exactly its minimum.
-  let projected = state.balance - state.owed;
-  return dates.map((due, i) => {
-    const k = i + 1;
-    if (settledBy.has(k)) return { k, due, amount: null, status: 'paid', paidOn: settledBy.get(k) };
-    if (!state.next || k < state.next) return { k, due, amount: 0, status: 'paid', paidOn: null };
-    // The equal plan's installment 6 is only an estimate at today's price until it is repriced.
-    const est = estimate && k === PLAN_INSTALLMENTS;
-    if (k === state.next) return { k, due, amount: state.owed, status: due < now ? 'overdue' : 'open', estimate: est };
-    const amount = amountDue(k, projected);
-    projected -= amount;
-    return { k, due, amount, status: 'upcoming', estimate: est };
-  });
-}
-
-module.exports = { PLAN_INSTALLMENTS, dueDates, amountDue, replay, planState, awaitingFinalPrice, validatePayment, scheduleRows };
+module.exports = {
+  PLAN_INSTALLMENTS, INSTALLMENT_CHOICES, MIN_PAYMENT, CLOSE_AFTER_DAYS, WARN_DAYS, LAST_CLOSE_AFTER_DAYS, LAST_WARN_DAYS,
+  dueDates, countOf, datesOf, periodOf, floats, awaitingFinalPrice, priceChanges, currentTotal,
+  planState, scheduleRows, validatePayment, daysBetween, addDays,
+};

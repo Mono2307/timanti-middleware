@@ -4,19 +4,24 @@
  * Buy plan routes.
  *
  * Staff — the "Buy plan" admin action on a draft (More actions), authenticated by its session token:
- *   GET  /api/buy-plan/draft/:draftId   the plan and its 6 rows, or a preview + what blocks starting
+ *   GET  /api/buy-plan/draft/:draftId   the plan, its rows and payments, or a preview of each way to
+ *                                       run it (gold / equal × 4, 5, 6 installments) + what blocks it
  *   POST /api/buy-plan/start            start the plan: record it, lock the price, stamp the dates,
  *                                       email the customer their schedule
  *   POST /api/buy-plan/gold-link        before a gold-value-first plan: a link for the gold value
- *   POST /api/buy-plan/send-link        a GoKwik link for any amount from the amount due now (the
- *                                       minimum) to the balance — SMS + the plan email
+ *   POST /api/buy-plan/send-link        a GoKwik link for any amount from Rs1,000 (or the balance, if
+ *                                       less) up to the balance — SMS + the plan email
+ *   POST /api/buy-plan/record-payment   a payment taken in store (cash / card / UPI / bank transfer),
+ *                                       recorded the same way a GoKwik or Pine payment is
+ *   POST /api/buy-plan/change-product   after staff change the pieces on the draft: reprice it at
+ *                                       today's rate and re-spread the plan (a gold plan loses its lock)
  *
  * Customer — the "Pay a different amount" link in every plan email (signed token, no login):
- *   GET  /pay/plan/:token               the balance, the minimum, an amount box
+ *   GET  /pay/plan/:token               the balance, what is due, an amount box
  *   POST /pay/plan/:token               validate → GoKwik link → redirect to it
  *
  * Operator:
- *   POST /api/buy-plan/sweep            run the reminder sweep now (x-webhook-secret =
+ *   POST /api/buy-plan/sweep            run the sweep now (x-webhook-secret =
  *                                       PRICE_UPDATE_WEBHOOK_SECRET). dryRun=true reports only;
  *                                       asOf=YYYY-MM-DD runs it as if it were that day.
  *
@@ -30,14 +35,15 @@ const { putJson, getBuyingRateTable } = require('../../../core/shopify');
 const { updateDraftOrderMetafields } = require('../../../core/metafields');
 const { log } = require('../../../core/logger');
 const { verifySessionToken } = require('../../after-sales/session_token');
-const { RATE_LOCK_TAG, BUY_PLAN_TAG } = require('./lock');
+const { RATE_LOCK_TAG, BUY_PLAN_TAG, CHANGE_REPRICE_TAG } = require('./lock');
 const S = require('./schedule');
 const store = require('./store');
 const notify = require('./notify');
+const final = require('./final');
 const { createPlanLink, readPayToken, customPayUrl } = require('./links');
-const { runBuyPlanSweep } = require('./sweep');
+const { runBuyPlanSweep, followUp } = require('./sweep');
 const { restoreDeletedPlanDraft } = require('./restore');
-const { todayIst, readDraft, startBlockers, snapshotOf, lockedGoldRate, goldValue, paidSoFar } = require('./draft');
+const { todayIst, readDraft, startBlockers, snapshotOf, lockedGoldRate, goldValue, paidSoFar, linesKey } = require('./draft');
 
 function requireStaffSession(req, res, next) {
   try {
@@ -55,39 +61,53 @@ function requireStaffSession(req, res, next) {
 }
 
 const MODES = ['gold', 'equal'];
+// The installment mode field only accepts its choices (admin/routes.js PAYMENT_MODE_FALLBACK).
+const STORE_MODES = ['cash', 'card', 'upi', 'bank transfer'];
 
-function view(d, plan) {
+async function view(d, plan) {
+  const today = todayIst();
   if (plan) {
-    const state = S.planState(plan, d.legs);
+    const st = S.planState(plan, d.legs, today);
+    const planKey = plan.lines_key || linesKey((plan.snapshot || {}).line_items);
     return {
       ok: true, draft: d.draft.name, customer: d.customer, plan: {
-        status: plan.status, mode: plan.mode, total: Number(plan.total),
+        status: plan.status, mode: plan.mode, n: st.n, total: st.total, startTotal: Number(plan.total),
         finalTotal: plan.final_total === null || plan.final_total === undefined ? null : Number(plan.final_total),
-        awaitingFinalPrice: S.awaitingFinalPrice(plan), finalDate: (plan.due_dates || [])[S.PLAN_INSTALLMENTS - 1],
+        awaitingFinalPrice: S.awaitingFinalPrice(plan), finalDate: st.dates[st.n - 1],
         goldValue: Number(plan.gold_value) || null, startDate: plan.start_date,
-        lockedGoldRate: plan.locked_gold_rate, paid: state.paid, balance: state.balance, credit: state.credit,
-        next: state.next, minPayment: state.owed, customPayUrl: customPayUrl(plan.id),
+        lockedGoldRate: plan.mode === 'gold' ? plan.locked_gold_rate : null,
+        paid: st.paid, balance: st.balance, credit: st.credit, k: st.k, dueNow: st.dueNow, upcoming: st.upcoming,
+        minPayment: st.minPayment, suggested: st.suggested, closeOn: st.closure.closeOn, warn: st.closure.warn,
+        customPayUrl: plan.status === 'active' ? customPayUrl(plan.id) : null,
+        voucherCode: plan.voucher_code || null, voucherValue: Number(plan.voucher_value) || null,
+        closedReason: plan.closed_reason || null, changePending: Boolean(plan.change_pending),
+        piecesChanged: Boolean(planKey) && linesKey(d.draft.line_items) !== planKey,
       },
-      rows: S.scheduleRows(plan, d.legs, todayIst()),
+      rows: st.rows,
+      payments: await store.listPayments(d.id),
+      storeModes: STORE_MODES,
     };
   }
-  // No plan yet: both ways of running it, side by side, with what blocks each.
-  const start = todayIst();
+  // No plan yet: each way of running it, for 4, 5 and 6 installments, with what blocks it.
   const gv = goldValue(d);
   const paid = paidSoFar(d);
-  const option = (mode) => {
-    const p = { mode, total: d.total, start_date: start, gold_value: mode === 'gold' ? Math.max(gv, paid) : null };
-    return { rows: S.scheduleRows(p, d.legs, start), blockers: startBlockers(d, mode) };
-  };
+  const options = {};
+  for (const mode of MODES) {
+    options[mode] = { blockers: startBlockers(d, mode), rows: {} };
+    for (const n of S.INSTALLMENT_CHOICES) {
+      const p = { mode, total: d.total, start_date: today, installments: n, gold_value: mode === 'gold' ? Math.max(gv, paid) : null };
+      options[mode].rows[n] = S.planState(p, d.legs, today).rows;
+    }
+  }
   return {
     ok: true, draft: d.draft.name, customer: d.customer, plan: null,
     preview: {
-      total: d.total, startDate: start, finalDate: S.dueDates(start)[S.PLAN_INSTALLMENTS - 1],
-      goldValue: gv, paid, goldOutstanding: Math.max(0, gv - paid),
-      monthlyEqual: S.amountDue(1, d.total),
-      monthlyAfterGold: S.amountDue(2, Math.max(0, d.total - Math.max(gv, paid))),
+      total: d.total, startDate: today, goldValue: gv, paid, goldOutstanding: Math.max(0, gv - paid),
+      // Open on the way the payments already allow: gold value first once it is covered.
+      suggestedMode: gv > 0 && paid >= gv ? 'gold' : 'equal',
+      finalDates: Object.fromEntries(S.INSTALLMENT_CHOICES.map(n => [n, S.dueDates(today, n)[n - 1]])),
     },
-    options: { gold: option('gold'), equal: option('equal') },
+    options, installmentChoices: S.INSTALLMENT_CHOICES,
   };
 }
 
@@ -102,10 +122,17 @@ async function mustReadDraft(draftId) {
   return d;
 }
 
+async function activePlan(d) {
+  const plan = await store.getPlanByDraft(d.id);
+  if (!plan) { const e = new Error(`${d.draft.name} has no buy plan`); e.status = 404; throw e; }
+  if (plan.status !== 'active') { const e = new Error(`This buy plan is ${plan.status}`); e.status = 409; throw e; }
+  return plan;
+}
+
 async function getDraftPlan(req, res) {
   try {
     const d = await mustReadDraft(req.params.draftId);
-    return res.json(view(d, await store.getPlanByDraft(d.id)));
+    return res.json(await view(d, await store.getPlanByDraft(d.id)));
   } catch (e) { return fail(res, e, 'read'); }
 }
 
@@ -113,24 +140,29 @@ async function startPlan(req, res) {
   try {
     const mode = String(req.body?.mode || '');
     if (!MODES.includes(mode)) return res.status(400).json({ ok: false, error: 'Choose how the customer will pay: gold value first, or equal installments' });
+    const n = Number(req.body?.installments || S.PLAN_INSTALLMENTS);
+    if (!S.INSTALLMENT_CHOICES.includes(n)) return res.status(400).json({ ok: false, error: `Choose ${S.INSTALLMENT_CHOICES.join(', ')} installments` });
     const d = await mustReadDraft(req.body?.draftId);
     if (await store.getPlanByDraft(d.id)) return res.status(409).json({ ok: false, error: `${d.draft.name} already has a buy plan` });
     const blockers = startBlockers(d, mode);
     if (blockers.length) return res.status(400).json({ ok: false, error: 'Cannot start a buy plan', missing: blockers });
 
     const start = todayIst();
-    const dueDates = S.dueDates(start);
+    const dueDates = S.dueDates(start, n);
     const table = await getBuyingRateTable().catch(() => null);
+    const paid = paidSoFar(d);
     // Record first: the unique key makes this the one place two simultaneous starts are told apart.
     const plan = await store.insertPlan({
       draft_order_id: d.id, draft_name: d.draft.name,
       customer_id: d.customer.id, customer_email: d.customer.email,
       customer_phone: d.customer.phone, customer_name: d.customer.name,
-      total: d.total, locked_gold_rate: lockedGoldRate(d), mode,
+      total: d.total, locked_gold_rate: lockedGoldRate(d), mode, installments: n,
       // Installment 1 of a gold plan: the gold value, or more if more was paid before the start.
-      gold_value: mode === 'gold' ? Math.max(goldValue(d), paidSoFar(d)) : null,
+      gold_value: mode === 'gold' ? Math.max(goldValue(d), paid) : null,
       start_rates: table?.sale_rates || null,
       start_date: start, due_dates: dueDates, status: 'active',
+      // Payments already on the draft are not news to the customer.
+      acknowledged_paid: paid, lines_key: linesKey(d.draft.line_items),
       snapshot: snapshotOf(d), created_by: req.staff?.sub ? String(req.staff.sub) : null,
     });
 
@@ -144,29 +176,27 @@ async function startPlan(req, res) {
       await store.deletePlan(plan.id).catch(() => {});
       throw new Error(`could not lock the draft: ${e.response?.data ? JSON.stringify(e.response.data) : e.message}`);
     }
-    // plan_total is also what gives the draft its 6 installment slots (payments/installments.js).
+    // plan_due_dates puts each payment in its installment's slot; plan_total gives the draft its 6
+    // slots (payments/installments.js).
     await updateDraftOrderMetafields(d.id, { plan_due_dates: dueDates.join(','), plan_total: String(d.total) });
-
-    // Payments already on the draft are not news to the customer: mark them confirmed.
-    const settled = S.planState(plan, d.legs).settled.length;
-    for (let k = 1; k <= settled; k++) await store.markSent(plan.id, k, 'customer', 'received');
     await notify.sendStarted(plan, d).catch(e => log.error('buy-plan', `started email ${d.draft.name}: ${e.message}`));
 
-    log.info('buy-plan', `${d.draft.name}: ${mode} plan started — Rs${d.total} over ${S.PLAN_INSTALLMENTS}, from ${start}`);
-    return res.json(view({ ...d, tags: [...d.tags, ...planTags] }, plan));
+    log.info('buy-plan', `${d.draft.name}: ${mode} plan started — Rs${d.total} over ${n}, from ${start}`);
+    return res.json(await view({ ...d, tags: [...d.tags, ...planTags] }, plan));
   } catch (e) { return fail(res, e, 'start'); }
 }
 
 async function sendLink(req, res) {
   try {
     const d = await mustReadDraft(req.body?.draftId);
-    const plan = await store.getPlanByDraft(d.id);
-    if (!plan) return res.status(404).json({ ok: false, error: `${d.draft.name} has no buy plan` });
-    const check = S.validatePayment(S.planState(plan, d.legs), req.body?.amount);
+    const plan = await activePlan(d);
+    const check = S.validatePayment(S.planState(plan, d.legs, todayIst()), req.body?.amount);
     if (!check.ok) return res.status(400).json({ ok: false, error: check.reason, min: check.min, max: check.max });
 
+    const st = S.planState(plan, d.legs, todayIst());
+    const next = st.dueNow > 0 ? { k: st.k, due: st.dates[st.k - 1] } : (st.upcoming || { k: st.k, due: st.dates[st.k - 1] });
     const link = await createPlanLink(plan, check.amount);
-    await notify.sendLink(plan, d, link);
+    await notify.sendLink(plan, d, link, { k: next.k, dueDate: next.due });
     log.info('buy-plan', `${d.draft.name}: staff sent a link for Rs${check.amount}`);
     return res.json({ ok: true, amount: check.amount, phone: plan.customer_phone, url: link.shortUrl });
   } catch (e) { return fail(res, e, 'send-link'); }
@@ -194,7 +224,59 @@ async function sendGoldLink(req, res) {
   } catch (e) { return fail(res, e, 'gold-link'); }
 }
 
+// A payment taken in store. It goes through the same path as a GoKwik or Pine payment
+// (handlePaymentCompletion: deposit row, the installment slot for today's period, amount_paid, tags),
+// so the draft's payment table, the invoice and the reports see it like any other payment. The
+// "payment received" email follows from the sweep.
+function recordPaymentHandler(ctx) {
+  return async function recordPayment(req, res) {
+    try {
+      const d = await mustReadDraft(req.body?.draftId);
+      const plan = await activePlan(d);
+      const mode = String(req.body?.mode || '').toLowerCase();
+      if (!STORE_MODES.includes(mode)) return res.status(400).json({ ok: false, error: `How was it paid? ${STORE_MODES.join(', ')}` });
+      const check = S.validatePayment(S.planState(plan, d.legs, todayIst()), req.body?.amount);
+      if (!check.ok) return res.status(400).json({ ok: false, error: check.reason, min: check.min, max: check.max });
+      if (typeof ctx?.handlePaymentCompletion !== 'function') throw new Error('payment recording is not wired');
+
+      await ctx.handlePaymentCompletion({
+        id: `buy-plan-${plan.id}-${Date.now()}`, shopify_draft_id: d.id, draft_order_name: d.draft.name,
+        customer_name: plan.customer_name, is_partial: true, amount_paisa: check.amount * 100, payment_mode: mode,
+      }, { paymentSource: 'buy-plan', paymentModeOverride: mode });
+      log.info('buy-plan', `${d.draft.name}: Rs${check.amount} ${mode} recorded in store by ${req.staff?.sub || 'staff'}`);
+      const after = await mustReadDraft(d.id);
+      return res.json(await view(after, plan));
+    } catch (e) { return fail(res, e, 'record-payment'); }
+  };
+}
+
+// Staff have changed the pieces on the draft. Reprice it at today's gold rate (the lock steps aside
+// for this one reprice) and, once that has run, re-spread the plan over the installments left
+// (sweep.js finishChange, 5 minutes later). Everything paid carries over; the dates stay. A gold plan
+// gives up its locked rate for good and floats like an equal plan (founder, 2026-10-30).
+async function changeProduct(req, res) {
+  try {
+    const d = await mustReadDraft(req.body?.draftId);
+    const plan = await activePlan(d);
+    if (plan.change_pending) return res.status(409).json({ ok: false, error: 'A product change is already being priced. Reopen in a few minutes.' });
+    const planKey = plan.lines_key || linesKey((plan.snapshot || {}).line_items);
+    if (linesKey(d.draft.line_items) === planKey) {
+      return res.status(400).json({ ok: false, error: 'The pieces on the draft are the same as the plan\'s. Change the pieces on the draft first, then press Change product.' });
+    }
+    if (req.body?.confirm !== true) return res.status(400).json({ ok: false, error: 'Confirm the change first' });
+
+    const lostLock = plan.mode === 'gold';
+    const rates = await final.startReprice(plan, d, CHANGE_REPRICE_TAG);
+    const pending = { started_at: new Date().toISOString(), old_total: S.currentTotal(plan), lost_lock: lostLock, by: req.staff?.sub || null };
+    await store.updatePlan(plan.id, { mode: 'equal', change_pending: pending });
+    followUp(plan.id);
+    log.info('buy-plan', `${d.draft.name}: product change started${lostLock ? ' (gold lock given up)' : ''}, ${rates.length} piece(s) at today's rate`);
+    return res.json({ ok: true, lostLock, message: 'Repricing the new pieces at today\'s gold rate. The new schedule appears here in about 5 minutes, and the customer is emailed.' });
+  } catch (e) { return fail(res, e, 'change-product'); }
+}
+
 // ── Customer page: pay a different amount ───────────────────────────────────────────────────────
+
 
 // Same logo as the plan emails (integrations/email/templates.js).
 const LOGO_URL = 'https://cdn.shopify.com/s/files/1/0775/8322/0993/files/WhatsApp_Image_2026-04-23_at_10.42.47_AM.jpg?v=1777029219';
@@ -215,27 +297,34 @@ const page = (title, inner) => `<!DOCTYPE html><html lang="en"><head><meta chars
 const inr = (n) => `₹${Number(n || 0).toLocaleString('en-IN')}`;
 const escHtml = (s) => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
+
 async function loadForPayPage(token) {
   const planId = readPayToken(token);
   if (!planId) return { error: 'This link is not valid or has expired. Please contact the store.' };
   const plan = await store.getPlan(planId);
   if (!plan) return { error: 'We could not find this plan. Please contact the store.' };
-  if (plan.status !== 'active') return { error: plan.status === 'completed' ? 'This plan is fully paid. Thank you!' : 'This plan is no longer active. Please contact the store.' };
+  if (plan.status !== 'active') {
+    return { error: plan.status === 'completed' ? 'This plan is fully paid. Thank you!'
+      : plan.status === 'forfeited' ? `This plan has closed${plan.voucher_code ? ` and what you paid is now voucher ${plan.voucher_code}` : ''}. Please contact the store.`
+      : 'This plan is no longer active. Please contact the store.' };
+  }
   const d = await readDraft(plan.draft_order_id);
   if (!d) return { error: 'This plan is being updated. Please try again in a few minutes or contact the store.' };
-  return { plan, d, state: S.planState(plan, d.legs) };
+  return { plan, d, state: S.planState(plan, d.legs, todayIst()) };
 }
 
 function payForm(token, plan, state, error = '', amount = '') {
+  const due = state.dueNow > 0 ? `Due now: ${inr(state.dueNow)}`
+    : state.upcoming ? `Next installment: ${inr(state.upcoming.amount)} on ${escHtml(state.upcoming.due)}` : '';
   return page('Pay your buy plan', `
     <h1>Buy plan ${escHtml(plan.draft_name)}</h1>
-    <p class="muted">Installment ${state.next} of 6. Pay the amount due or more. Anything extra lowers the installments after this one.${S.awaitingFinalPrice(plan) ? " Your last installment is worked out on its due date at that day&#39;s gold rate." : ""}</p>
+    <p class="muted">Pay any amount from ${inr(state.minPayment)}. Paying more makes the installments after it smaller; paying less makes them larger.${S.awaitingFinalPrice(plan) ? " Your last installment is worked out 3 days before it is due, at that day&#39;s gold rate." : ""}</p>
     <div class="row"><span>Paid so far</span><span>${inr(state.paid)}</span></div>
     <div class="row"><span>Balance</span><strong>${inr(state.balance)}</strong></div>
-    <div class="row"><span>Amount due now (minimum)</span><span>${inr(state.owed)}</span></div>
+    ${due ? `<div class="row"><span>${due.split(':')[0]}</span><span>${due.slice(due.indexOf(':') + 2)}</span></div>` : ''}
     <form method="post" action="/pay/plan/${escHtml(token)}">
-      <label for="amount">Amount to pay (₹${Number(state.owed).toLocaleString('en-IN')} to ₹${Number(state.balance).toLocaleString('en-IN')})</label>
-      <input id="amount" name="amount" type="number" inputmode="numeric" min="${state.owed}" max="${state.balance}" step="1" value="${escHtml(amount || state.owed)}" required>
+      <label for="amount">Amount to pay (₹${Number(state.minPayment).toLocaleString('en-IN')} to ₹${Number(state.balance).toLocaleString('en-IN')})</label>
+      <input id="amount" name="amount" type="number" inputmode="numeric" min="${state.minPayment}" max="${state.balance}" step="1" value="${escHtml(amount || state.suggested)}" required>
       ${error ? `<div class="err">${escHtml(error)}</div>` : ''}
       <button type="submit">Continue to payment</button>
     </form>`);
@@ -267,6 +356,7 @@ async function payPagePost(req, res) {
   }
 }
 
+
 // ── Operator: run the sweep now ─────────────────────────────────────────────────────────────────
 
 async function sweepNow(req, res) {
@@ -280,11 +370,13 @@ async function sweepNow(req, res) {
   } catch (e) { return fail(res, e, 'sweep'); }
 }
 
-function register(app) {
+function register(app, ctx) {
   app.get('/api/buy-plan/draft/:draftId', requireStaffSession, getDraftPlan);
   app.post('/api/buy-plan/start', requireStaffSession, startPlan);
   app.post('/api/buy-plan/send-link', requireStaffSession, sendLink);
   app.post('/api/buy-plan/gold-link', requireStaffSession, sendGoldLink);
+  app.post('/api/buy-plan/record-payment', requireStaffSession, recordPaymentHandler(ctx));
+  app.post('/api/buy-plan/change-product', requireStaffSession, changeProduct);
   app.get('/pay/plan/:token', payPageGet);
   app.post('/pay/plan/:token', express.urlencoded({ extended: false }), payPagePost);
   app.post('/api/buy-plan/sweep', sweepNow);
