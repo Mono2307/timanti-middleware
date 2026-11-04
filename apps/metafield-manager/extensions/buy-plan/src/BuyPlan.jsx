@@ -142,15 +142,15 @@ function BuyPlan() {
   });
 
   const sendLink = () => run(async () => {
-    const body = await post("/api/buy-plan/send-link", { draftId, amount: Number(amount) });
+    const body = await post("/api/buy-plan/send-link", { draftId, amount });
     setNotice(`A payment link for ${inr(body.amount)} is on its way to ${body.phone} by SMS and email.`);
   });
 
   const recordPayment = () => run(async () => {
-    const body = await post("/api/buy-plan/record-payment", { draftId, amount: Number(storeAmount), mode: storeMode });
+    const body = await post("/api/buy-plan/record-payment", { draftId, amount: storeAmount, mode: storeMode });
     take(body);
     setStoreAmount("");
-    setNotice(`${inr(Number(storeAmount))} by ${MODE_NAMES[storeMode]} recorded. The customer's thank-you email follows within a few hours.`);
+    setNotice(`${inr(Number(String(storeAmount).replace(/[^\d.]/g, "")))} by ${MODE_NAMES[storeMode]} recorded. The customer's thank-you email follows within a few hours.`);
   });
 
   const changeProduct = () => run(async () => {
@@ -219,9 +219,19 @@ function BuyPlan() {
             </s-text>
 
             {goldUnpaid && !data.options.equal.blockers?.length ? (
-              <s-banner tone="info" heading={`Collect the gold value first: ${inr(pv.goldOutstanding)}`}>
-                Take it at the counter as usual, or send the customer a link with the button below. Then reopen Buy plan to start the plan.
-              </s-banner>
+              <s-stack direction="block" gap="small-200">
+                <s-banner tone="info" heading={`Collect the gold value first: ${inr(pv.goldOutstanding)}`}>
+                  Taken at the counter? Record it here. Or send the customer a link with the button below.
+                </s-banner>
+                <s-stack direction="inline" gap="small-200" alignItems="end">
+                  <s-number-field label="Amount taken in store" min="1" step="1"
+                    value={storeAmount} onInput={(e) => setStoreAmount(val(e))} />
+                  <s-select label="Paid by" value={storeMode} onChange={(e) => setStoreMode(val(e))}>
+                    {(data.storeModes || Object.keys(MODE_NAMES)).map((m) => <s-option value={m}>{MODE_NAMES[m] || m}</s-option>)}
+                  </s-select>
+                </s-stack>
+                <s-button onClick={recordPayment} loading={busy} disabled={Boolean(busy || !storeAmount)}>Record payment</s-button>
+              </s-stack>
             ) : option.blockers?.length ? (
               <s-banner tone="warning" heading="Fix these before starting">{option.blockers.join(" · ")}</s-banner>
             ) : (

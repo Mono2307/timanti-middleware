@@ -107,7 +107,7 @@ async function view(d, plan) {
       suggestedMode: gv > 0 && paid >= gv ? 'gold' : 'equal',
       finalDates: Object.fromEntries(S.INSTALLMENT_CHOICES.map(n => [n, S.dueDates(today, n)[n - 1]])),
     },
-    options, installmentChoices: S.INSTALLMENT_CHOICES,
+    options, installmentChoices: S.INSTALLMENT_CHOICES, storeModes: STORE_MODES,
   };
 }
 
@@ -232,18 +232,23 @@ function recordPaymentHandler(ctx) {
   return async function recordPayment(req, res) {
     try {
       const d = await mustReadDraft(req.body?.draftId);
-      const plan = await activePlan(d);
+      // Before the plan starts (a gold plan's gold value taken at the counter) there is no plan yet:
+      // the payment just lands on the draft, and Start counts it.
+      const existing = await store.getPlanByDraft(d.id);
+      const plan = existing ? await activePlan(d) : null;
       const mode = String(req.body?.mode || '').toLowerCase();
       if (!STORE_MODES.includes(mode)) return res.status(400).json({ ok: false, error: `How was it paid? ${STORE_MODES.join(', ')}` });
-      const check = S.validatePayment(S.planState(plan, d.legs, todayIst()), req.body?.amount);
+      const state = plan ? S.planState(plan, d.legs, todayIst())
+        : (() => { const balance = Math.max(0, Math.round(d.total - paidSoFar(d))); return { balance, minPayment: Math.min(S.MIN_PAYMENT, balance) }; })();
+      const check = S.validatePayment(state, req.body?.amount);
       if (!check.ok) return res.status(400).json({ ok: false, error: check.reason, min: check.min, max: check.max });
       if (typeof ctx?.handlePaymentCompletion !== 'function') throw new Error('payment recording is not wired');
 
       await ctx.handlePaymentCompletion({
-        id: `buy-plan-${plan.id}-${Date.now()}`, shopify_draft_id: d.id, draft_order_name: d.draft.name,
-        customer_name: plan.customer_name, is_partial: true, amount_paisa: check.amount * 100, payment_mode: mode,
+        id: `buy-plan-${plan ? plan.id : 'pre-' + d.id}-${Date.now()}`, shopify_draft_id: d.id, draft_order_name: d.draft.name,
+        customer_name: plan?.customer_name || d.customer?.name, is_partial: true, amount_paisa: check.amount * 100, payment_mode: mode,
       }, { paymentSource: 'buy-plan', paymentModeOverride: mode });
-      log.info('buy-plan', `${d.draft.name}: Rs${check.amount} ${mode} recorded in store by ${req.staff?.sub || 'staff'}`);
+      log.info('buy-plan', `${d.draft.name}: Rs${check.amount} ${mode} recorded in store by ${req.staff?.sub || 'staff'}${plan ? '' : ' (before the plan started)'}`);
       const after = await mustReadDraft(d.id);
       return res.json(await view(after, plan));
     } catch (e) { return fail(res, e, 'record-payment'); }
