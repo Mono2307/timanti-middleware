@@ -90,6 +90,10 @@ t('Rs1,000, or the balance when less is left', () => {
   assert.strictEqual(nearlyDone.minPayment, 500);
   assert.strictEqual(S.validatePayment(nearlyDone, 500).ok, true);
 });
+t('accepts amounts typed with commas, ₹ or Rs', () => {
+  const s = at(plan(), [], START);
+  for (const v of ['20,000', '₹20,000', 'Rs 20,000', ' 20000 ']) assert.deepStrictEqual(S.validatePayment(s, v), { ok: true, amount: 20000 });
+});
 t('never more than the balance', () => assert.strictEqual(S.validatePayment(at(plan(), [], START), 120001).ok, false));
 
 console.log('gold value first');

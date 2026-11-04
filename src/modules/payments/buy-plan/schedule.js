@@ -212,8 +212,11 @@ function scheduleRows(plan, state, now, A) {
 
 // Validate a requested payment amount against the plan's current state.
 // Returns { ok: true, amount } or { ok: false, reason, min, max }.
+// People type "20,000", "₹20,000" or "Rs 20000"; Number() reads those as NaN, which became 0.
+const parseAmount = (v) => r0(String(v ?? '').replace(/rs\.?|₹|inr|,|\s/gi, ''));
+
 function validatePayment(state, amount) {
-  const amt = r0(amount);
+  const amt = parseAmount(amount);
   const min = state.minPayment;
   const max = state.balance;
   if (max <= 0) return { ok: false, reason: 'Plan is fully paid', min: 0, max: 0 };
