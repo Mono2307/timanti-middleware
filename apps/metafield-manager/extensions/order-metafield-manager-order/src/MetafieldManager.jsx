@@ -138,6 +138,13 @@ const FIELD_CONFIG = {
   installment_4_value: { section: "Installments", label: "4 · Amount", editable: true, applies: "both" },
   installment_4_mode: { section: "Installments", label: "4 · Mode", editable: true, applies: "both" },
   installment_4_date: { section: "Installments", label: "4 · Date", editable: true, applies: "both" },
+  // Slots 5-6 exist only for buy plans (up to 6 installments); hidden everywhere else.
+  installment_5_value: { section: "Installments", label: "5 · Amount", editable: true, applies: "both", buyPlanOnly: true },
+  installment_5_mode: { section: "Installments", label: "5 · Mode", editable: true, applies: "both", buyPlanOnly: true },
+  installment_5_date: { section: "Installments", label: "5 · Date", editable: true, applies: "both", buyPlanOnly: true },
+  installment_6_value: { section: "Installments", label: "6 · Amount", editable: true, applies: "both", buyPlanOnly: true },
+  installment_6_mode: { section: "Installments", label: "6 · Mode", editable: true, applies: "both", buyPlanOnly: true },
+  installment_6_date: { section: "Installments", label: "6 · Date", editable: true, applies: "both", buyPlanOnly: true },
 
   // All system-computed (net-based) — read-only so staff never hand-type a balance.
   // amount_paid is the SUM of the installment legs above, recomputed server-side on every save.
@@ -317,8 +324,14 @@ function fieldsForScope(scope) {
   });
 }
 
-function buildSections(scope) {
-  const inScope = fieldsForScope(scope);
+// A buy plan carries the buy-plan tag (or ot:buy-plan) from the day it starts through to the order.
+function isBuyPlan(tags) {
+  return (tags ?? []).some((t) => ["buy-plan", "ot:buy-plan"].includes(String(t).trim().toLowerCase()));
+}
+
+function buildSections(scope, tags) {
+  const buyPlan = isBuyPlan(tags);
+  const inScope = fieldsForScope(scope).filter((key) => buyPlan || !FIELD_CONFIG[key].buyPlanOnly);
   const inScopeSet = new Set(inScope);
 
   // Required staff inputs → single top section, in REQUIRED_FIELDS priority order.
@@ -515,6 +528,8 @@ const PAYMENT_TRIGGER_KEYS = [
   "installment_2_value", "installment_2_mode", "installment_2_date",
   "installment_3_value", "installment_3_mode", "installment_3_date",
   "installment_4_value", "installment_4_mode", "installment_4_date",
+  "installment_5_value", "installment_5_mode", "installment_5_date",
+  "installment_6_value", "installment_6_mode", "installment_6_date",
 ];
 
 // A metafield save alone never fires the resource webhook, so the middleware never recomputes on its
@@ -1991,7 +2006,7 @@ export default function MetafieldManager({ surface = "block" } = {}) {
     </>
   );
 
-  const sections = buildSections(ctx.scope);
+  const sections = buildSections(ctx.scope, docTags);
 
   // Rendered fresh in each location (inline card + modal) so vnodes aren't shared.
   const renderBanners = () => (
