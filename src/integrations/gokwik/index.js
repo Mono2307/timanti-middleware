@@ -7,8 +7,8 @@ const gkHeaders = () => ({
   'Content-Type':  'application/json'
 });
 
-async function createPaymentLink({ draftOrderId, amount, customerPhone, customerName, customerEmail }) {
-  const expireAt = Math.floor(Date.now() / 1000) + 604800;
+async function createPaymentLink({ draftOrderId, amount, customerPhone, customerName, customerEmail, expiryDays = 7 }) {
+  const expireAt = Math.floor(Date.now() / 1000) + expiryDays * 86400;
   // Suffix with timestamp so GoKwik doesn't reject duplicate merchant_reference_id
   // when multiple links are created for the same draft (advance + final, or retries)
   const merchantRefId = `${draftOrderId}-${Date.now()}`;

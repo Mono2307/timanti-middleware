@@ -88,19 +88,20 @@ t('the pieces key ignores order and non-jewellery lines', () => {
 
 console.log('payments land in their installment slot');
 const dates = '2026-10-22,2026-11-22,2026-12-22,2027-01-22,2027-02-22,2027-03-22';
-t('a payment goes in the slot of the installment its date falls in', () => {
+t('the first payment goes in slot 1, whatever its date', () => {
   assert.deepStrictEqual(planLegPatch([], { value: 5000, mode: 'card', date: '2026-12-25' }, dates),
-    { installment_3_value: '5000.00', installment_3_mode: 'card', installment_3_date: '2026-12-25' });
+    { installment_1_value: '5000.00', installment_1_mode: 'card', installment_1_date: '2026-12-25' });
 });
-t('a second payment in the same installment is added to it', () => {
-  const rows = [{ slot: 3, value: 5000, mode: 'card', date: '2026-12-25', type: 'payment' }];
-  assert.deepStrictEqual(planLegPatch(rows, { value: 2000, mode: 'upi', date: '2027-01-05' }, dates),
-    { installment_3_value: '7000.00', installment_3_mode: 'upi', installment_3_date: '2027-01-05' });
+t('a second payment in the same month is the second installment, not added to the first', () => {
+  const rows = [{ slot: 1, value: 5000, mode: 'card', date: '2026-10-25', type: 'payment' }];
+  assert.deepStrictEqual(planLegPatch(rows, { value: 2000, mode: 'upi', date: '2026-10-28' }, dates),
+    { installment_2_value: '2000.00', installment_2_mode: 'upi', installment_2_date: '2026-10-28' });
 });
-t('a slot holding a deposit from before the plan is not merged into', () => {
-  const rows = [{ slot: 1, value: 1000, mode: 'cash', date: '2026-10-01', type: 'payment' },
-                { slot: 2, value: 1000, mode: 'cash', date: '2026-10-05', type: 'payment' }];
-  assert.strictEqual(planLegPatch(rows, { value: 3000, mode: 'card', date: '2026-11-23' }, dates).installment_3_value, '3000.00');
+t('slots 5 and 6 are used, and a 7th payment folds into slot 6', () => {
+  const rows = [1, 2, 3, 4, 5].map(slot => ({ slot, value: 1000, mode: 'cash', date: '2026-10-25', type: 'payment' }));
+  assert.strictEqual(planLegPatch(rows, { value: 3000, mode: 'card', date: '2026-11-23' }, dates).installment_6_value, '3000.00');
+  rows.push({ slot: 6, value: 3000, mode: 'card', date: '2026-11-23', type: 'payment' });
+  assert.strictEqual(planLegPatch(rows, { value: 500, mode: 'upi', date: '2026-12-23' }, dates).installment_6_value, '3500.00');
 });
 
 console.log(`\n${n} passed`);

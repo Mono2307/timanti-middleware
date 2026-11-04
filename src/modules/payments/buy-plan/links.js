@@ -17,6 +17,7 @@ const { supabase } = require('../../../core/supabase');
 const { log } = require('../../../core/logger');
 const { createPaymentLink, cancelPaymentLink } = require('../../../integrations/gokwik');
 
+const LINK_DAYS = 30;     // GoKwik payment links stay payable for 30 days (founder, 2026-11-04)
 const TOKEN_DAYS = 300;   // outlives the longest plan (6 months + 60 days to close) with room to spare
 
 const tokenKey = () => crypto.createHmac('sha256', String(config.supabase.serviceKey || ''))
@@ -58,6 +59,7 @@ async function createPlanLink(plan, amount) {
   const { gokwikLinkId, shortUrl, expiresAt } = await createPaymentLink({
     draftOrderId: draftId, amount, customerPhone: phone,
     customerName: plan.customer_name || null, customerEmail: plan.customer_email || null,
+    expiryDays: LINK_DAYS,
   });
   const { error } = await supabase.from('payment_links').insert({
     draft_order_id: draftId, draft_order_name: plan.draft_name, gokwik_link_id: gokwikLinkId,

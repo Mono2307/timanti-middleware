@@ -158,31 +158,12 @@ function installmentLegPatch(rows, { value, mode, date, type }, { max = MAX_INST
   return patch;
 }
 
-// A buy-plan draft keeps ONE slot per installment: slot k holds everything paid in installment k's
-// period (from its due date, custom.plan_due_dates, to the next one), so the payment table and the
-// invoice show the plan's installments however many payments made them up. A second payment in the
-// same period is ADDED to that slot, which takes the latest payment's mode and date (the mode field
-// only accepts one of its choices, so modes cannot be joined). If the slot is held by a CAD advance,
-// or by a payment from another period (two deposits taken before the plan started), the payment
-// falls back to the next free slot like any other document.
-function planLegPatch(rows, { value, mode, date }, dueDatesCsv) {
-  const dates = String(dueDatesCsv || '').split(',').map(s => s.trim()).filter(Boolean);
-  let slot = 1;
-  for (let i = 0; i < dates.length; i++) if (dates[i] <= String(date || '')) slot = i + 1;
-  slot = Math.min(slot, PLAN_MAX_INSTALLMENTS);
-  const periodOf = (d) => { let k = 1; for (let i = 0; i < dates.length; i++) if (dates[i] <= String(d || '')) k = i + 1; return k; };
-  const existing = (rows || []).find(r => r.slot === slot);
-  if (existing && (existing.type === 'cad_advance' || (existing.date && periodOf(existing.date) !== slot))) {
-    return installmentLegPatch(rows, { value, mode, date }, { max: PLAN_MAX_INSTALLMENTS });
-  }
-  if (!existing) {
-    return { [`installment_${slot}_value`]: value.toFixed(2), [`installment_${slot}_mode`]: mode || '', [`installment_${slot}_date`]: date || '' };
-  }
-  return {
-    [`installment_${slot}_value`]: (existing.value + value).toFixed(2),
-    [`installment_${slot}_mode`]:  mode || existing.mode || '',
-    [`installment_${slot}_date`]:  date || existing.date || '',
-  };
+// A buy-plan draft gives every payment its own slot, in the order they are made, up to 6
+// (founder, 2026-11-04: a second payment is the second installment, never added to the first).
+// A 7th payment folds into slot 6. The money rules (schedule.js) work from the payment dates, not
+// the slots, so this changes only what the payment table shows.
+function planLegPatch(rows, { value, mode, date }) {
+  return installmentLegPatch(rows, { value, mode, date }, { max: PLAN_MAX_INSTALLMENTS });
 }
 
 module.exports = {
