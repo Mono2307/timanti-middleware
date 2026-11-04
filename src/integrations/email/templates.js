@@ -810,11 +810,24 @@ function planScheduleTable(rows) {
       ? `<p style="font-size:12px; color:#999999; margin:8px 0 0;">* At today's gold rate. Your last installment is set 3 days before it is due, at that day's rate.</p>` : ''}`;
 }
 
-const PLAN_PAYING = 'You can pay any amount from ₹1,000 at any time: paying more makes the installments after it smaller, paying less makes them larger, and a missed installment is added to the next one.';
-const PLAN_CLOSING = 'If no payment is made for 60 days, or the plan is not paid off 30 days after the last installment, the plan closes and everything you have paid comes back to you as a voucher valid for a year.';
-const rulesFor = (mode) => (mode === 'equal'
-  ? `Your installments are at the price on the day the plan started. Your last installment is worked out 3 days before it is due, at that day's gold rate, so it may be a little more or less. ${PLAN_PAYING} ${PLAN_CLOSING}`
-  : `Your gold rate was locked when you paid the gold value and will not change. ${PLAN_PAYING} ${PLAN_CLOSING}`);
+// The plan's terms, as bullets under "Terms of your plan" (founder, 2026-11-04).
+const PLAN_PAYING = [
+  'You can pay any amount from ₹1,000 at any time.',
+  'Paying more makes the installments after it smaller; paying less makes them larger.',
+  'A missed installment is added to the next one.',
+];
+const PLAN_CLOSING = [
+  'If no payment is made for 60 days, the plan closes.',
+  'If the plan is not paid off 30 days after the last installment, it closes.',
+  'When a plan closes, everything you have paid comes back to you as a voucher valid for a year.',
+];
+const termsList = (items) => `<p style="margin:0 0 6px; font-weight:bold; color:#666666;">Terms of your plan</p>`
+  + `<ul style="margin:0; padding-left:18px; text-align:left;">${items.map(t => `<li style="margin:0 0 4px;">${t}</li>`).join('')}</ul>`;
+const rulesFor = (mode) => termsList(mode === 'equal'
+  ? ['Your installments are at the price on the day the plan started.',
+     'Your last installment is worked out 3 days before it is due, at that day\'s gold rate, so it may be a little more or less.',
+     ...PLAN_PAYING, ...PLAN_CLOSING]
+  : ['Your gold rate was locked when you paid the gold value and will not change.', ...PLAN_PAYING, ...PLAN_CLOSING]);
 
 function planBody({ heading, ref, body, payUrl, amount, customPayUrl, rows, paid, balance, timelineText, mode }) {
   return head()
@@ -870,7 +883,7 @@ function buildBuyPlanFinalPriceHtml({ customerName, draftName, startTotal, final
     heading: `Your final price: ${money(finalTotal)}`,
     body: `${who} today's gold rate your piece is <strong>${money(finalTotal)}</strong> (it was ${money(startTotal)} when your plan started).${tail}`,
     payUrl, amount, customPayUrl, rows, paid, balance,
-    timelineText: `Your price is now final and will not change again. ${PLAN_CLOSING}`,
+    timelineText: termsList(['Your price is now final and will not change again.', ...PLAN_PAYING, ...PLAN_CLOSING]),
   });
 }
 
