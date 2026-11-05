@@ -35,6 +35,11 @@
 {% comment %} Offline and not delivered = collected in store: no shipping row, address, timeline or link. {% endcomment %}
 {% assign hide_shipping_footer = false %}
 {% if is_offline and is_delivery == false %}{% assign hide_shipping_footer = true %}{% endif %}
+{% comment %} The 21-business-day line: online, and an MTO piece shipped to the customer. Not on an in-stock
+   delivery, which already says "2 to 3 business days" (founder, 2026-11-06), nor in store. {% endcomment %}
+{% assign show_timeline = true %}
+{% if hide_shipping_footer %}{% assign show_timeline = false %}{% endif %}
+{% if is_delivery and is_mto == false %}{% assign show_timeline = false %}{% endif %}
 {% assign support_phone = "7710938305" %}
 {% if is_offline %}{% assign support_phone = "7710968305" %}{% endif %}
 {% comment %} ===== LOGO SIZE: change the number below to set the logo width in pixels ===== {% endcomment %}
@@ -156,11 +161,11 @@
                         </tr>
                         {% endif %}
                       </table>
-                      {% unless hide_shipping_footer %}
+                      {% if show_timeline %}
                         <div style="background: #F6F6F6; padding: 12px 16px; margin: 14px auto; text-align: center; max-width: 460px; border-radius: 4px; font-size: 12px; line-height: 1.5; color: #888;">
                           Items are usually shipped within 21 business days.
                         </div>
-                      {% endunless %}
+                      {% endif %}
                     </td>
                   </tr>
                 </table>

@@ -80,9 +80,6 @@ const REQUIRED_FIELDS = [
   "shipment",
   "state_code",
   "employee_name",
-  // Last in the list on purpose: it is the question staff answer as they close the sale, and adding
-  // it mid-list would reshuffle a section they fill from muscle memory.
-  "in_store_sale",
 ];
 // Label on the blank entry of every choice dropdown. It is also the sentinel we normalise back to
 // "" — see renderEditable and save(). Never let this string reach Shopify: it is not a valid
@@ -108,13 +105,9 @@ const FIELD_CONFIG = {
   // shipping row and shipping address on the order-confirmation email.
   shipment: { section: "Order Details", label: "Ship to Customer", editable: true, applies: "both" },
   employee_name: { section: "Order Details", label: "Sales Staff", editable: true, applies: "both" },
-  // Yes/No, and the answer must be given BEFORE the draft is converted. Shopify emails the order
-  // confirmation the moment the order is created, and that email reads only TAGS — the in-store-sale
-  // tag plus the ch:/ot:/ship: routing tags. Draft tags carry across at conversion; metafields reach
-  // the order seconds later, after the customer was emailed.
-  // Draft-only for the same reason — on an order it would be a control that can no longer change
-  // anything.
-  in_store_sale: { section: "Order Details", label: "Send Tax Invoice in Email", editable: true, applies: "draft", required: true },
+  // "Send Tax Invoice in Email" (in_store_sale) was retired 2026-11-06: an offline confirmation always
+  // carries the tax invoice, so Channel + Ship to Customer decide the email on their own. The
+  // in-store-sale tag handling in save() stays only so an old draft can still be read.
 
   // Payments are captured as up to 4 INSTALLMENTS, each with its own value, mode and date. Enter
   // each collection in its own leg — never re-type a running total, and never skip a slot. The
