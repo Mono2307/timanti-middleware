@@ -11,8 +11,9 @@ const fake = (rel, exports) => {
   require.cache[file] = { id: file, filename: file, loaded: true, exports };
 };
 
-const world = { plans: [], drafts: {}, markers: new Set(), config: {}, sent: [], links: [], repriced: [], vouchers: [] };
+const world = { plans: [], drafts: {}, markers: new Set(), config: {}, sent: [], links: [], repriced: [], vouchers: [], written: [], openLink: null };
 fake('./store.js', {
+  latestOpenLink: async () => world.openLink,
   listActivePlans: async () => world.plans.filter(p => p.status === 'active'),
   updatePlan: async (id, patch) => Object.assign(world.plans.find(p => p.id === id), patch),
   getPlan: async (id) => world.plans.find(p => p.id === id) || null,
@@ -22,7 +23,8 @@ fake('./store.js', {
   setConfigValue: async (k, v) => { world.config[k] = v; },
 });
 fake('./notify.js', {
-  sendLink: async (plan, d, link, o = {}) => world.sent.push(`${o.overdue ? 'overdue' : 'due'}#${o.k}:${link.amount}`),
+  sendLink: async (plan, d, link, o = {}) => world.sent.push(`${o.relink ? 'relink:' : ''}${o.overdue ? 'overdue' : 'due'}#${o.k}:${link.amount}`),
+  sendPricePutBack: async (plan, d, fixes, error) => world.sent.push(`put-back:${fixes.map(f => f.to).join(',')}${error ? ':failed' : ''}`),
   sendReceived: async (plan, d, amount) => world.sent.push(`received:${amount}`),
   sendCompleted: async () => world.sent.push('completed'),
   sendStaffDigest: async (rows) => world.sent.push(`digest:${rows.length}`),
@@ -34,8 +36,8 @@ fake('./notify.js', {
   sendForfeited: async () => world.sent.push('forfeit-alert'),
 });
 fake('./final.js', {
-  startFinalReprice: async (plan, d) => { world.repriced.push(d.id); d.tags.push('buy-plan-final', 'reprice'); return []; },
-  finalRepriceDone: (tags) => tags.includes('rate-locked') && !tags.includes('buy-plan-final'),
+  startFinalReprice: async (plan, d) => { world.repriced.push(d.id); d.tags.push('rate-locked', 'sync-payment'); return { rates: [], changes: [], skipped: [] }; },
+  finalRepriceDone: (tags) => tags.includes('rate-locked') && !tags.includes('buy-plan-final') && !tags.includes('sync-payment'),
   changeRepriceDone: (tags) => !tags.includes('buy-plan-change') && !tags.includes('reprice'),
 });
 fake('./links.js', { createPlanLink: async (plan, amount) => { world.links.push(amount); return { shortUrl: 'https://pay', amount }; } });
@@ -46,7 +48,11 @@ fake('./voucher.js', { issuePlanVoucher: async ({ value }) => { world.vouchers.p
 const metafields = require.resolve('../../../core/metafields');
 require.cache[metafields] = { id: metafields, filename: metafields, loaded: true, exports: { updateDraftOrderMetafields: async () => {} } };
 const realDraft = require('./draft');
-fake('./draft.js', { ...realDraft, readDraft: async (id) => world.drafts[id] || null });
+fake('./draft.js', { ...realDraft, readDraft: async (id) => world.drafts[id] || null,
+  writeDraftLines: async (id, lines, o = {}) => {
+    if (world.writeFails) throw new Error('Shopify said no');
+    world.written.push({ id, lines, tags: o.tags });
+  } });
 
 const { runBuyPlanSweep } = require('./sweep');
 const S = require('./schedule');
@@ -65,6 +71,7 @@ function reset({ legs = [], status = 'open', mode = 'gold', tags = ['buy-plan', 
     acknowledged_paid: legs.reduce((s, l) => s + l.value, 0), lines_key: realDraft.linesKey([ring]), ...over }];
   world.drafts = { 100: { id: '100', draft: { name: '#D300', status, line_items: lines }, mf: {}, tags: [...tags], customer: {}, total: 120000, legs } };
   world.markers = new Set(); world.config = {}; world.sent = []; world.links = []; world.repriced = []; world.vouchers = [];
+  world.written = []; world.openLink = null; world.writeFails = false;
 }
 const paid = (date, value) => ({ value, date });
 const five = D.slice(0, 5).map(d => paid(d, 20000));
@@ -168,6 +175,97 @@ const five = D.slice(0, 5).map(d => paid(d, 20000));
     assert.strictEqual(world.plans[0].snapshot.line_items[0].variant_id, 7);
   });
 
+  await t('two issues on one plan both reach the digest', async () => {
+    const other = { ...ring, variant_id: 99 };
+    reset({ lines: [other], over: { snapshot: { line_items: [ring] } } });
+    await runBuyPlanSweep({ now: at('2026-10-27') });   // pieces changed AND installment 1 overdue
+    assert.ok(world.sent.includes('digest:2'));
+  });
+
+  console.log('a re-added piece keeps its locked price');
+  const locked = { ...ring, price: '120000.00', properties: [{ name: 'Gold', value: 'Rs80000.00' }, { name: '_gold_rate', value: '10000' }, { name: '_jewel_code', value: 'R1' }] };
+  const readded = { ...ring, price: '150000.00', properties: [] };
+
+  await t('re-added at the catalog price: the plan line is put back, the restore copy keeps it, the store is told', async () => {
+    reset({ legs: [paid(START, 20000)], lines: [readded], over: { snapshot: { line_items: [locked] } } });
+    const r = await runBuyPlanSweep({ now: at('2026-11-01') });
+    assert.strictEqual(world.written.length, 1);
+    assert.strictEqual(world.written[0].lines[0].price, '120000.00');
+    assert.deepStrictEqual(world.written[0].lines[0].properties, locked.properties);
+    assert.ok(world.written[0].tags.includes('sync-payment'));
+    assert.ok(world.written[0].tags.includes('rate-locked'));
+    assert.strictEqual(world.plans[0].snapshot.line_items[0].price, '120000.00');
+    assert.deepStrictEqual(world.sent, ['put-back:120000', 'digest:1']);
+    assert.match(r.plans[0].sent.join(), /put back Ring at Rs120000/);
+  });
+
+  await t('at the plan price already: nothing is written', async () => {
+    reset({ legs: [paid(START, 20000)], lines: [locked], over: { snapshot: { line_items: [locked] } } });
+    await runBuyPlanSweep({ now: at('2026-11-01') });
+    assert.deepStrictEqual(world.written, []);
+    assert.deepStrictEqual(world.sent, []);
+  });
+
+  await t('not while a reprice is on the draft, and not on a dry run', async () => {
+    reset({ legs: [paid(START, 20000)], lines: [readded], tags: ['buy-plan', 'rate-locked', 'reprice'], over: { snapshot: { line_items: [locked] } } });
+    await runBuyPlanSweep({ now: at('2026-11-01') });
+    assert.deepStrictEqual(world.written, []);
+    reset({ legs: [paid(START, 20000)], lines: [readded], over: { snapshot: { line_items: [locked] } } });
+    const r = await runBuyPlanSweep({ now: at('2026-11-01'), dryRun: true });
+    assert.deepStrictEqual(world.written, []);
+    assert.strictEqual(r.digestRows.length, 1);
+  });
+
+  await t('the write fails: the store is told to fix it by hand, once, and the snapshot is not overwritten', async () => {
+    reset({ legs: [paid(START, 20000)], lines: [readded], over: { snapshot: { line_items: [locked] } } });
+    world.writeFails = true;
+    await runBuyPlanSweep({ now: at('2026-11-01') });
+    await runBuyPlanSweep({ now: at('2026-11-02') });
+    assert.deepStrictEqual(world.sent.filter(s => s.startsWith('put-back')), ['put-back:120000:failed']);
+    assert.strictEqual(world.plans[0].snapshot.line_items[0].price, '120000.00');
+  });
+
+  console.log('a fresh link when the one held lapses');
+  const overdue2 = () => {
+    reset({ legs: [paid(START, 20000)] });
+    world.markers.add('1|2|customer|due'); world.markers.add('1|2|customer|overdue');
+  };
+
+  await t('installment 2 overdue and its link lapses in 3 days: one new link, once', async () => {
+    overdue2();
+    world.openLink = { gokwik_link_id: 'L1', amount: 20000, expires_at: '2026-12-01T10:00:00Z' };
+    await runBuyPlanSweep({ now: at('2026-11-28') });
+    await runBuyPlanSweep({ now: at('2026-11-28') });
+    assert.deepStrictEqual(world.sent.filter(s => !s.startsWith('digest')), ['relink:overdue#2:20000']);
+    assert.deepStrictEqual(world.links, [20000]);
+  });
+
+  await t('an already-expired link is replaced too; a link with weeks left is not', async () => {
+    overdue2();
+    world.openLink = { gokwik_link_id: 'L1', amount: 20000, expires_at: '2026-11-20T10:00:00Z' };
+    await runBuyPlanSweep({ now: at('2026-11-28') });
+    assert.deepStrictEqual(world.links, [20000]);
+    overdue2();
+    world.openLink = { gokwik_link_id: 'L1', amount: 20000, expires_at: '2026-12-20T10:00:00Z' };
+    await runBuyPlanSweep({ now: at('2026-11-28') });
+    assert.deepStrictEqual(world.links, []);
+  });
+
+  await t('not when this pass already sent a link, nor on a dry run, nor with nothing due', async () => {
+    reset({ legs: [paid(START, 20000)] });
+    world.openLink = { gokwik_link_id: 'L1', amount: 20000, expires_at: '2026-11-22T10:00:00Z' };
+    await runBuyPlanSweep({ now: at('2026-11-21') });   // the due#2 reminder carries a new link already
+    assert.deepStrictEqual(world.links, [20000]);
+    overdue2();
+    world.openLink = { gokwik_link_id: 'L1', amount: 20000, expires_at: '2026-12-01T10:00:00Z' };
+    await runBuyPlanSweep({ now: at('2026-11-28'), dryRun: true });
+    assert.deepStrictEqual(world.links, []);
+    reset({ legs: [paid(START, 20000)] });
+    world.openLink = { gokwik_link_id: 'L1', amount: 20000, expires_at: '2026-11-05T10:00:00Z' };
+    await runBuyPlanSweep({ now: at('2026-11-04') });   // installment 2 is three weeks off
+    assert.deepStrictEqual(world.links, []);
+  });
+
   console.log('equal plans: the final price');
 
   await t('3 days before the last installment the draft is repriced, once', async () => {
@@ -191,6 +289,7 @@ const five = D.slice(0, 5).map(d => paid(d, 20000));
     await runBuyPlanSweep({ now: at('2027-03-21') });
     assert.strictEqual(world.plans[0].final_total, 126000);
     assert.deepStrictEqual(world.sent, ['final-price:126000:26000']);
+    assert.ok(world.plans[0].snapshot, 'the final prices become the plan\'s snapshot');
     await runBuyPlanSweep({ now: at('2027-03-22') });
     assert.deepStrictEqual(world.links, [26000]);
   });
@@ -201,6 +300,15 @@ const five = D.slice(0, 5).map(d => paid(d, 20000));
     world.drafts[100].total = 112000;
     await runBuyPlanSweep({ now: at('2027-03-21') });
     assert.deepStrictEqual(world.sent, ['final-price:112000:none', 'credit:8000']);
+  });
+
+  await t('the final price waits until the recompute has consumed sync-payment', async () => {
+    reset({ mode: 'equal', legs: five, tags: ['buy-plan', 'rate-locked', 'sync-payment'] });
+    world.markers.add('1|6|staff|final_reprice');
+    world.drafts[100].total = 126000;
+    await runBuyPlanSweep({ now: at('2027-03-21') });
+    assert.strictEqual(world.plans[0].final_total, null);
+    assert.deepStrictEqual(world.sent, ['digest:1']);
   });
 
   await t('a reprice that never finished reaches the staff digest', async () => {

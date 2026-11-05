@@ -47,6 +47,25 @@ t('rebuilds lines at their LOCKED prices and keeps the plan tags', () => {
   const keys = input.metafields.map(m => m.key).sort();
   assert.deepStrictEqual(keys, ['installment_1_value', 'plan_total']);   // long JSON records are not carried
   assert.strictEqual(input.metafields.find(m => m.key === 'installment_1_value').type, 'number_decimal');
+  assert.strictEqual(input.appliedDiscount, undefined);
+  assert.strictEqual(input.lineItems[0].appliedDiscount, undefined);
+});
+t('carries the line discounts and the draft-wide discount', () => {
+  const input = draftInput({
+    line_items: [
+      { variant_id: 5, quantity: 1, price: '120000', properties: [],
+        applied_discount: { value: '10.0', value_type: 'percentage', title: 'Loyalty', description: 'Diamond 10%', amount: '12000.00' } },
+      { title: 'Engraving', quantity: 1, price: '500', properties: [],
+        applied_discount: { value: '100.0', value_type: 'fixed_amount', title: '', amount: '100.00' } },
+      { title: 'Box', quantity: 1, price: '0', properties: [], applied_discount: { value: '0', value_type: 'fixed_amount' } },
+    ],
+    applied_discount: { value: '2500.0', value_type: 'fixed_amount', title: 'Store', description: 'Festive' },
+    tags: ['buy-plan'],
+  });
+  assert.deepStrictEqual(input.lineItems[0].appliedDiscount, { value: 10, valueType: 'PERCENTAGE', title: 'Loyalty', description: 'Diamond 10%' });
+  assert.deepStrictEqual(input.lineItems[1].appliedDiscount, { value: 100, valueType: 'FIXED_AMOUNT' });
+  assert.strictEqual(input.lineItems[2].appliedDiscount, undefined);   // a zero discount is no discount
+  assert.deepStrictEqual(input.appliedDiscount, { value: 2500, valueType: 'FIXED_AMOUNT', title: 'Store', description: 'Festive' });
 });
 
 console.log('staff WhatsApp link');

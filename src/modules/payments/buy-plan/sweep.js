@@ -8,16 +8,20 @@
 //   2. draft completed        → plan completed; "plan complete" email to the customer, once
 //   3. product change pending → once its reprice has run: the new price, the new schedule, and a
 //                               voucher if the customer has already paid more than the new price
-//   4. floating plan          → 3 days before the last due date, reprice at that day's gold rate; a
-//                               follow-up 5 minutes later fixes the final price and sends its link
+//   4. floating plan          → 3 days before the last due date, the gold moves to that day's rate
+//                               (only the gold, final.js); a follow-up 5 minutes later, once the
+//                               collect figures are recomputed, fixes the final price and sends its link
 //   5. pieces edited without "Change product" → one alert to the store (the snapshot keeps the
 //                               plan's pieces, so a deleted draft comes back as the plan, not the edit)
+//      the same piece re-added at another price → the snapshot's line is put back (keepLockedPrices)
 //   6. new money since the last run → "payment received" with the new schedule
 //   7. closure due            → the plan closes, the money paid becomes a voucher (forfeit.js)
 //   8. closure warnings       → day 30 / 45 without a payment, day 15 / 25 after the last due date
 //   9. next installment due within 3 days → a GoKwik link for what it asks, email + SMS
 //  10. current installment 3+ days overdue → one overdue reminder with a fresh link
-// Then one staff digest a day: everything due in 3 days, overdue, or about to close.
+//  11. the link the customer holds lapses within 3 days, installment still unpaid → a new one, once
+// Then one staff digest a day: everything due in 3 days, overdue, or about to close — every issue on
+// a plan, not only the first.
 
 const { log } = require('../../../core/logger');
 const { updateDraftOrderMetafields } = require('../../../core/metafields');
@@ -28,10 +32,13 @@ const { createPlanLink } = require('./links');
 const final = require('./final');
 const { forfeitPlan } = require('./forfeit');
 const { issuePlanVoucher } = require('./voucher');
-const { readDraft, snapshotOf, todayIst, daysBetween, adminDraftUrl, linesKey } = require('./draft');
+const { readDraft, snapshotOf, todayIst, daysBetween, adminDraftUrl, linesKey,
+  linesToRestore, withRestored, writeDraftLines, withTags, SYNC_TAG } = require('./draft');
+const { isRateLocked } = require('./lock');
 
 const REMIND_DAYS_BEFORE = 3;
 const OVERDUE_AFTER_DAYS = 3;
+const RELINK_DAYS_BEFORE = 3;   // a new link when the one the customer holds lapses within this many days
 const FINAL_REPRICE_DAYS_BEFORE = 3;   // founder, 2026-10-30: the final link arrives with the reminder
 const DIGEST_KEY = 'buy_plan_digest_last';
 const RUN_EVERY_MS = 6 * 60 * 60 * 1000;
@@ -102,9 +109,9 @@ async function finalStep(plan, d, today, { dryRun }) {
 
   if (!(await store.wasSent(plan.id, n, 'staff', 'final_reprice'))) {
     if (dryRun) return { plan: plan.draft_name, action: "would reprice at today's gold rate" };
-    const rates = await final.startFinalReprice(plan, d);
+    const { rates, changes, skipped } = await final.startFinalReprice(plan, d);
     await store.markSent(plan.id, n, 'staff', 'final_reprice');
-    await store.updatePlan(plan.id, { final_rates: { date: today, rates } });
+    await store.updatePlan(plan.id, { final_rates: { date: today, rates, changes, skipped } });
     followUp(plan.id);
     return { plan: plan.draft_name, action: 'final reprice started' };
   }
@@ -112,11 +119,14 @@ async function finalStep(plan, d, today, { dryRun }) {
   if (!final.finalRepriceDone(d.tags)) {
     return { plan: plan.draft_name, action: 'waiting for the final reprice',
       digest: digestRow(plan, d, n, n, lastDue, 0, { overdue: true, stuck: true,
-        note: 'Final reprice has not finished. Open the draft and check its tags (buy-plan-final / reprice).' }) };
+        note: 'Final price has not finished. Open the draft and check its tags (sync-payment / buy-plan-final / reprice); saving the payment panel re-runs the recompute.' }) };
   }
 
   if (dryRun) return { plan: plan.draft_name, action: 'would fix the final price' };
-  const patch = { final_total: d.total, final_repriced_at: new Date().toISOString(), price_changes: withPrice(plan, today, d.total, 'final price') };
+  // The lines now carry the final prices: they are the plan's from here on (keepLockedPrices compares
+  // against this snapshot).
+  const patch = { final_total: d.total, final_repriced_at: new Date().toISOString(), price_changes: withPrice(plan, today, d.total, 'final price'),
+    lines_key: linesKey(d.draft.line_items), snapshot: snapshotOf(d) };
   Object.assign(plan, patch);
   await store.updatePlan(plan.id, patch);
   const st = S.planState(plan, d.legs, today);
@@ -140,6 +150,35 @@ async function checkLines(plan, d, { dryRun }) {
     await store.setConfigValue(key, now);
   }
   return true;
+}
+
+// 5b. The same piece is on the draft at a price (or breakup) other than the plan's — typically removed
+// and re-added from the catalog, which brings it in at today's catalog price with no breakup. Put the
+// snapshot's line back. Only while the lock is in force: a product change or the final price writes
+// new prices on purpose, and the snapshot follows them once they are done.
+async function keepLockedPrices(plan, d, { dryRun }) {
+  const snapLines = (plan.snapshot || {}).line_items;
+  const tags = d.tags.map(t => t.toLowerCase());
+  if (!snapLines || plan.change_pending || !isRateLocked(d.tags) || tags.includes('reprice')) return { fixes: [] };
+  const fixes = linesToRestore(snapLines, d.draft.line_items);
+  if (!fixes.length || dryRun) return { fixes };
+  let error = null;
+  try {
+    await writeDraftLines(d.id, withRestored(d.draft.line_items, fixes), { tags: withTags(d.tags, [SYNC_TAG]) });
+    for (const f of fixes) log.warn('buy-plan', `${plan.draft_name}: ${f.title} was at Rs${f.from}, put back to the plan's Rs${f.to}`);
+  } catch (e) {
+    error = e.message;
+    log.error('buy-plan', `${plan.draft_name}: could not put the plan price back: ${error}`);
+  }
+  // A put-back happens once (the next sweep finds the plan's line); a write that keeps failing alerts
+  // once per distinct finding, not every 6 hours.
+  const key = `buy_plan_putback_${plan.id}`;
+  const seen = fixes.map(f => `${f.idx}:${f.from}`).join(',');
+  if (!error || (await store.getConfigValue(key)) !== seen) {
+    await notify.sendPricePutBack(plan, d, fixes, error).catch(e => log.error('buy-plan', `put-back alert: ${e.message}`));
+    if (error) await store.setConfigValue(key, seen);
+  }
+  return { fixes, error };
 }
 
 async function sweepPlan(plan, today, { dryRun, restore }) {
@@ -170,10 +209,12 @@ async function sweepPlan(plan, today, { dryRun, restore }) {
   }
 
   const edited = await checkLines(plan, d, { dryRun });
+  const kept = edited ? { fixes: [] } : await keepLockedPrices(plan, d, { dryRun });
   if (!dryRun) {
-    // Keep the restore copy current (payments, tags), but never adopt pieces the plan is not for.
+    // Keep the restore copy current (payments, tags), but never adopt pieces the plan is not for, nor
+    // a line at a price other than the plan's.
     const snap = snapshotOf(d);
-    if (edited && plan.snapshot) { snap.line_items = plan.snapshot.line_items; snap.applied_discount = plan.snapshot.applied_discount; }
+    if ((edited || kept.fixes.length) && plan.snapshot) { snap.line_items = plan.snapshot.line_items; snap.applied_discount = plan.snapshot.applied_discount; }
     await store.updatePlan(plan.id, { snapshot: snap });
   }
 
@@ -181,6 +222,13 @@ async function sweepPlan(plan, today, { dryRun, restore }) {
   const out = { plan: plan.draft_name, k: st.k, dueNow: st.dueNow, upcoming: st.upcoming, balance: st.balance, sent: [] };
   const rows = [];
   if (edited) rows.push(digestRow(plan, d, n, st.k, today, st.dueNow, { overdue: true, stuck: true, note: 'Pieces changed without "Change product".' }));
+  for (const f of kept.fixes) {
+    rows.push(digestRow(plan, d, n, st.k, today, st.dueNow, { overdue: true, stuck: true, note: kept.error
+      ? `${plan.draft_name}: ${f.title} was re-added at a different price, and putting the plan price back failed (${kept.error}). Fix the line by hand.`
+      : `${plan.draft_name}: ${f.title} was re-added at a different price; the plan price was put back.` }));
+    out.sent.push(`${dryRun ? 'would put back' : 'put back'} ${f.title} at Rs${f.to}`);
+  }
+  let linked = false;   // a link went (or, on a dry run, would go) to the customer in this pass
 
   // 6. Money arrived since the last confirmation.
   const acknowledged = Number(plan.acknowledged_paid) || 0;
@@ -191,7 +239,7 @@ async function sweepPlan(plan, today, { dryRun, restore }) {
     }
     out.sent.push(`received Rs${st.paid - acknowledged}`);
   }
-  if (st.balance <= 0) return { ...out, digest: rows[0] || null };   // fully paid; staff complete the draft
+  if (st.balance <= 0) return { ...out, digest: rows };   // fully paid; staff complete the draft
 
   // 7. Closure.
   const c = st.closure;
@@ -210,6 +258,7 @@ async function sweepPlan(plan, today, { dryRun, restore }) {
       await notify.sendClosingSoon(plan, d, link, { closeOn: c.closeOn, lastInstallment: c.warn.kind.startsWith('last'), today });
       await store.markSent(plan.id, c.warn.k, 'customer', c.warn.kind);
     }
+    linked = true;
     out.sent.push(`${c.warn.kind}: closes ${c.closeOn}`);
   }
   if (c.warn) rows.push(digestRow(plan, d, n, st.k, st.dates[st.k - 1], st.suggested, { overdue: true, closeOn: c.closeOn, note: `Closes on ${c.closeOn} unless paid` }));
@@ -225,6 +274,7 @@ async function sweepPlan(plan, today, { dryRun, restore }) {
         await notify.sendLink(plan, d, link, { k: up.k, dueDate: up.due, today });
         await store.markSent(plan.id, up.k, 'customer', 'due');
       }
+      linked = true;
       out.sent.push(`due #${up.k} Rs${up.amount}`);
     }
     if (!c.warn) rows.push(digestRow(plan, d, n, up.k, up.due, up.amount));
@@ -240,11 +290,34 @@ async function sweepPlan(plan, today, { dryRun, restore }) {
         await notify.sendLink(plan, d, link, { k: st.k, dueDate: dueOn, overdue: true, today });
         await store.markSent(plan.id, st.k, 'customer', 'overdue');
       }
+      linked = true;
       out.sent.push(`overdue #${st.k} Rs${st.dueNow}`);
     }
     if (!c.warn) rows.push(digestRow(plan, d, n, st.k, dueOn, st.dueNow, { overdue: true }));
   }
-  return { ...out, digest: rows[0] || null };
+
+  // 11. The link the customer holds lapses within 3 days (or has) and the installment is still unpaid:
+  // a new one, once per expiring link (the marker names that link's expiry).
+  const ask = st.dueNow > 0 ? { k: st.k, due: dueOn, amount: st.dueNow, overdue: late >= OVERDUE_AFTER_DAYS }
+    : up && !unpriced && daysBetween(today, up.due) <= REMIND_DAYS_BEFORE ? { k: up.k, due: up.due, amount: up.amount, overdue: false }
+    : null;
+  if (ask && !linked) {
+    const open = await store.latestOpenLink(plan.draft_order_id);
+    const expires = open ? Date.parse(open.expires_at) : NaN;
+    if (Number.isFinite(expires) && daysBetween(today, todayIst(expires)) <= RELINK_DAYS_BEFORE) {
+      const key = `buy_plan_relink_${plan.id}`;
+      const mark = `${ask.k}|${open.expires_at}`;
+      if ((await store.getConfigValue(key)) !== mark) {
+        if (!dryRun) {
+          const link = await createPlanLink(plan, ask.amount);
+          await notify.sendLink(plan, d, link, { k: ask.k, dueDate: ask.due, overdue: ask.overdue, relink: true, today });
+          await store.setConfigValue(key, mark);
+        }
+        out.sent.push(`new link #${ask.k} Rs${ask.amount}`);
+      }
+    }
+  }
+  return { ...out, digest: rows };
 }
 
 async function runBuyPlanSweep({ dryRun = false, restore = null, now = Date.now() } = {}) {
@@ -255,7 +328,7 @@ async function runBuyPlanSweep({ dryRun = false, restore = null, now = Date.now(
   for (const plan of plans) {
     try {
       const r = await sweepPlan(plan, today, { dryRun, restore });
-      if (r.digest) digestRows.push(r.digest);
+      digestRows.push(...[].concat(r.digest || []));   // every issue on the plan, not just the first
       results.push(r);
     } catch (e) {
       // One bad plan must not stop the rest.
@@ -286,5 +359,5 @@ function startBuyPlanSweep(opts = {}) {
 
 module.exports = {
   runBuyPlanSweep, startBuyPlanSweep, sweepPlan, finalStep, finishChange, followUp,
-  REMIND_DAYS_BEFORE, OVERDUE_AFTER_DAYS, FINAL_REPRICE_DAYS_BEFORE,
+  keepLockedPrices, REMIND_DAYS_BEFORE, OVERDUE_AFTER_DAYS, FINAL_REPRICE_DAYS_BEFORE, RELINK_DAYS_BEFORE,
 };

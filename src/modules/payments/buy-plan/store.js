@@ -87,8 +87,18 @@ async function listPayments(draftId) {
   }));
 }
 
+// The newest payment link still open on the draft — the one the customer was last sent.
+async function latestOpenLink(draftId) {
+  const { data, error } = await supabase.from('payment_links')
+    .select('gokwik_link_id, amount, expires_at, created_at')
+    .eq('draft_order_id', String(draftId)).eq('status', 'created')
+    .order('created_at', { ascending: false }).limit(1).maybeSingle();
+  if (error) { console.error(`[buy-plan] payment_links read: ${error.message}`); return null; }
+  return data || null;
+}
+
 module.exports = {
-  listPayments,
+  listPayments, latestOpenLink,
   getPlanByDraft, getPlan, listActivePlans, insertPlan, updatePlan, deletePlan,
   wasSent, markSent, getConfigValue, setConfigValue,
 };

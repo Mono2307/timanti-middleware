@@ -84,16 +84,19 @@ async function sendFinalCredit(plan, d, credit) {
 }
 
 // A payment link for installment k: by SMS (as every payment link is) and by email with the plan.
-async function sendLink(plan, d, link, { k, dueDate, overdue = false, today } = {}) {
+// relink: the link sent earlier is about to lapse (GoKwik links last 30 days); this is its replacement.
+async function sendLink(plan, d, link, { k, dueDate, overdue = false, today, relink = false } = {}) {
   const st = stateOf(plan, d, today);
   const n = st.n;
   const phone = phoneOf(plan.customer_phone);
   if (phone) {
-    await sendSMS(phone, `Timanti buy plan ${plan.draft_name}: installment ${k} of ${n}, ${rupees(link.amount)}${overdue ? ' (overdue)' : ''}. Pay: ${link.shortUrl}`);
+    await sendSMS(phone, `Timanti buy plan ${plan.draft_name}: installment ${k} of ${n}, ${rupees(link.amount)}${overdue ? ' (overdue)' : ''}. ${relink ? 'New payment link (the earlier one is expiring)' : 'Pay'}: ${link.shortUrl}`);
   }
   await sendEmail({
     to: plan.customer_email,
-    subject: overdue
+    subject: relink
+      ? `A new payment link for installment ${k} on your buy plan (${plan.draft_name})`
+      : overdue
       ? `Installment ${k} on your buy plan is overdue (${plan.draft_name})`
       : `Installment ${k} of ${n} on your buy plan: ${rupees(link.amount)} (${plan.draft_name})`,
     html: T.buildBuyPlanDueHtml({
@@ -187,6 +190,20 @@ async function sendLinesChanged(plan, d) {
   });
 }
 
+// fixes: draft.js linesToRestore — the lines put back at the plan's price (error: the write failed).
+async function sendPricePutBack(plan, d, fixes, error = null) {
+  await sendEmail({
+    to: STORE(), internal: true,
+    subject: error
+      ? `Buy plan ${plan.draft_name}: a piece is at the wrong price, fix it by hand`
+      : `Buy plan ${plan.draft_name}: a re-added piece was put back at the plan price`,
+    html: T.buildBuyPlanPricePutBackHtml({
+      draftName: plan.draft_name, adminUrl: adminDraftUrl(d.id), customerName: plan.customer_name,
+      lines: fixes.map(f => ({ title: f.title, from: f.from, to: f.to })), error,
+    }),
+  });
+}
+
 // The message staff send by hand on WhatsApp.
 function whatsappUrl(row) {
   const phone = phoneOf(row.phone);
@@ -224,5 +241,5 @@ async function sendRestored({ plan, oldName, newName, newId, d }) {
 
 module.exports = {
   sendStarted, sendGoldLink, sendLink, sendReceived, sendCompleted, sendFinalPrice, sendFinalCredit,
-  sendClosingSoon, sendForfeited, sendChanged, sendLinesChanged, sendStaffDigest, sendRestored, whatsappUrl,
+  sendClosingSoon, sendForfeited, sendChanged, sendLinesChanged, sendPricePutBack, sendStaffDigest, sendRestored, whatsappUrl,
 };

@@ -17,9 +17,10 @@
 const RATE_LOCK_TAG = 'rate-locked';
 const BUY_PLAN_TAG  = 'buy-plan';
 const REFUSED_NOTE  = 'rate locked: buy plan';
-// The equal plan's one sanctioned reprice: on the date of installment 6 the sweep sets today's rate in
-// custom.gold_rate and tags the draft buy-plan-final + reprice. While that tag is on, the lock steps
-// aside; the reprice swaps it for rate-locked, so the new price is locked the moment it is written.
+// The equal plan's final price used to be an engine reprice let through by this tag. Since 2026-11-06
+// it moves only the gold and is written straight onto the lines (final.js), so nothing sets this tag
+// any more; it is still honoured so a draft caught mid-reprice by that deploy finishes: while it is
+// on the lock steps aside, and the reprice swaps it for rate-locked.
 const FINAL_REPRICE_TAG = 'buy-plan-final';
 // A product change (routes.js changeProduct): today's rate goes into custom.gold_rate and the draft is
 // tagged buy-plan-change + reprice. The lock steps aside for that one reprice too, and the reprice

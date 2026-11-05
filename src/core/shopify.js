@@ -202,10 +202,10 @@ const putJson    = (p, data, opts) => rest('put',    p, { ...opts, data });
 const deleteJson = (p, opts) => rest('delete', p, opts);
 
 /** GraphQL Admin API. Throws on userErrors so callers cannot silently ignore a failed write. */
-async function graphql(query, variables = {}, { token, timeout = 15000 } = {}) {
+async function graphql(query, variables = {}, { token, timeout = 15000, apiVersion = API_VERSION } = {}) {
   const t = token || await getShopifyToken();
   const { data } = await axios.post(
-    `${config.shopify.storeUrl}/admin/api/${API_VERSION}/graphql.json`,
+    `${config.shopify.storeUrl}/admin/api/${apiVersion}/graphql.json`,
     { query, variables },
     { headers: shopifyHeaders(t), timeout }
   );

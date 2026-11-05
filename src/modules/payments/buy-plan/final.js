@@ -1,13 +1,19 @@
 'use strict';
 
-// Buy plan — repricing a plan draft at today's gold rate: the equal plan's final reprice, and a
+// Buy plan — repricing a plan draft at today's gold rate: the equal plan's final price, and a
 // product change (see schedule.js for the plan types).
 //
-// Three days before the last installment's date the draft is repriced at that day's gold rate, the same way staff
-// reprice any draft: today's rate per piece goes into custom.gold_rate (positional over the jewellery
-// lines) and the draft is tagged `reprice`. The `buy-plan-final` tag lets that one reprice through the
-// lock, and the reprice itself swaps it for `rate-locked` (lock.js), so the new price is locked as soon
-// as it is written. The sweep then reads the new net-to-collect as the plan's final price.
+// FINAL PRICE (equal plan). Three days before the last installment's date ONLY the gold in each piece
+// moves to that day's rate; diamonds, gemstones and making stay at the prices on the draft (founder,
+// 2026-11-05). So this is not the pricing engine's reprice, which re-reads every part from the catalog:
+// each line's Gold property is scaled by today's rate over the rate it was priced at (its _gold_rate),
+// and the line's price moves by that difference plus GST. The lines are written straight back, the
+// draft tagged rate-locked + sync-payment; the draft webhook recomputes the collect figures and consumes
+// sync-payment, and the sweep then reads the new net-to-collect as the plan's final price.
+//
+// PRODUCT CHANGE. The new piece has no earlier price, so it goes through the engine: today's rate per
+// piece goes into custom.gold_rate (positional over the jewellery lines) and the draft is tagged
+// buy-plan-change + reprice, which lets that one reprice through the lock (lock.js).
 //
 // Today's rate for a piece is its variant's custom.gold_rate (the daily price job writes the day's
 // rate for that karat onto every variant). A custom line with no variant takes the day's sale rate
@@ -15,7 +21,8 @@
 
 const { getJson, putJson, getBuyingRateTable } = require('../../../core/shopify');
 const { updateDraftOrderMetafields } = require('../../../core/metafields');
-const { productLines, prop, rs, GST } = require('./draft');
+const { log } = require('../../../core/logger');
+const { productLines, prop, rs, GST, SYNC_TAG, withTags, writeDraftLines } = require('./draft');
 const { RATE_LOCK_TAG, FINAL_REPRICE_TAG, CHANGE_REPRICE_TAG } = require('./lock');
 
 function nearestKarat(rate, table) {
@@ -45,10 +52,52 @@ function lineRates(lineItems, { variantRates = {}, saleRates = {}, startSaleRate
   });
 }
 
-// Pure. Roughly how far the price moves at these rates. Gold is the only part the reprice changes.
+// Pure. Roughly how far the price moves at these rates. Gold is the only part the final price changes.
 function estimateDelta(rates) {
   return Math.round(rates.reduce((sum, r) =>
     sum + (r.newRate && r.oldRate ? r.gold * (r.newRate / r.oldRate - 1) : 0), 0) * GST);
+}
+
+// Pure. The equal plan's final price on the lines: for each jewellery line
+//   newGold  = round(oldGold × newRate / oldRate)                 (Gold is the line's, × quantity)
+//   newPrice = oldPrice + (newGold − oldGold) × 1.03 / quantity    (price is per unit)
+// and the Gold, _gold_rate, Gross Value, Taxable Value and GST properties follow, so the invoice's
+// breakup still adds up. The old rate is the line's own _gold_rate: it was written with that Gold value,
+// so a second run on already-moved lines changes nothing. A line with no Gold or no rate is left as it is.
+// Returns { lines (the whole list, every line), changes, skipped }.
+function goldOnlyReprice(lineItems, rates) {
+  const products = productLines(lineItems);
+  const changes = [], skipped = [];
+  const money = (v) => `Rs${v.toFixed(2)}`;
+  const lines = (lineItems || []).map(li => {
+    const i = products.indexOf(li);
+    if (i < 0) return li;
+    const r = rates[i] || {};
+    const title = li.title || `line ${i + 1}`;
+    const oldGold = rs(prop(li, 'Gold'));
+    const oldRate = rs(prop(li, '_gold_rate')) || Number(r.oldRate) || 0;
+    const newRate = Number(r.newRate) || 0;
+    if (!(oldGold > 0)) { skipped.push({ title, why: 'no Gold breakup' }); return li; }
+    if (!(oldRate > 0) || !(newRate > 0)) { skipped.push({ title, why: 'no gold rate' }); return li; }
+    if (Math.abs(newRate - oldRate) < 0.005) return li;
+
+    const newGold = Math.round(oldGold * newRate / oldRate);
+    const dGold = newGold - oldGold;
+    const qty = Number(li.quantity) || 1;
+    const oldPrice = parseFloat(li.price) || 0;
+    const newPrice = Math.round((oldPrice + dGold * GST / qty) * 100) / 100;
+    const moved = { 'Gold': newGold, 'Gross Value': dGold * GST, 'Taxable Value': dGold, 'GST': dGold * (GST - 1) };
+    const properties = (li.properties || []).map(p => {
+      if (p.name === '_gold_rate') return { name: p.name, value: String(newRate) };
+      if (p.name === 'Gold') return { name: p.name, value: money(newGold) };
+      if (p.name in moved) return { name: p.name, value: money(rs(p.value) + moved[p.name]) };
+      return p;
+    });
+    if (!properties.some(p => p.name === '_gold_rate')) properties.push({ name: '_gold_rate', value: String(newRate) });
+    changes.push({ title, oldGold, newGold, oldRate, newRate, oldPrice, newPrice, quantity: qty });
+    return { ...li, price: newPrice.toFixed(2), properties };
+  });
+  return { lines, changes, skipped };
 }
 
 async function todaysRates(plan, d) {
@@ -73,9 +122,9 @@ async function estimateFinal(plan, d) {
   return Math.max(0, Math.round(Number(plan.total)) + estimateDelta(rates));
 }
 
-// Write today's rates and ask for the reprice. Throws (and changes nothing) if any piece has no rate.
-// tag: FINAL_REPRICE_TAG (the result is locked) or CHANGE_REPRICE_TAG (a product change; it floats).
-async function startReprice(plan, d, tag = FINAL_REPRICE_TAG) {
+// The product change: write today's rates and ask the engine for the reprice. Throws (and changes
+// nothing) if any piece has no rate.
+async function startReprice(plan, d, tag = CHANGE_REPRICE_TAG) {
   const rates = await todaysRates(plan, d);
   if (!rates.length) throw new Error('no jewellery lines to reprice');
   const missing = rates.filter(r => !r.newRate);
@@ -86,12 +135,32 @@ async function startReprice(plan, d, tag = FINAL_REPRICE_TAG) {
   return rates;
 }
 
-const startFinalReprice = (plan, d) => startReprice(plan, d, FINAL_REPRICE_TAG);
+// The equal plan's final price: gold only, written straight onto the lines (see the top).
+// Returns { rates, changes, skipped }.
+async function startFinalReprice(plan, d) {
+  const rates = await todaysRates(plan, d);
+  if (!rates.length) throw new Error('no jewellery lines to reprice');
+  const { lines, changes, skipped } = goldOnlyReprice(d.draft.line_items, rates);
+  for (const s of skipped) log.warn('buy-plan', `${d.draft.name}: final price: ${s.title} left at its price (${s.why})`);
+  const tags = withTags(d.tags.filter(t => t.toLowerCase() !== FINAL_REPRICE_TAG), [RATE_LOCK_TAG, SYNC_TAG]);
+  if (changes.length) await writeDraftLines(d.id, lines, { tags });
+  else await putJson(`draft_orders/${d.id}.json`, { draft_order: { id: d.id, tags: tags.join(', ') } });
+  // A draft-level custom.gold_rate overrides each line's _gold_rate for any later reader; keep it in step.
+  if (changes.length && String(d.mf.gold_rate || '').trim()) {
+    const moved = productLines(lines).map((li, i) => rs(prop(li, '_gold_rate')) || rates[i].oldRate || 0);
+    await updateDraftOrderMetafields(d.id, { gold_rate: moved.map(r => Number(r).toFixed(2)).join(',') }).catch(() => {});
+  }
+  for (const c of changes) {
+    log.info('buy-plan', `${d.draft.name}: final price: ${c.title} gold Rs${c.oldGold} → Rs${c.newGold} (rate ${c.oldRate} → ${c.newRate}), price Rs${c.oldPrice} → Rs${c.newPrice}`);
+  }
+  return { rates, changes, skipped };
+}
 
-// The final reprice has run once the draft carries rate-locked again and no longer the final tag.
+// The final price has landed once the draft is rate-locked and the payment step has consumed
+// sync-payment. (buy-plan-final + reprice: a final reprice started by the engine before 2026-11-06.)
 const finalRepriceDone = (tags) => {
   const list = (tags || []).map(t => String(t).toLowerCase());
-  return list.includes(RATE_LOCK_TAG) && !list.includes(FINAL_REPRICE_TAG) && !list.includes('reprice');
+  return list.includes(RATE_LOCK_TAG) && ![FINAL_REPRICE_TAG, 'reprice', SYNC_TAG].some(t => list.includes(t));
 };
 // A product-change reprice has run once both its tags are gone.
 const changeRepriceDone = (tags) => {
@@ -99,4 +168,7 @@ const changeRepriceDone = (tags) => {
   return !list.includes(CHANGE_REPRICE_TAG) && !list.includes('reprice');
 };
 
-module.exports = { lineRates, estimateDelta, nearestKarat, estimateFinal, startReprice, startFinalReprice, finalRepriceDone, changeRepriceDone };
+module.exports = {
+  lineRates, estimateDelta, goldOnlyReprice, nearestKarat, estimateFinal, startReprice, startFinalReprice,
+  finalRepriceDone, changeRepriceDone,
+};

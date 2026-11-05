@@ -20,6 +20,7 @@ const S = require('./schedule');
 const store = require('./store');
 const notify = require('./notify');
 const { readInstallments } = require('../installments');
+const { lineInput, discountInput, GQL_VERSION } = require('./draft');
 
 // Only what the money and the invoice depend on. Long JSON records (repair inspection, per-line
 // discounts) are not carried: their definitions vary and the price they produced is already on the lines.
@@ -36,16 +37,6 @@ function addressInput(a) {
   return Object.keys(out).length ? out : undefined;
 }
 
-function lineInput(li) {
-  const attrs = (li.properties || []).map(p => ({ key: p.name, value: String(p.value) }));
-  const price = { amount: parseFloat(li.price).toFixed(2), currencyCode: 'INR' };
-  if (li.variant_id) {
-    return { variantId: `gid://shopify/ProductVariant/${li.variant_id}`, quantity: li.quantity, priceOverride: price, customAttributes: attrs };
-  }
-  return { title: li.title, quantity: li.quantity, originalUnitPriceWithCurrency: price,
-    taxable: li.taxable ?? true, requiresShipping: li.requires_shipping ?? false, customAttributes: attrs };
-}
-
 function draftInput(snap) {
   const metafields = Object.entries(snap.metafields || {})
     .filter(([k, v]) => RESTORE_KEYS.test(k) && String(v ?? '').trim() !== '')
@@ -57,6 +48,9 @@ function draftInput(snap) {
     email: snap.email || undefined,
     metafields,
   };
+  // Per-line discounts ride on each line (lineInput); this is the draft-wide one.
+  const discount = discountInput(snap.applied_discount);
+  if (discount) input.appliedDiscount = discount;
   if (snap.customer_id) input.purchasingEntity = { customerId: `gid://shopify/Customer/${snap.customer_id}` };
   const bill = addressInput(snap.billing_address), ship = addressInput(snap.shipping_address);
   if (bill) input.billingAddress = bill;
@@ -80,7 +74,7 @@ async function restoreDeletedPlanDraft(oldDraftId) {
   const res = await graphql(
     `mutation($input: DraftOrderInput!) { draftOrderCreate(input: $input) {
        draftOrder { id legacyResourceId name } userErrors { field message } } }`,
-    { input: draftInput(snap) });
+    { input: draftInput(snap) }, { apiVersion: GQL_VERSION });
   const errs = res?.draftOrderCreate?.userErrors || [];
   if (errs.length) throw new Error(`draftOrderCreate: ${JSON.stringify(errs)}`);
   const created = res.draftOrderCreate.draftOrder;

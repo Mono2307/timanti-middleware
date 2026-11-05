@@ -1015,6 +1015,23 @@ function buildBuyPlanLinesChangedHtml({ draftName, adminUrl, customerName }) {
     + foot();
 }
 
+// Internal: a piece on a locked buy-plan draft was found at a price other than the plan's (removed and
+// re-added from the catalog, typically) and the plan's line was put back. lines: [{ title, from, to }]
+function buildBuyPlanPricePutBackHtml({ draftName, adminUrl, customerName, lines, error }) {
+  const list = (lines || []).map(l => `<li>${esc(l.title)}: ${money(l.from)} on the draft, the plan's price is ${money(l.to)}</li>`).join('');
+  return head()
+    + contentBlock({
+        ref: 'Store — internal',
+        heading: error ? `${esc(draftName)}: a buy-plan piece is at the wrong price` : `${esc(draftName)}: the plan price was put back`,
+        body: `A piece on ${esc(customerName || 'a customer')}'s buy-plan draft was at a price other than the plan's, usually because it was removed and added back from the catalog:<ul>${list}</ul>`
+          + (error
+            ? `Putting the plan's line back failed (${esc(error)}). Open the draft and set the line back to the plan's price by hand.`
+            : 'The plan\'s line (price and breakup) has been put back and the totals recomputed. To change the pieces on a plan, use More actions → Buy plan → Change product.'),
+        buttonsHtml: button('Open the draft', adminUrl),
+      })
+    + foot();
+}
+
 // Internal, one mail a day to the store. rows: [{ draftName, adminUrl, customerName, phone, k, n, due,
 // amount, overdue, note, waUrl }]
 function buildBuyPlanStaffDigestHtml({ dateLabel, rows }) {
@@ -1088,6 +1105,7 @@ module.exports = {
   buildBuyPlanForfeitedStaffHtml,
   buildBuyPlanChangedHtml,
   buildBuyPlanLinesChangedHtml,
+  buildBuyPlanPricePutBackHtml,
   buildLoyaltyOccasionHtml,
   buildCadAdvanceDigestHtml,
   buildCadAdvanceExpiryHtml,

@@ -3,7 +3,7 @@
 // Buy plan — reading a plan's draft. Everything the plan is computed from comes off the live draft:
 // the payments are its installment legs, wherever they were recorded (GoKwik, Pine, cash, the panel).
 
-const { getJson } = require('../../../core/shopify');
+const { getJson, graphql } = require('../../../core/shopify');
 const { config } = require('../../../core/config');
 const { readInstallments } = require('../installments');
 
@@ -120,7 +120,94 @@ function lockedGoldRate(d) {
     .filter(Boolean).join(',') || null;
 }
 
+// ── Writing lines back ──────────────────────────────────────────────────────────────────────────
+// GraphQL priceOverride is the only way to give a variant line a price of our own (REST resets it to
+// the catalog price), and it needs API 2025-01. draftOrderUpdate REPLACES the line list, so callers
+// pass every line, the ones they did not change included.
+const GQL_VERSION = '2025-01';
+
+// A REST applied_discount ({ value, value_type, title, description }) as GraphQL input.
+function discountInput(ad) {
+  const value = parseFloat(ad && ad.value);
+  if (!ad || !(value > 0)) return undefined;
+  const out = { value, valueType: String(ad.value_type || '').toLowerCase() === 'percentage' ? 'PERCENTAGE' : 'FIXED_AMOUNT' };
+  if (ad.title) out.title = String(ad.title);
+  if (ad.description) out.description = String(ad.description);
+  return out;
+}
+
+function lineInput(li) {
+  const attrs = (li.properties || []).map(p => ({ key: p.name, value: String(p.value) }));
+  const price = { amount: parseFloat(li.price).toFixed(2), currencyCode: 'INR' };
+  const discount = discountInput(li.applied_discount);
+  const out = li.variant_id
+    ? { variantId: `gid://shopify/ProductVariant/${li.variant_id}`, quantity: li.quantity, priceOverride: price, customAttributes: attrs }
+    : { title: li.title, quantity: li.quantity, originalUnitPriceWithCurrency: price,
+        taxable: li.taxable ?? true, requiresShipping: li.requires_shipping ?? false, customAttributes: attrs };
+  if (discount) out.appliedDiscount = discount;
+  return out;
+}
+
+// The tag the payment step of the draft webhook consumes once it has recomputed the collect figures
+// (server.js handlePaymentMetafieldSync) — the same nudge the admin panel sends after a save.
+const SYNC_TAG = 'sync-payment';
+const withTags = (tags, add) => {
+  const list = [...(tags || [])];
+  for (const t of add) if (!list.some(x => String(x).toLowerCase() === t)) list.push(t);
+  return list;
+};
+
+async function writeDraftLines(draftId, lineItems, { tags } = {}) {
+  const input = { lineItems: (lineItems || []).map(lineInput) };
+  if (tags) input.tags = tags;
+  const res = await graphql(
+    `mutation($id: ID!, $input: DraftOrderInput!) { draftOrderUpdate(id: $id, input: $input) {
+       draftOrder { id } userErrors { field message } } }`,
+    { id: `gid://shopify/DraftOrder/${String(draftId).replace(/\D/g, '')}`, input }, { apiVersion: GQL_VERSION });
+  const errs = res?.draftOrderUpdate?.userErrors || [];
+  if (errs.length) throw new Error(`draftOrderUpdate: ${JSON.stringify(errs)}`);
+}
+
+// ── A re-added piece keeps its locked price ─────────────────────────────────────────────────────
+// Removing a piece from the draft and adding it back from the catalog brings it in at TODAY's catalog
+// price with no breakup (hydration steps aside on a locked draft). The pieces key is unchanged, so
+// checkLines sees nothing. These compare each jewellery line with the snapshot's line for the same
+// piece and quantity.
+const BREAKUP_PROPS = ['Gold', 'Diamond', 'Making', 'Making Charges', 'Gemstone', '_gold_rate', 'Gross Value'];
+const pieceOf = (li) => `${li.variant_id || String(li.title || '').trim()}x${li.quantity || 1}`;
+
+// Pure. The live lines (by index into liveLines) whose price or breakup differs from the snapshot's
+// line for the same piece. Only breakup properties the snapshot line carries are compared.
+function linesToRestore(snapLines, liveLines) {
+  const pool = new Map();
+  for (const s of productLines(snapLines)) {
+    if (!pool.has(pieceOf(s))) pool.set(pieceOf(s), []);
+    pool.get(pieceOf(s)).push(s);
+  }
+  const out = [];
+  (liveLines || []).forEach((li, idx) => {
+    if (!productLines([li]).length) return;
+    const snap = (pool.get(pieceOf(li)) || []).shift();
+    const want = snap ? parseFloat(snap.price) : NaN;
+    if (!Number.isFinite(want)) return;
+    const priceMoved = Math.abs((parseFloat(li.price) || 0) - want) >= 0.5;
+    const propsMoved = BREAKUP_PROPS.some(name => {
+      const v = prop(snap, name);
+      return v !== undefined && String(prop(li, name) ?? '') !== String(v);
+    });
+    if (priceMoved || propsMoved) out.push({ idx, title: li.title || snap.title || '', from: parseFloat(li.price) || 0, to: want, snap });
+  });
+  return out;
+}
+
+// Pure. The live line list with each restored line swapped for its snapshot line.
+const withRestored = (liveLines, fixes) => (liveLines || []).map((li, idx) => {
+  const f = fixes.find(x => x.idx === idx);
+  return f ? { ...f.snap } : li;
+});
+
 module.exports = {
   todayIst, daysBetween, splitTags, adminDraftUrl, readDraft, startBlockers, snapshotOf, lockedGoldRate,
   productLines, goldValue, paidSoFar, prop, rs, GST, linesKey,
+  GQL_VERSION, SYNC_TAG, withTags, discountInput, lineInput, writeDraftLines, linesToRestore, withRestored,
 };
