@@ -1,0 +1,197 @@
+{% comment %}
+  Timanti — Refund request confirmation
+  Shopify → Settings → Notifications → Refund notification → paste this in full.
+
+  Changes from the previous version:
+    · Heading is "Refund request confirmation" with the order number
+    · Black CTA button removed
+    · Body rewritten to the refund
+    · Refund Timeline box removed — replaced by one generic 4-week line
+    · Item table kept · "Visit our online store" added · "View order" removed
+    · v2 footer: Need help → social → promises → policy links
+
+  This is Shopify's own notification, so the middleware cannot cc anyone onto it.
+  To copy the store, add hsrstore@timanti.in under Settings → Notifications →
+  Recipients for this notification.
+{% endcomment %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+  <meta name="viewport" content="width=device-width">
+  <title>Refund request confirmation</title>
+</head>
+<body style="margin:0; padding:20px 0; background:#d8d8d8;">
+<table width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td align="center">
+<!--[if mso]><table width="600" align="center" cellpadding="0" cellspacing="0" border="0"><tr><td><![endif]-->
+<table width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%; max-width:600px; margin:0 auto; background:#ffffff; border:1px solid #cccccc; font-family:'Helvetica Neue', Arial, sans-serif; color:#333333;">
+<tr><td>
+
+  <!-- Logo -->
+  <table width="100%" cellpadding="0" cellspacing="0" border="0">
+    <tr><td align="center" style="padding:18px 40px 14px;">
+      <img src="https://cdn.shopify.com/s/files/1/0775/8322/0993/files/WhatsApp_Image_2026-04-23_at_10.42.47_AM.jpg?v=1777029219" alt="Timanti" width="120" style="max-width:120px; height:auto; display:block; margin:0 auto;">
+    </td></tr>
+  </table>
+
+  <!-- Hero -->
+  <table width="100%" cellpadding="0" cellspacing="0" border="0">
+    <tr><td align="center" style="padding:24px 40px 18px; text-align:center;">
+      <p style="font-size:13px; color:#999999; margin:0 0 5px;">Order {{ order_name }}</p>
+      <h2 style="font-size:22px; font-weight:600; color:#111111; margin:0 0 12px;">Refund request confirmation</h2>
+      <p style="font-size:14px; color:#555555; line-height:1.65; margin:0 0 18px;">Your refund has been processed to your original payment method.</p>
+      <p style="font-size:14px; margin:8px 0 0;"><a href="{{ shop.url }}" style="color:#fc7d27; text-decoration:none;">Visit our online store</a></p>
+    </td></tr>
+  </table>
+
+  <!-- Items returned -->
+  <table width="100%" cellpadding="0" cellspacing="0" border="0">
+    <tr><td style="border-top:8px solid #f5f5f5; padding:20px 40px;">
+      <h3 style="font-size:15px; font-weight:600; color:#111111; margin:0 0 12px;">Items returned</h3>
+
+      {% for line in refund_line_items %}
+        <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border-bottom:1px solid #f0f0f0;">
+          <tr>
+            <td width="60" valign="top" style="padding:12px 14px 12px 0;">
+              {% if line.image %}
+                <img src="{{ line | img_url: 'compact_cropped' }}" width="60" height="60" alt="" style="width:60px; height:60px; border-radius:4px; display:block;">
+              {% else %}
+                <div style="width:60px; height:60px; background:#f8f2ea; border-radius:4px; line-height:60px; text-align:center; font-size:22px; color:#c9a96e;">&#9670;</div>
+              {% endif %}
+            </td>
+            <td valign="top" style="padding:12px 0; text-align:left;">
+              <div style="font-weight:600; color:#111111; font-size:15px;">{{ line.title }}</div>
+              <div style="font-size:14px; color:#555555; margin-top:1px;">Qty: {{ line.quantity }}</div>
+              {% if line.variant.title != 'Default Title' %}
+                <div style="font-size:13px; color:#888888;">{{ line.variant.title }}</div>
+              {% endif %}
+            </td>
+          </tr>
+        </table>
+      {% endfor %}
+
+      <!-- Summary, indented to 45% like the order emails -->
+      <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:14px;"><tr>
+        <td width="45%"></td>
+        <td>
+          <table width="100%" cellpadding="0" cellspacing="0" border="0">
+            {% for transaction in refund_transactions %}
+              {% if transaction.status == 'success' %}
+                <tr>
+                  <td style="font-size:15px; color:#999999; padding:3px 0;">Refund method</td>
+                  <td align="right" style="font-size:16px; color:#333333; font-weight:500; padding:3px 0;">
+                    {% if transaction.payment_details.credit_card_company %}
+                      {{ transaction.payment_details.credit_card_company }} ending {{ transaction.payment_details.credit_card_last_four_digits }}
+                    {% else %}
+                      {{ transaction.gateway_display_name }}
+                    {% endif %}
+                  </td>
+                </tr>
+              {% endif %}
+            {% endfor %}
+            <tr>
+              <td style="font-size:15px; color:#333333; font-weight:600; padding:3px 0; border-top:2px solid #e5e5e5; padding-top:8px;">Total refund</td>
+              <td align="right" style="font-size:16px; color:#16a34a; font-weight:600; padding:3px 0; border-top:2px solid #e5e5e5; padding-top:8px;">{% comment %} An offline-paid order is refunded outside Shopify, so Shopify's own refund amount is 0. Fall back to the amount staff entered in the Metafield Manager panel (custom.amount_refunded, rupees). {% endcomment %}{% assign panel_refund = order.metafields.custom.amount_refunded | plus: 0 %}{% if total_refund_amount > 0 %}{{ total_refund_amount | money_with_currency }}{% elsif panel_refund > 0 %}{{ panel_refund | times: 100 | money_with_currency }}{% else %}{{ total_refund_amount | money_with_currency }}{% endif %}</td>
+            </tr>
+          </table>
+        </td>
+      </tr></table>
+
+      <p style="font-size:12px; color:#666666; line-height:1.5; margin:14px 0 0; text-align:left;">It can take up to 4 weeks for the refund to reflect in your bank account.</p>
+    </td></tr>
+  </table>
+
+  <!-- Need help -->
+  <table width="100%" cellpadding="0" cellspacing="0" border="0">
+    <tr><td style="border-top:8px solid #f5f5f5; padding:20px 40px;">
+      <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px solid #e6d8cc; border-radius:8px;">
+        <tr><td align="center" style="padding:20px;">
+          <h3 style="font-size:16px; font-weight:500; color:#111111; margin:0 0 8px;">Need help?</h3>
+          <p style="font-size:14px; color:#666666; margin:0 auto 16px; max-width:460px; line-height:1.6;">For any help with your order, please call or WhatsApp us on the number below, or reply to this email with your query and our customer team will get back to you.</p>
+          <table align="center" cellpadding="0" cellspacing="0" border="0"><tr>
+            <td align="center" valign="top" style="padding:0 18px;">
+              <img src="https://cdn.simpleicons.org/whatsapp/25D366" width="26" height="26" alt="" style="display:block; margin:0 auto 6px;">
+              <strong style="color:#000000; font-size:13px;">Call / WhatsApp</strong><br>
+              <a href="tel:+917710968305" style="color:#fc7d27; font-weight:600; text-decoration:underline; font-size:13px;">+91 7710968305</a>
+            </td>
+            <td align="center" valign="top" style="padding:0 18px;">
+              <img src="https://api.iconify.design/mdi/email-outline.svg?color=%23333333" width="26" height="26" alt="" style="display:block; margin:0 auto 6px;">
+              <strong style="color:#000000; font-size:13px;">Email us</strong><br>
+              <a href="mailto:hello@timanti.in" style="color:#fc7d27; font-weight:600; text-decoration:underline; font-size:13px;">hello@timanti.in</a>
+            </td>
+          </tr></table>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+
+  <!-- Social -->
+  <table width="100%" cellpadding="0" cellspacing="0" border="0">
+    <tr><td style="border-top:8px solid #f5f5f5; padding:20px 40px;">
+      <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#f6f6f6; border-radius:8px;">
+        <tr><td align="center" style="padding:20px;">
+          <h3 style="font-size:16px; font-weight:600; color:#000000; margin:0 0 10px;">We hope you loved the experience so far!</h3>
+          <p style="font-size:13px; color:#444444; margin:0 auto 16px; max-width:440px; line-height:1.6;">Please follow us on Instagram and leave us a review on Google. It would mean the world to us.</p>
+          <table align="center" cellpadding="0" cellspacing="0" border="0"><tr>
+            <td style="padding:0 5px;">
+              <table cellpadding="0" cellspacing="0" border="0" style="background:#ffffff; border:1.5px solid #000000; border-radius:6px;"><tr>
+                <td style="padding:9px 14px;"><a href="https://instagram.com/timanti.official" style="color:#000000; font-size:13px; font-weight:600; text-decoration:none;"><img src="https://cdn.simpleicons.org/instagram/E4405F" width="14" height="14" alt="" style="vertical-align:middle;">&nbsp;Follow @timanti.official</a></td>
+              </tr></table>
+            </td>
+            <td style="padding:0 5px;">
+              <table cellpadding="0" cellspacing="0" border="0" style="background:#ffffff; border:1.5px solid #000000; border-radius:6px;"><tr>
+                <td style="padding:9px 14px;"><a href="{{ shop.url }}" style="color:#000000; font-size:13px; font-weight:600; text-decoration:none;"><img src="https://api.iconify.design/logos/google-icon.svg" width="14" height="14" alt="" style="vertical-align:middle;">&nbsp;Review us on Google</a></td>
+              </tr></table>
+            </td>
+          </tr></table>
+
+          <table align="center" cellpadding="0" cellspacing="0" border="0" style="margin:34px auto 0; max-width:400px; border-top:1px solid #e4e4e4;"><tr>
+            <td align="center" style="padding:18px 0 0;">
+              <p style="margin:0;"><a href="{{ shop.url }}" style="color:#fc7d27; font-weight:600; text-decoration:underline; font-size:13px;">Get WhatsApp updates on new collections &amp; offers</a></p>
+              <p style="font-size:10px; color:#bbbbbb; line-height:1.5; margin:9px auto 0; max-width:340px;">By joining WhatsApp updates you consent to receive marketing messages. Unsubscribe anytime.</p>
+            </td>
+          </tr></table>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+
+  <!-- Promises -->
+  <table width="100%" cellpadding="0" cellspacing="0" border="0">
+    <tr><td style="border-top:8px solid #f5f5f5; padding:20px 40px;">
+      <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#F6F6F6; border-radius:8px;">
+        <tr><td align="center" style="padding:18px;">
+          <table align="center" cellpadding="0" cellspacing="0" border="0"><tr>
+            <td align="center" style="padding:0 13px;">
+              <img src="https://cdn.shopify.com/s/files/1/0775/8322/0993/files/icon1_10925c66-b900-4920-a93c-49753bce74cf.png?v=1770206196" width="44" height="44" alt="" style="display:block; margin:0 auto 6px;">
+              <span style="font-size:12px; color:#333333; line-height:1.4;">BIS Hallmarked<br>Gold</span>
+            </td>
+            <td align="center" style="padding:0 13px;">
+              <img src="https://cdn.shopify.com/s/files/1/0775/8322/0993/files/icon6.png" width="44" height="44" alt="" style="display:block; margin:0 auto 6px;">
+              <span style="font-size:12px; color:#333333; line-height:1.4;">IGI Certified<br>Diamonds</span>
+            </td>
+            <td align="center" style="padding:0 13px;">
+              <img src="https://cdn.shopify.com/s/files/1/0775/8322/0993/files/icon2_1d5faa97-53c3-44c7-9b2a-04ca57696e11.png?v=1770206090" width="44" height="44" alt="" style="display:block; margin:0 auto 6px;">
+              <span style="font-size:12px; color:#333333; line-height:1.4;">Lifetime<br>Exchange</span>
+            </td>
+          </tr></table>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+
+  <!-- Policy links -->
+  <table width="100%" cellpadding="0" cellspacing="0" border="0">
+    <tr><td align="center" style="background:#F6F6F6; padding:16px 40px; text-align:center;">
+      <a href="{{ shop.url }}/pages/return-refund-policy" style="color:#fc7d27; font-size:14px; text-decoration:none;">Return &amp; Refund Policy</a>
+      &nbsp;|&nbsp;
+      <a href="{{ shop.url }}/pages/lifetime-exchange-upgrade" style="color:#fc7d27; font-size:14px; text-decoration:none;">Lifetime Exchange &amp; Upgrade</a>
+    </td></tr>
+  </table>
+
+</td></tr>
+</table>
+<!--[if mso]></td></tr></table><![endif]-->
+</td></tr></table>
+</body>
+</html>
