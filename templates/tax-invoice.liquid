@@ -516,7 +516,7 @@ properties (prop_*). jc_meta stays nil so its fallback branches below are simply
       money already paid against it. ──{% endcomment %}
       {% assign inst_rows = "" %}
       {% assign installments_collected = 0 %}
-      {% for i in (1..4) %}
+      {% for i in (1..6) %}
         {% case i %}
           {% when 1 %}
             {% assign _v = order.metafields.custom.installment_1_value.value | default: order.metafields.custom.installment_1_value | plus: 0 %}
@@ -538,6 +538,16 @@ properties (prop_*). jc_meta stays nil so its fallback branches below are simply
             {% assign _m = order.metafields.custom.installment_4_mode.value  | default: order.metafields.custom.installment_4_mode  | append: "" %}
             {% assign _d = order.metafields.custom.installment_4_date.value  | default: order.metafields.custom.installment_4_date  | append: "" %}
             {% assign _t = "" %}
+          {% when 5 %}
+            {% assign _v = order.metafields.custom.installment_5_value.value | default: order.metafields.custom.installment_5_value | plus: 0 %}
+            {% assign _m = order.metafields.custom.installment_5_mode.value  | default: order.metafields.custom.installment_5_mode  | append: "" %}
+            {% assign _d = order.metafields.custom.installment_5_date.value  | default: order.metafields.custom.installment_5_date  | append: "" %}
+            {% assign _t = "" %}
+          {% when 6 %}
+            {% assign _v = order.metafields.custom.installment_6_value.value | default: order.metafields.custom.installment_6_value | plus: 0 %}
+            {% assign _m = order.metafields.custom.installment_6_mode.value  | default: order.metafields.custom.installment_6_mode  | append: "" %}
+            {% assign _d = order.metafields.custom.installment_6_date.value  | default: order.metafields.custom.installment_6_date  | append: "" %}
+            {% assign _t = "" %}
         {% endcase %}
         {% if _v > 0 %}
           {% assign inst_rows = inst_rows | append: _d | append: "|" | append: _m | append: "|" | append: _v | append: "|" | append: _t | append: "~" %}
@@ -557,7 +567,7 @@ NOTE: keep angle brackets out of this comment. Order Printer validates the templ
 reads them as unknown tags, rejecting the paste with "Tag value invalid / Tag mode invalid".
 ──{% endcomment %}
 {% if inst_rows == "" %}
-  {% for i in (1..4) %}
+  {% for i in (1..6) %}
     {% assign pfx = "i" | append: i | append: ":" %}
     {% for tag in order.tags %}
       {% assign t = tag | strip %}
