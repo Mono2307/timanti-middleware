@@ -84,6 +84,9 @@ const config = {
     /** Exchange / credit-note sheet — a different script and sheet. */
     exchange:      process.env.EXCHANGE_APPS_SCRIPT_URL,
     poQueue:       process.env.PO_QUEUE_SCRIPT_URL,
+    /** Buy-plan tracker sheet (services/buy-plan-sheet), and the secret its script checks. */
+    buyPlan:       process.env.BUY_PLAN_SHEET_URL,
+    buyPlanSecret: process.env.BUY_PLAN_SHEET_SECRET,
   },
 
   // ── Serialization feature flags — wire one document type at a time ─────────

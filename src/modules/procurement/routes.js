@@ -48,6 +48,7 @@ const { syncDraftOrderToSheet, syncOrderToSheet, removeDraftFromSheet,
 const { batchRaisePo } = require('./batch');
 const { isRateLocked } = require('../payments/buy-plan/lock');
 const { restoreDeletedPlanDraft } = require('../payments/buy-plan/restore');
+const { alertIfPlanPieceSold } = require('../payments/buy-plan/sold-alert');
 // Same omission as the sync trio above, one branch further down: the draft-delete handler calls
 // creditInstruments.revertApplied and this was never imported. It is a bare identifier, so the
 // ReferenceError is thrown while EVALUATING the expression — before the trailing .catch() can ever
@@ -111,6 +112,11 @@ app.post('/api/po-webhook', async (req, res) => {
     getShopifyToken()
       .then(token => syncOrderToSheet(req.body, token, deps.shopifyStoreUrl))
       .catch(e => console.error('[SYNC] order webhook error:', e.message));
+    // No stock hold: if this order sold a piece an active buy plan is for, tell the store to reorder.
+    if (topic === 'orders/create') {
+      alertIfPlanPieceSold(req.body)
+        .catch(e => console.error('[buy-plan] sold-piece alert:', e.message));
+    }
     // This is the ONLY webhook this app receives for orders, so it is where the order-side refund
     // trigger tags get consumed. Both handlers no-op unless their tag is present, and each strips its
     // own tag, so an unrelated orders/updated (the great majority) costs one early return.

@@ -43,6 +43,7 @@ const final = require('./final');
 const { createPlanLink, readPayToken, customPayUrl } = require('./links');
 const { runBuyPlanSweep, followUp } = require('./sweep');
 const { restoreDeletedPlanDraft } = require('./restore');
+const sheet = require('./sheet');
 const { todayIst, readDraft, startBlockers, snapshotOf, lockedGoldRate, goldValue, paidSoFar, linesKey } = require('./draft');
 
 function requireStaffSession(req, res, next) {
@@ -248,6 +249,7 @@ function recordPaymentHandler(ctx) {
         id: `buy-plan-${plan ? plan.id : 'pre-' + d.id}-${Date.now()}`, shopify_draft_id: d.id, draft_order_name: d.draft.name,
         customer_name: plan?.customer_name || d.customer?.name, is_partial: true, amount_paisa: check.amount * 100, payment_mode: mode,
       }, { paymentSource: 'buy-plan', paymentModeOverride: mode });
+      sheet.pushSoon();
       log.info('buy-plan', `${d.draft.name}: Rs${check.amount} ${mode} recorded in store by ${req.staff?.sub || 'staff'}${plan ? '' : ' (before the plan started)'}`);
       const after = await mustReadDraft(d.id);
       return res.json(await view(after, plan));
@@ -275,6 +277,7 @@ async function changeProduct(req, res) {
     const pending = { started_at: new Date().toISOString(), old_total: S.currentTotal(plan), lost_lock: lostLock, by: req.staff?.sub || null };
     await store.updatePlan(plan.id, { mode: 'equal', change_pending: pending });
     followUp(plan.id);
+    sheet.pushSoon();
     log.info('buy-plan', `${d.draft.name}: product change started${lostLock ? ' (gold lock given up)' : ''}, ${rates.length} piece(s) at today's rate`);
     return res.json({ ok: true, lostLock, message: 'Repricing the new pieces at today\'s gold rate. The new schedule appears here in about 5 minutes, and the customer is emailed.' });
   } catch (e) { return fail(res, e, 'change-product'); }
@@ -375,6 +378,13 @@ async function sweepNow(req, res) {
   } catch (e) { return fail(res, e, 'sweep'); }
 }
 
+// Operator: push the tracker sheet now.
+async function sheetSyncNow(req, res) {
+  const secret = config.priceUpdateWebhookSecret;
+  if (!secret || req.headers['x-webhook-secret'] !== secret) return res.status(401).json({ ok: false, error: 'Unauthorized' });
+  try { return res.json(await sheet.pushToSheet()); } catch (e) { return fail(res, e, 'sheet-sync'); }
+}
+
 function register(app, ctx) {
   app.get('/api/buy-plan/draft/:draftId', requireStaffSession, getDraftPlan);
   app.post('/api/buy-plan/start', requireStaffSession, startPlan);
@@ -385,6 +395,8 @@ function register(app, ctx) {
   app.get('/pay/plan/:token', payPageGet);
   app.post('/pay/plan/:token', express.urlencoded({ extended: false }), payPagePost);
   app.post('/api/buy-plan/sweep', sweepNow);
+  app.post('/api/buy-plan/sheet-sync', sheetSyncNow);
+  sheet.startSheetSync();
 }
 
 // Re-exported for tests that predate the split into draft.js.
