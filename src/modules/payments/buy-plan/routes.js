@@ -18,6 +18,9 @@
  *   POST /api/buy-plan/cancel           cancel the plan (cancel.js): the customer opted out (voucher for
  *                                       the money staff confirm was received), or a demo / staff mistake
  *                                       (no voucher; the draft can be given a new plan)
+ *   POST /api/buy-plan/issue-voucher    staff issue the voucher the system has worked out (credit.js):
+ *                                       paid over the price, or a plan closed for non-payment. Nothing
+ *                                       ever issues one on its own.
  *
  * Customer — the "Pay a different amount" link in every plan email (signed token, no login):
  *   GET  /pay/plan/:token               the balance, what is due, an amount box
@@ -48,6 +51,7 @@ const { createPlanLink, readPayToken, customPayUrl } = require('./links');
 const { runBuyPlanSweep, followUp } = require('./sweep');
 const { restoreDeletedPlanDraft } = require('./restore');
 const { cancelPlan, isMistake } = require('./cancel');
+const credit = require('./credit');
 const sheet = require('./sheet');
 const { todayIst, readDraft, startBlockers, snapshotOf, lockedGoldRate, goldValue, paidSoFar, linesKey } = require('./draft');
 
@@ -75,6 +79,8 @@ async function view(d, plan) {
   if (plan) {
     const st = S.planState(plan, d.legs, today);
     const planKey = plan.lines_key || linesKey((plan.snapshot || {}).line_items);
+    const piecesChanged = Boolean(planKey) && linesKey(d.draft.line_items) !== planKey;
+    const due = credit.voucherDue(plan, st);
     return {
       ok: true, draft: d.draft.name, customer: d.customer, plan: {
         status: plan.status, mode: plan.mode, n: st.n, total: st.total, startTotal: Number(plan.total),
@@ -86,8 +92,13 @@ async function view(d, plan) {
         minPayment: st.minPayment, suggested: st.suggested, closeOn: st.closure.closeOn, warn: st.closure.warn,
         customPayUrl: plan.status === 'active' ? customPayUrl(plan.id) : null,
         voucherCode: plan.voucher_code || null, voucherValue: Number(plan.voucher_value) || null,
+        voucherCodes: credit.codesOf(plan), vouchered: credit.vouchered(plan),
+        // What staff may issue now (Issue voucher), and what a Customer-opted-out cancel would issue.
+        voucherDue: due.amount, voucherKind: due.kind, cancelVoucher: Math.max(0, st.paid - credit.vouchered(plan)),
+        // The changed pieces at their catalog prices — a guide before Change product is pressed.
+        newPiecesEstimate: piecesChanged ? Math.round(parseFloat(d.draft.total_price) || 0) : null,
         closedReason: plan.closed_reason || null, closedAt: plan.closed_at || null, changePending: Boolean(plan.change_pending),
-        piecesChanged: Boolean(planKey) && linesKey(d.draft.line_items) !== planKey,
+        piecesChanged,
       },
       rows: st.rows,
       payments: await store.listPayments(d.id),
@@ -281,7 +292,8 @@ async function changeProduct(req, res) {
   try {
     const d = await mustReadDraft(req.body?.draftId);
     const plan = await activePlan(d);
-    if (plan.change_pending) return res.status(409).json({ ok: false, error: 'A product change is already being priced. Reopen in a few minutes.' });
+    if (plan.change_pending) return res.status(409).json({ ok: false, error: 'A product change is already being priced. Reopen in a minute.' });
+    if (credit.vouchered(plan) > 0) return res.status(409).json({ ok: false, error: `A voucher (${credit.codesOf(plan).join(', ')}) was already issued on this plan, so it is settled at its price. Complete the draft, or cancel the plan.` });
     const planKey = plan.lines_key || linesKey((plan.snapshot || {}).line_items);
     if (linesKey(d.draft.line_items) === planKey) {
       return res.status(400).json({ ok: false, error: 'The pieces on the draft are the same as the plan\'s. Change the pieces on the draft first, then press Change product.' });
@@ -295,7 +307,7 @@ async function changeProduct(req, res) {
     followUp(plan.id);
     sheet.pushSoon();
     log.info('buy-plan', `${d.draft.name}: product change started${lostLock ? ' (gold lock given up)' : ''}, ${rates.length} piece(s) at today's rate`);
-    return res.json({ ok: true, lostLock, message: 'Repricing the new pieces at today\'s gold rate. The new schedule appears here in about 5 minutes, and the customer is emailed.' });
+    return res.json({ ok: true, lostLock, message: 'Repricing the new pieces at today\'s gold rate. The new schedule usually appears here within a minute (reopen to see it), and the customer is emailed.' });
   } catch (e) { return fail(res, e, 'change-product'); }
 }
 
@@ -314,6 +326,21 @@ async function cancelHandler(req, res) {
     sheet.pushSoon();
     return res.json({ ok: true, ...r, voucher: r.voucher || null });
   } catch (e) { return fail(res, e, 'cancel'); }
+}
+
+// Staff issue the voucher the plan owes (credit.js). confirm: the customer agreed (paid over the
+// price) / the tick that the money really came in (a closed plan).
+async function issueVoucherHandler(req, res) {
+  try {
+    const d = await mustReadDraft(req.body?.draftId);
+    const plan = await planOn(d.id);
+    if (!plan) return res.status(404).json({ ok: false, error: `${d.draft.name} has no buy plan` });
+    if (req.body?.confirm !== true) return res.status(400).json({ ok: false, error: 'Tick the confirmation first' });
+    const today = todayIst();
+    const r = await credit.issueStaffVoucher(plan, d, S.planState(plan, d.legs, today), { today, by: req.staff?.sub ? String(req.staff.sub) : null });
+    sheet.pushSoon();
+    return res.json({ ok: true, ...r });
+  } catch (e) { return fail(res, e, 'issue-voucher'); }
 }
 
 // ── Customer page: pay a different amount ───────────────────────────────────────────────────────
@@ -427,6 +454,7 @@ function register(app, ctx) {
   app.post('/api/buy-plan/record-payment', requireStaffSession, recordPaymentHandler(ctx));
   app.post('/api/buy-plan/change-product', requireStaffSession, changeProduct);
   app.post('/api/buy-plan/cancel', requireStaffSession, cancelHandler);
+  app.post('/api/buy-plan/issue-voucher', requireStaffSession, issueVoucherHandler);
   app.get('/pay/plan/:token', payPageGet);
   app.post('/pay/plan/:token', express.urlencoded({ extended: false }), payPagePost);
   app.post('/api/buy-plan/sweep', sweepNow);

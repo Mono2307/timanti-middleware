@@ -19,11 +19,15 @@ fake('./voucher.js', { issuePlanVoucher: async ({ value, why }) => {
   return { code: 'VCH-9', value, validUntil: '2027-11-09' };
 } });
 fake('./forfeit.js', { releaseDraft: async (plan, d, tag) => { world.released.push(tag); } });
-fake('./notify.js', { sendCancelled: async (plan, d, o) => {
-  world.sent.push(`${o.kind}:${o.paid}:${o.voucher ? o.voucher.code : o.voucherError ? 'failed' : 'none'}`);
-} });
+fake('./notify.js', {
+  sendCancelled: async (plan, d, o) => {
+    world.sent.push(`${o.kind}:${o.paid}:${o.voucher ? o.voucher.code : o.voucherError ? 'failed' : 'none'}`);
+  },
+  sendVoucherIssued: async (plan, d, o) => world.sent.push(`voucher-email:${o.kind}:${o.voucher.value}`),
+});
 
 const { cancelPlan, isMistake, CANCELLED_TAG } = require('./cancel');
+const { issueStaffVoucher, voucherDue } = require('./credit');
 const S = require('./schedule');
 
 let n = 0;
@@ -90,6 +94,54 @@ const go = (o) => cancelPlan(world.plan, world.d, { today: '2026-11-09', by: 'st
     reset({ over: { change_pending: { started_at: new Date().toISOString() } } });
     await assert.rejects(go({ kind: 'mistake' }), e => e.status === 409);
     assert.strictEqual(world.plan.status, 'active');
+  });
+
+  await t('opted out after an earlier voucher: only what was not already given back', async () => {
+    reset({ legs: [{ value: 30000, date: START }], over: { voucher_value: 10000, voucher_code: 'VCH-1' } });
+    await go({ kind: 'opted_out', moneyReceived: true });
+    assert.deepStrictEqual(world.vouchers, ['20000:plan cancelled']);
+    assert.strictEqual(world.plan.voucher_value, 30000);
+    assert.strictEqual(world.plan.voucher_code, 'VCH-1,VCH-9');
+  });
+
+  console.log('issueStaffVoucher (staff press Issue voucher)');
+  const stOf = () => S.planState(world.plan, world.d.legs, '2026-11-09');
+
+  await t('paid over the price: voucher for the difference, the plan is settled, the customer emailed', async () => {
+    reset({ legs: [{ value: 40000, date: START }], over: { total: 30000 } });
+    assert.deepStrictEqual(voucherDue(world.plan, stOf()), { kind: 'credit', amount: 10000 });
+    const r = await issueStaffVoucher(world.plan, world.d, stOf(), { today: '2026-11-09', by: 'staff-1' });
+    assert.strictEqual(r.voucher.value, 10000);
+    assert.deepStrictEqual(world.vouchers, ['10000:paid over the price']);
+    assert.strictEqual(world.plan.voucher_value, 10000);
+    assert.strictEqual(world.plan.final_total, 30000);
+    assert.deepStrictEqual(world.sent, ['voucher-email:credit:10000']);
+    assert.strictEqual(voucherDue(world.plan, stOf()).amount, 0);
+    await assert.rejects(issueStaffVoucher(world.plan, world.d, stOf(), { today: '2026-11-09' }), e => e.status === 409);
+  });
+
+  await t('closed plan: voucher for everything paid', async () => {
+    reset({ legs: [{ value: 25000, date: START }], over: { status: 'forfeited' } });
+    const r = await issueStaffVoucher(world.plan, world.d, stOf(), { today: '2026-11-09' });
+    assert.strictEqual(r.kind, 'closed');
+    assert.deepStrictEqual(world.vouchers, ['25000:plan closed']);
+    assert.deepStrictEqual(world.sent, ['voucher-email:closed:25000']);
+  });
+
+  await t('the voucher fails: the claim is rolled back so staff can press again; nothing emailed', async () => {
+    reset({ legs: [{ value: 25000, date: START }], over: { status: 'forfeited' } });
+    world.voucherFails = true;
+    await assert.rejects(issueStaffVoucher(world.plan, world.d, stOf(), { today: '2026-11-09' }), /Shopify said no/);
+    assert.strictEqual(world.plan.voucher_value, null);
+    assert.deepStrictEqual(world.sent, []);
+    assert.strictEqual(voucherDue(world.plan, stOf()).amount, 25000);
+  });
+
+  await t('nothing owed on an active plan still being paid, or while a product change is priced', async () => {
+    reset({ legs: [{ value: 5000, date: START }] });
+    assert.strictEqual(voucherDue(world.plan, stOf()).amount, 0);
+    reset({ legs: [{ value: 90000, date: START }], over: { change_pending: { started_at: new Date().toISOString() } } });
+    assert.strictEqual(voucherDue(world.plan, stOf()).amount, 0);
   });
 
   console.log(`\n${n} passed`);

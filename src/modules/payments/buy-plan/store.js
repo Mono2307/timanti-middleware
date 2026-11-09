@@ -23,6 +23,12 @@ async function getPlan(id) {
   return data || null;
 }
 
+async function listPlansByStatus(status) {
+  const { data, error } = await supabase.from(TABLE).select('*').eq('status', status).order('id');
+  if (error) throw new Error(`buy_plans list: ${error.message}`);
+  return data || [];
+}
+
 async function listActivePlans() {
   const { data, error } = await supabase.from(TABLE).select('*').eq('status', 'active').order('id');
   if (error) throw new Error(`buy_plans list: ${error.message}`);
@@ -99,6 +105,6 @@ async function latestOpenLink(draftId) {
 
 module.exports = {
   listPayments, latestOpenLink,
-  getPlanByDraft, getPlan, listActivePlans, insertPlan, updatePlan, deletePlan,
+  getPlanByDraft, getPlan, listActivePlans, listPlansByStatus, insertPlan, updatePlan, deletePlan,
   wasSent, markSent, getConfigValue, setConfigValue,
 };

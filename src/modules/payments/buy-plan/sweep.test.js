@@ -15,6 +15,7 @@ const world = { plans: [], drafts: {}, markers: new Set(), config: {}, sent: [],
 fake('./store.js', {
   latestOpenLink: async () => world.openLink,
   listActivePlans: async () => world.plans.filter(p => p.status === 'active'),
+  listPlansByStatus: async (s) => world.plans.filter(p => p.status === s),
   updatePlan: async (id, patch) => Object.assign(world.plans.find(p => p.id === id), patch),
   getPlan: async (id) => world.plans.find(p => p.id === id) || null,
   wasSent: async (id, k, a, kind) => world.markers.has(`${id}|${k}|${a}|${kind}`),
@@ -29,7 +30,7 @@ fake('./notify.js', {
   sendCompleted: async () => world.sent.push('completed'),
   sendStaffDigest: async (rows) => world.sent.push(`digest:${rows.length}`),
   sendFinalPrice: async (plan, d, link) => world.sent.push(`final-price:${plan.final_total}:${link ? link.amount : 'none'}`),
-  sendFinalCredit: async (plan, d, credit) => world.sent.push(`credit:${credit}`),
+  sendFinalCredit: async (plan, d, credit, o = {}) => world.sent.push(`credit:${credit}${o.why === 'change' ? ':change' : ''}`),
   sendClosingSoon: async (plan, d, link, o) => world.sent.push(`closing:${o.closeOn}`),
   sendChanged: async (plan, d, o) => world.sent.push(`changed:${o.oldTotal}->${o.newTotal}${o.voucher ? ':' + o.voucher.code : ''}`),
   sendLinesChanged: async () => world.sent.push('lines-changed'),
@@ -134,7 +135,7 @@ const five = D.slice(0, 5).map(d => paid(d, 20000));
     assert.deepStrictEqual(world.sent.filter(s => s.startsWith('closing')), ['closing:2027-01-23']);
   });
 
-  await t('60 days: the plan closes and the money paid becomes a voucher', async () => {
+  await t('60 days: the plan closes (the voucher is left to staff)', async () => {
     reset({ legs: [paid(START, 20000)] });
     await runBuyPlanSweep({ now: at('2027-01-23'), dryRun: true });
     assert.strictEqual(world.plans[0].status, 'active');
@@ -330,13 +331,50 @@ const five = D.slice(0, 5).map(d => paid(d, 20000));
     assert.strictEqual(S.currentTotal(world.plans[0]), 150000);
   });
 
-  await t('cheaper piece than already paid: the difference becomes a voucher', async () => {
+  await t('cheaper piece than already paid: NO voucher; the store is prompted, and the digest keeps it open', async () => {
     reset({ mode: 'equal', legs: [paid(START, 50000)], tags: ['buy-plan'],
       over: { change_pending: { started_at: new Date().toISOString(), old_total: 120000, lost_lock: false } } });
     world.drafts[100].total = 40000;
+    const r = await runBuyPlanSweep({ now: at('2026-11-01'), dryRun: false });
+    assert.deepStrictEqual(world.vouchers, []);
+    assert.ok(world.sent.includes('changed:120000->40000'));
+    assert.ok(world.sent.includes('credit:10000:change'));
+    assert.ok(world.sent.includes('digest:1'));
+    assert.strictEqual(r.plans[0].balance, 0);
+  });
+
+  await t('a voucher already issued on the plan is not owed again', async () => {
+    reset({ mode: 'equal', legs: [paid(START, 50000)], tags: ['buy-plan'], over: { voucher_value: 10000, voucher_code: 'VCH-1', final_total: 40000 } });
+    world.drafts[100].total = 40000;
+    world.plans[0].price_changes = [{ date: START, total: 40000, why: 'product change' }];
     await runBuyPlanSweep({ now: at('2026-11-01') });
-    assert.deepStrictEqual(world.vouchers, [10000]);
-    assert.ok(world.sent.includes('changed:120000->40000:VCH-2'));
+    assert.ok(!world.sent.some(s => s.startsWith('digest')));
+  });
+
+  await t('repriced, but the collect figure is older than the reprice: wait (then accept after 5 minutes)', async () => {
+    reset({ mode: 'equal', legs: [paid(START, 20000)], tags: ['buy-plan'],
+      over: { change_pending: { started_at: new Date().toISOString(), old_total: 120000 } } });
+    Object.assign(world.drafts[100], { total: 150000, mfAt: { amount_to_be_collected: '2026-11-01T10:00:00Z' } });
+    world.drafts[100].draft.updated_at = '2026-11-01T10:05:00Z';
+    await runBuyPlanSweep({ now: at('2026-11-01') });
+    assert.ok(world.plans[0].change_pending, 'still waiting');
+    world.drafts[100].mfAt.amount_to_be_collected = '2026-11-01T10:05:01Z';
+    await runBuyPlanSweep({ now: at('2026-11-01') });
+    assert.strictEqual(world.plans[0].change_pending, null);
+    reset({ mode: 'equal', legs: [paid(START, 20000)], tags: ['buy-plan'],
+      over: { change_pending: { started_at: new Date(Date.now() - 6 * 60 * 1000).toISOString(), old_total: 120000 } } });
+    Object.assign(world.drafts[100], { total: 150000, mfAt: { amount_to_be_collected: '2026-11-01T10:00:00Z' } });
+    world.drafts[100].draft.updated_at = '2026-11-01T10:05:00Z';
+    await runBuyPlanSweep({ now: at('2026-11-01') });
+    assert.strictEqual(world.plans[0].change_pending, null);
+  });
+
+  await t('a closed plan whose voucher was not issued stays on the digest', async () => {
+    reset({ legs: [paid(START, 30000)] });
+    world.plans[0].status = 'forfeited';
+    await runBuyPlanSweep({ now: at('2027-02-01') });
+    assert.deepStrictEqual(world.sent, ['digest:1']);
+    assert.deepStrictEqual(world.vouchers, []);
   });
 
   await t('still repricing: wait, no messages', async () => {

@@ -17,6 +17,7 @@ const S = require('./schedule');
 const store = require('./store');
 const notify = require('./notify');
 const { issuePlanVoucher } = require('./voucher');
+const { vouchered, recordVoucher } = require('./credit');
 const { releaseDraft } = require('./forfeit');
 
 const CANCELLED_TAG = 'buy-plan-cancelled';
@@ -30,7 +31,8 @@ async function cancelPlan(plan, d, { kind, moneyReceived = false, note = '', by 
   if (!KINDS[kind]) throw refuse('Choose why the plan is being cancelled');
   if (plan.change_pending) throw refuse('A product change is being priced. Reopen in a few minutes, then cancel.', 409);
   const st = S.planState(plan, d.legs, today);
-  const paid = st.paid;
+  // Anything already given back on an earlier voucher (credit.js) is not given back again.
+  const paid = Math.max(0, Math.round(st.paid) - vouchered(plan));
   if (kind === 'opted_out' && paid > 0 && moneyReceived !== true) {
     throw refuse(`Check that the ${paid.toLocaleString('en-IN')} recorded on this plan actually reached the store before a voucher is made. If it was only recorded for a demo, cancel as a demo or staff mistake.`);
   }
@@ -43,7 +45,7 @@ async function cancelPlan(plan, d, { kind, moneyReceived = false, note = '', by 
   if (kind === 'opted_out' && paid > 0) {
     try {
       voucher = await issuePlanVoucher({ plan, d, value: paid, today, why: 'plan cancelled' });
-      await store.updatePlan(plan.id, { voucher_code: voucher.code, voucher_value: voucher.value });
+      await recordVoucher(plan, voucher);
     } catch (e) {
       voucherError = e.message;
       log.error('buy-plan', `${plan.draft_name}: cancel voucher: ${e.message}`);

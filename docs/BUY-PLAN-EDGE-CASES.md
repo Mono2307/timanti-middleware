@@ -1,5 +1,11 @@
 # Buy Plan: what happens when… (9 Nov 2026)
 
+> **Vouchers are never automatic** (founder, 9 Nov). Whenever money is owed back — a plan closed for
+> non-payment, a cheaper piece, an overpayment, gold falling before the final price — the system
+> prompts the store (Buy plan screen, store email, daily digest) and nothing is issued or emailed
+> about a voucher until staff press **Issue voucher**. Cancel plan → Customer opted out is the other
+> staff step that issues one.
+
 Every situation a buy plan can get into, what the system does, what the customer and the store
 are told, and whether that part works today. Plain language; the technical audit with code
 references is `docs/BUY-PLAN-COVERAGE.md`.
@@ -30,9 +36,11 @@ WhatsApp link per customer for staff to send by hand.
 | A payment arrives (online or in store) | ✅ | — | Thank you, new schedule. Up to 6 hours late (it goes with the next 6-hourly check) |
 | 30 and 45 days with no payment | ✅ | ✅ | "Your plan closes on [date] unless you pay"; any ₹1,000 keeps it going; a link |
 | Last installment 15 and 25 days late | ✅ | ✅ | Same, for the last installment |
-| Plan closed for non-payment | ✅ | — | Plan closed; voucher code, value, valid-until date. **Not sent if the voucher failed** (the store makes it by hand) |
+| Plan closed for non-payment | — | — | Nothing at the moment it closes |
+| Staff press Issue voucher on a closed plan | ✅ | — | Plan closed; voucher code for everything paid, valid-until date |
+| Staff press Issue voucher on a plan paid over its price | ✅ | — | "You paid ₹X more than your piece"; voucher code; piece fully paid |
 | Equal plan: final price, 3 days before the last date | ✅ | ✅ | Final price at today's gold rate, the last amount, a link |
-| Product changed | ✅ | — | Old and new price, new schedule; if they had already paid more than the new price, the voucher for the difference |
+| Product changed | ✅ | — | Old and new price, new schedule; if they had already paid more than the new price: "our store team will be in touch" (no voucher) |
 | **Plan cancelled: customer opted out, money paid** | ✅ | — | "Cancelled, as you asked." Voucher code, value, valid until |
 | **Plan cancelled: customer opted out, nothing paid** | ✅ | — | "Cancelled, as you asked. No payment was made, nothing more needed." |
 | **Plan cancelled: opted out but the voucher failed** | — | — | Nothing. The store is told to make the voucher by hand and tell the customer |
@@ -44,14 +52,14 @@ There is **no SMS** for: start, payment received, closed, changed, cancelled, co
 ### To the store (internal email)
 | When | What it says |
 |---|---|
-| Every day (if anything is due) | Digest: due in 3 days, overdue, closing soon, stuck jobs, with WhatsApp links |
+| Every day (if anything is due) | Digest: due in 3 days, overdue, closing soon, stuck jobs, **plans owed a voucher not yet issued**, with WhatsApp links |
 | A plan draft was deleted | "Deleted and restored as [new D number]". Now also says: to really remove a plan, press Cancel plan first |
 | Pieces on the draft edited without "Change product" | Alert, once per edit |
 | A piece was re-added at the wrong price | "Put back at the plan price", or "fix by hand" if putting it back failed |
 | A piece on an active plan was sold to someone else | Alert to reorder |
-| Plan closed for non-payment | Voucher code, or "CREATE THE VOUCHER BY HAND"; delete the draft, do not complete it |
+| Plan closed for non-payment | "Check the ₹X paid really came in, then press Issue voucher on the Buy plan screen. Only then delete the draft." |
 | **Plan cancelled (either kind)** | Who cancelled, why, the amount; voucher code / "CREATE THE VOUCHER BY HAND" / "no voucher, normal draft again" |
-| Equal plan: gold fell and the customer has paid more than the final price | The credit amount (no voucher is made automatically, see gap G10) |
+| Customer has paid more than the price (gold fell, or a cheaper piece after Change product) | "Offer a piece of higher value or a second piece; if they want the difference back, press Issue voucher." Nothing is issued |
 
 ---
 
@@ -90,7 +98,7 @@ There is **no SMS** for: start, payment received, closed, changed, cancelled, co
 | Each payment | Takes its own slot 1–6. A 7th payment is folded into slot 6, **and it overwrites slot 6's date and mode** | ⚠️ **Decision D3** |
 | Customer pays more than the current installment | Later installments get smaller | ✅ |
 | Customer pays less, or misses a month | The shortfall moves to the next installment ("double") | ✅ |
-| An old link is paid after another payment already lowered the balance → customer has paid **more than the price** | Plan goes quiet as "fully paid". No voucher, no alert for the extra money | ❌ G10 |
+| An old link is paid after another payment already lowered the balance → customer has paid **more than the price** | Daily digest and the Buy plan screen prompt staff: offer more, or Issue voucher | ✅ |
 | Amount typed straight into the Metafield Manager slot | Counts toward the plan, but has no payment record, so it is missing from the Buy plan screen's list and from reports | ⚠️ **Decision D4** |
 | A plan payment is refunded or charged back | The plan doesn't notice; it still counts the money | ❌ G7 |
 | Two payments land at the same moment (two staff, or staff + online) | One can be lost from the slots (the payment record survives) | ❌ G9 |
@@ -110,33 +118,35 @@ There is **no SMS** for: start, payment received, closed, changed, cancelled, co
 
 ## 6. Changing the product
 "Product change" = the customer swaps the piece on the plan for a different piece. Staff change the
-lines on the draft, then press **Change product** and tick that the customer agreed.
+lines on the draft; the Buy plan screen shows the new pieces' catalog price next to what has been paid,
+and warns if the new pieces cost less ("suggest a piece worth ₹X or more"). Staff press **Change
+product** and tick that the customer agreed. The new price is usually ready within a minute (it used
+to be a fixed 5-minute wait).
 
 | If… | Then… | Status |
 |---|---|---|
 | Equal plan, piece swapped | Everything paid is kept; new piece priced at today's rate (gold only moves); balance re-spread over the months left; customer emailed | ✅ (done on D327) |
 | Gold plan, piece swapped | The gold lock is lost for good and the plan becomes Equal; same as above | ✅ |
-| New piece is cheaper than what is already paid | The difference becomes a voucher | ✅ |
+| New piece is cheaper than what is already paid | **No voucher.** The plan is fully paid; the store is emailed and prompted daily to offer a piece of higher value, or to press Issue voucher if the customer wants the difference back. Issuing it settles the plan at its price | ✅ |
+| New piece costs more than what is paid (the normal mid-plan case) | No voucher; the rest is spread over the installments left | ✅ |
 | Change pressed with the pieces unchanged | Refused | ✅ |
 | Pieces edited **without** pressing Change product | Store alerted; a deleted draft comes back with the plan's original pieces | ✅ |
-| **A second product change** (see below) | A voucher can be paid out twice for the same money | ❌ G3 |
+| **A second product change** after a voucher was issued | Refused: the plan is settled once a voucher is issued. Before a voucher, a second change just re-prices (nothing was given back yet) | ✅ fixed 9 Nov |
 | Change pressed in the last 3 days, while the final price is being worked out | The plan gets stuck and shows in the digest every day | ❌ G11 |
 | The reprice behind a change never finishes | After 1 hour the digest flags it as stuck; a person must fix it | ⚠️ |
 
-**What "second product change" means, with numbers.** A customer has paid ₹50,000.
-1. They swap to piece A at ₹40,000. They have paid ₹10,000 more than A, so they get **voucher 1 for ₹10,000**. Correct.
-2. Later they swap again, to piece B at ₹35,000. The system compares the ₹50,000 paid with ₹35,000 and makes **voucher 2 for ₹15,000**.
-
-The correct second voucher is ₹5,000 (A minus B), because ₹10,000 of the overpayment was already
-given back in voucher 1. So ₹10,000 is paid out twice. The plan record also forgets voucher 1's
-code. Rare, but real money.
+**What "second product change" meant, and why it is fixed.** A customer had paid ₹50,000, swapped to
+piece A at ₹40,000 (voucher ₹10,000), then to piece B at ₹35,000 — and the old code made a second
+voucher for ₹15,000, paying the first ₹10,000 out twice. Now no voucher is automatic, the plan keeps a
+running total of every voucher issued on it (a close or cancel only gives back what was not already
+returned), and Change product is refused once a voucher has been issued.
 
 ## 7. Equal plan: the final price
 | If… | Then… | Status |
 |---|---|---|
 | 3 days before the last date | Only the gold part moves to that day's rate (diamonds, stones, making stay); final link sent with the reminder | ✅ not yet proven live |
 | A line has no gold breakup or no rate | Left at its price; only logged, store not told | ⚠️ |
-| Gold fell and the customer has already paid more than the final price | Store emailed the credit; no voucher made automatically | ⚠️ G10 |
+| Gold fell and the customer has already paid more than the final price | Store emailed and prompted; staff press Issue voucher if the customer wants it | ✅ |
 | The reminder's estimate after an earlier product change | Uses the original price, so the estimate is off (the final price itself is right) | ⚠️ |
 
 ## 8. Missed payments and closing
@@ -144,11 +154,11 @@ code. Rare, but real money.
 |---|---|---|
 | An installment is missed | Marked missed; added to the next one | ✅ |
 | 30 and 45 days with no payment | Customer warned (email + SMS) with the close date; store digest lists it | ✅ |
-| 60 days with no payment | Plan closes. Everything paid → voucher (1 year, one purchase of at least its value). Customer + store emailed. Draft's plan tags removed, tagged `buy-plan-closed`; **since today, the customer's open payment link is also cancelled** | ✅ |
+| 60 days with no payment | Plan closes: lock off, tagged `buy-plan-closed`, the customer's open payment link cancelled. **No voucher yet**: the store is emailed and the plan stays on the daily digest until staff check the money came in and press Issue voucher (1 year, one purchase of at least its value). The customer is emailed when the voucher is issued | ✅ |
 | Last installment unpaid 15 / 25 / 30 days after its date | Warnings, then close as above | ✅ |
 | Any payment, even ₹1,000 | Restarts the 60-day clock | ✅ |
-| The voucher fails while closing | Plan still closes (never two vouchers); store told to make it by hand | ⚠️ no automatic retry |
-| The closed draft | Must be deleted by hand; deleting it is safe (a closed plan is never restored) | 🧑 |
+| Issue voucher fails (Shopify error) | Nothing is issued or emailed; staff can press it again | ✅ |
+| The closed draft | Delete it by hand **after** issuing the voucher (a closed plan is never restored). Deleted first: the digest says to make the voucher by hand | 🧑 |
 | Testing this on one plan | The check can now run on one draft only (`draft=D327`), without touching other plans or sending the real digest | ✅ new today |
 
 ## 9. Cancelling a plan (new today)
@@ -177,7 +187,7 @@ reminders and closing stop; deleting the draft no longer restores it; the tracke
 | Voucher fails during cancel | Plan is still cancelled (never two vouchers); customer not emailed; store told to make it by hand | ✅ |
 | Only part of the recorded money was real | One tick covers all of it. Staff must cancel as mistake and make a voucher by hand for the real part | ⚠️ **Decision D5** |
 | The tick is the only check | The screen doesn't list each payment's source (GoKwik has a transaction id; in-store has none; Metafield Manager typing has no record) | ⚠️ |
-| A product-change voucher was already issued, then the customer opts out | The cancel voucher is for everything paid, so the change voucher's money is paid out again (same flaw as G3) | ❌ G3 |
+| A voucher was already issued on the plan, then the customer opts out | The cancel voucher is only for what was not already given back | ✅ fixed 9 Nov |
 | Draft keeps its 6 installment slots after cancel | Harmless if deleted; if kept as a normal draft, new payments still go in plan-style slots | ⚠️ |
 | Customer pays some other way after cancel (e.g. typed into the Metafield Manager) | Not blocked | ❌ G2 |
 
@@ -225,14 +235,14 @@ plan is marked complete and the customer gets the "complete" email.
 |---|---|---|
 | G1 | A draft with a balance can be converted; plan marked "complete" | Refuse conversion through our button; if Shopify's own button is used, keep the plan open, don't send "complete", alert the store |
 | G2 | Payments after a plan ended (closed/cancelled) are not blocked | Refuse or alert on any payment to a draft whose plan is no longer active |
-| G3 | Second product change (and cancel after a change) pays the same money twice | Subtract vouchers already issued on the plan; keep every voucher code |
+| G3 | ~~Second product change pays the same money twice~~ | Fixed 9 Nov: no automatic vouchers, running voucher total, change refused after a voucher |
 | G4 | Midnight–5:30 am payments land in the previous installment | Date payments in IST |
 | G5 | Deleting a draft frees its voucher/exchange note but the copy still uses it | Re-apply them to the rebuilt draft, or leave them unchanged on delete |
 | G6 | Discounts/vouchers/old gold applied after the start are ignored by the plan | Refuse them on a plan draft, or re-base the plan |
 | G7 | Refunds/chargebacks not seen by the plan | Count refunds against the plan's money |
 | G8 | GoKwik webhook trusts the newest link, no signature, no duplicate check | Verify signature; match the payment to its own link and transaction id |
 | G9 | Two simultaneous payments can lose one | Lock the draft while writing a payment |
-| G10 | Overpayment (stale link, or gold fell) leaves unhandled credit | Voucher automatically, or a store alert with a button |
+| G10 | ~~Overpayment leaves unhandled credit~~ | Fixed 9 Nov: store prompted, Issue voucher button |
 | G11 | Product change in the last 3 days gets stuck | Refuse Change product in the final-price window |
 
 ### Decisions needed from the founder
@@ -243,7 +253,7 @@ plan is marked complete and the customer gets the "complete" email.
 | D3 | 7th payment: fold into slot 6 (losing its date), or refuse? | Fold, but keep the earlier date |
 | D4 | Allow typing payments into the Metafield Manager on plan drafts? | No; plan payments only through the Buy plan screen |
 | D5 | Cancel when only part of the recorded money is real? | Let staff enter the verified amount instead of a single tick |
-| D6 | Gold fell / overpaid: automatic voucher for the difference? | Yes, like a product change |
+| D6 | ~~Gold fell / overpaid: automatic voucher?~~ | Decided 9 Nov: never automatic; staff press Issue voucher |
 | D7 | Re-read the customer's phone/email before each message? | Yes |
 | D8 | Alert the store when a plan is fully paid and ready to convert? | Yes, in the daily digest |
 

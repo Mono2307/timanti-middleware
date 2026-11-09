@@ -71,14 +71,17 @@ async function sendFinalPrice(plan, d, link, { today } = {}) {
   });
 }
 
-// Internal: gold fell and the customer has paid more than the final price.
-async function sendFinalCredit(plan, d, credit) {
+// Internal: the customer has paid more than the price — gold fell before the final price, or a
+// cheaper piece after Change product (why: 'change'). Nothing is issued: the store offers a piece of
+// higher value, or issues a voucher for the difference on the Buy plan screen.
+async function sendFinalCredit(plan, d, credit, { why = 'final', oldTotal, newTotal } = {}) {
   await sendEmail({
     to: STORE(), internal: true,
-    subject: `Buy plan ${plan.draft_name}: customer overpaid by ${rupees(credit)} after the final reprice`,
+    subject: `Buy plan ${plan.draft_name}: customer has paid ${rupees(credit)} more than the ${why === 'change' ? 'new piece' : 'final price'}`,
     html: T.buildBuyPlanFinalCreditHtml({
       draftName: plan.draft_name, adminUrl: adminDraftUrl(d.id), customerName: plan.customer_name,
-      phone: plan.customer_phone, startTotal: Number(plan.total), finalTotal: Number(plan.final_total), credit,
+      phone: plan.customer_phone, credit, why,
+      startTotal: why === 'change' ? oldTotal : Number(plan.total), finalTotal: why === 'change' ? newTotal : Number(plan.final_total),
     }),
   });
 }
@@ -146,25 +149,33 @@ async function sendClosingSoon(plan, d, link, { closeOn, lastInstallment, today 
   });
 }
 
-// The plan closed for non-payment. voucher is null if it could not be created (voucherError says why).
-async function sendForfeited(plan, d, { paid, voucher, voucherError, reason }) {
-  if (voucher) {
-    await sendEmail({
-      to: plan.customer_email,
-      subject: `Your buy plan has closed: voucher ${voucher.code} for ${rupees(paid)} (${plan.draft_name})`,
-      html: T.buildBuyPlanForfeitedHtml({
-        customerName: plan.customer_name, draftName: plan.draft_name, paid, voucherCode: voucher.code, validUntil: voucher.validUntil,
-      }),
-    });
-  }
+// Internal: the plan closed for non-payment. owed is what the voucher will be; staff issue it.
+async function sendForfeited(plan, d, { owed, reason }) {
   await sendEmail({
     to: STORE(), internal: true,
-    subject: `Buy plan ${plan.draft_name} closed (${reason})${voucher ? `: voucher ${voucher.code}` : ': CREATE THE VOUCHER BY HAND'}`,
+    subject: `Buy plan ${plan.draft_name} closed (${reason})${owed > 0 ? `: issue the voucher for ${rupees(owed)}` : ''}`,
     html: T.buildBuyPlanForfeitedStaffHtml({
       draftName: plan.draft_name, adminUrl: d ? adminDraftUrl(d.id) : '', customerName: plan.customer_name,
-      phone: plan.customer_phone, paid, total: S.currentTotal(plan), voucherCode: voucher?.code,
-      validUntil: voucher?.validUntil, reason, voucherError,
+      phone: plan.customer_phone, owed, total: S.currentTotal(plan), reason,
     }),
+  });
+}
+
+// Customer: staff issued a voucher (credit.js). kind 'closed': the plan closed for non-payment and this
+// is everything paid; 'credit': what was paid beyond the price.
+async function sendVoucherIssued(plan, d, { kind, voucher }) {
+  await sendEmail({
+    to: plan.customer_email,
+    subject: kind === 'closed'
+      ? `Your buy plan has closed: voucher ${voucher.code} for ${rupees(voucher.value)} (${plan.draft_name})`
+      : `Your voucher ${voucher.code} for ${rupees(voucher.value)} (${plan.draft_name})`,
+    html: kind === 'closed'
+      ? T.buildBuyPlanForfeitedHtml({
+          customerName: plan.customer_name, draftName: plan.draft_name, paid: voucher.value, voucherCode: voucher.code, validUntil: voucher.validUntil,
+        })
+      : T.buildBuyPlanCreditVoucherHtml({
+          customerName: plan.customer_name, draftName: plan.draft_name, amount: voucher.value, voucherCode: voucher.code, validUntil: voucher.validUntil,
+        }),
   });
 }
 
@@ -195,13 +206,13 @@ async function sendCancelled(plan, d, { kind, paid, voucher, voucherError, reaso
 }
 
 // The piece on the plan was changed.
-async function sendChanged(plan, d, { oldTotal, newTotal, lostLock, voucher, credit, today }) {
+async function sendChanged(plan, d, { oldTotal, newTotal, lostLock, credit, today }) {
   const st = stateOf(plan, d, today);
   await sendEmail({
     to: plan.customer_email,
     subject: `Your buy plan has been updated (${plan.draft_name})`,
     html: T.buildBuyPlanChangedHtml({
-      ...base(plan, st), oldTotal, newTotal, lostLock, credit, voucherCode: voucher?.code, validUntil: voucher?.validUntil,
+      ...base(plan, st), oldTotal, newTotal, lostLock, credit,
       customPayUrl: customPayUrl(plan.id),
     }),
   });
@@ -267,5 +278,5 @@ async function sendRestored({ plan, oldName, newName, newId, d }) {
 
 module.exports = {
   sendStarted, sendGoldLink, sendLink, sendReceived, sendCompleted, sendFinalPrice, sendFinalCredit,
-  sendClosingSoon, sendForfeited, sendCancelled, sendChanged, sendLinesChanged, sendPricePutBack, sendStaffDigest, sendRestored, whatsappUrl,
+  sendClosingSoon, sendForfeited, sendVoucherIssued, sendCancelled, sendChanged, sendLinesChanged, sendPricePutBack, sendStaffDigest, sendRestored, whatsappUrl,
 };

@@ -13,7 +13,10 @@ import { useEffect, useState } from "preact/hooks";
 //
 // Any payment from Rs1,000 counts; a missed installment is added to the next; after any payment the
 // balance is re-spread over the installments left. 60 days with no payment (or unpaid 30 days after
-// the last date) closes the plan and what was paid becomes a voucher.
+// the last date) closes the plan and what was paid is owed back as a voucher.
+//
+// Vouchers are never automatic (founder, 2026-11-09): when a closed plan, a cheaper piece or an
+// overpayment means money is owed back, this screen prompts staff, who press Issue voucher.
 //
 // Before a plan exists: staff pick the type and the number of installments, see the schedule, send
 // the gold value link if needed, and start it on a deliberate click (the ONLY way a plan starts).
@@ -111,6 +114,7 @@ function BuyPlan() {
   const [moneyChecked, setMoneyChecked] = useState(false);
   const [cancelAgreed, setCancelAgreed] = useState(false);
   const [cancelNote, setCancelNote] = useState("");
+  const [voucherAgreed, setVoucherAgreed] = useState(false);
 
   function take(body) {
     setData(body);
@@ -163,6 +167,15 @@ function BuyPlan() {
     const body = await post("/api/buy-plan/change-product", { draftId, confirm: true });
     setChangeAgreed(false);
     setNotice(body.message);
+    await load();
+  });
+
+  const issueVoucher = () => run(async () => {
+    const body = await post("/api/buy-plan/issue-voucher", { draftId, confirm: true });
+    setVoucherAgreed(false);
+    setNotice(body.kind === "closed"
+      ? `Voucher ${body.voucher.code} for ${inr(body.voucher.value)} issued and emailed to the customer. Now delete this draft; do not complete it.`
+      : `Voucher ${body.voucher.code} for ${inr(body.voucher.value)} issued and emailed to the customer. The plan is settled: complete the draft.`);
     await load();
   });
 
@@ -273,10 +286,24 @@ function BuyPlan() {
           <s-stack direction="block" gap="base">
             {plan.status === "forfeited" ? (
               <s-banner tone="critical" heading="This plan has closed">
-                {plan.closedReason ? `Closed: ${plan.closedReason}. ` : ""}
-                {plan.voucherCode
-                  ? `What the customer paid, ${inr(plan.voucherValue || plan.paid)}, is voucher ${plan.voucherCode}. Delete this draft; do not complete it.`
-                  : "The voucher could not be created automatically. Create it by hand, then delete this draft."}
+                <s-stack direction="block" gap="small-200">
+                  <s-text>
+                    {plan.closedReason ? `Closed: ${plan.closedReason}. ` : ""}
+                    {plan.voucherDue > 0
+                      ? `${inr(plan.voucherDue)} paid is owed back to the customer as a voucher (one year, one purchase of at least its value). Nothing has been sent to them yet. Do not delete this draft until the voucher is issued.`
+                      : plan.voucherCodes?.length
+                      ? `Voucher ${plan.voucherCodes.join(", ")} has been issued. Delete this draft; do not complete it.`
+                      : "Nothing was paid. Delete this draft."}
+                  </s-text>
+                  {plan.voucherDue > 0 ? (
+                    <s-stack direction="block" gap="small-200">
+                      <s-checkbox
+                        label={`I have checked that ${inr(plan.voucherDue)} actually reached Timanti (bank, GoKwik or the cash drawer), not just recorded here`}
+                        checked={voucherAgreed} onChange={(e) => setVoucherAgreed(checked(e))} />
+                      <s-button onClick={issueVoucher} loading={busy} disabled={Boolean(busy || !voucherAgreed)}>Issue voucher for {inr(plan.voucherDue)}</s-button>
+                    </s-stack>
+                  ) : null}
+                </s-stack>
               </s-banner>
             ) : null}
             {plan.status === "completed" ? <s-banner tone="success">This plan is complete.</s-banner> : null}
@@ -313,8 +340,22 @@ function BuyPlan() {
                 No payment has come in for a while. Any payment from ₹1,000 keeps the plan going. The customer has been warned.
               </s-banner>
             ) : null}
-            {plan.credit > 0 ? (
-              <s-banner tone="warning">The customer has paid {inr(plan.credit)} more than the price. Settle it with them before completing the draft.</s-banner>
+            {active && plan.voucherDue > 0 ? (
+              <s-banner tone="warning" heading={`The customer has paid ${inr(plan.voucherDue)} more than the price`}>
+                <s-stack direction="block" gap="small-200">
+                  <s-text>
+                    Nothing has been issued or sent to the customer. First suggest a piece worth at least what they have paid, or a
+                    second piece: add it to the draft, then press Change product. If they would rather have the difference back,
+                    issue a voucher for it (one year, one purchase of at least its value). The plan is then settled at its price.
+                  </s-text>
+                  <s-checkbox label={`The customer wants ${inr(plan.voucherDue)} back as a voucher`}
+                    checked={voucherAgreed} onChange={(e) => setVoucherAgreed(checked(e))} />
+                  <s-button onClick={issueVoucher} loading={busy} disabled={Boolean(busy || !voucherAgreed)}>Issue voucher for {inr(plan.voucherDue)}</s-button>
+                </s-stack>
+              </s-banner>
+            ) : null}
+            {active && plan.vouchered > 0 ? (
+              <s-text color="subdued">Voucher {plan.voucherCodes.join(", ")} ({inr(plan.vouchered)}) issued on this plan.</s-text>
             ) : null}
 
             {active && plan.piecesChanged && !plan.changePending ? (
@@ -324,8 +365,20 @@ function BuyPlan() {
                     If the customer is changing product: everything paid carries over and the dates stay. The draft is repriced at
                     today's gold rate and the balance spread over the installments left.
                     {plan.mode === "gold" ? " The locked gold rate is given up for good; the last installment is then repriced 3 days before it is due." : ""}
-                    {" "}If they have already paid more than the new price, the difference becomes a voucher. If the change was a mistake, put the original pieces back instead.
+                    {" "}If the change was a mistake, put the original pieces back instead.
                   </s-text>
+                  {plan.newPiecesEstimate != null ? (
+                    <s-text>
+                      New pieces: about {inr(plan.newPiecesEstimate)} at catalog prices (the exact price is set at today's gold rate).
+                      Paid so far: {inr(plan.paid)}.
+                    </s-text>
+                  ) : null}
+                  {plan.newPiecesEstimate != null && plan.newPiecesEstimate < plan.paid ? (
+                    <s-banner tone="critical" heading={`About ${inr(plan.paid - plan.newPiecesEstimate)} more than the new pieces has been paid`}>
+                      Suggest a piece worth {inr(plan.paid)} or more, or add a second piece. If the customer still wants this one,
+                      go ahead: nothing is given back automatically, and you can issue a voucher for the difference afterwards.
+                    </s-banner>
+                  ) : null}
                   <s-checkbox label="The customer has agreed to the change of product" checked={changeAgreed} onChange={(e) => setChangeAgreed(checked(e))} />
                   <s-button onClick={changeProduct} loading={busy} disabled={Boolean(busy || !changeAgreed)}>Change product</s-button>
                 </s-stack>
@@ -364,7 +417,7 @@ function BuyPlan() {
                   <s-text-field label="Customer's own link to pay a different amount (share on WhatsApp)" value={plan.customPayUrl} readOnly />
                 ) : null}
               </s-stack>
-            ) : active && !plan.awaitingFinalPrice && !(plan.credit > 0) ? (
+            ) : active && !plan.awaitingFinalPrice && !(plan.voucherDue > 0) ? (
               <s-banner tone="success">Fully paid. The draft can be completed.</s-banner>
             ) : null}
 
@@ -377,19 +430,19 @@ function BuyPlan() {
                   <s-button variant={cancelKind === "mistake" ? "primary" : "secondary"} onClick={() => pickCancel("mistake")}>Demo or staff mistake</s-button>
                 </s-stack>
                 {cancelKind === "opted_out" ? (
-                  <s-banner tone="warning" heading={plan.paid > 0 ? `Voucher for ${inr(plan.paid)}` : "Nothing paid"}>
+                  <s-banner tone="warning" heading={plan.cancelVoucher > 0 ? `Voucher for ${inr(plan.cancelVoucher)}` : "Nothing to give back"}>
                     <s-stack direction="block" gap="small-200">
                       <s-text>
-                        {plan.paid > 0
-                          ? `Everything paid, ${inr(plan.paid)}, becomes a voucher for the customer: valid one year, for one purchase worth at least its value. No cash refund. The customer is emailed.`
-                          : "Nothing has been paid, so there is no voucher. The customer is emailed that the plan is cancelled."}
+                        {plan.cancelVoucher > 0
+                          ? `Everything paid${plan.vouchered > 0 ? ` not already given back` : ""}, ${inr(plan.cancelVoucher)}, becomes a voucher for the customer: valid one year, for one purchase worth at least its value. No cash refund. The customer is emailed.`
+                          : "Nothing is owed back, so there is no voucher. The customer is emailed that the plan is cancelled."}
                       </s-text>
-                      {plan.paid > 0 ? (
+                      {plan.cancelVoucher > 0 ? (
                         <s-checkbox
-                          label={`I have checked that ${inr(plan.paid)} actually reached Timanti (bank, GoKwik or the cash drawer), not just recorded here`}
+                          label={`I have checked that ${inr(plan.cancelVoucher)} actually reached Timanti (bank, GoKwik or the cash drawer), not just recorded here`}
                           checked={moneyChecked} onChange={(e) => setMoneyChecked(checked(e))} />
                       ) : null}
-                      {plan.paid > 0 ? (
+                      {plan.cancelVoucher > 0 ? (
                         <s-text color="subdued">If the payments were only recorded for a demo or by mistake, choose Demo or staff mistake instead.</s-text>
                       ) : null}
                     </s-stack>
@@ -407,8 +460,8 @@ function BuyPlan() {
                     <s-text-field label="Note (optional)" value={cancelNote} onInput={(e) => setCancelNote(val(e))} />
                     <s-checkbox label="Cancel this buy plan. This cannot be undone." checked={cancelAgreed} onChange={(e) => setCancelAgreed(checked(e))} />
                     <s-button tone="critical" onClick={cancelPlan} loading={busy}
-                      disabled={Boolean(busy || !cancelAgreed || (cancelKind === "opted_out" && plan.paid > 0 && !moneyChecked))}>
-                      {cancelKind === "opted_out" && plan.paid > 0 ? `Cancel plan and issue voucher for ${inr(plan.paid)}` : "Cancel plan"}
+                      disabled={Boolean(busy || !cancelAgreed || (cancelKind === "opted_out" && plan.cancelVoucher > 0 && !moneyChecked))}>
+                      {cancelKind === "opted_out" && plan.cancelVoucher > 0 ? `Cancel plan and issue voucher for ${inr(plan.cancelVoucher)}` : "Cancel plan"}
                     </s-button>
                   </s-stack>
                 ) : null}

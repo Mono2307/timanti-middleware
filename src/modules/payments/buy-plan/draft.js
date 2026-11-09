@@ -29,7 +29,8 @@ async function readDraft(draftId) {
   if (!draft) return null;
   const { metafields = [] } = await getJson(`draft_orders/${id}/metafields.json`);
   const mf = {};
-  for (const m of metafields) if (m.namespace === 'custom') mf[m.key] = m.value;
+  const mfAt = {};   // when each metafield was last written (collectFresh)
+  for (const m of metafields) if (m.namespace === 'custom') { mf[m.key] = m.value; mfAt[m.key] = m.updated_at; }
 
   const c = draft.customer || {};
   const customer = {
@@ -43,7 +44,7 @@ async function readDraft(draftId) {
   const net = parseFloat(mf.amount_to_be_collected);
   const total = Math.round(Number.isFinite(net) && net > 0 ? net : parseFloat(draft.total_price) || 0);
   const legs = readInstallments(mf).filter(l => l.type !== 'cad_advance');
-  return { id, draft, mf, customer, total, legs, tags: splitTags(draft.tags) };
+  return { id, draft, mf, mfAt, customer, total, legs, tags: splitTags(draft.tags) };
 }
 
 // The jewellery lines the pricing engine prices (server.js handleRecalculatePriceTag uses the same
@@ -151,6 +152,16 @@ function lineInput(li) {
 // The tag the payment step of the draft webhook consumes once it has recomputed the collect figures
 // (server.js handlePaymentMetafieldSync) — the same nudge the admin panel sends after a save.
 const SYNC_TAG = 'sync-payment';
+
+// The amount to collect (what d.total is read from) was recomputed after the draft's last write. A
+// reprice writes the lines and drops its tags first; the collect figure is recomputed by a later pass.
+// Unknown timestamps count as fresh.
+function collectFresh(d) {
+  const at = Date.parse(d?.mfAt?.amount_to_be_collected || '');
+  const draftAt = Date.parse(d?.draft?.updated_at || '');
+  if (!Number.isFinite(at) || !Number.isFinite(draftAt)) return true;
+  return at >= draftAt - 2000;
+}
 const withTags = (tags, add) => {
   const list = [...(tags || [])];
   for (const t of add) if (!list.some(x => String(x).toLowerCase() === t)) list.push(t);
@@ -209,5 +220,5 @@ const withRestored = (liveLines, fixes) => (liveLines || []).map((li, idx) => {
 module.exports = {
   todayIst, daysBetween, splitTags, adminDraftUrl, readDraft, startBlockers, snapshotOf, lockedGoldRate,
   productLines, goldValue, paidSoFar, prop, rs, GST, linesKey,
-  GQL_VERSION, SYNC_TAG, withTags, discountInput, lineInput, writeDraftLines, linesToRestore, withRestored,
+  GQL_VERSION, SYNC_TAG, collectFresh, withTags, discountInput, lineInput, writeDraftLines, linesToRestore, withRestored,
 };

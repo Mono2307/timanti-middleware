@@ -1,4 +1,4 @@
-# route inventory — 131 routes across 1 express app(s)
+# route inventory — 132 routes across 1 express app(s)
 # Regenerate: node tools/route-inventory.js --write
 # This file must not change during a pure move/refactor.
 
@@ -14,6 +14,7 @@ POST   /api/buy-plan/cancel
 POST   /api/buy-plan/change-product
 GET    /api/buy-plan/draft/:draftId
 POST   /api/buy-plan/gold-link
+POST   /api/buy-plan/issue-voucher
 POST   /api/buy-plan/record-payment
 POST   /api/buy-plan/send-link
 POST   /api/buy-plan/sheet-sync

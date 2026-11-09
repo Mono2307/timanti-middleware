@@ -1,19 +1,18 @@
 'use strict';
 
 // Buy plan — closing a plan for non-payment (founder, 2026-10-30; the rules are in schedule.js).
-// Everything the customer paid becomes a voucher (voucher.js): one year, one purchase worth at least
-// its value. The draft is released: its plan tags come off (so the price lock and the delete guard
-// stop), it is tagged buy-plan-closed, and any open payment link is cancelled. It is NOT deleted here — its payments are what the voucher
-// stands for, and the store deletes it once they have seen the alert.
-//
-// The plan is marked forfeited BEFORE the voucher is made, so a crash in between can never issue a
-// second voucher on the next sweep; the store alert then says to create it by hand.
+// Everything the customer paid is owed back as a voucher (one year, one purchase worth at least its
+// value), but it is NOT issued here (founder, 2026-11-09): the store is told, checks the money really
+// came in, and presses Issue voucher on the Buy plan screen (credit.js). The customer hears about the
+// voucher when it is issued. The draft is released: its plan tags come off (so the price lock and the
+// delete guard stop), it is tagged buy-plan-closed, and any open payment link is cancelled. It is NOT
+// deleted here: the voucher is issued from it, and the store deletes it after that.
 
 const { putJson } = require('../../../core/shopify');
 const { log } = require('../../../core/logger');
 const store = require('./store');
 const notify = require('./notify');
-const { issuePlanVoucher } = require('./voucher');
+const { vouchered } = require('./credit');
 const { cancelOpenLinks } = require('./links');
 const { RATE_LOCK_TAG, BUY_PLAN_TAG, FINAL_REPRICE_TAG, CHANGE_REPRICE_TAG } = require('./lock');
 
@@ -32,26 +31,14 @@ async function releaseDraft(plan, d, endTag) {
 }
 
 async function forfeitPlan(plan, d, st, today, reason) {
-  const paid = st.paid;
+  const owed = Math.max(0, Math.round(st.paid) - vouchered(plan));
   await store.updatePlan(plan.id, { status: 'forfeited', closed_at: new Date().toISOString(), closed_reason: reason });
-
-  let voucher = null;
-  let voucherError = null;
-  if (paid > 0) {
-    try {
-      voucher = await issuePlanVoucher({ plan, d, value: paid, today, why: 'plan closed' });
-      await store.updatePlan(plan.id, { voucher_code: voucher.code, voucher_value: voucher.value });
-    } catch (e) {
-      voucherError = e.message;
-      log.error('buy-plan', `${plan.draft_name}: forfeit voucher: ${e.message}`);
-    }
-  }
-
+  plan.status = 'forfeited';
   await releaseDraft(plan, d, CLOSED_TAG);
-  await notify.sendForfeited(plan, d, { paid, voucher, voucherError, reason });
-  await store.markSent(plan.id, st.n, 'customer', 'forfeited');
-  log.info('buy-plan', `${plan.draft_name}: plan closed (${reason}), Rs${paid} → ${voucher ? voucher.code : 'NO VOUCHER'}`);
-  return { voucher, voucherError };
+  await notify.sendForfeited(plan, d, { owed, reason });
+  await store.markSent(plan.id, st.n, 'staff', 'forfeited');
+  log.info('buy-plan', `${plan.draft_name}: plan closed (${reason}), Rs${owed} owed as a voucher: store prompted`);
+  return { owed };
 }
 
 module.exports = { forfeitPlan, releaseDraft, CLOSED_TAG };

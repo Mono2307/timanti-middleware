@@ -888,18 +888,21 @@ function buildBuyPlanFinalPriceHtml({ customerName, draftName, startTotal, final
 }
 
 // Internal: an equal plan whose final price came out below what the customer has already paid.
-function buildBuyPlanFinalCreditHtml({ draftName, adminUrl, customerName, phone, startTotal, finalTotal, credit }) {
+function buildBuyPlanFinalCreditHtml({ draftName, adminUrl, customerName, phone, startTotal, finalTotal, credit, why = 'final' }) {
+  const cause = why === 'change'
+    ? 'The customer changed to a piece priced below what they have already paid.'
+    : 'Gold fell before the last installment of this buy plan, so the final price is below what the customer has paid.';
   return head()
     + contentBlock({
         ref: 'Store — internal',
-        heading: `${esc(draftName)}: customer overpaid by ${money(credit)}`,
-        body: 'Gold fell before the last installment of this buy plan, so the final price is below what the customer has paid. Settle the difference with the customer (refund or credit) before completing the draft. The customer has been told the store will be in touch.',
+        heading: `${esc(draftName)}: customer has paid ${money(credit)} more than the price`,
+        body: `${cause} Nothing has been issued and the customer has not been sent a voucher. Talk to them first: suggest a piece worth at least what they have paid, or a second piece (add it to the draft, then press Change product). If they want the difference back instead, open Buy plan on the draft and press Issue voucher.`,
         buttonsHtml: button('Open the draft', adminUrl),
       })
     + section(summary([
         { label: 'Customer', value: `${customerName || '—'} ${phone || ''}` },
-        { label: 'Price at start', value: money(startTotal) },
-        { label: 'Final price', value: money(finalTotal) },
+        { label: why === 'change' ? 'Previous price' : 'Price at start', value: money(startTotal) },
+        { label: why === 'change' ? 'New price' : 'Final price', value: money(finalTotal) },
         { label: 'Overpaid', value: money(credit), total: true },
       ]))
     + foot();
@@ -969,22 +972,36 @@ function buildBuyPlanForfeitedHtml({ customerName, draftName, paid, voucherCode,
     + foot();
 }
 
-// Internal: a plan closed for non-payment.
-function buildBuyPlanForfeitedStaffHtml({ draftName, adminUrl, customerName, phone, paid, total, voucherCode, validUntil, reason, voucherError }) {
+// Internal: a plan closed for non-payment. The voucher is issued by staff (Buy plan → Issue voucher).
+function buildBuyPlanForfeitedStaffHtml({ draftName, adminUrl, customerName, phone, owed, total, reason }) {
   return head()
     + contentBlock({
         ref: 'Store — internal',
         heading: `Buy plan ${esc(draftName)} closed: ${esc(reason)}`,
-        body: voucherError
-          ? `The plan closed, but the voucher could NOT be created (${esc(voucherError)}). Create a voucher for ${money(paid)} for the customer by hand, valid one year. Then delete the draft. Do not complete it.`
-          : `The plan closed and the customer has been sent voucher <strong>${esc(voucherCode)}</strong> for everything paid, valid until ${esc(planDate(validUntil))}. The draft's payments now live in that voucher: delete the draft. Do not complete it.`,
+        body: owed > 0
+          ? `The plan closed and its price lock is off. Nothing has been sent to the customer yet. Check that the ${money(owed)} paid on it really reached Timanti, then open Buy plan on the draft and press Issue voucher: the customer is emailed the voucher (one year, one purchase of at least its value). Only then delete the draft. Do not complete it.`
+          : 'The plan closed and its price lock is off. Nothing was paid on it, so there is no voucher. Delete the draft.',
         buttonsHtml: button('Open the draft', adminUrl),
       })
     + section(summary([
         { label: 'Customer', value: `${customerName || '—'} ${phone || ''}` },
         { label: 'Plan price', value: money(total) },
-        { label: 'Paid (voucher value)', value: money(paid), total: true },
+        { label: 'To put on the voucher', value: money(owed), total: true },
       ]))
+    + foot();
+}
+
+// Customer: staff issued a voucher for what was paid beyond the price of the piece.
+function buildBuyPlanCreditVoucherHtml({ customerName, draftName, amount, voucherCode, validUntil }) {
+  return head()
+    + contentBlock({
+        ref: `Buy Plan — ${draftName}`,
+        heading: 'Your voucher',
+        body: `${customerName ? esc(customerName) + ', you' : 'You'} paid <strong>${money(amount)}</strong> more than the price of your piece. As agreed with our store, that amount is now a Timanti voucher: <strong>${esc(voucherCode)}</strong>, valid until <strong>${esc(planDate(validUntil))}</strong>. Use it in one purchase worth ${money(amount)} or more, in store or online. Your piece is fully paid.`,
+        buttonsHtml: button('Browse New Arrivals', CATALOGUE_URL),
+        storeLinkHtml: storeLink('or visit our HSR Layout store', STORE_MAP_URL),
+      })
+    + standardFooter()
     + foot();
 }
 
@@ -1032,11 +1049,11 @@ function buildBuyPlanCancelledStaffHtml({ draftName, adminUrl, customerName, pho
 }
 
 // Customer: the piece on the plan was changed.
-function buildBuyPlanChangedHtml({ customerName, draftName, oldTotal, newTotal, lostLock, voucherCode, credit, validUntil, customPayUrl, rows, paid, balance }) {
+function buildBuyPlanChangedHtml({ customerName, draftName, oldTotal, newTotal, lostLock, credit, customPayUrl, rows, paid, balance }) {
   const who = customerName ? esc(customerName) + ', your' : 'Your';
   const lock = lostLock ? ' Because the piece changed, the gold rate is no longer locked: your last installment is worked out 3 days before it is due, at that day\'s gold rate.' : '';
   const tail = credit > 0
-    ? ` You have already paid <strong>${money(credit)}</strong> more than the new price, so that amount comes back to you as voucher <strong>${esc(voucherCode)}</strong>, valid until ${esc(planDate(validUntil))}.`
+    ? ` You have already paid the full price, and <strong>${money(credit)}</strong> more. Our store team will be in touch about it.`
     : ` Everything you have paid counts towards it, and the balance of <strong>${money(balance)}</strong> is spread over the installments left.`;
   return planBody({
     ref: `Buy Plan — ${draftName}`,
@@ -1146,6 +1163,7 @@ module.exports = {
   buildBuyPlanClosingSoonHtml,
   buildBuyPlanForfeitedHtml,
   buildBuyPlanForfeitedStaffHtml,
+  buildBuyPlanCreditVoucherHtml,
   buildBuyPlanCancelledHtml,
   buildBuyPlanCancelledStaffHtml,
   buildBuyPlanChangedHtml,

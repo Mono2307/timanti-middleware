@@ -3,11 +3,12 @@
 // Buy plan — the sweep. Runs every 6 hours; every message is guarded by a sent-marker, so running
 // more often only means a reminder is never more than a few hours late.
 //
+// Vouchers are never issued here: when money is owed back the store is prompted (credit.js).
 // Per active plan, in order:
 //   1. draft gone             → restore it from the snapshot (the delete webhook normally got there first)
 //   2. draft completed        → plan completed; "plan complete" email to the customer, once
-//   3. product change pending → once its reprice has run: the new price, the new schedule, and a
-//                               voucher if the customer has already paid more than the new price
+//   3. product change pending → once its reprice has run: the new price and the new schedule; if the
+//                               customer has already paid more than the new price, the store is told
 //   4. floating plan          → 3 days before the last due date, the gold moves to that day's rate
 //                               (only the gold, final.js); a follow-up 5 minutes later, once the
 //                               collect figures are recomputed, fixes the final price and sends its link
@@ -15,7 +16,7 @@
 //                               plan's pieces, so a deleted draft comes back as the plan, not the edit)
 //      the same piece re-added at another price → the snapshot's line is put back (keepLockedPrices)
 //   6. new money since the last run → "payment received" with the new schedule
-//   7. closure due            → the plan closes, the money paid becomes a voucher (forfeit.js)
+//   7. closure due            → the plan closes; the store is prompted to issue the voucher (forfeit.js)
 //   8. closure warnings       → day 30 / 45 without a payment, day 15 / 25 after the last due date
 //   9. next installment due within 3 days → a GoKwik link for what it asks, email + SMS
 //  10. current installment 3+ days overdue → one overdue reminder with a fresh link
@@ -31,9 +32,10 @@ const notify = require('./notify');
 const { createPlanLink } = require('./links');
 const final = require('./final');
 const { forfeitPlan } = require('./forfeit');
-const { issuePlanVoucher } = require('./voucher');
+const { voucherDue } = require('./credit');
 const { readDraft, snapshotOf, todayIst, daysBetween, adminDraftUrl, linesKey,
-  linesToRestore, withRestored, writeDraftLines, withTags, SYNC_TAG } = require('./draft');
+  linesToRestore, withRestored, writeDraftLines, withTags, collectFresh, SYNC_TAG } = require('./draft');
+const { readInstallments } = require('../installments');
 const { isRateLocked } = require('./lock');
 
 const REMIND_DAYS_BEFORE = 3;
@@ -42,7 +44,12 @@ const RELINK_DAYS_BEFORE = 3;   // a new link when the one the customer holds la
 const FINAL_REPRICE_DAYS_BEFORE = 3;   // founder, 2026-10-30: the final link arrives with the reminder
 const DIGEST_KEY = 'buy_plan_digest_last';
 const RUN_EVERY_MS = 6 * 60 * 60 * 1000;
-const FOLLOW_UP_MS = 5 * 60 * 1000;   // a reprice runs off a Shopify webhook; give it time to land
+// A reprice runs off a Shopify webhook and usually lands within a minute: look every 15 seconds, for
+// up to 10 minutes, and stop as soon as it has. A product change accepts the new price once the
+// collect figure has caught up (collectFresh), or after FRESH_WAIT_MS at the latest.
+const POLL_MS = 15 * 1000;
+const POLL_FOR_MS = 10 * 60 * 1000;
+const FRESH_WAIT_MS = 5 * 60 * 1000;
 const STUCK_AFTER_MS = 60 * 60 * 1000;
 
 const digestRow = (plan, d, n, k, due, amount, extra = {}) => ({
@@ -50,13 +57,18 @@ const digestRow = (plan, d, n, k, due, amount, extra = {}) => ({
   phone: plan.customer_phone, mode: plan.mode, n, k, due, amount, overdue: false, ...extra,
 });
 
-function followUp(planId) {
+function followUp(planId, startedAt = Date.now()) {
   const t = setTimeout(async () => {
+    let again = false;
     try {
       const plan = await store.getPlan(planId);
-      if (plan && plan.status === 'active') await sweepPlan(plan, todayIst(), { dryRun: false, restore: null });
-    } catch (e) { log.error('buy-plan', `follow-up for plan ${planId}: ${e.message}`); }
-  }, FOLLOW_UP_MS);
+      if (plan && plan.status === 'active') {
+        const r = await sweepPlan(plan, todayIst(), { dryRun: false, restore: null });
+        again = /^waiting/.test(String(r?.action || ''));
+      }
+    } catch (e) { log.error('buy-plan', `follow-up for plan ${planId}: ${e.message}`); again = true; }
+    if (again && Date.now() - startedAt < POLL_FOR_MS) followUp(planId, startedAt);
+  }, POLL_MS);
   if (t.unref) t.unref();
 }
 
@@ -65,8 +77,9 @@ const withPrice = (plan, date, total, why) => [...(plan.price_changes || []), { 
 // 3. A product change: finish it once the reprice has written the new price.
 async function finishChange(plan, d, today, { dryRun }) {
   const pending = plan.change_pending || {};
-  if (!final.changeRepriceDone(d.tags)) {
-    const late = Date.now() - Date.parse(pending.started_at || 0) > STUCK_AFTER_MS;
+  const since = Date.now() - Date.parse(pending.started_at || 0);
+  if (!final.changeRepriceDone(d.tags) || (!collectFresh(d) && since < FRESH_WAIT_MS)) {
+    const late = since > STUCK_AFTER_MS;
     return { plan: plan.draft_name, action: 'waiting for the product-change reprice',
       digest: late ? digestRow(plan, d, S.countOf(plan), 0, today, 0, { overdue: true, stuck: true,
         note: 'Product change: the reprice has not finished. Open the draft and check its tags (buy-plan-change / reprice).' }) : null };
@@ -85,19 +98,13 @@ async function finishChange(plan, d, today, { dryRun }) {
   await store.updatePlan(plan.id, patch);
   await updateDraftOrderMetafields(d.id, { plan_total: String(newTotal) }).catch(() => {});
 
+  // Paid more than the new piece: no voucher here. The store is prompted to offer a piece of higher
+  // value, or to issue a voucher for the difference by hand (credit.js).
   const st = S.planState(plan, d.legs, today);
-  let voucher = null;
-  if (st.credit > 0) {
-    try {
-      voucher = await issuePlanVoucher({ plan, d, value: st.credit, today, why: 'product change' });
-      await store.updatePlan(plan.id, { voucher_code: voucher.code, voucher_value: voucher.value });
-    } catch (e) {
-      log.error('buy-plan', `${plan.draft_name}: change voucher: ${e.message}`);
-      await notify.sendForfeited(plan, d, { paid: st.credit, voucher: null, voucherError: e.message, reason: 'product change, customer overpaid' }).catch(() => {});
-    }
-  }
-  await notify.sendChanged(plan, d, { oldTotal, newTotal, lostLock: Boolean(pending.lost_lock), voucher, credit: st.credit, today });
-  log.info('buy-plan', `${plan.draft_name}: product changed, Rs${oldTotal} → Rs${newTotal}${voucher ? `, voucher ${voucher.code} Rs${voucher.value}` : ''}`);
+  const owed = voucherDue(plan, st).amount;
+  await notify.sendChanged(plan, d, { oldTotal, newTotal, lostLock: Boolean(pending.lost_lock), credit: owed, today });
+  if (owed > 0) await notify.sendFinalCredit(plan, d, owed, { why: 'change', oldTotal, newTotal }).catch(e => log.error('buy-plan', `credit alert: ${e.message}`));
+  log.info('buy-plan', `${plan.draft_name}: product changed, Rs${oldTotal} → Rs${newTotal}${owed > 0 ? `, paid Rs${owed} over the new price (store prompted)` : ''}`);
   return null;   // carry on with the rest of the sweep at the new price
 }
 
@@ -239,7 +246,12 @@ async function sweepPlan(plan, today, { dryRun, restore }) {
     }
     out.sent.push(`received Rs${st.paid - acknowledged}`);
   }
-  if (st.balance <= 0) return { ...out, digest: rows };   // fully paid; staff complete the draft
+  if (st.balance <= 0) {   // fully paid; staff complete the draft
+    const owed = voucherDue(plan, st).amount;
+    if (owed > 0) rows.push(digestRow(plan, d, n, st.k, today, owed, { overdue: true, stuck: true,
+      note: `Paid ${owed.toLocaleString('en-IN')} more than the price. Offer a piece of higher value, or open Buy plan and press Issue voucher.` }));
+    return { ...out, digest: rows };
+  }
 
   // 7. Closure.
   const c = st.closure;
@@ -343,6 +355,20 @@ async function runBuyPlanSweep({ dryRun = false, restore = null, now = Date.now(
       // One bad plan must not stop the rest.
       log.error('buy-plan', `sweep ${plan.draft_name}: ${e.message}`);
       results.push({ plan: plan.draft_name, error: e.message });
+    }
+  }
+
+  // Plans closed for non-payment whose voucher staff have not issued yet: on the digest every day.
+  if (!only) {
+    for (const plan of await store.listPlansByStatus('forfeited').catch(() => [])) {
+      try {
+        const d = await readDraft(plan.draft_order_id).catch(() => null);
+        const legs = d ? d.legs : readInstallments((plan.snapshot || {}).metafields || {}).filter(l => l.type !== 'cad_advance');
+        const owed = voucherDue(plan, S.planState(plan, legs, today)).amount;
+        if (owed > 0) digestRows.push(digestRow(plan, d || { id: plan.draft_order_id }, S.countOf(plan), 0, today, owed, { overdue: true, stuck: true,
+          note: d ? `Closed: check the ${owed.toLocaleString('en-IN')} paid really came in, then open Buy plan and press Issue voucher. Do not delete the draft before.`
+            : `Closed and the draft was deleted before its voucher was issued: create a voucher for ${owed.toLocaleString('en-IN')} by hand.` }));
+      } catch (e) { log.error('buy-plan', `closed plan ${plan.draft_name}: ${e.message}`); }
     }
   }
 
