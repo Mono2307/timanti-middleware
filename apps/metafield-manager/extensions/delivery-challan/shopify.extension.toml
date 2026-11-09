@@ -3,6 +3,7 @@ api_version = "2026-01"
 [[extensions]]
 name = "t:name"
 handle = "delivery-challan"
+uid = "5080b5ae-780f-ba48-51f3-45ee6d2db5c9fef66cba"
 type = "ui_extension"
 
 # Admin action: "Delivery challan" under More actions on a draft order. Makes the challan (prices the
