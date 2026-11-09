@@ -1,0 +1,14 @@
+api_version = "2026-01"
+
+[[extensions]]
+name = "t:name"
+handle = "delivery-challan"
+type = "ui_extension"
+
+# Admin action: "Delivery challan" under More actions on a draft order. Makes the challan (prices the
+# draft at gold + making 100%, diamond 50%, and draws the DC- number) and cancels it, each behind an
+# explicit button and a confirmation. Replaces typing the make-memo-custom / cancel-memo-custom tags.
+# Talks to the middleware: src/modules/challan/routes.js.
+[[extensions.targeting]]
+module = "./src/DeliveryChallan.jsx"
+target = "admin.draft-order-details.action.render"

@@ -49,8 +49,9 @@ const SECTION_ORDER = [
   // §6 Read-only middleware output, then the repair workflow.
   "System-Generated",
   "Repair",
-  // §7 Raised off a draft via make-memo-custom; nothing else reads these.
-  "Delivery Challan",
+  // "Delivery Challan" is unlisted: its two fields (Ship Outside Codes, Delivery / Store Code) are
+  // now set in the Delivery challan action under More actions, which also makes and cancels the
+  // challan. Their config stays below as documentation, the same way the other sections retired.
   // §8 Everything else.
   //
   // "Product Metadata" is deliberately NOT here any more. Its editable weights and carats moved to

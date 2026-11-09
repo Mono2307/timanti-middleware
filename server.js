@@ -2252,6 +2252,99 @@ async function handleRecalculatePriceTag(draft, { force = false } = {}) {
 // make-transfer and its per-draft custom.transfer_pct_gold / _dia / _making overrides were retired on
 // 2026-09-15 along with the b2b series — see handleDocumentSerialTags. The percentages are fixed again,
 // so this is a memo-only engine; restoring a variable split means restoring the metafield read below.
+// Computes the challan line items for a draft (REST shape) WITHOUT writing anything. Shared by the
+// make-memo-custom tag path below and by the Delivery challan admin action (src/modules/challan),
+// which also uses it to show staff the new prices before they confirm.
+// Returns { allLineItems, preview: [{ title, quantity, current, challan }], totalBasis, repricedCount }.
+async function computeChallanReprice(draft, token) {
+  const rs = (v) => parseFloat(String(v || '0').replace('Rs', '').replace(/,/g, '').trim()) || 0;
+
+  // Component weights (fractions): full gold + making, half the stone value.
+  const pctGold = 1, pctDia = 0.5, pctMaking = 1;
+
+  // Product lines only — skip EXC trade-in lines and negative discount lines; everything else is
+  // re-sent verbatim below.
+  const productItems = (draft.line_items || []).filter(item =>
+    !isExcLine(item) &&
+    !((item.title || '').toLowerCase().includes('discount') && parseFloat(item.price) < 0) &&
+    ((item.properties || []).some(p => p.name === 'Gold') || !!item.variant_id)
+  );
+
+  // Resolve gold / diamond / making per item: prop → variant metafield (per-unit × qty).
+  const resolved = await Promise.all(productItems.map(async (item) => {
+    const props = {};
+    for (const p of (item.properties || [])) props[p.name] = p.value;
+    let gold   = rs(props['Gold']);
+    let dia    = rs(props['Diamond']);
+    let making = rs(props['Making'] || props['Making Charges']);
+    if (!gold || !making || (!dia && pctDia > 0)) {
+      const { varMf } = await fetchItemMeta(item, token);
+      if (!gold)   gold   = parseFloat(varMf.price_breakup_gold    || 0) * (item.quantity || 1);
+      if (!dia)    dia    = parseFloat(varMf.price_breakup_diamond || 0) * (item.quantity || 1);
+      if (!making) making = parseFloat(varMf.price_breakup_making  || 0) * (item.quantity || 1);
+    }
+    const basis = (gold * pctGold + dia * pctDia + making * pctMaking) * 1.03;  // GST-inclusive, same convention as reprice/catalog
+    return { item, basis };
+  }));
+
+  const totalBasis    = resolved.reduce((sum, r) => sum + r.basis, 0);
+  const totalDiscount = parseFloat(draft.applied_discount?.amount || 0);
+
+  const repricedMap = new Map();
+  const preview = [];
+  for (const { item, basis } of resolved) {
+    // Prorate any order-level discount by this item's share of the weighted basis.
+    const itemDiscount = totalBasis > 0 ? totalDiscount * (basis / totalBasis) : 0;
+    const finalValue   = Math.max(0, basis - itemDiscount);   // tax-inclusive
+    const taxableValue = finalValue / 1.03;
+    const gst          = taxableValue * 0.03;
+
+    // The split props are stripped, never rewritten: this reprice prorates a NATIVE order-level
+    // discount across the weighted basis, so its cut is not attributable to diamond or making at all.
+    // Carrying the source draft's breakup onto a memo/transfer would state a component saving this
+    // document did not give.
+    const OVERWRITE = new Set(['Gross Value', 'Taxable Value', 'GST', 'Discount Applied', ...DISCOUNT_SPLIT_PROPS]);
+    const updatedProps = (item.properties || []).filter(p => !OVERWRITE.has(p.name));
+    updatedProps.push(
+      { name: 'Gross Value',      value: `Rs${basis.toFixed(2)}` },
+      { name: 'Taxable Value',    value: `Rs${taxableValue.toFixed(2)}` },
+      { name: 'GST',              value: `Rs${gst.toFixed(2)}` },
+      { name: 'Discount Applied', value: `Rs${itemDiscount.toFixed(2)}` },
+    );
+    repricedMap.set(item.id, {
+      variant_id: item.variant_id || undefined,
+      quantity: item.quantity,
+      price: (finalValue / (item.quantity || 1)).toFixed(2),
+      properties: updatedProps,
+    });
+    preview.push({
+      title: item.title, quantity: item.quantity || 1,
+      current: +(parseFloat(item.price || 0) * (item.quantity || 1)).toFixed(2),
+      challan: +finalValue.toFixed(2),
+    });
+  }
+
+  const allLineItems = (draft.line_items || []).map(item => {
+    const r = repricedMap.get(item.id);
+    // else-branch re-sends non-product / EXC lines verbatim.
+    return r
+      ? { variant_id: r.variant_id, quantity: r.quantity, price: r.price, properties: r.properties, title: item.title }
+      : { variant_id: item.variant_id || undefined, quantity: item.quantity, price: item.price, properties: item.properties || [], title: item.title };
+  });
+
+  return { allLineItems, preview, totalBasis, repricedCount: repricedMap.size };
+}
+
+// Writes the challan prices onto the draft in ONE GraphQL write, with the given tag string (the
+// caller decides which tags stay). Throws on failure — the admin action has to be able to say so.
+async function applyChallanReprice(draft, tagString, token) {
+  const t = token || await getShopifyToken();
+  const r = await computeChallanReprice(draft, t);
+  await gqlSetDraftLineItems(draft.id, r.allLineItems, t, { tags: tagString, clearDiscount: true });
+  console.log(`✅ Draft ${draft.id}: challan reprice — G100/D50/M100%, ${r.repricedCount} item(s), basis=Rs${r.totalBasis.toFixed(2)}`);
+  return r;
+}
+
 async function handleWeightedDocReprice(draft) {
   if (!SERIAL_MEMO_TRANSFER) return;
   const tags  = (draft.tags || '').split(',').map(t => t.trim());
@@ -2260,82 +2353,10 @@ async function handleWeightedDocReprice(draft) {
   const triggerTag = 'make-memo-custom';
 
   try {
-    const draftOrderId = draft.id;
-    const token = await getShopifyToken();
-    const rs = (v) => parseFloat(String(v || '0').replace('Rs', '').replace(/,/g, '').trim()) || 0;
-
-    // Component weights (fractions): full gold + making, half the stone value.
-    const pctGold = 1, pctDia = 0.5, pctMaking = 1;
-
-    // Product lines only — skip EXC trade-in lines and negative discount lines; everything else is
-    // re-sent verbatim below.
-    const productItems = (draft.line_items || []).filter(item =>
-      !isExcLine(item) &&
-      !((item.title || '').toLowerCase().includes('discount') && parseFloat(item.price) < 0) &&
-      ((item.properties || []).some(p => p.name === 'Gold') || !!item.variant_id)
-    );
-
-    // Resolve gold / diamond / making per item: prop → variant metafield (per-unit × qty).
-    const resolved = await Promise.all(productItems.map(async (item) => {
-      const props = {};
-      for (const p of (item.properties || [])) props[p.name] = p.value;
-      let gold   = rs(props['Gold']);
-      let dia    = rs(props['Diamond']);
-      let making = rs(props['Making'] || props['Making Charges']);
-      if (!gold || !making || (!dia && pctDia > 0)) {
-        const { varMf } = await fetchItemMeta(item, token);
-        if (!gold)   gold   = parseFloat(varMf.price_breakup_gold    || 0) * (item.quantity || 1);
-        if (!dia)    dia    = parseFloat(varMf.price_breakup_diamond || 0) * (item.quantity || 1);
-        if (!making) making = parseFloat(varMf.price_breakup_making  || 0) * (item.quantity || 1);
-      }
-      const basis = (gold * pctGold + dia * pctDia + making * pctMaking) * 1.03;  // GST-inclusive, same convention as reprice/catalog
-      return { item, basis };
-    }));
-
-    const totalBasis    = resolved.reduce((sum, r) => sum + r.basis, 0);
-    const totalDiscount = parseFloat(draft.applied_discount?.amount || 0);
-
-    const repricedMap = new Map();
-    for (const { item, basis } of resolved) {
-      // Prorate any order-level discount by this item's share of the weighted basis.
-      const itemDiscount = totalBasis > 0 ? totalDiscount * (basis / totalBasis) : 0;
-      const finalValue   = Math.max(0, basis - itemDiscount);   // tax-inclusive
-      const taxableValue = finalValue / 1.03;
-      const gst          = taxableValue * 0.03;
-
-      // The split props are stripped, never rewritten: this reprice prorates a NATIVE order-level
-      // discount across the weighted basis, so its cut is not attributable to diamond or making at all.
-      // Carrying the source draft's breakup onto a memo/transfer would state a component saving this
-      // document did not give.
-      const OVERWRITE = new Set(['Gross Value', 'Taxable Value', 'GST', 'Discount Applied', ...DISCOUNT_SPLIT_PROPS]);
-      const updatedProps = (item.properties || []).filter(p => !OVERWRITE.has(p.name));
-      updatedProps.push(
-        { name: 'Gross Value',      value: `Rs${basis.toFixed(2)}` },
-        { name: 'Taxable Value',    value: `Rs${taxableValue.toFixed(2)}` },
-        { name: 'GST',              value: `Rs${gst.toFixed(2)}` },
-        { name: 'Discount Applied', value: `Rs${itemDiscount.toFixed(2)}` },
-      );
-      repricedMap.set(item.id, {
-        variant_id: item.variant_id || undefined,
-        quantity: item.quantity,
-        price: (finalValue / (item.quantity || 1)).toFixed(2),
-        properties: updatedProps,
-      });
-    }
-
-    const allLineItems = (draft.line_items || []).map(item => {
-      const r = repricedMap.get(item.id);
-      // else-branch re-sends non-product / EXC lines verbatim.
-      return r
-        ? { variant_id: r.variant_id, quantity: r.quantity, price: r.price, properties: r.properties, title: item.title }
-        : { variant_id: item.variant_id || undefined, quantity: item.quantity, price: item.price, properties: item.properties || [], title: item.title };
-    });
-
     // Strip the trigger tag here (loop prevention). handleDocumentSerialTags still mints off the
     // in-memory draft.tags in the same webhook pass, then no-op removes the (already gone) tag.
     const tagsWithout = tags.filter(t => t && t.toLowerCase() !== triggerTag).join(', ');
-    await gqlSetDraftLineItems(draftOrderId, allLineItems, token, { tags: tagsWithout, clearDiscount: true });
-    console.log(`✅ Draft ${draftOrderId}: ${triggerTag} reprice — G${Math.round(pctGold*100)}/D${Math.round(pctDia*100)}/M${Math.round(pctMaking*100)}%, ${repricedMap.size} item(s), basis=Rs${totalBasis.toFixed(2)}`);
+    await applyChallanReprice(draft, tagsWithout);
   } catch (err) {
     console.error(`weighted reprice (${triggerTag}) failed for draft ${draft.id}:`, err.message);
   }
@@ -5175,12 +5196,16 @@ const ctx = {
   // procurement module never has to know the resource vocabulary.
   handleOrderRefundSync:  (order) => handleRefundSync(order, 'orders'),
   handleOrderRefundEmail: (order) => handleRefundEmailTag(order, 'orders'),
+  // The Delivery challan admin action (src/modules/challan) prices and numbers a draft directly,
+  // through the same engine the make-memo-custom tag uses.
+  challan: { enabled: SERIAL_MEMO_TRANSFER, computeChallanReprice, applyChallanReprice },
 };
 
 registerRepairRoutes(app, getShopifyToken);
 pine.register(app, ctx);
 require('./src/modules/reporting/routes').register(app, ctx);
 require('./src/modules/serialization/routes').register(app, ctx);
+require('./src/modules/challan/routes').register(app, ctx);
 require('./src/modules/procurement/routes').register(app, ctx);
 const admin = require('./src/modules/admin/routes');
 admin.register(app, ctx);
