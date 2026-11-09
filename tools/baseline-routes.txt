@@ -10,6 +10,7 @@ GET    /api/backfill-installments
 POST   /api/backfill-installments
 POST   /api/backfill-order-metafields
 POST   /api/backfill-order-tags
+POST   /api/buy-plan/cancel
 POST   /api/buy-plan/change-product
 GET    /api/buy-plan/draft/:draftId
 POST   /api/buy-plan/gold-link

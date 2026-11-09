@@ -988,6 +988,49 @@ function buildBuyPlanForfeitedStaffHtml({ draftName, adminUrl, customerName, pho
     + foot();
 }
 
+// Customer: the plan was cancelled at their request. voucherCode is absent when nothing was paid.
+function buildBuyPlanCancelledHtml({ customerName, draftName, paid, voucherCode, validUntil }) {
+  const who = customerName ? esc(customerName) + ', your' : 'Your';
+  const body = voucherCode
+    ? `${who} buy plan has been cancelled, as you asked. Everything you paid, <strong>${money(paid)}</strong>, is now a Timanti voucher: <strong>${esc(voucherCode)}</strong>, valid until <strong>${esc(planDate(validUntil))}</strong>. Use it in one purchase worth ${money(paid)} or more, in store or online.`
+    : `${who} buy plan has been cancelled, as you asked. No payment was made on it, so nothing more is needed from you.`;
+  return head()
+    + contentBlock({
+        ref: `Buy Plan — ${draftName}`,
+        heading: 'Your buy plan has been cancelled',
+        body,
+        buttonsHtml: button('Browse New Arrivals', CATALOGUE_URL),
+        storeLinkHtml: storeLink('or visit our HSR Layout store', STORE_MAP_URL),
+      })
+    + standardFooter()
+    + foot();
+}
+
+// Internal: staff cancelled a plan. kind: 'opted_out' (voucher for what was paid) or 'mistake' (none).
+function buildBuyPlanCancelledStaffHtml({ draftName, adminUrl, customerName, phone, paid, total, kind, reason, by, voucherCode, validUntil, voucherError }) {
+  const body = kind === 'mistake'
+    ? `The plan was cancelled as a demo or staff mistake. No voucher was made and the customer was not emailed. The draft is a normal draft again${paid > 0 ? `, still showing the ${money(paid)} recorded on it` : ''}: delete it, or start a new plan on it.`
+    : voucherError
+    ? `The customer opted out, but the voucher could NOT be created (${esc(voucherError)}). Create a voucher for ${money(paid)} for the customer by hand, valid one year. Then delete the draft. Do not complete it.`
+    : voucherCode
+    ? `The customer opted out and has been sent voucher <strong>${esc(voucherCode)}</strong> for everything paid, valid until ${esc(planDate(validUntil))}. The draft's payments now live in that voucher: delete the draft. Do not complete it.`
+    : 'The customer opted out. Nothing was paid on the plan, so there is no voucher. Delete the draft.';
+  return head()
+    + contentBlock({
+        ref: 'Store — internal',
+        heading: `Buy plan ${esc(draftName)} cancelled: ${esc(reason)}`,
+        body,
+        buttonsHtml: adminUrl ? button('Open the draft', adminUrl) : '',
+      })
+    + section(summary([
+        { label: 'Customer', value: `${customerName || '—'} ${phone || ''}` },
+        { label: 'Cancelled by', value: by || '—' },
+        { label: 'Plan price', value: money(total) },
+        { label: kind === 'mistake' ? 'Recorded (no voucher)' : 'Paid (voucher value)', value: money(paid), total: true },
+      ]))
+    + foot();
+}
+
 // Customer: the piece on the plan was changed.
 function buildBuyPlanChangedHtml({ customerName, draftName, oldTotal, newTotal, lostLock, voucherCode, credit, validUntil, customPayUrl, rows, paid, balance }) {
   const who = customerName ? esc(customerName) + ', your' : 'Your';
@@ -1075,7 +1118,7 @@ function buildBuyPlanRestoredHtml({ oldName, newName, adminUrl, customerName, to
     + contentBlock({
         ref: 'Store — internal',
         heading: `Buy plan draft ${esc(oldName)} was deleted and restored as ${esc(newName)}`,
-        body: 'A draft on an active buy plan was deleted. The middleware rebuilt it at the plan\'s prices with its payments, and the plan now follows the new draft. If the deletion was intentional, cancel the plan with HQ rather than deleting the draft.',
+        body: 'A draft on an active buy plan was deleted. The middleware rebuilt it at the plan\'s prices with its payments, and the plan now follows the new draft. If the deletion was intentional, open Buy plan on the restored draft and press Cancel plan first; the draft of a cancelled plan can then be deleted for good.',
         buttonsHtml: button('Open the restored draft', adminUrl),
       })
     + section(summary([
@@ -1103,6 +1146,8 @@ module.exports = {
   buildBuyPlanClosingSoonHtml,
   buildBuyPlanForfeitedHtml,
   buildBuyPlanForfeitedStaffHtml,
+  buildBuyPlanCancelledHtml,
+  buildBuyPlanCancelledStaffHtml,
   buildBuyPlanChangedHtml,
   buildBuyPlanLinesChangedHtml,
   buildBuyPlanPricePutBackHtml,

@@ -15,7 +15,7 @@ const { graphql } = require('../../../core/shopify');
 const { supabase } = require('../../../core/supabase');
 const { getMetafieldType } = require('../../../core/metafields');
 const { log } = require('../../../core/logger');
-const { cancelPaymentLink } = require('../../../integrations/gokwik');
+const { cancelOpenLinks } = require('./links');
 const S = require('./schedule');
 const store = require('./store');
 const notify = require('./notify');
@@ -83,13 +83,7 @@ async function restoreDeletedPlanDraft(oldDraftId) {
   await store.updatePlan(plan.id, { draft_order_id: newId, draft_name: created.name });
   await supabase.from('store_deposits').update({ draft_order_id: newId }).eq('draft_order_id', String(oldDraftId));
 
-  const { data: open } = await supabase.from('payment_links').select('gokwik_link_id')
-    .eq('draft_order_id', String(oldDraftId)).eq('status', 'created');
-  for (const l of open || []) {
-    try { await cancelPaymentLink(l.gokwik_link_id); } catch (e) { log.warn('buy-plan', `cancel ${l.gokwik_link_id}: ${e.message}`); }
-    await supabase.from('payment_links').update({ status: 'cancelled', updated_at: new Date().toISOString() })
-      .eq('gokwik_link_id', l.gokwik_link_id);
-  }
+  await cancelOpenLinks(oldDraftId);
 
   log.info('buy-plan', `${plan.draft_name} was deleted — restored as ${created.name} (${newId})`);
   await notify.sendRestored({ plan, oldName: plan.draft_name, newName: created.name, newId, d: { legs } })

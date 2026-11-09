@@ -15,6 +15,9 @@
  *                                       recorded the same way a GoKwik or Pine payment is
  *   POST /api/buy-plan/change-product   after staff change the pieces on the draft: reprice it at
  *                                       today's rate and re-spread the plan (a gold plan loses its lock)
+ *   POST /api/buy-plan/cancel           cancel the plan (cancel.js): the customer opted out (voucher for
+ *                                       the money staff confirm was received), or a demo / staff mistake
+ *                                       (no voucher; the draft can be given a new plan)
  *
  * Customer — the "Pay a different amount" link in every plan email (signed token, no login):
  *   GET  /pay/plan/:token               the balance, what is due, an amount box
@@ -23,7 +26,8 @@
  * Operator:
  *   POST /api/buy-plan/sweep            run the sweep now (x-webhook-secret =
  *                                       PRICE_UPDATE_WEBHOOK_SECRET). dryRun=true reports only;
- *                                       asOf=YYYY-MM-DD runs it as if it were that day.
+ *                                       asOf=YYYY-MM-DD runs it as if it were that day; draft=D327 (or
+ *                                       the draft id) runs it on that one plan only.
  *
  * Starting a plan is ALWAYS a deliberate staff action. Nothing else — a payment link, a payment, a
  * tag — ever turns a draft into a buy plan.
@@ -43,6 +47,7 @@ const final = require('./final');
 const { createPlanLink, readPayToken, customPayUrl } = require('./links');
 const { runBuyPlanSweep, followUp } = require('./sweep');
 const { restoreDeletedPlanDraft } = require('./restore');
+const { cancelPlan, isMistake } = require('./cancel');
 const sheet = require('./sheet');
 const { todayIst, readDraft, startBlockers, snapshotOf, lockedGoldRate, goldValue, paidSoFar, linesKey } = require('./draft');
 
@@ -81,7 +86,7 @@ async function view(d, plan) {
         minPayment: st.minPayment, suggested: st.suggested, closeOn: st.closure.closeOn, warn: st.closure.warn,
         customPayUrl: plan.status === 'active' ? customPayUrl(plan.id) : null,
         voucherCode: plan.voucher_code || null, voucherValue: Number(plan.voucher_value) || null,
-        closedReason: plan.closed_reason || null, changePending: Boolean(plan.change_pending),
+        closedReason: plan.closed_reason || null, closedAt: plan.closed_at || null, changePending: Boolean(plan.change_pending),
         piecesChanged: Boolean(planKey) && linesKey(d.draft.line_items) !== planKey,
       },
       rows: st.rows,
@@ -123,8 +128,15 @@ async function mustReadDraft(draftId) {
   return d;
 }
 
+// The plan on the draft, if it still holds it. A plan cancelled as a demo or staff mistake does not:
+// the draft is a normal draft again and a new plan may be started on it.
+async function planOn(draftId) {
+  const plan = await store.getPlanByDraft(draftId);
+  return plan && !isMistake(plan) ? plan : null;
+}
+
 async function activePlan(d) {
-  const plan = await store.getPlanByDraft(d.id);
+  const plan = await planOn(d.id);
   if (!plan) { const e = new Error(`${d.draft.name} has no buy plan`); e.status = 404; throw e; }
   if (plan.status !== 'active') { const e = new Error(`This buy plan is ${plan.status}`); e.status = 409; throw e; }
   return plan;
@@ -133,7 +145,7 @@ async function activePlan(d) {
 async function getDraftPlan(req, res) {
   try {
     const d = await mustReadDraft(req.params.draftId);
-    return res.json(await view(d, await store.getPlanByDraft(d.id)));
+    return res.json(await view(d, await planOn(d.id)));
   } catch (e) { return fail(res, e, 'read'); }
 }
 
@@ -144,9 +156,13 @@ async function startPlan(req, res) {
     const n = Number(req.body?.installments || S.PLAN_INSTALLMENTS);
     if (!S.INSTALLMENT_CHOICES.includes(n)) return res.status(400).json({ ok: false, error: `Choose ${S.INSTALLMENT_CHOICES.join(', ')} installments` });
     const d = await mustReadDraft(req.body?.draftId);
-    if (await store.getPlanByDraft(d.id)) return res.status(409).json({ ok: false, error: `${d.draft.name} already has a buy plan` });
+    if (await planOn(d.id)) return res.status(409).json({ ok: false, error: `${d.draft.name} already has a buy plan` });
     const blockers = startBlockers(d, mode);
     if (blockers.length) return res.status(400).json({ ok: false, error: 'Cannot start a buy plan', missing: blockers });
+
+    // A plan cancelled as a mistake gives up the draft id (it is unique) and keeps its row for the record.
+    const earlier = await store.getPlanByDraft(d.id);
+    if (earlier) await store.updatePlan(earlier.id, { draft_order_id: `${d.id}-cancelled-${earlier.id}` });
 
     const start = todayIst();
     const dueDates = S.dueDates(start, n);
@@ -208,7 +224,7 @@ async function sendLink(req, res) {
 async function sendGoldLink(req, res) {
   try {
     const d = await mustReadDraft(req.body?.draftId);
-    if (await store.getPlanByDraft(d.id)) return res.status(409).json({ ok: false, error: `${d.draft.name} already has a buy plan` });
+    if (await planOn(d.id)) return res.status(409).json({ ok: false, error: `${d.draft.name} already has a buy plan` });
     const basic = startBlockers(d, 'equal');
     if (basic.length) return res.status(400).json({ ok: false, error: 'Cannot send the gold value link', missing: basic });
     const gv = goldValue(d);
@@ -235,7 +251,7 @@ function recordPaymentHandler(ctx) {
       const d = await mustReadDraft(req.body?.draftId);
       // Before the plan starts (a gold plan's gold value taken at the counter) there is no plan yet:
       // the payment just lands on the draft, and Start counts it.
-      const existing = await store.getPlanByDraft(d.id);
+      const existing = await planOn(d.id);
       const plan = existing ? await activePlan(d) : null;
       const mode = String(req.body?.mode || '').toLowerCase();
       if (!STORE_MODES.includes(mode)) return res.status(400).json({ ok: false, error: `How was it paid? ${STORE_MODES.join(', ')}` });
@@ -281,6 +297,23 @@ async function changeProduct(req, res) {
     log.info('buy-plan', `${d.draft.name}: product change started${lostLock ? ' (gold lock given up)' : ''}, ${rates.length} piece(s) at today's rate`);
     return res.json({ ok: true, lostLock, message: 'Repricing the new pieces at today\'s gold rate. The new schedule appears here in about 5 minutes, and the customer is emailed.' });
   } catch (e) { return fail(res, e, 'change-product'); }
+}
+
+// Staff cancel the plan. kind 'opted_out': the customer backs out and what they paid becomes a voucher,
+// once staff confirm (moneyReceived) that the money really came in. kind 'mistake': a demo or a plan
+// started by mistake — no voucher, no customer email. confirm: the tick on the screen.
+async function cancelHandler(req, res) {
+  try {
+    const d = await mustReadDraft(req.body?.draftId);
+    const plan = await activePlan(d);
+    if (req.body?.confirm !== true) return res.status(400).json({ ok: false, error: 'Confirm the cancellation first' });
+    const r = await cancelPlan(plan, d, {
+      kind: String(req.body?.kind || ''), moneyReceived: req.body?.moneyReceived === true,
+      note: req.body?.note, by: req.staff?.sub ? String(req.staff.sub) : null, today: todayIst(),
+    });
+    sheet.pushSoon();
+    return res.json({ ok: true, ...r, voucher: r.voucher || null });
+  } catch (e) { return fail(res, e, 'cancel'); }
 }
 
 // ── Customer page: pay a different amount ───────────────────────────────────────────────────────
@@ -373,7 +406,8 @@ async function sweepNow(req, res) {
   const p = { ...(req.query || {}), ...(req.body || {}) };
   const asOf = /^\d{4}-\d{2}-\d{2}$/.test(String(p.asOf || '')) ? Date.parse(`${p.asOf}T06:00:00Z`) : Date.now();
   try {
-    const result = await runBuyPlanSweep({ dryRun: String(p.dryRun) === 'true', now: asOf, restore: restoreDeletedPlanDraft });
+    const only = String(p.draft || '').trim() || null;
+    const result = await runBuyPlanSweep({ dryRun: String(p.dryRun) === 'true', now: asOf, restore: restoreDeletedPlanDraft, only });
     return res.json({ ok: true, ...result });
   } catch (e) { return fail(res, e, 'sweep'); }
 }
@@ -392,6 +426,7 @@ function register(app, ctx) {
   app.post('/api/buy-plan/gold-link', requireStaffSession, sendGoldLink);
   app.post('/api/buy-plan/record-payment', requireStaffSession, recordPaymentHandler(ctx));
   app.post('/api/buy-plan/change-product', requireStaffSession, changeProduct);
+  app.post('/api/buy-plan/cancel', requireStaffSession, cancelHandler);
   app.get('/pay/plan/:token', payPageGet);
   app.post('/pay/plan/:token', express.urlencoded({ extended: false }), payPagePost);
   app.post('/api/buy-plan/sweep', sweepNow);

@@ -346,5 +346,27 @@ const five = D.slice(0, 5).map(d => paid(d, 20000));
     assert.deepStrictEqual(world.sent, []);
   });
 
+  console.log('single-plan run (draft=)');
+
+  await t('runs only the named plan, by D number or draft id, and never sends the digest', async () => {
+    reset();
+    world.plans.push({ ...world.plans[0], id: 2, draft_order_id: '200', draft_name: '#D301' });
+    world.drafts[200] = { ...world.drafts[100], id: '200', draft: { ...world.drafts[100].draft, name: '#D301' } };
+    const r = await runBuyPlanSweep({ now: at('2026-10-27'), only: 'D300' });
+    assert.deepStrictEqual(r.plans.map(p => p.plan), ['#D300']);
+    assert.deepStrictEqual(world.sent, ['overdue#1:20000']);
+    assert.strictEqual(world.config.buy_plan_digest_last, undefined);
+    assert.strictEqual(r.digestRows.length, 1);
+    const byId = await runBuyPlanSweep({ now: at('2026-10-27'), only: '200', dryRun: true });
+    assert.deepStrictEqual(byId.plans.map(p => p.plan), ['#D301']);
+  });
+
+  await t('an unknown or inactive draft is refused, not a silent run of nothing', async () => {
+    reset();
+    await assert.rejects(runBuyPlanSweep({ now: at('2026-10-27'), only: '#D999' }), /No active buy plan/);
+    world.plans[0].status = 'cancelled';
+    await assert.rejects(runBuyPlanSweep({ now: at('2026-10-27'), only: 'D300' }), /No active buy plan/);
+  });
+
   console.log(`\n${n} passed`);
 })().catch(e => { console.error(e); process.exit(1); });

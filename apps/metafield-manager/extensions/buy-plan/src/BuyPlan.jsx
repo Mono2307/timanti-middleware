@@ -18,7 +18,9 @@ import { useEffect, useState } from "preact/hooks";
 // Before a plan exists: staff pick the type and the number of installments, see the schedule, send
 // the gold value link if needed, and start it on a deliberate click (the ONLY way a plan starts).
 // Once started: the schedule, the payments, a GoKwik link for any amount, recording a payment taken
-// in store, and Change product after the pieces on the draft are changed.
+// in store, Change product after the pieces on the draft are changed, and Cancel plan: the customer
+// opted out (what they paid becomes a voucher, once staff confirm the money really came in), or a
+// demo / staff mistake (no voucher; the draft can be given a new plan).
 //
 // All maths lives in the middleware (src/modules/payments/buy-plan/schedule.js); this only displays.
 
@@ -105,6 +107,10 @@ function BuyPlan() {
   const [storeAmount, setStoreAmount] = useState("");
   const [storeMode, setStoreMode] = useState("card");
   const [changeAgreed, setChangeAgreed] = useState(false);
+  const [cancelKind, setCancelKind] = useState(null);
+  const [moneyChecked, setMoneyChecked] = useState(false);
+  const [cancelAgreed, setCancelAgreed] = useState(false);
+  const [cancelNote, setCancelNote] = useState("");
 
   function take(body) {
     setData(body);
@@ -157,6 +163,23 @@ function BuyPlan() {
     const body = await post("/api/buy-plan/change-product", { draftId, confirm: true });
     setChangeAgreed(false);
     setNotice(body.message);
+    await load();
+  });
+
+  const pickCancel = (k) => { setCancelKind(k); setMoneyChecked(false); setCancelAgreed(false); };
+
+  const cancelPlan = () => run(async () => {
+    const body = await post("/api/buy-plan/cancel", {
+      draftId, kind: cancelKind, moneyReceived: moneyChecked, note: cancelNote, confirm: true,
+    });
+    setCancelKind(null);
+    setNotice(cancelKind === "mistake"
+      ? "Plan cancelled. No voucher was made and the customer was not emailed. This is a normal draft again: delete it, or start a new plan."
+      : body.voucher
+      ? `Plan cancelled. Voucher ${body.voucher.code} for ${inr(body.voucher.value)} has been emailed to the customer. Delete this draft; do not complete it.`
+      : body.voucherError
+      ? `Plan cancelled, but the voucher could not be made: ${body.voucherError}. Create it by hand, then delete this draft.`
+      : "Plan cancelled. Nothing was paid, so there is no voucher. Delete this draft.");
     await load();
   });
 
@@ -257,6 +280,16 @@ function BuyPlan() {
               </s-banner>
             ) : null}
             {plan.status === "completed" ? <s-banner tone="success">This plan is complete.</s-banner> : null}
+            {plan.status === "cancelled" ? (
+              <s-banner tone="critical" heading="This plan was cancelled">
+                {plan.closedReason ? `Cancelled: ${plan.closedReason}. ` : ""}
+                {plan.voucherCode
+                  ? `What the customer paid, ${inr(plan.voucherValue || plan.paid)}, is voucher ${plan.voucherCode}. Delete this draft; do not complete it.`
+                  : plan.paid > 0
+                  ? "The voucher could not be created automatically. Create it by hand, then delete this draft."
+                  : "Nothing was paid. Delete this draft."}
+              </s-banner>
+            ) : null}
 
             <s-text type="strong">{MODE_LABEL[plan.mode] || "Buy plan"} · {plan.n} installments</s-text>
             <s-text>
@@ -333,6 +366,53 @@ function BuyPlan() {
               </s-stack>
             ) : active && !plan.awaitingFinalPrice && !(plan.credit > 0) ? (
               <s-banner tone="success">Fully paid. The draft can be completed.</s-banner>
+            ) : null}
+
+            {active && !plan.changePending ? (
+              <s-stack direction="block" gap="small-200">
+                <s-divider />
+                <s-text type="strong">Cancel this plan</s-text>
+                <s-stack direction="inline" gap="small-200">
+                  <s-button variant={cancelKind === "opted_out" ? "primary" : "secondary"} onClick={() => pickCancel("opted_out")}>Customer opted out</s-button>
+                  <s-button variant={cancelKind === "mistake" ? "primary" : "secondary"} onClick={() => pickCancel("mistake")}>Demo or staff mistake</s-button>
+                </s-stack>
+                {cancelKind === "opted_out" ? (
+                  <s-banner tone="warning" heading={plan.paid > 0 ? `Voucher for ${inr(plan.paid)}` : "Nothing paid"}>
+                    <s-stack direction="block" gap="small-200">
+                      <s-text>
+                        {plan.paid > 0
+                          ? `Everything paid, ${inr(plan.paid)}, becomes a voucher for the customer: valid one year, for one purchase worth at least its value. No cash refund. The customer is emailed.`
+                          : "Nothing has been paid, so there is no voucher. The customer is emailed that the plan is cancelled."}
+                      </s-text>
+                      {plan.paid > 0 ? (
+                        <s-checkbox
+                          label={`I have checked that ${inr(plan.paid)} actually reached Timanti (bank, GoKwik or the cash drawer), not just recorded here`}
+                          checked={moneyChecked} onChange={(e) => setMoneyChecked(checked(e))} />
+                      ) : null}
+                      {plan.paid > 0 ? (
+                        <s-text color="subdued">If the payments were only recorded for a demo or by mistake, choose Demo or staff mistake instead.</s-text>
+                      ) : null}
+                    </s-stack>
+                  </s-banner>
+                ) : null}
+                {cancelKind === "mistake" ? (
+                  <s-banner tone="info" heading="No voucher, no customer email">
+                    The plan stops and its price lock comes off. This becomes a normal draft again
+                    {plan.paid > 0 ? `, still showing the ${inr(plan.paid)} recorded on it` : ""}. You can then delete it (it will not come
+                    back), or start a new plan on it.
+                  </s-banner>
+                ) : null}
+                {cancelKind ? (
+                  <s-stack direction="block" gap="small-200">
+                    <s-text-field label="Note (optional)" value={cancelNote} onInput={(e) => setCancelNote(val(e))} />
+                    <s-checkbox label="Cancel this buy plan. This cannot be undone." checked={cancelAgreed} onChange={(e) => setCancelAgreed(checked(e))} />
+                    <s-button tone="critical" onClick={cancelPlan} loading={busy}
+                      disabled={Boolean(busy || !cancelAgreed || (cancelKind === "opted_out" && plan.paid > 0 && !moneyChecked))}>
+                      {cancelKind === "opted_out" && plan.paid > 0 ? `Cancel plan and issue voucher for ${inr(plan.paid)}` : "Cancel plan"}
+                    </s-button>
+                  </s-stack>
+                ) : null}
+              </s-stack>
             ) : null}
           </s-stack>
         ) : null}

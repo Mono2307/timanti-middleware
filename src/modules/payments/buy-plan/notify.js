@@ -168,6 +168,32 @@ async function sendForfeited(plan, d, { paid, voucher, voucherError, reason }) {
   });
 }
 
+// Staff cancelled the plan (cancel.js). The customer hears only when they opted out — not for a demo
+// or a mistake, and not while their voucher still has to be made by hand.
+async function sendCancelled(plan, d, { kind, paid, voucher, voucherError, reason, by }) {
+  if (kind === 'opted_out' && !voucherError) {
+    await sendEmail({
+      to: plan.customer_email,
+      subject: voucher
+        ? `Your buy plan has been cancelled: voucher ${voucher.code} for ${rupees(paid)} (${plan.draft_name})`
+        : `Your buy plan has been cancelled (${plan.draft_name})`,
+      html: T.buildBuyPlanCancelledHtml({
+        customerName: plan.customer_name, draftName: plan.draft_name, paid, voucherCode: voucher?.code, validUntil: voucher?.validUntil,
+      }),
+    });
+  }
+  const handVoucher = kind === 'opted_out' && paid > 0 && !voucher;
+  await sendEmail({
+    to: STORE(), internal: true,
+    subject: `Buy plan ${plan.draft_name} cancelled (${reason})${voucher ? `: voucher ${voucher.code}` : handVoucher ? ': CREATE THE VOUCHER BY HAND' : ''}`,
+    html: T.buildBuyPlanCancelledStaffHtml({
+      draftName: plan.draft_name, adminUrl: d ? adminDraftUrl(d.id) : '', customerName: plan.customer_name,
+      phone: plan.customer_phone, paid, total: S.currentTotal(plan), kind, reason, by,
+      voucherCode: voucher?.code, validUntil: voucher?.validUntil, voucherError,
+    }),
+  });
+}
+
 // The piece on the plan was changed.
 async function sendChanged(plan, d, { oldTotal, newTotal, lostLock, voucher, credit, today }) {
   const st = stateOf(plan, d, today);
@@ -241,5 +267,5 @@ async function sendRestored({ plan, oldName, newName, newId, d }) {
 
 module.exports = {
   sendStarted, sendGoldLink, sendLink, sendReceived, sendCompleted, sendFinalPrice, sendFinalCredit,
-  sendClosingSoon, sendForfeited, sendChanged, sendLinesChanged, sendPricePutBack, sendStaffDigest, sendRestored, whatsappUrl,
+  sendClosingSoon, sendForfeited, sendCancelled, sendChanged, sendLinesChanged, sendPricePutBack, sendStaffDigest, sendRestored, whatsappUrl,
 };

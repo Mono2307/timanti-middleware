@@ -44,16 +44,22 @@ function readPayToken(token, now = Date.now()) {
 
 const customPayUrl = (planId) => `${String(config.serverUrl || '').replace(/\/+$/, '')}/pay/plan/${payToken(planId)}`;
 
-// Cancel every open link on the draft, then raise one for `amount`. Returns { shortUrl, amount }.
-async function createPlanLink(plan, amount) {
-  const draftId = String(plan.draft_order_id);
+// Cancel every open link on the draft: before a new one is raised, and when a plan ends (closed,
+// cancelled, or its draft deleted), so the customer cannot pay into a plan that no longer runs.
+async function cancelOpenLinks(draftId) {
   const { data: open } = await supabase.from('payment_links')
-    .select('gokwik_link_id').eq('draft_order_id', draftId).eq('status', 'created');
+    .select('gokwik_link_id').eq('draft_order_id', String(draftId)).eq('status', 'created');
   for (const l of open || []) {
     try { await cancelPaymentLink(l.gokwik_link_id); } catch (e) { log.warn('buy-plan', `cancel ${l.gokwik_link_id}: ${e.message}`); }
     await supabase.from('payment_links').update({ status: 'cancelled', updated_at: new Date().toISOString() })
       .eq('gokwik_link_id', l.gokwik_link_id);
   }
+}
+
+// Cancel every open link on the draft, then raise one for `amount`. Returns { shortUrl, amount }.
+async function createPlanLink(plan, amount) {
+  const draftId = String(plan.draft_order_id);
+  await cancelOpenLinks(draftId);
 
   const phone = String(plan.customer_phone || '').replace(/\D/g, '').slice(-10);
   const { gokwikLinkId, shortUrl, expiresAt } = await createPaymentLink({
@@ -71,4 +77,4 @@ async function createPlanLink(plan, amount) {
   return { shortUrl, amount, expiresAt };
 }
 
-module.exports = { payToken, readPayToken, customPayUrl, createPlanLink };
+module.exports = { payToken, readPayToken, customPayUrl, createPlanLink, cancelOpenLinks };

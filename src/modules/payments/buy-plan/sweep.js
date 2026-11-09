@@ -320,9 +320,18 @@ async function sweepPlan(plan, today, { dryRun, restore }) {
   return { ...out, digest: rows };
 }
 
-async function runBuyPlanSweep({ dryRun = false, restore = null, now = Date.now() } = {}) {
+// The plan a filter names: its draft number (D327, #D327) or its draft id.
+const planMatches = (plan, only) => {
+  const want = String(only).replace(/^#/, '').toUpperCase();
+  return String(plan.draft_order_id) === want || String(plan.draft_name || '').replace(/^#/, '').toUpperCase() === want;
+};
+
+// only: run on that one plan (planMatches). A filtered run never sends or marks the daily digest —
+// the store's real digest for the day must still go out — it just returns the rows.
+async function runBuyPlanSweep({ dryRun = false, restore = null, now = Date.now(), only = null } = {}) {
   const today = todayIst(now);
-  const plans = await store.listActivePlans();
+  const plans = (await store.listActivePlans()).filter(p => !only || planMatches(p, only));
+  if (only && !plans.length) throw Object.assign(new Error(`No active buy plan on ${only}`), { status: 404 });
   const results = [];
   const digestRows = [];
   for (const plan of plans) {
@@ -338,7 +347,8 @@ async function runBuyPlanSweep({ dryRun = false, restore = null, now = Date.now(
   }
 
   let digest = 'nothing due';
-  if (digestRows.length) {
+  if (digestRows.length && only) digest = `not sent on a single-plan run (${digestRows.length})`;
+  else if (digestRows.length) {
     if ((await store.getConfigValue(DIGEST_KEY)) === today) digest = 'already sent today';
     else if (dryRun) digest = `would send (${digestRows.length})`;
     else {
@@ -348,7 +358,7 @@ async function runBuyPlanSweep({ dryRun = false, restore = null, now = Date.now(
     }
   }
   log.info('buy-plan', `sweep ${today}: ${plans.length} active plan(s), digest ${digest}`);
-  return { today, plans: results, digest, digestRows: dryRun ? digestRows : undefined };
+  return { today, plans: results, digest, digestRows: dryRun || only ? digestRows : undefined };
 }
 
 function startBuyPlanSweep(opts = {}) {
@@ -358,6 +368,6 @@ function startBuyPlanSweep(opts = {}) {
 }
 
 module.exports = {
-  runBuyPlanSweep, startBuyPlanSweep, sweepPlan, finalStep, finishChange, followUp,
+  runBuyPlanSweep, startBuyPlanSweep, sweepPlan, planMatches, finalStep, finishChange, followUp,
   keepLockedPrices, REMIND_DAYS_BEFORE, OVERDUE_AFTER_DAYS, FINAL_REPRICE_DAYS_BEFORE, RELINK_DAYS_BEFORE,
 };
