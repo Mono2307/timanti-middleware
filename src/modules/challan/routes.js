@@ -11,7 +11,7 @@
  * who pressed the button, and nothing is written until the inputs are known to be complete.
  *
  *   GET  /api/challan/:draftId          what the draft is now: stores, number (if any), price preview
- *   POST /api/challan/:draftId/make     { deliveryCode, shipOutside } → prices + numbers the challan
+ *   POST /api/challan/:draftId/make     { origin, deliveryCode, shipOutside } → prices + numbers the challan
  *   POST /api/challan/:draftId/cancel   { reason } → voids the number; prices stay as they are
  *
  * Pricing and numbering are the SAME engine the tags use (ctx.challan → server.js
@@ -41,7 +41,7 @@ const { log } = require('../../core/logger');
 const { verifySessionToken } = require('../after-sales/session_token');
 const serialization = require('../serialization');
 const { SERIAL_DEPS } = require('../serialization/routes');
-const { STORES, missingForMake } = require('./rules');
+const { STORES, DEMO_STORES, isDemo, missingForMake } = require('./rules');
 
 const DOC_TYPE = 'delivery_challan';
 const ISSUED_TAG = 'dc-issued';
@@ -87,9 +87,12 @@ async function upsertText(id, metafields, key, value) {
 }
 
 // Same precedence as assignDocSerial in server.js: a state:XX tag wins over custom.state_code.
+function stateTagOf(draft) {
+  const t = splitTags(draft.tags).find(x => /^state:/i.test(x));
+  return t ? normCode(t.split(':')[1]) : '';
+}
 function originOf(draft, mf) {
-  const stateTag = splitTags(draft.tags).find(t => /^state:/i.test(t));
-  return normCode(stateTag ? stateTag.split(':')[1] : mf.state_code);
+  return stateTagOf(draft) || normCode(mf.state_code);
 }
 
 function customerAddress(draft) {
@@ -123,9 +126,12 @@ function register(app, ctx) {
         preview = { lines: r.preview, total: +r.preview.reduce((s, l) => s + l.challan, 0).toFixed(2) };
       }
       return res.json({
-        ok: true, enabled: challan.enabled, stores: STORES,
+        ok: true, enabled: challan.enabled, stores: STORES, demoStores: DEMO_STORES,
+        demo: isDemo(originOf(draft, mf)),
         draft: { name: draft.name, status: draft.status, total: +parseFloat(draft.total_price || 0).toFixed(2) },
         origin: originOf(draft, mf),
+        // A state:XX tag outranks the metafield in the mint, so the form must not offer to change it.
+        originLocked: Boolean(stateTagOf(draft)),
         deliveryCode: normCode(mf.delivery_code),
         shipOutside: String(mf.ship_outside_codes || '').trim().toLowerCase() === 'yes',
         customerAddress: customerAddress(draft),
@@ -159,7 +165,15 @@ function register(app, ctx) {
 
       const shipOutside = req.body?.shipOutside === true;
       const deliveryCode = shipOutside ? normCode(mf.delivery_code) : normCode(req.body?.deliveryCode);
-      const origin = originOf(draft, mf);
+      // From store: chosen in the form and written to custom.state_code — the same field the
+      // Jewellery Workspace edits, so the tax invoice and every other reader stay in step. A
+      // state:XX tag outranks it in the mint, so a draft carrying one keeps that store.
+      const tagOrigin = stateTagOf(draft);
+      const requested = normCode(req.body?.origin);
+      if (tagOrigin && requested && requested !== tagOrigin) {
+        return res.status(422).json({ ok: false, error: `this draft is tagged state:${tagOrigin}, so it can only send from ${tagOrigin}` });
+      }
+      const origin = tagOrigin || requested || normCode(mf.state_code);
       const address = customerAddress(draft);
       const productLines = (draft.line_items || []).filter(li => parseFloat(li.price) >= 0).length;
 
@@ -167,8 +181,9 @@ function register(app, ctx) {
         const missing = missingForMake({ origin, deliveryCode, shipOutside, address, productLines });
         if (missing.length) return res.status(422).json({ ok: false, error: 'cannot make the challan yet — missing', missing });
 
-        // 1. Where it goes. Written before the number so the printed document and the ledger row
+        // 1. Where it comes from and goes. Written before the number so the printed document and the ledger row
         //    read the same destination.
+        if (!tagOrigin) await upsertText(id, metafields, 'state_code', origin);
         await upsertText(id, metafields, 'ship_outside_codes', shipOutside ? 'Yes' : 'No');
         if (!shipOutside) await upsertText(id, metafields, 'delivery_code', deliveryCode);
       }
@@ -182,7 +197,7 @@ function register(app, ctx) {
         });
         number = r.serial_code;
         if (r.stampErrors?.length) log.warn('challan', `${draft.name}: ${number} minted, stamp errors ${JSON.stringify(r.stampErrors)}`);
-        log.info('challan', `${draft.name}: ${number} issued (${origin} → ${shipOutside ? 'customer' : deliveryCode})`);
+        log.info('challan', `${draft.name}: ${number} issued${isDemo(origin) ? ' [DEMO]' : ''} (${origin} → ${shipOutside ? 'customer' : deliveryCode})`);
       }
 
       // 3. The prices — once, in the same write that adds the dc-issued tag.

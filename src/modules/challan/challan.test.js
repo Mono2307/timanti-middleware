@@ -1,7 +1,7 @@
 // Delivery challan admin action — what must be in place before a number is drawn.
 
 const assert = require('assert');
-const { missingForMake, STORES } = require('./rules');
+const { missingForMake, STORES, isDemo } = require('./rules');
 
 const addr = { name: 'A Customer', line: '1 Road, Pune, MH', province: 'MH' };
 const base = { origin: 'KA-HSR', deliveryCode: 'MH-HQ', shipOutside: false, address: null, productLines: 1 };
@@ -19,5 +19,9 @@ ok('ship outside needs a customer address', () => assert.match(missingForMake({ 
 ok('ship outside ignores the destination store', () =>
   assert.deepStrictEqual(missingForMake({ ...base, shipOutside: true, deliveryCode: '', address: addr }), []));
 ok('an empty draft blocks it', () => assert.match(missingForMake({ ...base, productLines: 0 })[0], /product line/));
+
+ok('the demo store KA-TEST can send', () => assert.deepStrictEqual(missingForMake({ ...base, origin: 'KA-TEST' }), []));
+ok('the demo store can never receive', () => assert.deepStrictEqual(missingForMake({ ...base, deliveryCode: 'KA-TEST' }), ['the destination store']));
+ok('the demo store is not a real store', () => { assert.ok(isDemo('KA-TEST')); assert.ok(!STORES['KA-TEST']); assert.ok(!isDemo('KA-HSR')); });
 
 console.log(`challan: ${n} passed`);

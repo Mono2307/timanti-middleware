@@ -39,6 +39,7 @@ function DeliveryChallan() {
   const [error, setError] = useState("");
   const [stage, setStage] = useState("form"); // form | confirm | cancel
   const [shipOutside, setShipOutside] = useState(false);
+  const [from, setFrom] = useState("");
   const [dest, setDest] = useState("");
   const [reason, setReason] = useState("");
   const [result, setResult] = useState(null); // { kind: 'made'|'cancelled', number, warning? }
@@ -50,8 +51,11 @@ function DeliveryChallan() {
       const body = await middleware(`/api/challan/${draftId}`);
       setS(body);
       setShipOutside(body.shipOutside);
-      const others = Object.keys(body.stores || {}).filter((c) => c !== body.origin);
-      setDest(body.deliveryCode && body.deliveryCode !== body.origin ? body.deliveryCode : (others[0] || ""));
+      const known = { ...(body.stores || {}), ...(body.demoStores || {}) };
+      const start = known[body.origin] ? body.origin : Object.keys(body.stores || {})[0] || "";
+      setFrom(start);
+      const others = Object.keys(body.stores || {}).filter((c) => c !== start);
+      setDest(body.deliveryCode && body.deliveryCode !== start ? body.deliveryCode : (others[0] || ""));
     } catch (e) {
       setError(e.message);
     } finally {
@@ -66,7 +70,7 @@ function DeliveryChallan() {
     try {
       const body = await middleware(`/api/challan/${draftId}/make`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ shipOutside, deliveryCode: shipOutside ? "" : dest }),
+        body: JSON.stringify({ origin: from, shipOutside, deliveryCode: shipOutside ? "" : dest }),
       });
       setResult({ kind: "made", number: body.number });
     } catch (e) {
@@ -125,7 +129,15 @@ function DeliveryChallan() {
   }
 
   const c = s.challan;
-  const storeName = (code) => s.stores?.[code] || code || "—";
+  const storeName = (code) => s.stores?.[code] || s.demoStores?.[code] || code || "—";
+  // Demo-only From store (KA-TEST): its own DC-KATEST book, never a real store's numbers.
+  // Active/cancelled screens describe the stored From; the form describes the one being picked.
+  const isDemoCode = (code) => Boolean(s.demoStores?.[code]);
+  const demoBanner = (c && c.status === "active" ? s.demo : isDemoCode(from)) ? (
+    <s-banner tone="info" heading="Demo store (KA-TEST)">
+      This challan comes from the demo book (DC-KATEST-…), not from a real store. It prints as a demo document.
+    </s-banner>
+  ) : null;
 
   // ── Already cancelled ──
   if (c && c.status === "cancelled") {
@@ -163,6 +175,7 @@ function DeliveryChallan() {
     return (
       <s-admin-action heading={heading}>
         <s-stack direction="block" gap="base">
+          {demoBanner}
           {error ? <s-banner tone="critical">{error}</s-banner> : null}
           {c.priced ? (
             <s-banner tone="success" heading={`Challan ${c.number} is active`}>
@@ -185,10 +198,16 @@ function DeliveryChallan() {
   }
 
   // ── No challan yet ──
-  const others = Object.keys(s.stores || {}).filter((code) => code !== s.origin);
+  const others = Object.keys(s.stores || {}).filter((code) => code !== from);
+  const fromOptions = [...Object.keys(s.stores || {}), ...Object.keys(s.demoStores || {})];
+  const pickFrom = (code) => {
+    setFrom(code);
+    if (dest === code) setDest(Object.keys(s.stores || {}).find((x) => x !== code) || "");
+  };
   const missing = [];
   if (!s.enabled) missing.push("delivery challans are switched off on the server");
-  if (!s.stores?.[s.origin]) missing.push("From store: set Store / State Code (KA-HSR or MH-HQ) in Metafield Manager, then reopen this");
+  if (!s.stores?.[from] && !s.demoStores?.[from]) missing.push("a From store");
+  if (!shipOutside && dest && dest === from) missing.push("a To store different from the From store");
   if (shipOutside && !s.customerAddress) missing.push("a customer shipping or billing address with a state on this draft");
   if (!shipOutside && !dest) missing.push("a destination store");
   if (!s.preview?.lines?.length) missing.push("at least one product line on the draft");
@@ -198,12 +217,13 @@ function DeliveryChallan() {
     return (
       <s-admin-action heading={heading}>
         <s-stack direction="block" gap="base">
+          {demoBanner}
           <s-banner tone="warning" heading="Make the delivery challan?">
-            This draws the next DC number from {storeName(s.origin)}'s book and reprices this draft to the
+            This draws the next DC number from {storeName(from)}'s book and reprices this draft to the
             challan value (gold and making in full, diamonds at 50%). The number cannot be taken back,
             only cancelled.
           </s-banner>
-          <s-text>From: {storeName(s.origin)}</s-text>
+          <s-text>From: {storeName(from)}</s-text>
           <s-text>To: {destination}</s-text>
           <Preview preview={s.preview} current={s.draft.total} />
         </s-stack>
@@ -216,8 +236,15 @@ function DeliveryChallan() {
   return (
     <s-admin-action heading={heading}>
       <s-stack direction="block" gap="base">
+        {demoBanner}
         {error ? <s-banner tone="critical">{error}</s-banner> : null}
-        <s-text>From: <s-text type="strong">{storeName(s.origin)}</s-text></s-text>
+        {s.originLocked ? (
+          <s-text>From: <s-text type="strong">{storeName(from)}</s-text> (set by this draft's state: tag)</s-text>
+        ) : (
+          <s-select label="From store" value={from} onChange={(e) => pickFrom(val(e))}>
+            {fromOptions.map((code) => <s-option value={code}>{storeName(code)}</s-option>)}
+          </s-select>
+        )}
         <s-checkbox label="Ship outside — deliver to the customer's address, not to a store" checked={shipOutside}
           onChange={(e) => setShipOutside(Boolean(e?.currentTarget?.checked ?? e?.target?.checked))} />
         {shipOutside ? (

@@ -11,10 +11,21 @@ const STORES = {
   'MH-HQ':  'Mumbai HQ (MH-HQ)',
 };
 
+// DEMO ONLY. A From store whose challans draw from their own book (DC-KATEST-0001…), so a demo or
+// UAT never spends a real store's numbers. It can send goods but never receive them, and the
+// template prints its challan as a demo document. Added 2026-11-09 for the UAT demo; to retire it,
+// empty this object (and drop the KATEST branch from the template).
+const DEMO_STORES = {
+  'KA-TEST': 'KA-TEST (demo only, not a real store)',
+};
+
+const isOrigin = (code) => Boolean(STORES[code] || DEMO_STORES[code]);
+const isDemo   = (code) => Boolean(DEMO_STORES[code]);
+
 /** What is missing before a challan can be made. */
 function missingForMake({ origin, deliveryCode, shipOutside, address, productLines }) {
   const m = [];
-  if (!STORES[origin]) m.push(origin ? `the From store "${origin}" is not KA-HSR or MH-HQ (set Store / State Code in Metafield Manager)` : 'the From store (set Store / State Code in Metafield Manager)');
+  if (!isOrigin(origin)) m.push(origin ? `the From store "${origin}" is not KA-HSR or MH-HQ (set Store / State Code in Metafield Manager)` : 'the From store (set Store / State Code in Metafield Manager)');
   if (shipOutside) {
     if (!address) m.push('a customer shipping or billing address with a state, because Ship outside is on');
   } else if (!STORES[deliveryCode]) {
@@ -26,4 +37,4 @@ function missingForMake({ origin, deliveryCode, shipOutside, address, productLin
   return m;
 }
 
-module.exports = { STORES, missingForMake };
+module.exports = { STORES, DEMO_STORES, isOrigin, isDemo, missingForMake };
