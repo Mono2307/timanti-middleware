@@ -1,5 +1,7 @@
 # Buy Plan: edge-case coverage matrix (9 Nov 2026)
 
+Plain-language version for staff and the founder: `docs/BUY-PLAN-EDGE-CASES.md`. Rows updated for `0d2f06a` (Cancel plan, single-plan sweep, link cancelled on close); the counts below are from before it.
+
 Every edge case we could find, checked against the **code** (not its comments) at `11bdd84` plus the
 uncommitted work in progress. Rules: `docs/BUY-PLAN-CONTEXT.md` and the founder decisions.
 Line numbers are as of 9 Nov 2026. `server.js` was being edited at the same time, so its numbers may drift
@@ -169,7 +171,7 @@ on the happy path, but a nearby variant fails or needs manual work. **Not covere
 | PL-3 | GoKwik cancel fails but the row is marked cancelled → the customer pays the old link | Not covered | `links.js:53` only logs a warning. The webhook finds no open link → payment dropped, or credited at the newer link's amount. | | |
 | PL-4 | Replayed or duplicate `success` webhook | Partial | Harmless with one link (it's now `success`). Credits again if a newer open link exists. No transaction-id check. | Replay a captured webhook body | |
 | PL-5 | Webhook signature not verified | Not covered | `server.js` gokwik-webhook. Capture only (`gokwik_webhook_log`). | | Verify first (memory: pending) |
-| PL-6 | Closing a plan doesn't cancel its open link | Not covered | `forfeit.js:22-47` | Close (real run) → `payment_links` status | |
+| PL-6 | Closing a plan doesn't cancel its open link | Covered (0d2f06a) | `forfeit.js` releaseDraft → `links.js` cancelOpenLinks | Close (real run) → `payment_links` status | |
 | PL-7 | `expired` or `cancelled` webhook marks *all* open links on the draft | Partial | `server.js` gokwik-webhook. Fine with one link per plan. | | |
 | PL-8 | Pay page: tampered or expired token, plan not active, draft missing | Covered | `links.js:34`, `routes.js:309-322` | UAT 8 | |
 | PL-9 | Pay page reported broken | Partial | Investigating (UAT doc request 2) | UAT 8 | |
@@ -222,9 +224,9 @@ on the happy path, but a nearby variant fails or needs manual work. **Not covere
 | MC-3 | Last installment +30 days → closed; warnings at 15 and 25 | Covered | `schedule.js:164-169` | UAT 17 | |
 | MC-4 | Any payment restarts the clock | Covered | schedule.test | UAT 14 | |
 | MC-5 | Closed draft released (tags off, `buy-plan-closed`) | Partial | `forfeit.js:38-41`. `plan_total` and `plan_due_dates` stay on the draft. | Read the tags and metafields after closing | |
-| MC-6 | Customer pays the warning-email link after closing | Not covered | See PL-6. Money lands on the released draft, outside the voucher. | | |
+| MC-6 | Customer pays the warning-email link after closing | Partial | The link is now cancelled on close (0d2f06a). Still open if GoKwik's cancel fails (PL-3), and the webhook doesn't check plan status (PI-11). | | |
 | MC-7 | Closed draft must be deleted by hand | Store | Store email | | |
-| MC-8 | Sweep with a future `asOf` touches all plans | Building | Single-plan filter | | |
+| MC-8 | Sweep with a future `asOf` touches all plans | Covered (0d2f06a) | `draft=D327` runs one plan, never sends the digest (`sweep.js` planMatches) | sweep.test | |
 
 ### Vouchers (VO)
 | # | Case | Status | Where | How to test | Decision |
@@ -267,7 +269,7 @@ on the happy path, but a nearby variant fails or needs manual work. **Not covere
 ### Cancellation (CA)
 | # | Case | Status | Where | How to test | Decision |
 |---|---|---|---|---|---|
-| CA-1 | Cancel plan: customer opted out (voucher for verified money) or demo / staff mistake (no voucher) | Building | (main thread) | | Requirements: see "What this means for Cancel plan" above |
+| CA-1 | Cancel plan: customer opted out (voucher for verified money) or demo / staff mistake (no voucher) | Covered (0d2f06a) | `cancel.js`, `routes.js` cancelHandler, `BuyPlan.jsx` | cancel.test; live: cancel a demo draft | Still open: per-payment source list, partial verification (D5), plan_total/plan_due_dates left on the draft, change-voucher double count (PC-6) |
 | CA-2 | Pay page on a cancelled plan | Covered | `routes.js:317` "no longer active" | | |
 
 ### Messages (MS)
