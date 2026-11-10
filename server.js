@@ -36,6 +36,7 @@ const discountBreakup = require('./src/modules/pricing/discount_breakup');
 const { startLoyaltySweep } = require('./src/modules/loyalty/sweep');
 const { startBuyPlanSweep } = require('./src/modules/payments/buy-plan/sweep');
 const { restoreDeletedPlanDraft } = require('./src/modules/payments/buy-plan/restore');
+const { conversionBlock: buyPlanConversionBlock } = require('./src/modules/payments/buy-plan/convert');
 
 const app = express();
 app.use(cors());
@@ -84,6 +85,9 @@ app.post('/api/webhooks/typeform/customer-capture',
 
 async function completeShopifyOrder(shopifyDraftId, transactionDbId) {
   try {
+    // A buy-plan draft still owing money is never converted (founder, 2026-11-09).
+    const planBlock = await buyPlanConversionBlock(shopifyDraftId).catch(e => { console.error(`buy-plan conversion check: ${e.message}`); return null; });
+    if (planBlock) { console.warn(`⛔ not converting ${shopifyDraftId}: ${planBlock}`); return null; }
     const token = await getShopifyToken();
     const shopifyResponse = await axios.put(
       `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${shopifyDraftId}/complete.json`,
@@ -4443,6 +4447,8 @@ app.post('/api/convert-to-order', async (req, res) => {
   const { draftOrderId } = req.body;
   if (!draftOrderId) return res.status(400).json({ success: false, error: 'draftOrderId required' });
   try {
+    const planBlock = await buyPlanConversionBlock(draftOrderId).catch(e => { console.error(`buy-plan conversion check: ${e.message}`); return null; });
+    if (planBlock) return res.status(409).json({ success: false, error: planBlock });
     const orderId = await completeShopifyOrder(draftOrderId, null);
     if (!orderId) return res.status(500).json({ success: false, error: 'Shopify conversion failed — check logs' });
     return res.json({ success: true, orderId });

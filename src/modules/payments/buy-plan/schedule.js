@@ -37,6 +37,7 @@ const { addMonths } = require('../../adjustments/cad_advance');
 const PLAN_INSTALLMENTS = 6;
 const INSTALLMENT_CHOICES = [4, 5, 6];
 const MIN_PAYMENT = 1000;
+const MAX_PAYMENTS = 6;
 const CLOSE_AFTER_DAYS = 60;
 const WARN_DAYS = [30, 45];
 const LAST_CLOSE_AFTER_DAYS = 30;
@@ -170,13 +171,20 @@ function planState(plan, legs, today = new Date().toISOString()) {
   }
   const close = Boolean(closeOn && now >= closeOn);
 
+  // At most MAX_PAYMENTS payments on a plan (founder, 2026-11-09): each takes its own slot and there
+  // are six. Once five are in, the next one must clear the balance.
+  const payments = (legs || []).filter(l => r0(l && l.value) > 0).length;
+  const lastPayment = balance > 0 && payments >= MAX_PAYMENTS - 1;
+
   const state = {
     n, k, dates, total, paid, balance, credit, dueNow, upcoming, paidIn, lastPaidOn,
     closure: { overdueSince, closeOn, close, warn },
-    // The smallest payment a link may be raised for; the balance when less is left.
-    minPayment: balance > 0 ? Math.min(MIN_PAYMENT, balance) : 0,
+    payments, lastPayment,
+    // The smallest payment a link may be raised for; the balance when less is left, and the whole
+    // balance once only one payment is left.
+    minPayment: balance > 0 ? (lastPayment ? balance : Math.min(MIN_PAYMENT, balance)) : 0,
     // What staff and the customer are pointed at: what is due now, else the next installment.
-    suggested: balance > 0 ? (dueNow || (upcoming ? upcoming.amount : balance)) : 0,
+    suggested: balance > 0 ? (lastPayment ? balance : (dueNow || (upcoming ? upcoming.amount : balance))) : 0,
   };
   state.rows = scheduleRows(plan, state, now, A);
   return state;
@@ -220,6 +228,7 @@ function validatePayment(state, amount) {
   const min = state.minPayment;
   const max = state.balance;
   if (max <= 0) return { ok: false, reason: 'Plan is fully paid', min: 0, max: 0 };
+  if (state.lastPayment && amt !== max) return { ok: false, reason: `Five payments have been made, so this one must be the whole balance, Rs${max.toLocaleString('en-IN')}`, min, max };
   if (amt < min) return { ok: false, reason: `The smallest payment is Rs${min.toLocaleString('en-IN')}`, min, max };
   if (amt > max) return { ok: false, reason: `The most you can pay is the balance, Rs${max.toLocaleString('en-IN')}`, min, max };
   return { ok: true, amount: amt };

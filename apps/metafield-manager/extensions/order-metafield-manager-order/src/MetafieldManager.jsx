@@ -323,6 +323,15 @@ function isBuyPlan(tags) {
   return (tags ?? []).some((t) => ["buy-plan", "ot:buy-plan"].includes(String(t).trim().toLowerCase()));
 }
 
+// On a buy-plan DRAFT every payment goes through Buy plan → Record payment (founder, 2026-11-09), so
+// the installment slots are read-only there: an amount typed here has no payment record behind it,
+// and the plan's schedule reads the slots. On the order they stay editable (money still owed on a
+// plan converted early is collected against the order).
+const PLAN_SLOT = /^installment_\d+_(value|mode|date)$/;
+const lockedOnPlan = (key, scope, buyPlan) => buyPlan && scope === "draft" && PLAN_SLOT.test(key);
+const planSlotLabel = (key, label, scope, buyPlan) =>
+  lockedOnPlan(key, scope, buyPlan) && key === "installment_1_value" ? `${label} (buy plan: record payments on the Buy plan screen)` : label;
+
 function buildSections(scope, tags) {
   const buyPlan = isBuyPlan(tags);
   const inScope = fieldsForScope(scope).filter((key) => buyPlan || !FIELD_CONFIG[key].buyPlanOnly);
@@ -331,8 +340,8 @@ function buildSections(scope, tags) {
   // Required staff inputs → single top section, in REQUIRED_FIELDS priority order.
   const requiredFields = REQUIRED_FIELDS.filter((key) => inScopeSet.has(key)).map((key) => ({
     key,
-    label: FIELD_CONFIG[key].label,
-    editable: FIELD_CONFIG[key].editable,
+    label: planSlotLabel(key, FIELD_CONFIG[key].label, scope, buyPlan),
+    editable: FIELD_CONFIG[key].editable && !lockedOnPlan(key, scope, buyPlan),
     required: true,
     disabledWhen: FIELD_CONFIG[key].disabledWhen,
     disabledNote: FIELD_CONFIG[key].disabledNote,
@@ -349,7 +358,8 @@ function buildSections(scope, tags) {
     // disabledWhen/disabledNote must be carried through: this function rebuilds a NEW object per
     // field rather than passing the config along, so anything not named here is silently dropped
     // and a cross-field rule goes quiet with nothing failing. That shipped once already.
-    (bySection[cfg.section] ||= []).push({ key, label: cfg.label, editable: cfg.editable, required: cfg.required,
+    (bySection[cfg.section] ||= []).push({ key, label: planSlotLabel(key, cfg.label, scope, buyPlan),
+      editable: cfg.editable && !lockedOnPlan(key, scope, buyPlan), required: cfg.required,
       disabledWhen: cfg.disabledWhen, disabledNote: cfg.disabledNote });
   }
   const topical = SECTION_ORDER.filter((title) => bySection[title]?.length).map((title) => ({

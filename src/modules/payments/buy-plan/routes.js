@@ -80,7 +80,8 @@ async function view(d, plan) {
     const st = S.planState(plan, d.legs, today);
     const planKey = plan.lines_key || linesKey((plan.snapshot || {}).line_items);
     const piecesChanged = Boolean(planKey) && linesKey(d.draft.line_items) !== planKey;
-    const due = credit.voucherDue(plan, st);
+    const due = credit.voucherDue(plan, st, d);
+    const records = await store.listPayments(d.id);
     return {
       ok: true, draft: d.draft.name, customer: d.customer, plan: {
         status: plan.status, mode: plan.mode, n: st.n, total: st.total, startTotal: Number(plan.total),
@@ -94,14 +95,18 @@ async function view(d, plan) {
         voucherCode: plan.voucher_code || null, voucherValue: Number(plan.voucher_value) || null,
         voucherCodes: credit.codesOf(plan), vouchered: credit.vouchered(plan),
         // What staff may issue now (Issue voucher), and what a Customer-opted-out cancel would issue.
-        voucherDue: due.amount, voucherKind: due.kind, cancelVoucher: Math.max(0, st.paid - credit.vouchered(plan)),
+        voucherDue: due.amount, voucherKind: due.kind, cancelVoucher: credit.payout(plan, st, d),
+        // For the per-payment check before a close/cancel voucher: each payment and its source, and
+        // the old gold / exchange note that go into that voucher on top.
+        slots: credit.paymentSlots(d.legs, records), handedIn: credit.handedIn(d),
+        payments: st.payments, lastPayment: st.lastPayment,
         // The changed pieces at their catalog prices — a guide before Change product is pressed.
         newPiecesEstimate: piecesChanged ? Math.round(parseFloat(d.draft.total_price) || 0) : null,
         closedReason: plan.closed_reason || null, closedAt: plan.closed_at || null, changePending: Boolean(plan.change_pending),
         piecesChanged,
       },
       rows: st.rows,
-      payments: await store.listPayments(d.id),
+      payments: records,
       storeModes: STORE_MODES,
     };
   }
@@ -150,6 +155,7 @@ async function activePlan(d) {
   const plan = await planOn(d.id);
   if (!plan) { const e = new Error(`${d.draft.name} has no buy plan`); e.status = 404; throw e; }
   if (plan.status !== 'active') { const e = new Error(`This buy plan is ${plan.status}`); e.status = 409; throw e; }
+  await store.syncContact(plan, d.customer);   // messages go to the customer as they are now
   return plan;
 }
 
@@ -321,6 +327,7 @@ async function cancelHandler(req, res) {
     if (req.body?.confirm !== true) return res.status(400).json({ ok: false, error: 'Confirm the cancellation first' });
     const r = await cancelPlan(plan, d, {
       kind: String(req.body?.kind || ''), moneyReceived: req.body?.moneyReceived === true,
+      verifiedSlots: Array.isArray(req.body?.verifiedSlots) ? req.body.verifiedSlots : null,
       note: req.body?.note, by: req.staff?.sub ? String(req.staff.sub) : null, today: todayIst(),
     });
     sheet.pushSoon();
@@ -337,7 +344,10 @@ async function issueVoucherHandler(req, res) {
     if (!plan) return res.status(404).json({ ok: false, error: `${d.draft.name} has no buy plan` });
     if (req.body?.confirm !== true) return res.status(400).json({ ok: false, error: 'Tick the confirmation first' });
     const today = todayIst();
-    const r = await credit.issueStaffVoucher(plan, d, S.planState(plan, d.legs, today), { today, by: req.staff?.sub ? String(req.staff.sub) : null });
+    const r = await credit.issueStaffVoucher(plan, d, S.planState(plan, d.legs, today), {
+      today, by: req.staff?.sub ? String(req.staff.sub) : null,
+      verifiedSlots: Array.isArray(req.body?.verifiedSlots) ? req.body.verifiedSlots : null,
+    });
     sheet.pushSoon();
     return res.json({ ok: true, ...r });
   } catch (e) { return fail(res, e, 'issue-voucher'); }
@@ -378,6 +388,7 @@ async function loadForPayPage(token) {
   }
   const d = await readDraft(plan.draft_order_id);
   if (!d) return { error: 'This plan is being updated. Please try again in a few minutes or contact the store.' };
+  await store.syncContact(plan, d.customer);
   return { plan, d, state: S.planState(plan, d.legs, todayIst()) };
 }
 
@@ -386,7 +397,9 @@ function payForm(token, plan, state, error = '', amount = '') {
     : state.upcoming ? `Next installment: ${inr(state.upcoming.amount)} on ${escHtml(state.upcoming.due)}` : '';
   return page('Pay your buy plan', `
     <h1>Buy plan ${escHtml(plan.draft_name)}</h1>
-    <p class="muted">Pay any amount from ${inr(state.minPayment)}. Paying more makes the installments after it smaller; paying less makes them larger.${S.awaitingFinalPrice(plan) ? " Your last installment is worked out 3 days before it is due, at that day&#39;s gold rate." : ""}</p>
+    <p class="muted">${state.lastPayment
+      ? `Five payments have been made on this plan, so this payment is the whole balance, ${inr(state.balance)}.`
+      : `Pay any amount from ${inr(state.minPayment)}. Paying more makes the installments after it smaller; paying less makes them larger.`}${S.awaitingFinalPrice(plan) ? " Your last installment is worked out 3 days before it is due, at that day&#39;s gold rate." : ""} A copy of the payment link is also sent to your phone and email.</p>
     <div class="row"><span>Paid so far</span><span>${inr(state.paid)}</span></div>
     <div class="row"><span>Balance</span><strong>${inr(state.balance)}</strong></div>
     ${due ? `<div class="row"><span>${due.split(':')[0]}</span><span>${due.slice(due.indexOf(':') + 2)}</span></div>` : ''}
@@ -417,6 +430,12 @@ async function payPagePost(req, res) {
     if (!check.ok) return res.status(400).send(payForm(req.params.token, r.plan, r.state, check.reason, req.body?.amount));
     const link = await createPlanLink(r.plan, check.amount);
     log.info('buy-plan', `${r.plan.draft_name}: customer chose Rs${check.amount} on the pay page`);
+    // The link opens now, and a copy goes by SMS + email: their earlier link was just cancelled, so
+    // closing this tab must not leave them without one.
+    const st = r.state;
+    const next = st.dueNow > 0 ? { k: st.k, due: st.dates[st.k - 1] } : (st.upcoming || { k: st.k, due: st.dates[st.k - 1] });
+    notify.sendLink(r.plan, r.d, link, { k: next.k, dueDate: next.due, chosen: true })
+      .catch(e => log.error('buy-plan', `${r.plan.draft_name}: pay-page link copy: ${e.message}`));
     return res.redirect(303, link.shortUrl);
   } catch (e) {
     log.error('buy-plan', `pay page post: ${e.message}`);

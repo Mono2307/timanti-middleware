@@ -88,16 +88,26 @@ async function sendFinalCredit(plan, d, credit, { why = 'final', oldTotal, newTo
 
 // A payment link for installment k: by SMS (as every payment link is) and by email with the plan.
 // relink: the link sent earlier is about to lapse (GoKwik links last 30 days); this is its replacement.
-async function sendLink(plan, d, link, { k, dueDate, overdue = false, today, relink = false } = {}) {
+// chosen: the customer picked the amount on the pay page; this is their copy of the link it opened.
+// whole: five payments are in, so this link (replacing a smaller one) is for the whole balance.
+async function sendLink(plan, d, link, { k, dueDate, overdue = false, today, relink = false, chosen = false, whole = false } = {}) {
   const st = stateOf(plan, d, today);
   const n = st.n;
   const phone = phoneOf(plan.customer_phone);
   if (phone) {
-    await sendSMS(phone, `Timanti buy plan ${plan.draft_name}: installment ${k} of ${n}, ${rupees(link.amount)}${overdue ? ' (overdue)' : ''}. ${relink ? 'New payment link (the earlier one is expiring)' : 'Pay'}: ${link.shortUrl}`);
+    await sendSMS(phone, whole
+      ? `Timanti buy plan ${plan.draft_name}: five payments are in, so the next one is the whole balance, ${rupees(link.amount)}. Your earlier link no longer works. Pay: ${link.shortUrl}`
+      : chosen
+      ? `Timanti buy plan ${plan.draft_name}: your payment link for ${rupees(link.amount)}, the amount you chose. Pay: ${link.shortUrl}`
+      : `Timanti buy plan ${plan.draft_name}: installment ${k} of ${n}, ${rupees(link.amount)}${overdue ? ' (overdue)' : ''}. ${relink ? 'New payment link (the earlier one is expiring)' : 'Pay'}: ${link.shortUrl}`);
   }
   await sendEmail({
     to: plan.customer_email,
-    subject: relink
+    subject: whole
+      ? `Your last buy plan payment: the whole balance, ${rupees(link.amount)} (${plan.draft_name})`
+      : chosen
+      ? `Your payment link for ${rupees(link.amount)} (${plan.draft_name})`
+      : relink
       ? `A new payment link for installment ${k} on your buy plan (${plan.draft_name})`
       : overdue
       ? `Installment ${k} on your buy plan is overdue (${plan.draft_name})`
@@ -120,6 +130,18 @@ async function sendReceived(plan, d, amount, { today } = {}) {
       nextK: next ? next.k : null, nextDue: next ? next.due : null, nextAmount: next ? next.amount : 0,
       customPayUrl: st.balance > 0 ? customPayUrl(plan.id) : null,
       mode: plan.mode, finalDate: finalDate(plan), awaitingFinal: S.awaitingFinalPrice(plan),
+    }),
+  });
+}
+
+// Internal: the draft became an order while money was still owed (sweep.js).
+async function sendConvertedOwing(plan, d, owed) {
+  await sendEmail({
+    to: STORE(), internal: true,
+    subject: `Buy plan ${plan.draft_name} converted with ${rupees(owed)} still owed`,
+    html: T.buildBuyPlanConvertedOwingHtml({
+      draftName: plan.draft_name, adminUrl: d ? adminDraftUrl(d.id) : '', customerName: plan.customer_name,
+      phone: plan.customer_phone, owed, total: S.currentTotal(plan),
     }),
   });
 }
@@ -277,6 +299,6 @@ async function sendRestored({ plan, oldName, newName, newId, d }) {
 }
 
 module.exports = {
-  sendStarted, sendGoldLink, sendLink, sendReceived, sendCompleted, sendFinalPrice, sendFinalCredit,
+  sendStarted, sendGoldLink, sendLink, sendReceived, sendCompleted, sendConvertedOwing, sendFinalPrice, sendFinalCredit,
   sendClosingSoon, sendForfeited, sendVoucherIssued, sendCancelled, sendChanged, sendLinesChanged, sendPricePutBack, sendStaffDigest, sendRestored, whatsappUrl,
 };

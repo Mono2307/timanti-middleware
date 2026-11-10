@@ -96,6 +96,37 @@ function Payments({ list }) {
   );
 }
 
+// Where a payment came from, so staff can check it before a voucher is made (credit.js paymentSlots).
+function sourceLabel(s) {
+  if (s.source === "gokwik") return `online payment link${s.ref ? ` (UTR ${s.ref})` : ""}`;
+  if (s.source === "pine") return `card terminal${s.ref ? ` (ref ${s.ref})` : ""}`;
+  if (s.source === "buy-plan") return "recorded in store on this screen";
+  if (s.source) return `recorded as ${s.source}`;
+  return "no payment record (typed into the Metafield Manager)";
+}
+
+// One tick per payment: the voucher is only the payments staff have checked really came in, plus
+// old gold / exchange note handed in, less any voucher already issued on the plan.
+function VerifyPayments({ plan, ticked, onToggle }) {
+  const slots = plan.slots || [];
+  const h = plan.handedIn || {};
+  return (
+    <s-stack direction="block" gap="small-200">
+      {slots.length ? <s-text>Tick each payment you have checked actually reached Timanti (bank statement, GoKwik, or the cash drawer):</s-text> : null}
+      {slots.map((s) => (
+        <s-checkbox
+          label={`Payment ${s.slot}: ${inr(s.amount)} on ${fmtDate(s.date)}${s.mode ? ` · ${MODE_NAMES[s.mode] || s.mode}` : ""} — ${sourceLabel(s)}`}
+          checked={Boolean(ticked[s.slot])} onChange={(e) => onToggle(s.slot, checked(e))} />
+      ))}
+      {h.oldGold > 0 ? <s-text>Old gold handed in: {inr(h.oldGold)} (included)</s-text> : null}
+      {h.exchangeNote > 0 ? <s-text>Exchange note handed in: {inr(h.exchangeNote)} (included)</s-text> : null}
+      {plan.vouchered > 0 ? <s-text color="subdued">Already given back on voucher {plan.voucherCodes.join(", ")}: {inr(plan.vouchered)} (taken off)</s-text> : null}
+    </s-stack>
+  );
+}
+const verifiedPayout = (plan, ticked) => Math.max(0,
+  (plan.slots || []).filter((s) => ticked[s.slot]).reduce((sum, s) => sum + s.amount, 0) + (plan.handedIn?.total || 0) - (plan.vouchered || 0));
+
 function BuyPlan() {
   const draftId = String(shopify.data?.selected?.[0]?.id || "").replace(/\D/g, "");
   const [data, setData] = useState(null);
@@ -111,10 +142,12 @@ function BuyPlan() {
   const [storeMode, setStoreMode] = useState("card");
   const [changeAgreed, setChangeAgreed] = useState(false);
   const [cancelKind, setCancelKind] = useState(null);
-  const [moneyChecked, setMoneyChecked] = useState(false);
   const [cancelAgreed, setCancelAgreed] = useState(false);
   const [cancelNote, setCancelNote] = useState("");
   const [voucherAgreed, setVoucherAgreed] = useState(false);
+  const [ticked, setTicked] = useState({});
+  const toggle = (slot, on) => setTicked((t) => ({ ...t, [slot]: on }));
+  const verifiedSlots = () => Object.keys(ticked).filter((k) => ticked[k]).map(Number);
 
   function take(body) {
     setData(body);
@@ -171,19 +204,20 @@ function BuyPlan() {
   });
 
   const issueVoucher = () => run(async () => {
-    const body = await post("/api/buy-plan/issue-voucher", { draftId, confirm: true });
+    const body = await post("/api/buy-plan/issue-voucher", { draftId, confirm: true, verifiedSlots: verifiedSlots() });
     setVoucherAgreed(false);
+    setTicked({});
     setNotice(body.kind === "closed"
       ? `Voucher ${body.voucher.code} for ${inr(body.voucher.value)} issued and emailed to the customer. Now delete this draft; do not complete it.`
       : `Voucher ${body.voucher.code} for ${inr(body.voucher.value)} issued and emailed to the customer. The plan is settled: complete the draft.`);
     await load();
   });
 
-  const pickCancel = (k) => { setCancelKind(k); setMoneyChecked(false); setCancelAgreed(false); };
+  const pickCancel = (k) => { setCancelKind(k); setCancelAgreed(false); setTicked({}); };
 
   const cancelPlan = () => run(async () => {
     const body = await post("/api/buy-plan/cancel", {
-      draftId, kind: cancelKind, moneyReceived: moneyChecked, note: cancelNote, confirm: true,
+      draftId, kind: cancelKind, verifiedSlots: verifiedSlots(), note: cancelNote, confirm: true,
     });
     setCancelKind(null);
     setNotice(cancelKind === "mistake"
@@ -290,17 +324,17 @@ function BuyPlan() {
                   <s-text>
                     {plan.closedReason ? `Closed: ${plan.closedReason}. ` : ""}
                     {plan.voucherDue > 0
-                      ? `${inr(plan.voucherDue)} paid is owed back to the customer as a voucher (one year, one purchase of at least its value). Nothing has been sent to them yet. Do not delete this draft until the voucher is issued.`
+                      ? "What was paid (and any old gold or exchange note handed in) is owed back to the customer as a voucher (one year, one purchase of at least its value). Nothing has been sent to them yet. Do not delete this draft until the voucher is issued."
                       : plan.voucherCodes?.length
                       ? `Voucher ${plan.voucherCodes.join(", ")} has been issued. Delete this draft; do not complete it.`
                       : "Nothing was paid. Delete this draft."}
                   </s-text>
                   {plan.voucherDue > 0 ? (
                     <s-stack direction="block" gap="small-200">
-                      <s-checkbox
-                        label={`I have checked that ${inr(plan.voucherDue)} actually reached Timanti (bank, GoKwik or the cash drawer), not just recorded here`}
-                        checked={voucherAgreed} onChange={(e) => setVoucherAgreed(checked(e))} />
-                      <s-button onClick={issueVoucher} loading={busy} disabled={Boolean(busy || !voucherAgreed)}>Issue voucher for {inr(plan.voucherDue)}</s-button>
+                      <VerifyPayments plan={plan} ticked={ticked} onToggle={toggle} />
+                      <s-button onClick={issueVoucher} loading={busy} disabled={Boolean(busy || !(verifiedPayout(plan, ticked) > 0))}>
+                        Issue voucher for {inr(verifiedPayout(plan, ticked))}
+                      </s-button>
                     </s-stack>
                   ) : null}
                 </s-stack>
@@ -391,6 +425,11 @@ function BuyPlan() {
             {active && plan.balance > 0 ? (
               <s-stack direction="block" gap="small-200">
                 <s-divider />
+                {plan.lastPayment ? (
+                  <s-banner tone="warning" heading={`Five payments made: the next one must be the whole balance, ${inr(plan.balance)}`}>
+                    A plan takes at most six payments. Links and the customer's pay page ask for the whole balance from now on.
+                  </s-banner>
+                ) : null}
                 <s-text type="strong">Record a payment taken in store</s-text>
                 <s-stack direction="inline" gap="small-200" alignItems="end">
                   <s-number-field label="Amount" min={String(plan.minPayment)} max={String(plan.balance)} step="1"
@@ -430,17 +469,16 @@ function BuyPlan() {
                   <s-button variant={cancelKind === "mistake" ? "primary" : "secondary"} onClick={() => pickCancel("mistake")}>Demo or staff mistake</s-button>
                 </s-stack>
                 {cancelKind === "opted_out" ? (
-                  <s-banner tone="warning" heading={plan.cancelVoucher > 0 ? `Voucher for ${inr(plan.cancelVoucher)}` : "Nothing to give back"}>
+                  <s-banner tone="warning" heading={verifiedPayout(plan, ticked) > 0 ? `Voucher for ${inr(verifiedPayout(plan, ticked))}` : "No voucher yet"}>
                     <s-stack direction="block" gap="small-200">
                       <s-text>
                         {plan.cancelVoucher > 0
-                          ? `Everything paid${plan.vouchered > 0 ? ` not already given back` : ""}, ${inr(plan.cancelVoucher)}, becomes a voucher for the customer: valid one year, for one purchase worth at least its value. No cash refund. The customer is emailed.`
+                          ? "The payments you tick below, plus any old gold or exchange note handed in, become one voucher for the customer: valid one year, for one purchase worth at least its value. No cash refund. The customer is emailed."
                           : "Nothing is owed back, so there is no voucher. The customer is emailed that the plan is cancelled."}
                       </s-text>
-                      {plan.cancelVoucher > 0 ? (
-                        <s-checkbox
-                          label={`I have checked that ${inr(plan.cancelVoucher)} actually reached Timanti (bank, GoKwik or the cash drawer), not just recorded here`}
-                          checked={moneyChecked} onChange={(e) => setMoneyChecked(checked(e))} />
+                      {plan.cancelVoucher > 0 ? <VerifyPayments plan={plan} ticked={ticked} onToggle={toggle} /> : null}
+                      {plan.slots?.length && !verifiedSlots().length ? (
+                        <s-text color="subdued">No payment ticked: the voucher will not include any money paid.</s-text>
                       ) : null}
                       {plan.cancelVoucher > 0 ? (
                         <s-text color="subdued">If the payments were only recorded for a demo or by mistake, choose Demo or staff mistake instead.</s-text>
@@ -460,8 +498,8 @@ function BuyPlan() {
                     <s-text-field label="Note (optional)" value={cancelNote} onInput={(e) => setCancelNote(val(e))} />
                     <s-checkbox label="Cancel this buy plan. This cannot be undone." checked={cancelAgreed} onChange={(e) => setCancelAgreed(checked(e))} />
                     <s-button tone="critical" onClick={cancelPlan} loading={busy}
-                      disabled={Boolean(busy || !cancelAgreed || (cancelKind === "opted_out" && plan.cancelVoucher > 0 && !moneyChecked))}>
-                      {cancelKind === "opted_out" && plan.cancelVoucher > 0 ? `Cancel plan and issue voucher for ${inr(plan.cancelVoucher)}` : "Cancel plan"}
+                      disabled={Boolean(busy || !cancelAgreed)}>
+                      {cancelKind === "opted_out" && verifiedPayout(plan, ticked) > 0 ? `Cancel plan and issue voucher for ${inr(verifiedPayout(plan, ticked))}` : "Cancel plan"}
                     </s-button>
                   </s-stack>
                 ) : null}

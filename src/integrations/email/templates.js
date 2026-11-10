@@ -1116,8 +1116,9 @@ function buildBuyPlanStaffDigestHtml({ dateLabel, rows }) {
       </tr>`).join('')}
     </table>` : `<p style="font-size:13px; color:#999999; margin:0;">None today.</p>`)
   );
-  const overdue = rows.filter(r => r.overdue);
-  const soon = rows.filter(r => !r.overdue);
+  const ready = rows.filter(r => r.ready);
+  const overdue = rows.filter(r => r.overdue && !r.ready);
+  const soon = rows.filter(r => !r.overdue && !r.ready);
   return head()
     + contentBlock({
         ref: 'Store — internal',
@@ -1126,6 +1127,24 @@ function buildBuyPlanStaffDigestHtml({ dateLabel, rows }) {
       })
     + block('Overdue', overdue, 'Past the due date and not yet paid. A plan with no payment for 60 days, or unpaid 30 days after its last installment, closes and the customer gets a voucher. Call the customer.')
     + block('Due in the next 3 days', soon, 'The customer has their reminder and link. A short WhatsApp nudge helps.')
+    + (ready.length ? block('Ready to convert', ready, 'Fully paid. Check the piece is ready, then convert the draft to an order; the customer gets their "plan complete" email after that.') : '')
+    + foot();
+}
+
+// Internal: a plan draft was converted to an order (in Shopify) while money was still owed on it.
+function buildBuyPlanConvertedOwingHtml({ draftName, adminUrl, customerName, phone, owed, total }) {
+  return head()
+    + contentBlock({
+        ref: 'Store — internal',
+        heading: `Buy plan ${esc(draftName)} was converted with ${money(owed)} still owed`,
+        body: `The draft was turned into an order before the plan was fully paid. The plan has ended, the customer has NOT been told it is complete, and no more reminders go out. Collect the ${money(owed)} against the order, and check how it was converted: plan drafts should only be converted once fully paid.`,
+        buttonsHtml: adminUrl ? button('Open the draft', adminUrl) : '',
+      })
+    + section(summary([
+        { label: 'Customer', value: `${customerName || '—'} ${phone || ''}` },
+        { label: 'Plan price', value: money(total) },
+        { label: 'Still owed', value: money(owed), total: true },
+      ]))
     + foot();
 }
 
@@ -1164,6 +1183,7 @@ module.exports = {
   buildBuyPlanForfeitedHtml,
   buildBuyPlanForfeitedStaffHtml,
   buildBuyPlanCreditVoucherHtml,
+  buildBuyPlanConvertedOwingHtml,
   buildBuyPlanCancelledHtml,
   buildBuyPlanCancelledStaffHtml,
   buildBuyPlanChangedHtml,

@@ -70,6 +70,20 @@ async function markSent(planId, installmentNo, audience, kind) {
   if (error) console.error(`[buy-plan] marker write failed for plan ${planId} #${installmentNo} ${kind}: ${error.message}`);
 }
 
+// Messages go to the customer as they are NOW (founder, 2026-11-09): take the draft's current customer
+// email / phone / name onto the plan when they changed. Empty values never overwrite.
+async function syncContact(plan, customer) {
+  if (!plan || !customer) return;
+  const patch = {};
+  for (const [col, v] of [['customer_email', customer.email], ['customer_phone', customer.phone], ['customer_name', customer.name]]) {
+    const val = String(v || '').trim();
+    if (val && val !== String(plan[col] || '').trim()) patch[col] = val;
+  }
+  if (!Object.keys(patch).length) return;
+  Object.assign(plan, patch);
+  await updatePlan(plan.id, patch).catch(e => console.error(`[buy-plan] contact update for plan ${plan.id}: ${e.message}`));
+}
+
 async function getConfigValue(key) {
   const { data } = await supabase.from('config').select('value').eq('key', key).maybeSingle();
   return data ? data.value : null;
@@ -85,11 +99,11 @@ async function setConfigValue(key, value) {
 // not here; the draft's installment slots are the money of record either way.
 async function listPayments(draftId) {
   const { data, error } = await supabase.from('store_deposit_payments')
-    .select('amount, payment_mode, payment_source, created_at')
+    .select('amount, payment_mode, payment_source, utr, created_at')
     .eq('draft_order_id', String(draftId)).order('created_at', { ascending: false });
   if (error) { console.error(`[buy-plan] payments read: ${error.message}`); return []; }
   return (data || []).map(p => ({
-    amount: Number(p.amount) || 0, mode: p.payment_mode || '', source: p.payment_source || '', at: p.created_at,
+    amount: Number(p.amount) || 0, mode: p.payment_mode || '', source: p.payment_source || '', utr: p.utr || '', at: p.created_at,
   }));
 }
 
@@ -106,5 +120,5 @@ async function latestOpenLink(draftId) {
 module.exports = {
   listPayments, latestOpenLink,
   getPlanByDraft, getPlan, listActivePlans, listPlansByStatus, insertPlan, updatePlan, deletePlan,
-  wasSent, markSent, getConfigValue, setConfigValue,
+  wasSent, markSent, syncContact, getConfigValue, setConfigValue,
 };

@@ -160,4 +160,19 @@ t('a paid-off plan never closes', () => {
   assert.strictEqual(at(plan(), [pay(START, 120000)], '2028-01-01').closure.close, false);
 });
 
+t('six payments at most: after five, the next must be the whole balance', () => {
+  const four = D.slice(0, 4).map(d => pay(d, 10000));
+  const s4 = at(plan(), four, D[3]);
+  assert.strictEqual(s4.lastPayment, false);
+  assert.strictEqual(s4.minPayment, 1000);
+  const s5 = at(plan(), [...four, pay(D[3], 10000)], D[3]);
+  assert.strictEqual(s5.payments, 5);
+  assert.strictEqual(s5.lastPayment, true);
+  assert.strictEqual(s5.minPayment, 70000);
+  assert.strictEqual(s5.suggested, 70000);
+  assert.strictEqual(S.validatePayment(s5, 20000).ok, false);
+  assert.match(S.validatePayment(s5, 20000).reason, /whole balance/);
+  assert.strictEqual(S.validatePayment(s5, 70000).ok, true);
+});
+
 console.log(`\n${n} passed`);

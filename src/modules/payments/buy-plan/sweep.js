@@ -195,10 +195,22 @@ async function sweepPlan(plan, today, { dryRun, restore }) {
     return { plan: plan.draft_name, action: 'draft missing — restore attempted' };
   }
   const n = S.countOf(plan);
+  if (!dryRun) await store.syncContact(plan, d.customer);   // messages go to the customer as they are now
 
   if (d.draft.status === 'completed') {
     if (dryRun) return { plan: plan.draft_name, action: 'would complete' };
-    await store.updatePlan(plan.id, { status: 'completed' });
+    // Converted with money still owed (Shopify's own Create order / Mark as paid: ours refuse it,
+    // convert.js): the plan is over, but the customer is NOT told it is complete; the store is told
+    // what is still owed, to collect against the order.
+    const owed = S.planState(plan, d.legs, today).balance;
+    await store.updatePlan(plan.id, { status: 'completed', ...(owed > 0 ? { closed_reason: `converted with Rs${owed} unpaid` } : {}) });
+    if (owed > 0) {
+      if (!(await store.wasSent(plan.id, n, 'staff', 'completed'))) {
+        await notify.sendConvertedOwing(plan, d, owed);
+        await store.markSent(plan.id, n, 'staff', 'completed');
+      }
+      return { plan: plan.draft_name, action: `converted with Rs${owed} still owed — store told` };
+    }
     if (!(await store.wasSent(plan.id, n, 'customer', 'completed'))) {
       await notify.sendCompleted(plan);
       await store.markSent(plan.id, n, 'customer', 'completed');
@@ -226,6 +238,11 @@ async function sweepPlan(plan, today, { dryRun, restore }) {
   }
 
   const st = S.planState(plan, d.legs, today);
+  // Five payments in: whatever the next link is for, it is for the whole balance (schedule.js).
+  if (st.lastPayment) {
+    if (st.dueNow > 0) st.dueNow = st.balance;
+    if (st.upcoming) st.upcoming = { ...st.upcoming, amount: st.balance };
+  }
   const out = { plan: plan.draft_name, k: st.k, dueNow: st.dueNow, upcoming: st.upcoming, balance: st.balance, sent: [] };
   const rows = [];
   if (edited) rows.push(digestRow(plan, d, n, st.k, today, st.dueNow, { overdue: true, stuck: true, note: 'Pieces changed without "Change product".' }));
@@ -250,7 +267,26 @@ async function sweepPlan(plan, today, { dryRun, restore }) {
     const owed = voucherDue(plan, st).amount;
     if (owed > 0) rows.push(digestRow(plan, d, n, st.k, today, owed, { overdue: true, stuck: true,
       note: `Paid ${owed.toLocaleString('en-IN')} more than the price. Offer a piece of higher value, or open Buy plan and press Issue voucher.` }));
+    else if (!S.awaitingFinalPrice(plan) && !plan.change_pending) rows.push(digestRow(plan, d, n, n, today, st.total, { ready: true,
+      note: 'Fully paid: convert the draft to an order.' }));
     return { ...out, digest: rows };
+  }
+
+  // Five payments in and the customer still holds a link for less than the balance (raised before the
+  // fifth payment): replace it with one for the whole balance, once per balance.
+  if (st.lastPayment && !st.closure.close) {
+    const open = await store.latestOpenLink(plan.draft_order_id);
+    const key = `buy_plan_lastlink_${plan.id}`;
+    if (open && Number(open.amount) < st.balance && (await store.getConfigValue(key)) !== String(st.balance)) {
+      const k = st.dueNow > 0 ? st.k : (st.upcoming ? st.upcoming.k : st.k);
+      if (!dryRun) {
+        const link = await createPlanLink(plan, st.balance);
+        await notify.sendLink(plan, d, link, { k, dueDate: st.dates[k - 1], whole: true, today });
+        await store.setConfigValue(key, String(st.balance));
+      }
+      out.sent.push(`last-payment link Rs${st.balance}`);
+      linked = true;
+    }
   }
 
   // 7. Closure.
@@ -364,7 +400,7 @@ async function runBuyPlanSweep({ dryRun = false, restore = null, now = Date.now(
       try {
         const d = await readDraft(plan.draft_order_id).catch(() => null);
         const legs = d ? d.legs : readInstallments((plan.snapshot || {}).metafields || {}).filter(l => l.type !== 'cad_advance');
-        const owed = voucherDue(plan, S.planState(plan, legs, today)).amount;
+        const owed = voucherDue(plan, S.planState(plan, legs, today), d).amount;
         if (owed > 0) digestRows.push(digestRow(plan, d || { id: plan.draft_order_id }, S.countOf(plan), 0, today, owed, { overdue: true, stuck: true,
           note: d ? `Closed: check the ${owed.toLocaleString('en-IN')} paid really came in, then open Buy plan and press Issue voucher. Do not delete the draft before.`
             : `Closed and the draft was deleted before its voucher was issued: create a voucher for ${owed.toLocaleString('en-IN')} by hand.` }));

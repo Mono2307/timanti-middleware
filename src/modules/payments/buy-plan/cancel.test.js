@@ -39,7 +39,8 @@ function reset({ legs = [], over = {} } = {}) {
   world.plan = { id: 1, draft_order_id: '100', draft_name: '#D400', total: 60000, status: 'active', mode: 'equal',
     customer_id: '9', customer_name: 'Asha', installments: 6, start_date: START, due_dates: S.dueDates(START, 6),
     gold_value: null, final_total: null, price_changes: [], ...over };
-  world.d = { id: '100', draft: { name: '#D400', status: 'open', line_items: [] }, mf: {}, tags: ['buy-plan'], legs };
+  world.d = { id: '100', draft: { name: '#D400', status: 'open', line_items: [] }, mf: {}, tags: ['buy-plan'],
+    legs: legs.map((l, i) => ({ slot: i + 1, ...l })) };
 }
 const go = (o) => cancelPlan(world.plan, world.d, { today: '2026-11-09', by: 'staff-1', ...o });
 
@@ -104,6 +105,16 @@ const go = (o) => cancelPlan(world.plan, world.d, { today: '2026-11-09', by: 'st
     assert.strictEqual(world.plan.voucher_code, 'VCH-1,VCH-9');
   });
 
+  await t('opted out: only the payments staff ticked, plus old gold handed in (D1, D5)', async () => {
+    reset({ legs: [{ value: 10000, date: START }, { value: 5000, date: '2026-11-03' }] });
+    world.d.mf = { old_gold_value: '8000' };
+    await go({ kind: 'opted_out', verifiedSlots: [1] });
+    assert.deepStrictEqual(world.vouchers, ['18000:plan cancelled']);
+    reset({ legs: [{ value: 10000, date: START }] });
+    await assert.rejects(go({ kind: 'opted_out', verifiedSlots: [7] }), /Payment 7 is not on this plan/);
+    assert.strictEqual(world.plan.status, 'active');
+  });
+
   console.log('issueStaffVoucher (staff press Issue voucher)');
   const stOf = () => S.planState(world.plan, world.d.legs, '2026-11-09');
 
@@ -120,9 +131,17 @@ const go = (o) => cancelPlan(world.plan, world.d, { today: '2026-11-09', by: 'st
     await assert.rejects(issueStaffVoucher(world.plan, world.d, stOf(), { today: '2026-11-09' }), e => e.status === 409);
   });
 
+  await t('closed plan: staff must tick payments; voucher = ticked + old gold / exchange note (D1, D5)', async () => {
+    reset({ legs: [{ value: 25000, date: START }, { value: 4000, date: '2026-11-02' }], over: { status: 'forfeited' } });
+    world.d.mf = { old_gold_value: '3000', exchange_note_value: '0' };
+    await assert.rejects(issueStaffVoucher(world.plan, world.d, stOf(), { today: '2026-11-09' }), /Tick each payment/);
+    const r2 = await issueStaffVoucher(world.plan, world.d, stOf(), { today: '2026-11-09', verifiedSlots: [1] });
+    assert.strictEqual(r2.voucher.value, 28000);
+  });
+
   await t('closed plan: voucher for everything paid', async () => {
     reset({ legs: [{ value: 25000, date: START }], over: { status: 'forfeited' } });
-    const r = await issueStaffVoucher(world.plan, world.d, stOf(), { today: '2026-11-09' });
+    const r = await issueStaffVoucher(world.plan, world.d, stOf(), { today: '2026-11-09', verifiedSlots: [1] });
     assert.strictEqual(r.kind, 'closed');
     assert.deepStrictEqual(world.vouchers, ['25000:plan closed']);
     assert.deepStrictEqual(world.sent, ['voucher-email:closed:25000']);
@@ -131,7 +150,7 @@ const go = (o) => cancelPlan(world.plan, world.d, { today: '2026-11-09', by: 'st
   await t('the voucher fails: the claim is rolled back so staff can press again; nothing emailed', async () => {
     reset({ legs: [{ value: 25000, date: START }], over: { status: 'forfeited' } });
     world.voucherFails = true;
-    await assert.rejects(issueStaffVoucher(world.plan, world.d, stOf(), { today: '2026-11-09' }), /Shopify said no/);
+    await assert.rejects(issueStaffVoucher(world.plan, world.d, stOf(), { today: '2026-11-09', verifiedSlots: [1] }), /Shopify said no/);
     assert.strictEqual(world.plan.voucher_value, null);
     assert.deepStrictEqual(world.sent, []);
     assert.strictEqual(voucherDue(world.plan, stOf()).amount, 25000);

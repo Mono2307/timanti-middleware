@@ -16,6 +16,8 @@ fake('./store.js', {
   latestOpenLink: async () => world.openLink,
   listActivePlans: async () => world.plans.filter(p => p.status === 'active'),
   listPlansByStatus: async (s) => world.plans.filter(p => p.status === s),
+  getPlanByDraft: async (id) => world.plans.find(p => p.draft_order_id === String(id)) || null,
+  syncContact: async (plan, c) => { if (c && c.email && c.email !== plan.customer_email) plan.customer_email = c.email; },
   updatePlan: async (id, patch) => Object.assign(world.plans.find(p => p.id === id), patch),
   getPlan: async (id) => world.plans.find(p => p.id === id) || null,
   wasSent: async (id, k, a, kind) => world.markers.has(`${id}|${k}|${a}|${kind}`),
@@ -28,6 +30,7 @@ fake('./notify.js', {
   sendPricePutBack: async (plan, d, fixes, error) => world.sent.push(`put-back:${fixes.map(f => f.to).join(',')}${error ? ':failed' : ''}`),
   sendReceived: async (plan, d, amount) => world.sent.push(`received:${amount}`),
   sendCompleted: async () => world.sent.push('completed'),
+  sendConvertedOwing: async (plan, d, owed) => world.sent.push(`converted-owing:${owed}`),
   sendStaffDigest: async (rows) => world.sent.push(`digest:${rows.length}`),
   sendFinalPrice: async (plan, d, link) => world.sent.push(`final-price:${plan.final_total}:${link ? link.amount : 'none'}`),
   sendFinalCredit: async (plan, d, credit, o = {}) => world.sent.push(`credit:${credit}${o.why === 'change' ? ':change' : ''}`),
@@ -56,6 +59,7 @@ fake('./draft.js', { ...realDraft, readDraft: async (id) => world.drafts[id] || 
   } });
 
 const { runBuyPlanSweep } = require('./sweep');
+const { conversionBlock } = require('./convert');
 const S = require('./schedule');
 
 let n = 0;
@@ -347,8 +351,9 @@ const five = D.slice(0, 5).map(d => paid(d, 20000));
     reset({ mode: 'equal', legs: [paid(START, 50000)], tags: ['buy-plan'], over: { voucher_value: 10000, voucher_code: 'VCH-1', final_total: 40000 } });
     world.drafts[100].total = 40000;
     world.plans[0].price_changes = [{ date: START, total: 40000, why: 'product change' }];
-    await runBuyPlanSweep({ now: at('2026-11-01') });
-    assert.ok(!world.sent.some(s => s.startsWith('digest')));
+    const r = await runBuyPlanSweep({ now: at('2026-11-01'), dryRun: true });
+    // Nothing owed back any more: the plan just shows as ready to convert.
+    assert.deepStrictEqual(r.digestRows.map(x => Boolean(x.ready)), [true]);
   });
 
   await t('repriced, but the collect figure is older than the reprice: wait (then accept after 5 minutes)', async () => {
@@ -382,6 +387,52 @@ const five = D.slice(0, 5).map(d => paid(d, 20000));
       over: { change_pending: { started_at: new Date().toISOString(), old_total: 120000 } } });
     await runBuyPlanSweep({ now: at('2026-11-01') });
     assert.deepStrictEqual(world.sent, []);
+  });
+
+  console.log('founder decisions 2026-11-09');
+
+  await t('D2: converted in Shopify with money owed — no "complete" email; the store is told what is owed', async () => {
+    reset({ status: 'completed', legs: [paid(START, 20000)] });
+    await runBuyPlanSweep({ now: at('2026-11-01') });
+    assert.deepStrictEqual(world.sent, ['converted-owing:100000']);
+    assert.strictEqual(world.plans[0].status, 'completed');
+    assert.match(world.plans[0].closed_reason, /converted with Rs100000 unpaid/);
+  });
+
+  await t('D2: our conversion refuses a plan draft that still owes money, or awaits its final price', async () => {
+    reset({ legs: [paid(START, 20000)] });
+    assert.match(await conversionBlock('100'), /Rs1,00,000 is still to be paid/);
+    reset({ mode: 'equal', tags: ['buy-plan'], legs: [paid(START, 120000)] });
+    assert.match(await conversionBlock('100'), /final price/);
+    reset({ legs: [paid(START, 120000)] });
+    assert.strictEqual(await conversionBlock('100'), null);
+    assert.strictEqual(await conversionBlock('999'), null);   // not a plan draft
+  });
+
+  await t('D8: a fully paid plan is on the digest as ready to convert', async () => {
+    reset({ legs: [paid(START, 120000)] });
+    const r = await runBuyPlanSweep({ now: at('2026-11-01'), dryRun: true });
+    assert.strictEqual(r.digestRows.length, 1);
+    assert.strictEqual(r.digestRows[0].ready, true);
+  });
+
+  await t('six payments: after five, links are for the whole balance, and a smaller open link is replaced once', async () => {
+    const five = ['2026-10-24', '2026-10-25', '2026-10-26', '2026-10-27', '2026-10-28'].map((date, i) => ({ slot: i + 1, ...paid(date, 2000) }));
+    reset({ legs: five });
+    world.openLink = { gokwik_link_id: 'g1', amount: 20000, expires_at: '2026-12-20T00:00:00Z' };
+    await runBuyPlanSweep({ now: at('2026-11-01') });
+    assert.deepStrictEqual(world.links, [110000]);
+    assert.ok(world.sent.includes('due#2:110000') || world.sent.some(s => s.endsWith(':110000')));
+    const before = world.links.length;
+    await runBuyPlanSweep({ now: at('2026-11-02') });
+    assert.strictEqual(world.links.length, before);
+  });
+
+  await t('D7: the plan follows the customer\'s current email', async () => {
+    reset();
+    world.drafts[100].customer = { email: 'new@b.in' };
+    await runBuyPlanSweep({ now: at(START) });
+    assert.strictEqual(world.plans[0].customer_email, 'new@b.in');
   });
 
   console.log('single-plan run (draft=)');
