@@ -34,7 +34,10 @@ const REPORTS = {
       { label: 'State (opt)',       param: 'state' },
       { label: 'Stage (opt)',       param: 'paymentStatus' },
     ],
-    cols: ['stage','payment_type','draft_name','order_name','day','customer',
+    cols: ['stage','payment_type',
+           // Gold value lock / Equal on every line of a buy-plan document — filter on it.
+           'buy_plan',
+           'draft_name','order_name','day','customer',
            // Who raised the sale (custom.employee_name).
            'sales_staff',
            'place_of_supply','shipping_state',
@@ -52,13 +55,18 @@ const REPORTS = {
            'i2_value','i2_mode',
            'i3_value','i3_mode',
            'i4_value','i4_mode',
+           'i5_value','i5_mode',   // buy plans only
+           'i6_value','i6_mode',
            'r1_value','r1_mode','r1_ref',
            'r2_value','r2_mode','r2_ref',
            // Totals, to the right of the legs they are computed from. amount_paid is GROSS collected
            // and amount_refunded what went back; net_collected is the figure to sum for a collections
            // total. All three ride along so a refund can be reconciled against the legs.
            'amount_paid','amount_refunded','net_collected','amount_pending','net_to_collect',
-           'payment_mode','installments'],
+           'payment_mode','installments',
+           // Buy plan standing — same wording as the Buy Plan Tracker sheet.
+           'plan_status','plan_installments','plan_total','plan_paid','plan_balance',
+           'plan_next_due','plan_next_amount','plan_closes_on','plan_voucher'],
   },
   adjustments: {
     tab: 'Adjustments', endpoint: '/api/adjustment-report', totals: true,

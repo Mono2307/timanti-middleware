@@ -184,4 +184,62 @@ t('has no duplicate columns', () => {
   assert.strictEqual(new Set(SALES_COLS).size, SALES_COLS.length);
 });
 
+console.log('buy plans in the sales report');
+{
+  const { planColumns, collectClosedPlans, PLAN_COLS } = require('./reports');
+  const S = require('../payments/buy-plan/schedule');
+  const plan = { id: 7, draft_order_id: '111', draft_name: '#D400', mode: 'equal', status: 'active',
+    total: 60000, installments: 6, start_date: '2026-11-04',
+    due_dates: ['2026-11-04', '2026-12-04', '2027-01-04', '2027-02-04', '2027-03-04', '2027-04-04'] };
+  const legs = legsFromTags(['i1:10000@card@2026-11-04']).inst;
+
+  t('a non-plan document gets blank plan columns', () => {
+    const c = planColumns(null, [], '2026-11-09');
+    assert.strictEqual(c.buy_plan, '');
+    for (const k of PLAN_COLS) assert.strictEqual(c[k], '');
+  });
+  t('plan columns come from the same planState and wording as the tracker sheet', () => {
+    const c = planColumns(plan, legs, '2026-11-09');
+    const st = S.planState(plan, legs, '2026-11-09');
+    assert.strictEqual(c.buy_plan, 'Equal');
+    assert.strictEqual(c.plan_status, S.statusLabel(plan, st, true));
+    assert.strictEqual(c.plan_status, 'Active: on track');
+    assert.strictEqual(c.plan_paid, 10000);
+    assert.strictEqual(c.plan_balance, 50000);
+    assert.strictEqual(c.plan_next_due, '2026-12-04');
+    assert.strictEqual(c.plan_next_amount, 10000);
+    assert.strictEqual(c.plan_closes_on, '');
+  });
+  t('a missed installment shows overdue and its closing date', () => {
+    const c = planColumns(plan, legs, '2027-01-10');
+    assert.ok(/^Active: (overdue|closing)/.test(c.plan_status), c.plan_status);
+    assert.ok(c.plan_closes_on, 'closes_on set once late');
+  });
+  t('every plan column is a sales column', () => {
+    assert.ok(SALES_COLS.includes('buy_plan'));
+    for (const k of PLAN_COLS) assert.ok(SALES_COLS.includes(k), `SALES_COLS is missing ${k}`);
+  });
+  t('a closed plan whose draft is gone still shows the money taken, once', () => {
+    const closed = { ...plan, id: 8, draft_name: '#D401', status: 'forfeited', closed_reason: 'no payment 60 days',
+      voucher_code: 'VCH27-KAHSR-0009', voucher_value: 10000,
+      snapshot: { line_items: [{ title: 'Ring', variant_title: '18K / YG / 12', quantity: 1, price: '60000' }],
+                  metafields: { installment_1_value: '10000', installment_1_mode: 'card', installment_1_date: '2026-11-04' } } };
+    const rows = [];
+    collectClosedPlans({ from: '2026-11-01', to: '2026-11-30' },
+      rows, { all: [closed, plan], reported: new Set([plan.id]) });
+    assert.strictEqual(rows.length, 1);
+    assert.strictEqual(rows[0].stage, 'plan-closed');
+    assert.strictEqual(rows[0].plan_status, 'Closed (voucher)');
+    assert.strictEqual(rows[0].plan_voucher, 'VCH27-KAHSR-0009 (Rs10000)');
+    assert.strictEqual(rows[0].gross_sales, '');          // not a sale
+    for (const k of Object.keys(rows[0])) assert.ok(SALES_COLS.includes(k), `row key ${k} not in SALES_COLS`);
+  });
+  t('a closed plan already listed through its draft is not repeated', () => {
+    const rows = [];
+    collectClosedPlans({ from: '2026-11-01', to: '2026-11-30' },
+      rows, { all: [{ ...plan, status: 'forfeited' }], reported: new Set([plan.id]) });
+    assert.strictEqual(rows.length, 0);
+  });
+}
+
 console.log(`\n${n} assertions passed`);

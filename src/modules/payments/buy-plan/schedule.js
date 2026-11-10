@@ -225,7 +225,30 @@ function validatePayment(state, amount) {
   return { ok: true, amount: amt };
 }
 
+// The one status wording every board shows (tracker sheet, sales report), so they can never disagree.
+// st is planState(plan, legs, today); draftExists=false when an active plan's draft is gone.
+const STATUS_LABELS = { active: 'Active', completed: 'Completed', forfeited: 'Closed (voucher)', cancelled: 'Cancelled' };
+function statusLabel(plan, st, draftExists = true) {
+  if (plan.status !== 'active') return STATUS_LABELS[plan.status] || plan.status;
+  const overdue = st.rows.some(r => r.status === 'missed' || r.status === 'overdue');
+  if (!draftExists) return 'Active: draft missing';
+  if (plan.change_pending) return 'Active: product change pricing';
+  if (st.closure?.warn) return `Active: closing ${st.closure.closeOn}`;
+  if (overdue) return 'Active: overdue';
+  return 'Active: on track';
+}
+
+// The payments of a plan whose draft is no longer read (closed, or gone). The snapshot has no legs
+// field of its own: they are the installment slots in the draft's metafields as last snapshotted.
+// readInstallments is passed in so this module stays free of requires beyond cad_advance.
+function snapshotLegs(plan, readInstallments) {
+  const snap = plan.snapshot || {};
+  if (Array.isArray(snap.legs)) return snap.legs;
+  return readInstallments(snap.metafields || {}).filter(l => l.type !== 'cad_advance');
+}
+
 module.exports = {
+  statusLabel, snapshotLegs,
   PLAN_INSTALLMENTS, INSTALLMENT_CHOICES, MIN_PAYMENT, CLOSE_AFTER_DAYS, WARN_DAYS, LAST_CLOSE_AFTER_DAYS, LAST_WARN_DAYS,
   dueDates, countOf, datesOf, periodOf, floats, awaitingFinalPrice, priceChanges, currentTotal,
   planState, scheduleRows, validatePayment, daysBetween, addDays,

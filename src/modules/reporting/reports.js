@@ -15,6 +15,7 @@
 const { runRecon, toCSV: reconToCSV } = require('./recon');
 const { readInstallments, installmentModes } = require('../payments/installments');
 const { readRefunds } = require('../payments/refunds');
+const S = require('../payments/buy-plan/schedule');
 
 // ── Small helpers ────────────────────────────────────────────────────────────
 
@@ -166,6 +167,110 @@ function legsFromTags(tags) {
   return { inst, refunds };
 }
 
+// ── Buy plans ────────────────────────────────────────────────────────────────
+// A buy plan is an ordinary draft to Shopify — its money is the draft's installment legs, so the
+// sales figures are already right. What the draft cannot say is that it IS a plan, where the plan
+// stands, or what is owed next: that lives in buy_plans. Each draft/order row is joined to its plan
+// (by draft id, falling back to draft name for a restored draft) and carries the same status wording
+// as the tracker sheet (schedule.statusLabel), computed from the same legs.
+//
+// A plan that CLOSED (forfeited/cancelled) and whose draft has since been deleted would otherwise
+// vanish from this report although money was taken: collectClosedPlans gives it one row per piece,
+// stage 'plan-closed', with its legs and the voucher it became. It is not a sale, so no GST columns.
+const PLAN_COLS = ['plan_status', 'plan_installments', 'plan_total', 'plan_paid', 'plan_balance',
+  'plan_next_due', 'plan_next_amount', 'plan_closes_on', 'plan_voucher'];
+const BLANK_PLAN_COLUMNS = Object.fromEntries(PLAN_COLS.map(k => [k, '']));
+const NO_PLANS = { byId: {}, byName: {}, all: [], reported: new Set() };
+const emptyPlans = () => ({ byId: {}, byName: {}, all: [], reported: new Set() });
+
+const todayIst = () => new Date(Date.now() + 330 * 60000).toISOString().slice(0, 10);
+
+// Every plan, any status. Best-effort: a failed read blanks the plan columns, never the report.
+async function loadBuyPlans(deps) {
+  if (!deps.supabase) return emptyPlans();
+  try {
+    const { data, error } = await deps.supabase.from('buy_plans').select('*');
+    if (error) throw new Error(error.message);
+    const out = emptyPlans();
+    out.all = data || [];
+    for (const p of out.all) {
+      out.byId[String(p.draft_order_id)] = p;
+      if (p.draft_name) out.byName[p.draft_name] = p;
+    }
+    return out;
+  } catch (e) {
+    console.warn(`[sales-report] buy plans unavailable: ${e.message}`);
+    return emptyPlans();
+  }
+}
+
+const planFor = (plans, draftId, draftName) =>
+  (draftId && plans.byId[String(draftId)]) || (draftName && plans.byName[draftName]) || null;
+
+// The plan columns for one document. buy_plan is set on every line (so a filter on it keeps whole
+// documents); the rest only on the first line, like every other document-level figure.
+function planColumns(plan, legs, today, draftExists = true) {
+  if (!plan) return { buy_plan: '', ...BLANK_PLAN_COLUMNS };
+  const st = S.planState(plan, legs || [], today);
+  const active = plan.status === 'active';
+  const late = active && st.closure && (st.closure.overdueSince || st.closure.warn);
+  return {
+    buy_plan:          plan.mode === 'gold' ? 'Gold value lock' : 'Equal',
+    plan_status:       S.statusLabel(plan, st, draftExists),
+    plan_installments: st.n,
+    plan_total:        st.total,
+    plan_paid:         st.paid,
+    plan_balance:      st.balance,
+    plan_next_due:     active && st.upcoming ? st.upcoming.due : '',
+    plan_next_amount:  active && st.upcoming ? st.upcoming.amount : '',
+    plan_closes_on:    late ? (st.closure.closeOn || '') : '',
+    plan_voucher:      plan.voucher_code ? `${plan.voucher_code} (Rs${plan.voucher_value})` : '',
+  };
+}
+
+function collectClosedPlans({ from, to }, rows, plans) {
+  const today = todayIst();
+  const inWindow = (d) => (!from || d >= from) && (!to || d <= to);
+  for (const plan of plans.all) {
+    if (!['forfeited', 'cancelled'].includes(plan.status)) continue;
+    if (plans.reported.has(plan.id)) continue;                    // its draft or order is already listed
+    if (!inWindow(String(plan.start_date || '').slice(0, 10))) continue;
+    const legs = S.snapshotLegs(plan, readInstallments);
+    const planCols = planColumns(plan, legs, today, false);
+    const paid = r2(legs.reduce((sum, l) => sum + num(l.value), 0));
+    const snap = plan.snapshot || {};
+    const lines = (snap.line_items || []).filter(
+      li => !((li.title || '').toLowerCase().includes('discount') && parseFloat(li.price) < 0));
+    (lines.length ? lines : [{}]).forEach((li, idx) => {
+      rows.push({
+        stage: 'plan-closed',
+        payment_type: `buy plan · closed (${plan.closed_reason || plan.status})`,
+        buy_plan: planCols.buy_plan,
+        draft_name: plan.draft_name || '',
+        order_name: '',
+        day: fmtDay(plan.start_date),
+        customer: plan.customer_name || '',
+        sales_staff: '', place_of_supply: '', shipping_state: '',
+        product_title: li.title || '', category: '', variant_title: li.variant_title || '',
+        ...optionColumns(optionValuesFromVariantTitle(li.variant_title)),
+        sku: li.sku || '', hsn: '', qty: li.quantity || '',
+        gross_sales: '', discount: '', net_sales: '', taxable_value: '', igst: '', sgst: '', cgst: '',
+        custom_serial: '',
+        ...(idx === 0 ? legColumns(legs, []) : BLANK_LEG_COLUMNS),
+        amount_paid:     idx === 0 ? paid : '',
+        amount_refunded: idx === 0 ? 0    : '',
+        net_collected:   idx === 0 ? paid : '',
+        amount_pending:  idx === 0 ? 0    : '',
+        net_to_collect:  idx === 0 ? 0    : '',
+        payment_mode:    idx === 0 ? installmentModes(legs).join(' / ') : '',
+        installments:    idx === 0 ? legs.length : '',
+        ...(idx === 0 ? planCols : BLANK_PLAN_COLUMNS),
+        buy_plan: planCols.buy_plan,
+      });
+    });
+  }
+}
+
 // ── Draft → order lineage ────────────────────────────────────────────────────
 // Shopify completes a draft in place (PUT .../complete.json): the draft flips to
 // status=completed and carries `order_id`, but NOTHING is written back onto the
@@ -185,7 +290,7 @@ async function buildOrderToDraftMap(deps) {
       resp = await axios.get(pageUrl, { headers: { 'X-Shopify-Access-Token': token }, timeout: 30000 });
     } catch (_) { break; }   // lineage is enrichment — never fail the whole report over it
     for (const d of (resp.data.draft_orders || [])) {
-      if (d.order_id) map[String(d.order_id)] = d.name || '';
+      if (d.order_id) map[String(d.order_id)] = { name: d.name || '', id: String(d.id) };
     }
     const link = resp.headers['link'] || '';
     const next = link.match(/<([^>]+)>;\s*rel="next"/);
@@ -196,7 +301,8 @@ async function buildOrderToDraftMap(deps) {
 
 // ── Sales report — orders side (GraphQL) ─────────────────────────────────────
 
-async function collectOrders(deps, { from, to }, rows, draftByOrderId = {}) {
+async function collectOrders(deps, { from, to }, rows, draftByOrderId = {}, plans = NO_PLANS) {
+  const today = todayIst();
   const { axios, storeUrl, token } = deps;
   const search = `created_at:>=${from} created_at:<=${to}`;
   let cursor = null, page = 0;
@@ -264,7 +370,10 @@ async function collectOrders(deps, { from, to }, rows, draftByOrderId = {}) {
                                  : (paid > 0 ? `partial${legCount > 1 ? `: ${legCount} installments` : ''}` : 'unpaid');
       // the draft this order was converted from, if it started life as one
       const orderLegacyId = String(n.id || '').split('/').pop();
-      const originDraft = draftByOrderId[orderLegacyId] || '';
+      const origin = draftByOrderId[orderLegacyId] || {};
+      const originDraft = origin.name || '';
+      const plan = planFor(plans, origin.id, originDraft);
+      const planCols = planColumns(plan, legs.filter(l => l.type !== 'cad_advance'), today);
 
       const lines = n.lineItems.edges.map(le => le.node);
       lines.forEach((li, idx) => {
@@ -278,7 +387,8 @@ async function collectOrders(deps, { from, to }, rows, draftByOrderId = {}) {
         });
         rows.push({
           stage,
-          payment_type:  paymentType,
+          payment_type:  plan ? `buy plan · ${paymentType}` : paymentType,
+          buy_plan:      planCols.buy_plan,
           draft_name:   originDraft,
           order_name:   n.name || '',
           day:          fmtDay(n.createdAt),
@@ -311,6 +421,8 @@ async function collectOrders(deps, { from, to }, rows, draftByOrderId = {}) {
           net_to_collect:  idx === 0 ? r2(net)  : '',
           payment_mode:    idx === 0 ? pmode    : '',
           installments:    idx === 0 ? legCount : '',
+          ...(idx === 0 ? planCols : BLANK_PLAN_COLUMNS),
+          buy_plan:        planCols.buy_plan,
         });
       });
     }
@@ -365,7 +477,8 @@ async function fetchProductTypes(deps, productIds) {
 // the identical draft list). Filter on d.created_at here instead, and never trust the endpoint to
 // have narrowed anything.
 
-async function collectDrafts(deps, { from, to }, rows) {
+async function collectDrafts(deps, { from, to }, rows, plans = NO_PLANS) {
+  const today = todayIst();
   const { axios, storeUrl, token } = deps;
   const hdrs = { 'X-Shopify-Access-Token': token };
   const fromT = from ? new Date(from + 'T00:00:00Z').getTime() : null;
@@ -468,6 +581,9 @@ async function collectDrafts(deps, { from, to }, rows) {
     // it would have under-reported. The i{n}: tags are per leg, so the figure is now exact and
     // matches what the converted-order row will say.
     const legCount = draftLegs.inst.length || '';
+    const plan = planFor(plans, d.id, d.name);
+    const planCols = planColumns(plan, draftLegs.inst.filter(l => l.type !== 'cad_advance'), today);
+    if (plan) plans.reported.add(plan.id);
 
     const shipState  = d.shipping_address?.province_code || '';
     // Draft has no custom.state_code inline. Mirror the invoice's supplier default (KA) so the
@@ -492,7 +608,8 @@ async function collectDrafts(deps, { from, to }, rows) {
       });
       rows.push({
         stage,
-        payment_type: paymentType,
+        payment_type: plan ? `buy plan · ${paymentType}` : paymentType,
+        buy_plan:    planCols.buy_plan,
         draft_name:  d.name || '',
         order_name:  '',
         day:         fmtDay(d.created_at),
@@ -519,13 +636,18 @@ async function collectDrafts(deps, { from, to }, rows) {
         net_to_collect:  idx === 0 ? r2(total)    : '',
         payment_mode:    idx === 0 ? pmode        : '',
         installments:    idx === 0 ? legCount     : '',
+        ...(idx === 0 ? planCols : BLANK_PLAN_COLUMNS),
+        buy_plan:        planCols.buy_plan,
       });
     });
   }
 }
 
 const SALES_COLS = [
-  'stage', 'payment_type', 'draft_name', 'order_name', 'day', 'customer',
+  'stage', 'payment_type',
+  // Gold value lock / Equal on every line of a buy-plan document, blank otherwise — filter on it.
+  'buy_plan',
+  'draft_name', 'order_name', 'day', 'customer',
   // Who raised the sale (custom.employee_name). Free on the orders side; the drafts side pays one
   // metafield read per draft, because the draft list endpoint carries no metafields at all.
   'sales_staff',
@@ -562,13 +684,22 @@ const SALES_COLS = [
   // A draft row and the order it becomes can therefore differ by under a rupee.
   'amount_paid', 'amount_refunded', 'net_collected', 'amount_pending', 'net_to_collect',
   'payment_mode', 'installments',
+  // ── Buy plan standing (from buy_plans; same wording as the tracker sheet) ──
+  // plan_paid is the plan's own sum of the same legs, so it matches amount_paid; plan_balance is
+  // against the PLAN total (the locked price, or the final reprice), which can differ from the
+  // draft's pending figure until the draft is repriced.
+  ...PLAN_COLS,
 ];
 
 async function buildSalesReport(deps, { from, to, state, paymentStatus } = {}) {
   const rows = [];
   const draftByOrderId = await buildOrderToDraftMap(deps);
-  await collectOrders(deps, { from, to }, rows, draftByOrderId);
-  await collectDrafts(deps, { from, to }, rows);
+  const plans = await loadBuyPlans(deps);
+  await collectOrders(deps, { from, to }, rows, draftByOrderId, plans);
+  // An order converted from a plan's draft accounts for that plan, whatever its date.
+  for (const o of Object.values(draftByOrderId)) { const p = planFor(plans, o.id, o.name); if (p) plans.reported.add(p.id); }
+  await collectDrafts(deps, { from, to }, rows, plans);
+  collectClosedPlans({ from, to }, rows, plans);
   let out = rows;
   if (state)         out = out.filter(r => r.place_of_supply === normState(state));
   if (paymentStatus) out = out.filter(r => r.stage === String(paymentStatus).toLowerCase());
@@ -662,6 +793,9 @@ module.exports = {
   buildSalesReport,
   buildSerialCounters,
   SALES_COLS,
+  PLAN_COLS,
+  planColumns,
+  collectClosedPlans,
   toCSV,
   gstSplit,
   // exported for unit tests — the leg flattening and the tag reconstruction are the two places the

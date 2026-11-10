@@ -10,6 +10,7 @@ const { supabase } = require('../../../core/supabase');
 const { config } = require('../../../core/config');
 const { log } = require('../../../core/logger');
 const S = require('./schedule');
+const { readInstallments } = require('../installments');
 const { readDraft, todayIst, adminDraftUrl } = require('./draft');
 
 const EVERY_MS = 10 * 60 * 1000;
@@ -17,20 +18,12 @@ const COLUMNS = ['Draft', 'Customer', 'Phone', 'Email', 'Plan', 'Installments', 
   'Plan total', 'Paid', 'Balance', 'Next due', 'Next amount', 'Due now', 'Status', 'Closes on', 'Warning',
   'Voucher', 'Payments', 'Draft link', 'Updated'];
 
-const STATUS = { active: 'Active', completed: 'Completed', forfeited: 'Closed (voucher)', cancelled: 'Cancelled' };
 
 // Pure: one sheet row from a plan, its live payments (legs) and today.
 function rowFor(plan, legs, today, draftExists = true) {
   const st = S.planState(plan, legs || [], today);
   const overdue = st.rows.some(r => r.status === 'missed' || r.status === 'overdue');
-  let status = STATUS[plan.status] || plan.status;
-  if (plan.status === 'active') {
-    if (!draftExists) status = 'Active: draft missing';
-    else if (plan.change_pending) status = 'Active: product change pricing';
-    else if (st.closure?.warn) status = `Active: closing ${st.closure.closeOn}`;
-    else if (overdue) status = 'Active: overdue';
-    else status = 'Active: on track';
-  }
+  const status = S.statusLabel(plan, st, draftExists);
   return [
     plan.draft_name, plan.customer_name || '', plan.customer_phone || '', plan.customer_email || '',
     plan.mode === 'gold' ? 'Gold value lock' : 'Equal', st.n, plan.start_date, st.dates[st.n - 1] || '',
@@ -52,7 +45,7 @@ async function buildTable(now = Date.now()) {
   for (const plan of data || []) {
     // Closed plans are not re-read from Shopify: their draft may be gone and their numbers are final.
     const d = plan.status === 'active' ? await readDraft(plan.draft_order_id).catch(() => null) : null;
-    const legs = d ? d.legs : ((plan.snapshot || {}).legs || []);
+    const legs = d ? d.legs : S.snapshotLegs(plan, readInstallments);
     rows.push(rowFor(plan, legs, today, plan.status !== 'active' || Boolean(d)));
   }
   return { columns: COLUMNS, rows };

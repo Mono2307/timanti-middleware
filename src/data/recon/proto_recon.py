@@ -341,6 +341,9 @@ for fname in sorted(settle_files):
                 'PlatformRef': norm_platform_ref(r.get('Platform Order Id','')),
                 'SourceFile': fname,
             }
+            # A Rs1 test payment that only ever reaches the settlement file must not become a
+            # transaction — the txn exports already drop these through is_test_txn.
+            if key not in txn_store and is_test_txn(fnum(r.get('Amount'))): continue
             if key not in txn_store:
                 # settled but absent from the txn export — keep the money visible
                 rec.update({'TxnDate': iso(parse_gk_date(r.get('Transaction Date',''))),
