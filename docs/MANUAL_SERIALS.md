@@ -46,6 +46,21 @@ Nothing else. `customer_order`, `customer_service` and `free_service` are B2C ta
 from Shopify at conversion and nowhere else; the server rejects any attempt to draw one from a
 sheet, because a second issuer would put the whole series in doubt.
 
+### Packing slips carry their document's number
+
+A packing slip has no series of its own. It ships with a delivery challan or an interstore sale invoice
+and prints **that** document's number, so the two can never disagree.
+
+- **🔢 Serial → Create the Packing Slip tab** builds a printable tab: *Ships with* dropdown (B3),
+  *Packing Slip no.* (E3), From / To from this book's `STORE_CODE` / `DEST_CODE`, an item table and
+  sign-off line. A hand-made layout works too if it carries the captions "Ships with" and
+  "Packing Slip no." (see `PACKING_SLIPS`).
+- Pick *Delivery Challan* or *Interstore Sale*. Once that tab is minted, the slip shows the same number
+  in bold. Until then it is blank with a note saying what it is waiting for.
+- It follows the document: minting, *Start a new document* and *Void* on the source tab re-sync it, and
+  so does changing the dropdown.
+- It never draws a number. *Mint* and *Void* refuse to run on a packing slip tab.
+
 ---
 
 ## Endpoints

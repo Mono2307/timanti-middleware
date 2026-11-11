@@ -109,6 +109,44 @@ var TABS = {
   }
 };
 
+/**
+ * PACKING SLIPS — a packing slip has NO series of its own. It travels with a delivery challan or an
+ * interstore sale invoice and prints THAT document's number, so the slip and its document can never
+ * disagree. The "Ships with" dropdown says which one; the number is copied from that tab once it has
+ * been minted, and cleared again when that tab starts a new document or voids its number.
+ *
+ *   label / labelDir / numberCell     where the copied number prints (caption first, cell fallback)
+ *   toggleLabel / toggleDir / toggleCell   where the "Ships with" dropdown sits
+ *
+ * "🔢 Serial → Create the Packing Slip tab" builds a printable tab with both captions in place. A
+ * hand-made layout works too, as long as it carries the two captions.
+ */
+var PACKING_SLIPS = {
+  'Packing Slip': {
+    label: 'Packing Slip no.', labelDir: 'right', numberCell: 'E3',
+    toggleLabel: 'Ships with',  toggleDir: 'right', toggleCell: 'B3'
+  }
+};
+
+/** Dropdown text → the series whose number the packing slip copies. */
+var SHIPS_WITH = {
+  'Delivery Challan': 'delivery_challan',
+  'Interstore Sale':  'b2b'
+};
+
+/**
+ * Addresses printed on the generated Packing Slip tab, by store code. From = STORE_CODE and
+ * To = DEST_CODE: the same book codes the challan and the invoice carry.
+ */
+var STORE_ADDRESSES = {
+  'KA-HSR': ['Auracarat Private Limited (Karnataka) — TIMANTI',
+             'No.2634, Opp. Gnan Srishti School, 17th Main HSR Layout 2nd Sector, Bengaluru 560102',
+             '29 Karnataka · GSTIN 29ABBCA3309B1Z7'],
+  'MH-HQ':  ['Auracarat Pvt Ltd',
+             '408, 1 Aerocity, Safed Pul, Saki Naka, Mumbai 400072',
+             '27 Maharashtra · GSTIN 27ABBCA3309B1ZB']
+};
+
 /** Where the middleware lives. No trailing slash. */
 var MIDDLEWARE_URL = 'https://timanti-middleware.fly.dev';
 
@@ -142,7 +180,7 @@ function normalizeTabName_(name) {
  * duplicate declarations quietly win — is indistinguishable from a bug in the script. If Diagnose
  * does not show the version you pasted, the code you are reading is not the code that is running.
  */
-var SCRIPT_VERSION = '2026-09-16.3';
+var SCRIPT_VERSION = '2026-11-11.1';
 
 /** Script Property holding the middleware secret. Never put this in a cell. */
 var SECRET_PROP = 'SHEET_API_SECRET';
@@ -173,6 +211,9 @@ function onOpen() {
     .addSeparator()
     .addItem('Start a new document', 'startNewDocument')
     .addItem('Void this number', 'voidThisNumber')
+    .addSeparator()
+    .addItem('Packing slip: copy the number', 'copyPackingSlipNumber')
+    .addItem('Create the Packing Slip tab', 'createPackingSlipTab')
     .addSeparator()
     .addItem('Set the API secret', 'setApiSecret')
     .addItem('Refresh on every open', 'installOpenRefresh')
@@ -321,6 +362,7 @@ function mintThisNumber() {
     cell.setFontColor('#000000').setFontStyle('normal').setFontWeight('bold');
     cell.setNote('Minted ' + stamp_() + '\n' + series + ' · ' + cfg.storeCode + ' → ' + cfg.destCode +
                  '\nRecorded on the middleware ledger. Reference ' + reference);
+    syncPackingSlipsQuietly_();
 
     ui.alert(res.already_held
       ? 'This document already held ' + res.serial_code + ' — returned unchanged, no second number drawn.'
@@ -366,6 +408,7 @@ function startNewDocument() {
   cell.clearNote();
   cell.setFontWeight('normal');
   try { refresh_(); } catch (e) { cell.setValue(''); }
+  syncPackingSlipsQuietly_();   // a packing slip still showing the old number must clear with it
 }
 
 /**
@@ -418,6 +461,7 @@ function voidThisNumber() {
       cell.setNote('VOIDED ' + res.serial_code + ' on ' + stamp_());
       cell.setFontWeight('normal');
     }
+    syncPackingSlipsQuietly_();
     ui.alert(res.already_cancelled
       ? res.serial_code + ' was already voided.'
       : res.serial_code + ' is voided. It will not be issued again.');
@@ -500,6 +544,14 @@ function refreshAllTabs_() {
       failed.push(sheet.getName() + ': ' + err.message);
     }
   }
+
+  // Packing slips copy, they never preview: bring each one in line with its document.
+  try {
+    var slips = syncPackingSlips_();
+    for (var j = 0; j < slips.length; j++) done.push(slips[j]);
+  } catch (err) {
+    failed.push('Packing slip: ' + err.message);
+  }
   return { done: done, skipped: skipped, failed: failed };
 }
 
@@ -521,6 +573,192 @@ function flagCell_(sheet, message) {
   var cell = numberCell_(sheet, cfg);
   cell.setValue('');
   cell.setNote(message + '\n\nRun "🔢 Serial → Refresh next number" once the connection is back.');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Packing slips — copy the number of the document they ship with, never draw one
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** The PACKING_SLIPS entry for this tab name, or null. Same name matching as TABS. */
+function resolvePackingSlip_(name) {
+  var wanted = normalizeTabName_(name);
+  for (var key in PACKING_SLIPS) {
+    if (PACKING_SLIPS.hasOwnProperty(key) && normalizeTabName_(key) === wanted) return PACKING_SLIPS[key];
+  }
+  return null;
+}
+
+/** Where this slip's number and "Ships with" dropdown are: caption first, configured cell second. */
+function packingSlipCells_(sheet, p) {
+  var numberRef = findByLabel_(sheet, p.label, p.labelDir) || p.numberCell;
+  var toggleRef = findByLabel_(sheet, p.toggleLabel, p.toggleDir) || p.toggleCell;
+  if (!numberRef || !toggleRef) {
+    throw new Error('tab "' + sheet.getName() + '" needs the captions "' + p.label + '" and "' +
+                    p.toggleLabel + '", or numberCell / toggleCell in PACKING_SLIPS');
+  }
+  return { numberRef: String(numberRef).toUpperCase(), toggleRef: String(toggleRef).toUpperCase() };
+}
+
+/** The tab in this spreadsheet that raises the given series (from TABS), or null. */
+function sourceSheetFor_(docType) {
+  var sheets = SpreadsheetApp.getActive().getSheets();
+  for (var key in TABS) {
+    if (!TABS.hasOwnProperty(key) || TABS[key].docType !== docType) continue;
+    for (var i = 0; i < sheets.length; i++) {
+      if (normalizeTabName_(sheets[i].getName()) === normalizeTabName_(key)) return sheets[i];
+    }
+  }
+  return null;
+}
+
+/**
+ * Bring one packing slip in line with its document. Returns a one-line summary.
+ *
+ * Reads only this spreadsheet's own state — no network, no secret — so it also runs from the
+ * simple onEdit trigger the moment someone changes the "Ships with" dropdown.
+ */
+function syncPackingSlip_(sheet, p) {
+  var cells = packingSlipCells_(sheet, p);
+  var cell = numberCell_(sheet, { cellRef: cells.numberRef });
+  var choice = String(sheet.getRange(cells.toggleRef).getDisplayValue() || '').trim();
+  var docType = SHIPS_WITH[choice];
+
+  var show = function (value, note, bold) {
+    cell.setValue(value);
+    cell.setFontColor(bold ? '#000000' : '#999999').setFontStyle(bold ? 'normal' : 'italic')
+        .setFontWeight(bold ? 'bold' : 'normal');
+    cell.setNote(note);
+  };
+
+  if (!docType) {
+    show('', 'Pick "Delivery Challan" or "Interstore Sale" under "' + p.toggleLabel + '". ' +
+             'The packing slip then carries that document\'s number.', false);
+    writeState_(sheet, { phase: 'packing-slip', serial_code: '' });
+    return sheet.getName() + ': choose what it ships with';
+  }
+
+  var label = DOC_TYPES[docType].label;
+  var source = sourceSheetFor_(docType);
+  if (!source) {
+    show('', 'No ' + label + ' tab in this spreadsheet to copy from (see TABS at the top of the script).', false);
+    writeState_(sheet, { phase: 'packing-slip', serial_code: '' });
+    return sheet.getName() + ': no ' + label + ' tab found';
+  }
+
+  var src = readState_(source);
+  if (src.phase !== 'minted' || !src.serial_code) {
+    show('', 'Waiting for the ' + label + '. Mint its number on the "' + source.getName() + '" tab first; ' +
+             'this slip then shows the same number. A packing slip never draws a number of its own.', false);
+    writeState_(sheet, { phase: 'packing-slip', serial_code: '' });
+    return sheet.getName() + ': waiting for ' + source.getName() + ' to be minted';
+  }
+
+  show(src.serial_code, 'Same number as the ' + label + ' on the "' + source.getName() + '" tab' +
+       (src.minted_at ? ' (minted ' + Utilities.formatDate(new Date(src.minted_at), TZ, 'dd MMM yyyy HH:mm') + ')' : '') +
+       '.\nCopied ' + stamp_() + '. A packing slip never draws a number of its own.', true);
+  writeState_(sheet, { phase: 'packing-slip', serial_code: src.serial_code, from: source.getName() });
+  return sheet.getName() + ' → ' + src.serial_code + ' (from ' + source.getName() + ')';
+}
+
+/** Every packing slip tab in this spreadsheet. Returns their summaries. */
+function syncPackingSlips_() {
+  var out = [];
+  var sheets = SpreadsheetApp.getActive().getSheets();
+  for (var i = 0; i < sheets.length; i++) {
+    var p = resolvePackingSlip_(sheets[i].getName());
+    if (p) out.push(syncPackingSlip_(sheets[i], p));
+  }
+  return out;
+}
+
+/** For the mint / new-document / void paths: a slip problem must never mask their own result. */
+function syncPackingSlipsQuietly_() {
+  try { syncPackingSlips_(); } catch (e) { /* the slip says what is wrong when next synced */ }
+}
+
+/** Menu: copy the number now and say what happened. */
+function copyPackingSlipNumber() {
+  var ui = SpreadsheetApp.getUi();
+  try {
+    var r = syncPackingSlips_();
+    ui.alert('Packing slip', r.length ? r.join('\n') :
+      'No packing slip tab found. Run "Create the Packing Slip tab", or add your tab to PACKING_SLIPS.',
+      ui.ButtonSet.OK);
+  } catch (err) {
+    ui.alert('Packing slip: ' + err.message);
+  }
+}
+
+/** Simple trigger: changing the "Ships with" dropdown re-copies the number straight away. */
+function onEdit(e) {
+  try {
+    if (!e || !e.range) return;
+    var sheet = e.range.getSheet();
+    var p = resolvePackingSlip_(sheet.getName());
+    if (!p) return;
+    var cells = packingSlipCells_(sheet, p);
+    if (e.range.getA1Notation().toUpperCase() !== cells.toggleRef) return;
+    syncPackingSlip_(sheet, p);
+  } catch (err) { /* menu "Packing slip: copy the number" reports the problem */ }
+}
+
+/**
+ * Menu: build a printable Packing Slip tab with the two captions in place. From / To are this
+ * book's own store codes, the same ones its challans and invoices carry. Refuses to overwrite an
+ * existing tab of that name.
+ */
+function createPackingSlipTab() {
+  var ui = SpreadsheetApp.getUi();
+  var ss = SpreadsheetApp.getActive();
+  var name = 'Packing Slip';
+  var p = PACKING_SLIPS[name];
+  if (ss.getSheetByName(name)) {
+    ui.alert('A "' + name + '" tab already exists, so nothing was changed. Delete or rename it first.');
+    return;
+  }
+
+  var from = String(STORE_CODE || '').trim().toUpperCase();
+  var to   = String(DEST_CODE  || '').trim().toUpperCase();
+  var fromLines = STORE_ADDRESSES[from] || [from];
+  var toLines   = STORE_ADDRESSES[to]   || [to];
+
+  var sh = ss.insertSheet(name);
+  sh.setColumnWidths(1, 6, 120);
+  sh.setColumnWidth(3, 220);
+
+  sh.getRange('A1:F1').merge().setValue('PACKING SLIP')
+    .setFontSize(16).setFontWeight('bold').setHorizontalAlignment('center');
+
+  sh.getRange('A3').setValue(p.toggleLabel).setFontWeight('bold');
+  sh.getRange('B3').setDataValidation(SpreadsheetApp.newDataValidation()
+    .requireValueInList(Object.keys(SHIPS_WITH), true).setAllowInvalid(false).build());
+  sh.getRange('D3').setValue(p.label).setFontWeight('bold');
+  sh.getRange('A4').setValue('Date').setFontWeight('bold');
+  sh.getRange('B4').setNumberFormat('dd-mm-yyyy');
+
+  sh.getRange('A6').setValue('From (' + from + ')').setFontWeight('bold');
+  sh.getRange('D6').setValue('To (' + to + ')').setFontWeight('bold');
+  for (var i = 0; i < 3; i++) {
+    if (fromLines[i]) sh.getRange(7 + i, 1, 1, 3).merge().setValue(fromLines[i]).setWrap(true);
+    if (toLines[i])   sh.getRange(7 + i, 4, 1, 3).merge().setValue(toLines[i]).setWrap(true);
+  }
+
+  var head = ['S.No', 'SKU', 'Description', 'Qty', 'Gross wt (g)', 'Net wt (g)'];
+  sh.getRange(11, 1, 1, 6).setValues([head]).setFontWeight('bold').setBackground('#f0f0f0');
+  for (var r = 0; r < 20; r++) sh.getRange(12 + r, 1).setValue(r + 1);
+  sh.getRange(11, 1, 21, 6).setBorder(true, true, true, true, true, true);
+  sh.getRange(32, 3).setValue('Total').setFontWeight('bold');
+  sh.getRange(32, 4).setFormula('=SUM(D12:D31)');
+  sh.getRange(32, 5).setFormula('=SUM(E12:E31)');
+  sh.getRange(32, 6).setFormula('=SUM(F12:F31)');
+
+  sh.getRange('A35').setValue('Packed by').setFontWeight('bold');
+  sh.getRange('C35').setValue('Checked by').setFontWeight('bold');
+  sh.getRange('E35').setValue('Received by').setFontWeight('bold');
+
+  syncPackingSlip_(sh, p);
+  ui.alert('Created the "' + name + '" tab.\n\nPick what it ships with in B3. Its number is copied from ' +
+           'that tab once the challan or invoice has been minted.');
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -572,6 +810,14 @@ function config_(sheet) {
  */
 function resolveTab_(name) {
   var wanted = normalizeTabName_(name);
+
+  // A packing slip is never a numbering tab: Mint / Void / Refresh refuse it by name, so nobody can
+  // draw a challan or invoice number from the slip by running the menu on the wrong tab.
+  if (resolvePackingSlip_(name)) {
+    throw new Error('tab "' + name + '" is a packing slip. It never draws a number: it copies the ' +
+      'number of the document it ships with. Mint on the Delivery Challan or Interstore Sale tab, then ' +
+      'run "🔢 Serial → Packing slip: copy the number".');
+  }
 
   for (var key in TABS) {
     if (!TABS.hasOwnProperty(key)) continue;
@@ -802,7 +1048,14 @@ function diagnose() {
         var c2 = config_(sheets[s2]);
         lines.push('  ' + nm + '  →  ' + c2.docType + ' in ' + c2.cellRef + '  (' + c2.cellFrom + ')');
       } catch (e2) {
-        lines.push('  ' + nm + '  →  not numbered');
+        var ps = resolvePackingSlip_(nm);
+        if (ps) {
+          var st = readState_(sheets[s2]);
+          lines.push('  ' + nm + '  →  packing slip, copies its number' +
+                     (st.serial_code ? ' (now ' + st.serial_code + ' from ' + st.from + ')' : ' (none yet)'));
+        } else {
+          lines.push('  ' + nm + '  →  not numbered');
+        }
       }
     }
   } catch (err) {
