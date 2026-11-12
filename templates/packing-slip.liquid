@@ -147,8 +147,16 @@
   {% endfor %}
   {% assign pack_list = pack_keys | split: "@" %}
 
+  {% comment %}
+    Value column: challan drafts only, the same figure the delivery challan prints — the line's
+    `Taxable Value` (gold 100% + diamond 50% + making 100%, no GST), in paise; a line the challan
+    pricing never touched falls back to its charged price de-taxed, exactly as the challan does.
+  {% endcomment %}
+  {% assign ps_is_dc = false %}
+  {% if order.metafields.custom.document_type == "delivery_challan" %}{% assign ps_is_dc = true %}{% endif %}
+
   {% assign sno = 0 %}
-  {% assign t_qty = 0 %}{% assign t_gross = 0 %}{% assign t_net = 0 %}{% assign t_dia = 0 %}{% assign t_gem = 0 %}
+  {% assign t_qty = 0 %}{% assign t_gross = 0 %}{% assign t_net = 0 %}{% assign t_dia = 0 %}{% assign t_gem = 0 %}{% assign t_val = 0 %}
 
   <table class="items-table">
     <thead>
@@ -160,13 +168,14 @@
         <th class="text-center" style="width:12%;">Net Wt (g)</th>
         <th class="text-center" style="width:12%;">Diamond (cts)</th>
         <th class="text-center" style="width:12%;">Gemstone (cts)</th>
+        {% if ps_is_dc %}<th class="text-right" style="width:12%;">Value (₹)</th>{% endif %}
       </tr>
     </thead>
     <tbody>
       {% for _key in pack_list %}
         {% if _key == blank %}{% continue %}{% endif %}
 
-        {% assign g_qty = 0 %}{% assign g_gross = 0 %}{% assign g_net = 0 %}{% assign g_dia = 0 %}{% assign g_gem = 0 %}
+        {% assign g_qty = 0 %}{% assign g_gross = 0 %}{% assign g_net = 0 %}{% assign g_dia = 0 %}{% assign g_gem = 0 %}{% assign g_val = 0 %}
         {% assign g_title = "" %}{% assign g_variant = "" %}{% assign g_sku = "" %}
 
         {% for li in line_items %}
@@ -200,6 +209,15 @@
           {% assign g_net   = g_net   | plus: _nw %}
           {% assign g_dia   = g_dia   | plus: _dia %}
           {% assign g_gem   = g_gem   | plus: _gem %}
+
+          {% if ps_is_dc %}
+            {% assign _tax_str = "" %}
+            {% for p in li.properties %}
+              {% if p.first == "Taxable Value" %}{% assign _tax_str = p.last | remove: "Rs" | remove: "," | strip %}{% endif %}
+            {% endfor %}
+            {% if _tax_str != "" %}{% assign _val_p = _tax_str | times: 100 | round %}{% else %}{% assign _val_p = li.final_line_price | divided_by: 1.03 | round %}{% endif %}
+            {% assign g_val = g_val | plus: _val_p %}
+          {% endif %}
         {% endfor %}
 
         {% if g_qty < 1 %}{% continue %}{% endif %}
@@ -209,6 +227,7 @@
         {% assign t_net   = t_net   | plus: g_net %}
         {% assign t_dia   = t_dia   | plus: g_dia %}
         {% assign t_gem   = t_gem   | plus: g_gem %}
+        {% assign t_val   = t_val   | plus: g_val %}
 
         <tr>
           <td class="text-center">{{ sno }}.</td>
@@ -222,6 +241,7 @@
           <td class="text-center">{% if g_net   > 0 %}{{ g_net   | round: 3 }}{% else %}—{% endif %}</td>
           <td class="text-center">{% if g_dia   > 0 %}{{ g_dia   | round: 3 }}{% else %}—{% endif %}</td>
           <td class="text-center">{% if g_gem   > 0 %}{{ g_gem   | round: 3 }}{% else %}—{% endif %}</td>
+          {% if ps_is_dc %}<td class="text-right">{{ g_val | money_without_currency | remove: ',' }}</td>{% endif %}
         </tr>
       {% endfor %}
     </tbody>
@@ -233,6 +253,7 @@
         <td class="text-center">{% if t_net   > 0 %}{{ t_net   | round: 3 }}{% else %}—{% endif %}</td>
         <td class="text-center">{% if t_dia   > 0 %}{{ t_dia   | round: 3 }}{% else %}—{% endif %}</td>
         <td class="text-center">{% if t_gem   > 0 %}{{ t_gem   | round: 3 }}{% else %}—{% endif %}</td>
+        {% if ps_is_dc %}<td class="text-right">{{ t_val | money_without_currency | remove: ',' }}</td>{% endif %}
       </tr>
     </tfoot>
   </table>
