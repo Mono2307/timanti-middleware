@@ -57,7 +57,8 @@ async function cancelOpenLinks(draftId) {
 }
 
 // Cancel every open link on the draft, then raise one for `amount`. Returns { shortUrl, amount }.
-async function createPlanLink(plan, amount) {
+// installmentType labels the payment_links row: 'buy_plan', or 'savings_plan' (savings-plan/sweep.js).
+async function createPlanLink(plan, amount, { installmentType = 'buy_plan' } = {}) {
   const draftId = String(plan.draft_order_id);
   await cancelOpenLinks(draftId);
 
@@ -69,7 +70,7 @@ async function createPlanLink(plan, amount) {
   });
   const { error } = await supabase.from('payment_links').insert({
     draft_order_id: draftId, draft_order_name: plan.draft_name, gokwik_link_id: gokwikLinkId,
-    short_url: shortUrl, amount, total_amount: Number(plan.total), installment_type: 'buy_plan',
+    short_url: shortUrl, amount, total_amount: Number(plan.total), installment_type: installmentType,
     status: 'created', customer_phone: phone, expires_at: expiresAt,
   });
   if (error) log.warn('buy-plan', `payment_links insert for ${plan.draft_name}: ${error.message}`);

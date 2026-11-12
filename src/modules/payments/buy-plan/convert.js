@@ -8,9 +8,22 @@
 const S = require('./schedule');
 const store = require('./store');
 const { readDraft } = require('./draft');
+const { config } = require('../../../core/config');
+
+// A savings-plan draft NEVER becomes an order (HQ, 12 Nov 2026): it pays out a Savings Scheme Voucher,
+// which is spent on a separate purchase draft. Only asked while savings plans are switched on, so a
+// deploy before its table exists adds no failing query to every conversion.
+async function savingsBlock(draftId) {
+  if (!config.savingsPlan.enabled) return null;
+  const plan = await require('../savings-plan/store').getPlanByDraft(String(draftId).replace(/\D/g, ''));
+  if (!plan || plan.status === 'cancelled') return null;
+  return `Savings plan ${plan.draft_name}: a savings plan draft is never converted to an order. Its voucher is used on a separate purchase.`;
+}
 
 // null when the draft may be converted, else the reason it may not (shown to staff as is).
 async function conversionBlock(draftId) {
+  const savings = await savingsBlock(draftId);
+  if (savings) return savings;
   const plan = await store.getPlanByDraft(String(draftId).replace(/\D/g, ''));
   if (!plan || plan.status !== 'active') return null;
   const d = await readDraft(plan.draft_order_id);
@@ -22,4 +35,4 @@ async function conversionBlock(draftId) {
   return null;
 }
 
-module.exports = { conversionBlock };
+module.exports = { conversionBlock, savingsBlock };

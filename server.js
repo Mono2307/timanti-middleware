@@ -5226,6 +5226,8 @@ lookbook.register(app);
 // Loyalty programme: storefront proxy, staff preview, operator endpoints. src/modules/loyalty.
 require('./src/modules/loyalty/routes').register(app, ctx);
 require('./src/modules/payments/buy-plan/routes').register(app, ctx);
+// Savings plan: every route answers 503 until SAVINGS_PLAN_ENABLED is on (config.savingsPlan).
+require('./src/modules/payments/savings-plan/routes').register(app);
 
 // ─────────────────────────────────────────
 // Start
@@ -5277,6 +5279,7 @@ app.listen(PORT, async () => {
   // Loyalty: expire unused online codes, keep the occasion-month tag current. No-op unless LOYALTY_ENABLED.
   startLoyaltySweep();
   startBuyPlanSweep({ restore: restoreDeletedPlanDraft });   // buy-plan reminders, staff digest, completion
+  if (config.savingsPlan.enabled) require('./src/modules/payments/savings-plan/sweep').startSavingsSweep();   // savings-plan reminders, grace, termination
 
   // Counter-vs-ledger reconciliation. Emails accounts only when a document number has gone missing;
   // silence means the counters and the ledger agree. This is the layer that catches a cause we have

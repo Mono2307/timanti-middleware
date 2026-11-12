@@ -1167,7 +1167,69 @@ function buildBuyPlanRestoredHtml({ oldName, newName, adminUrl, customerName, to
 }
 
 
+// ── Savings plan (src/modules/payments/savings-plan/notify.js) ──────────────────────────────────
+// rows: savings rules savingsState(...).rows — { k, due, amount, status: paid|overdue|due|upcoming, late }.
+
+function savingsScheduleTable(rows) {
+  const n = rows.length;
+  const label = { paid: 'Paid', due: 'Due today', overdue: 'Overdue', upcoming: 'Upcoming' };
+  const colour = { paid: '#16a34a', due: '#111111', overdue: '#dc2626', upcoming: '#999999' };
+  return `
+    <table width="100%" cellpadding="0" cellspacing="0" border="0" style="font-size:14px; color:#333333;">
+      ${rows.map(r => `
+      <tr style="border-top:1px solid #f0f0f0;">
+        <td style="padding:8px 0; color:#999999;">${r.k} of ${n}</td>
+        <td style="padding:8px 0;">${esc(planDate(r.due))}</td>
+        <td style="padding:8px 0; text-align:right;">${money(r.amount)}</td>
+        <td style="padding:8px 0 8px 12px; text-align:right; color:${colour[r.status] || '#333333'};">${label[r.status] || ''}${r.status === 'paid' && r.late ? ' (late)' : ''}</td>
+      </tr>`).join('')}
+    </table>`;
+}
+
+// Customer: every savings-plan email. terms: bullet strings (shown in the grey box), or omitted.
+function buildSavingsPlanHtml({ draftName, heading, body, payUrl, amount, rows, paid, terms, whatsappUrl, whatsappLabel }) {
+  return head()
+    + contentBlock({
+        ref: `Savings Plan — ${draftName}`, heading, body,
+        buttonsHtml: payUrl ? button(`Pay ${money(amount)}`, payUrl) : '',
+        storeLinkHtml: whatsappUrl ? storeLink(whatsappLabel || 'Message us on WhatsApp', whatsappUrl) : '',
+        timelineHtml: terms && terms.length ? timeline(termsList(terms)) : '',
+      })
+    + (rows && rows.length ? section(h3('Your plan') + savingsScheduleTable(rows)
+        + summary([{ label: 'Saved so far', value: money(paid), total: true }])) : '')
+    + standardFooter()
+    + foot();
+}
+
+// Internal (store): one savings-plan item that needs a person. facts: [{ label, value }].
+function buildSavingsPlanStaffHtml({ heading, body, adminUrl, facts }) {
+  return head()
+    + contentBlock({ ref: 'Store — internal', heading, body, buttonsHtml: adminUrl ? button('Open the draft', adminUrl) : '' })
+    + (facts && facts.length ? section(summary(facts.map(f => ({ label: f.label, value: f.value })))) : '')
+    + foot();
+}
+
+// Internal: the daily savings-plan follow-ups. rows: [{ draftName, adminUrl, customerName, phone, note, waUrl }].
+function buildSavingsPlanDigestHtml({ dateLabel, rows }) {
+  const items = rows.map(r => `
+      <tr style="border-top:1px solid #f0f0f0;">
+        <td style="padding:10px 0; font-size:14px; color:#333333; text-align:left;">
+          <a href="${r.adminUrl}" target="_blank" style="color:#111111; font-weight:600;">${esc(r.draftName)}</a>
+          · ${esc(r.customerName || '')} ${esc(r.phone || '')}<br>
+          <span style="color:#555555;">${esc(r.note)}</span>
+          ${r.waUrl ? `<br><a href="${r.waUrl}" target="_blank" style="color:#fc7d27;">Send on WhatsApp</a>` : ''}
+        </td>
+      </tr>`).join('');
+  return head()
+    + contentBlock({ ref: 'Store — internal', heading: `Savings plans: ${rows.length} to follow up`, body: esc(dateLabel) })
+    + section(`<table width="100%" cellpadding="0" cellspacing="0" border="0">${items}</table>`)
+    + foot();
+}
+
 module.exports = {
+  buildSavingsPlanHtml,
+  buildSavingsPlanStaffHtml,
+  buildSavingsPlanDigestHtml,
   buildLoyaltyTierUpHtml,
   buildBuyPlanStartedHtml,
   buildBuyPlanGoldLinkHtml,

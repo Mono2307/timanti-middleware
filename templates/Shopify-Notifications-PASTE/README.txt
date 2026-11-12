@@ -5,6 +5,8 @@ Select all the existing code, replace it with the file's full contents, Save. Th
     CAD Advance drafts get "Your Timanti Design Advance Receipt" copy (no 21-day box, no balance note).
     Payment method now shows Card / UPI (was blank).
     Check: search the file for "design advance".
+    Savings plan drafts (the "Savings Plan" line / savings-plan tag, 12 Nov 2026) get "Your Timanti Savings Plan Receipt"
+    copy, "Paid into your plan so far", no 21-day box, no balance note. Check: search the file for "is_savings".
 
 2 - Order confirmation                     -> "Order confirmation"
     Reads the draft's Channel / Ship to Customer / Order Type tags, so they finally take effect.

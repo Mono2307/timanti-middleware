@@ -129,6 +129,17 @@ const config = {
     rebuildHours:  String(process.env.LOOKBOOK_REBUILD_HOURS || '14,19'),
   },
 
+  // ── Savings plan (src/modules/payments/savings-plan) ──────────────────────
+  savingsPlan: {
+    /**
+     * Master switch: the savings-plan routes and its sweep. OFF unless set, so a deploy before the
+     * Supabase tables exist (savings-plan/migration.sql) does nothing.
+     */
+    enabled:       flagOn(process.env.SAVINGS_PLAN_ENABLED),
+    /** The store WhatsApp the customer emails link to (early redemption, questions). Digits, country code first. */
+    whatsapp:      String(process.env.SAVINGS_WHATSAPP || '917710968305').replace(/[^0-9]/g, ''),
+  },
+
   // ── Loyalty programme (src/modules/loyalty) ───────────────────────────────
   loyalty: {
     /**

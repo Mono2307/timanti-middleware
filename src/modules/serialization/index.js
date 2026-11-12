@@ -51,6 +51,9 @@ const DEFAULT_REGISTRY = {
   // Adjustments — per-store now, reset per FY. EXC27-KAHSR-0001 / VCH27-KAHSR-0001.
   voucher:          { scope: 'store',  start: 1, pad: 4, fy: true,  code: 'VCH{FY}-{CODE}-{SEQ}', display: 'VCH{FY}-{CODE}-{SEQ}' },
   exchange_note:    { scope: 'store',  start: 1, pad: 4, fy: true,  code: 'EXC{FY}-{CODE}-{SEQ}', display: 'EXC{FY}-{CODE}-{SEQ}' },
+  // Savings Scheme Voucher — what a savings plan pays out (savings-plan/voucher.js). Its own series so it
+  // is never mistaken for an ordinary voucher. SSV27-KAHSR-0001.
+  savings_voucher:  { scope: 'store',  start: 1, pad: 4, fy: true,  code: 'SSV{FY}-{CODE}-{SEQ}', display: 'SSV{FY}-{CODE}-{SEQ}' },
 };
 
 // Machine-written keys. state_code holds the full compound store code (e.g. KA-HSR),
