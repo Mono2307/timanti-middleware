@@ -27,6 +27,7 @@ const { deleteDiscountNode } = require('./online');
 const afterSales = require('./after_sales');
 const promo = require('./promo');
 const creditInstruments = require('../adjustments/credit_instruments');
+const referral = require('./referral');
 
 // Shopify sends several deliveries per order within seconds. Coalesce them: keep the newest
 // payload per order and process it once the burst has gone quiet.
@@ -94,6 +95,11 @@ async function settleOnlineCode(order, cfg) {
   if (Math.abs(appliedIncl - Number(red.discount_incl_tax || 0)) > 1) {
     log.warn('loyalty', `order ${order.name}: code ${codeEntry.code} applied Rs${appliedIncl}, expected Rs${red.discount_incl_tax} — check`);
   }
+  // The code carried a referral reward instead of loyalty: that reward is now used.
+  if (red.referral_reward_id) {
+    await referral.markUsed(supabase, red.referral_reward_id, { orderId: order.id, orderName: order.name, channel: 'online' })
+      .catch(e => log.error('referral', `order ${order.name}: reward ${red.referral_reward_id} not marked used: ${e.message}`));
+  }
   if (mismatch) {
     log.warn('loyalty', `order ${order.name}: loyalty code requested by customer ${red.customer_id} but the order is on ${orderCustomer} (GoKwik phone login?) — flagged for review`);
   }
@@ -151,6 +157,11 @@ async function processOrder(order) {
   const redeemedAgainst = await afterSales.redeemedAgainst(supabase, order.name);
   const points = isCadAdvanceOnly(order) ? 0
     : E.earnPoints(order, cfg, { amountRefunded: await amountRefundedFor(order.id), redeemedAgainst }).points;
+  // Referral: does this order earn the friend who referred it a reward (or void one)? Runs on every
+  // pass, before the unchanged-points early return below, because "fully paid" usually arrives on a
+  // later delivery than the order itself. Never blocks earning.
+  await referral.onOrder(order, { points, cfg })
+    .catch(e => log.error('referral', `order ${order.name}: referral check failed: ${e.message}`));
   const channel = order.source_name === 'shopify_draft_order' ? 'store' : 'online';
   const { changed, previousCustomerId } = await ledger.upsertOrderEntry(supabase, {
     customerId, orderId: order.id, orderName: order.name, points, kind: 'earn', channel,

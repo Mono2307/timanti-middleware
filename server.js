@@ -1573,7 +1573,7 @@ async function publishDiscountBreakup(draftOrderId, mfMap, perLine) {
 // no line props at all (see templates/Strategy/email_order_confirmation.html).
 const DISCOUNT_SPLIT_PROPS = new Set([
   'Discount on Diamond', 'Discount on Making', 'Discount on Total',
-  'Campaign', 'Campaign Discount', 'Manual Discount', 'Loyalty Discount', 'Shopify Discount', 'Code Discount',
+  'Campaign', 'Campaign Discount', 'Manual Discount', 'Loyalty Discount', 'Referral Discount', 'Shopify Discount', 'Code Discount',
 ]);
 
 function discountSplitProps({ dia = 0, mk = 0, tot = 0, bySrc = null, campaigns = [] } = {}) {
@@ -1590,6 +1590,8 @@ function discountSplitProps({ dia = 0, mk = 0, tot = 0, bySrc = null, campaigns 
     out.push({ name: 'Campaign Discount', value: rs(bySrc.campaign) });
     out.push({ name: 'Manual Discount',   value: rs(bySrc.manual) });
     out.push({ name: 'Loyalty Discount',  value: rs(bySrc.loyalty) });
+    // The referral reward takes loyalty's place on a bill (src/modules/loyalty/referral.js); only when used.
+    if ((Number(bySrc.referral) || 0) > 0.005) out.push({ name: 'Referral Discount', value: rs(bySrc.referral) });
     if ((Number(bySrc.other) || 0) > 0.005) out.push({ name: 'Shopify Discount', value: rs(bySrc.other) });
     if ((Number(bySrc.code)  || 0) > 0.005) out.push({ name: 'Code Discount',    value: rs(bySrc.code) });
   }
@@ -3600,7 +3602,7 @@ async function handleAutoDiamondDiscount(draft) {
       if (!band) return;
       // A diamond cut staff typed in (or an earlier auto run) means leave the line alone. Loyalty's own
       // entry does not: loyalty stacks on this discount, whichever of the two landed first.
-      if (next[i].some(e => e && e.src !== 'loyalty' && String(e.t || '').toLowerCase() === 'dia')) { skippedExisting = true; return; }
+      if (next[i].some(e => e && e.src !== 'loyalty' && e.src !== 'referral' && String(e.t || '').toLowerCase() === 'dia')) { skippedExisting = true; return; }
       // src marks it as the AUTO discount, so loyalty can tell it from a per-line discount staff typed in.
       next[i].push({ t: 'dia', m: 'pct', v: band.pct, src: 'auto-dia', camp });
       changed = true;
@@ -3854,6 +3856,7 @@ async function runDraftUpdateHandlers(draft) {
   await step('apply-discount',   () => handleApplyDiscountTag(draft));     // admin action: apply-discount:<code>|custom → dia-only pre-tax discount (drops reprice)
   await step('repairs',          () => handleRepairDraftUpdate(draft, getShopifyToken, assignRepairSerial));
   await step('document-serial',  () => handleDocumentSerialTags(draft));   // PO/memo/transfer tags added after creation
+  await step('referral-tag',     () => require('./src/modules/loyalty/referral').handleReferralTagStep(draft)); // ref:<code|phone> → referred:<CODE> or ref-invalid (no-op without a ref: tag)
   await step('loyalty',          () => loyaltyDraft.handleLoyaltyStep(draft)); // apply-loyalty / remove-loyalty / keep it correct as lines change (drops reprice)
   // Balance ordering matters: net-to-collect must be recomputed AFTER every adjustment above
   // (voucher / advance / exchange / old-gold), and amount_pending is DERIVED off that fresh net —

@@ -43,7 +43,7 @@ const DEFAULT_CONFIG = Object.freeze({
   online: { code_prefix: 'LOY-', code_ttl_minutes: 120 },
   // Customer emails, all off until the founder signs off the copy. online_live switches the "how to
   // use it" line from store-only to cart + store once the online benefit is live.
-  emails: { tier_change: false, occasion: false, online_live: false },
+  emails: { tier_change: false, occasion: false, online_live: false, referral_reward: false },
   // Which orders earn. Orders before #1038 are pre-programme / test history (founder, 2026-10-10).
   // superseded_orders: an invoice replaced by a later one with no exchange-note record linking them —
   // the earlier one earns nothing. Vandana Reddy's #1052 was re-invoiced as #1057.
@@ -52,6 +52,11 @@ const DEFAULT_CONFIG = Object.freeze({
   // types the code in the cart drawer; the server turns it into a one-time Shopify code (promo.js).
   // starts_at / ends_at are ISO dates in UTC. ISB10 runs 23 Oct 2026 12:00 AM IST to 30 Nov 2026 11:59:59 PM IST.
   promos: { ISB10: { pct: 10, active: true, starts_at: '2026-10-22T18:30:00Z', ends_at: '2026-11-30T18:29:59Z', require_login: false } },
+  // Referral (founder, 2026-11-12; referral.js): a friend's first fully paid order earns the referrer
+  // pct % off the diamond value of one later bill, usable for reward_months. Never with loyalty: the
+  // bill gets whichever saves more. exclude_tiers have no link and earn nothing (Platinum).
+  // enabled:false switches the whole programme off without a deploy.
+  referral: { enabled: true, pct: 10, reward_months: 12, exclude_tiers: ['T3'], link_base: 'https://timanti.in/' },
 });
 
 /** The diamond % per tier before the 2026-10-24 grid — see the upgrade in normalizeConfig. */
@@ -139,7 +144,21 @@ function normalizeConfig(raw) {
       tier_change: !!(raw.emails || {}).tier_change,
       occasion: !!(raw.emails || {}).occasion,
       online_live: !!(raw.emails || {}).online_live,
+      referral_reward: !!(raw.emails || {}).referral_reward,
     },
+    // Missing from a config saved before the programme existed → the defaults.
+    referral: (() => {
+      const r = raw.referral || DEFAULT_CONFIG.referral;
+      const pct = r.pct == null ? DEFAULT_CONFIG.referral.pct : Number(r.pct);
+      if (!(pct >= 0 && pct <= 100)) throw new Error('referral pct must be between 0 and 100');
+      return {
+        enabled: r.enabled !== false,
+        pct,
+        reward_months: Math.max(1, parseInt(r.reward_months, 10) || DEFAULT_CONFIG.referral.reward_months),
+        exclude_tiers: Array.isArray(r.exclude_tiers) ? r.exclude_tiers.map(String) : [...DEFAULT_CONFIG.referral.exclude_tiers],
+        link_base: String(r.link_base || DEFAULT_CONFIG.referral.link_base),
+      };
+    })(),
     // Promo codes on the diamond value. Missing -> the defaults; {} -> none. A bad entry is skipped
     // (and logged) instead of failing the whole config, so a typo here can never touch the tiers.
     promos: (() => {

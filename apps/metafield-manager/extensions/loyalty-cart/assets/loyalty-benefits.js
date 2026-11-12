@@ -15,6 +15,12 @@
  * entry switched off). Loyalty stacks with one voucher / code; Shopify's combination settings refuse a
  * promo code alongside loyalty, and this card says so. A one-time loyalty code is made for one set of
  * cart contents; if the cart changes after loyalty was applied, it is re-applied once, quietly.
+ *
+ * Referral (src/modules/loyalty/referral.js): on ANY page, a ?ref=CODE in the address is remembered
+ * for 30 days and copied onto the cart as the hidden attribute _referral, so the order says who sent
+ * the buyer. Once the visitor is logged in it is also claimed on the server (the backup if checkout
+ * drops the attribute). A customer with a banked referral reward sees it here: Apply puts on whichever
+ * of loyalty and the reward saves more (never both).
  */
 (function () {
   if (window.__tlLoyalty) return;
@@ -30,6 +36,7 @@
     !!document.querySelector('[data-tl-benefits][data-logged-in="true"]');
   var LOGIN_URL = (cfgEl && cfgEl.getAttribute('data-login-url')) || '/account/login?return_url=/cart';
   var HEADING = (cfgEl && cfgEl.getAttribute('data-heading')) || 'Your Benefits';
+  var KEY_LABEL = 'tl-loyalty-label';
 
   var store = {
     get: function (k) { try { return sessionStorage.getItem(k); } catch (e) { return null; } },
@@ -66,6 +73,42 @@
     return total;
   }
 
+  // ── Referral capture ─────────────────────────────────────────────────────────────────────────
+  var KEY_REF = 'tl-ref';
+  var REF_DAYS = 30;
+  function readRef() {
+    try {
+      var v = JSON.parse(localStorage.getItem(KEY_REF) || 'null');
+      if (!v || !v.code || Date.now() - v.at > REF_DAYS * 864e5) return null;
+      return v;
+    } catch (e) { return null; }
+  }
+  function saveRef(v) { try { if (v) localStorage.setItem(KEY_REF, JSON.stringify(v)); else localStorage.removeItem(KEY_REF); } catch (e) { /* blocked */ } }
+  (function captureReferral() {
+    var m = /[?&]ref=([A-Za-z0-9]{4,12})(?:[&#]|$)/.exec(window.location.search);
+    var ref = readRef();
+    // The first link within 30 days wins, the same rule the server applies to claims.
+    if (m && !ref) { ref = { code: m[1].toUpperCase(), at: Date.now() }; saveRef(ref); }
+    if (!ref) return;
+    getCart().then(function (cart) {
+      if ((cart.attributes || {})._referral === ref.code) return;
+      return fetch('/cart/update.js', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({ attributes: { _referral: ref.code } }),
+      });
+    }).catch(function () { /* the claim below is the backup */ });
+    if (LOGGED_IN && !ref.claimed) {
+      fetch('/apps/loyalty/referral/claim', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({ code: ref.code }),
+      }).then(function (r) { return r.json(); }).then(function (res) {
+        // Someone who has bought before (or the code's owner) is not a referral: stop sending it.
+        if (res && (res.reason === 'existing customer' || res.reason === 'own code' || res.reason === 'unknown code')) { saveRef(null); return; }
+        if (res && res.ok) { ref.claimed = true; saveRef(ref); }
+      }).catch(function () { /* try again on the next page */ });
+    }
+  })();
+
   var benefitsPromise = null;
   function getBenefits() {
     if (!LOGGED_IN) return Promise.resolve({ loggedIn: false });
@@ -95,6 +138,7 @@
       // Keep any other code already on the cart (a voucher stacks); drop an older loyalty code.
       var keep = cartCodes(cart).filter(function (c) { return !LOY.test(c); });
       return setCodes(keep.concat([res.code])).then(function () {
+        store.set(KEY_LABEL, res.kind === 'referral' ? 'Referral reward' : (res.tier || ''));
         store.set(KEY_ON, '1');
         store.set(KEY_SIG, cartSig(cart));
         reload(ctx.inDrawer);
@@ -123,7 +167,7 @@
   }
 
   function removeCode(cart, code, ctx) {
-    if (LOY.test(code)) { store.del(KEY_ON); store.del(KEY_SIG); }
+    if (LOY.test(code)) { store.del(KEY_ON); store.del(KEY_SIG); store.del(KEY_LABEL); }
     return setCodes(cartCodes(cart).filter(function (c) { return c.toUpperCase() !== String(code).toUpperCase(); }))
       .then(function () { reload(ctx.inDrawer); });
   }
@@ -175,20 +219,27 @@
         var login = el('a', 'button tl-card__btn', 'Log in');
         login.href = LOGIN_URL;
         body.appendChild(row('Log in to unlock your loyalty benefit', login));
-      } else if (b.found && b.enabled !== false && b.tier) {
+      } else if (b.found && b.enabled !== false && (b.tier || b.referral)) {
         var occ = b.occasion && b.occasion.length ? ' (' + b.occasion.join(' & ') + ' bonus)' : '';
+        var refText = b.referral ? 'Referral reward · ' + b.referral.pct + '% off diamonds' : '';
+        // Loyalty and the referral reward never combine; Apply puts on whichever saves more.
+        var offerText = b.tier
+          ? b.tier.name + ' member · ' + b.rate + '% off diamonds' + mk(b.tier) + occ +
+            (b.referral ? ' · or your referral reward (' + b.referral.pct + '% off diamonds), whichever saves more' : '')
+          : refText;
         if (!loyCode && store.get(KEY_ON) === '1' && store.get(KEY_SIG) !== cartSig(cart)) {
           // Applied earlier, cart changed since → re-apply for the new contents, once.
           store.set(KEY_SIG, cartSig(cart));
-          body.appendChild(row(b.tier.name + ' member · ' + b.rate + '% off diamonds' + mk(b.tier) + occ, null));
+          body.appendChild(row(offerText, null));
           applyLoyalty(cart, ctx);
         } else if (loyCode) {
           var saved = codeSaving(cart, loyCode);
-          body.appendChild(row(b.tier.name + ' benefit applied · ' + (saved > 0 ? inr(saved) + ' off' : b.rate + '% off diamonds' + mk(b.tier)),
+          var appliedName = store.get(KEY_LABEL) || (b.tier ? b.tier.name : 'Referral reward');
+          var appliedName2 = appliedName === 'Referral reward' ? appliedName : appliedName + ' benefit';
+          body.appendChild(row(appliedName2 + ' applied · ' + (saved > 0 ? inr(saved) + ' off' : (b.tier ? b.rate + '% off diamonds' + mk(b.tier) : refText)),
             textLink('Remove', function () { removeCode(cart, loyCode, ctx); })));
         } else {
-          body.appendChild(row(b.tier.name + ' member · ' + b.rate + '% off diamonds' + mk(b.tier) + occ,
-            primary('Apply', function () { applyLoyalty(cart, ctx); })));
+          body.appendChild(row(offerText, primary('Apply', function () { applyLoyalty(cart, ctx); })));
         }
       } else if (b.found && b.next) {
         body.appendChild(row(inr(b.next.gap) + ' more to unlock ' + b.next.name + ' · ' + b.next.pct + '% off diamonds' + mk(b.next), null));

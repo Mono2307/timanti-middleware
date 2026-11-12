@@ -236,6 +236,51 @@ function computeLoyalty({ points, birthday, anniversary, lines = [], now = new D
   };
 }
 
+// ── Referral reward ─────────────────────────────────────────────────────────────────────────────
+
+/** The referral reward, as it appears wherever a loyalty tier would (code titles, panel, ledger). */
+const REFERRAL_TIER = Object.freeze({ key: 'REF', name: 'Referral reward' });
+
+/**
+ * One referral reward on these lines: pct % off the DIAMOND value of each eligible line, no making
+ * cut, no cap (founder, 2026-11-12). Same eligibility rules as loyalty. Returns the SAME shape as
+ * computeLoyalty, so every path that turns a loyalty result into a code or a draft entry takes it
+ * unchanged; kind 'referral' tells them apart.
+ */
+function computeReferral({ lines = [], cfg, pct } = {}) {
+  const rate = Number(pct != null ? pct : (cfg && cfg.referral && cfg.referral.pct)) || 0;
+  const perLine = lines.map((line, idx) => {
+    const e = lineEligibility(line, cfg);
+    const diamond = Math.max(0, Number(line.diamond) || 0);
+    const making = Math.max(0, Number(line.making) || 0);
+    const discount = e.eligible ? Math.min(diamond, r2(diamond * rate / 100)) : 0;
+    return { idx, eligible: e.eligible, reason: e.reason, diamond: r2(diamond), discount, making: r2(making), makingDiscount: 0 };
+  });
+  const diamondTotal = r2(perLine.reduce((s, l) => s + l.discount, 0));
+  const ok = rate > 0 && perLine.some(l => l.eligible) && diamondTotal > 0;
+  return {
+    ok, reason: ok ? '' : (rate > 0 ? 'no eligible pieces' : 'referral reward is switched off'), kind: 'referral',
+    tier: { ...REFERRAL_TIER, pct: rate, making_pct: 0, making_cap: 0 },
+    rate, basePct: rate, occasion: { pct: 0, occasions: [] }, makingPct: 0, makingCap: 0,
+    perLine, diamondTotal, makingTotal: 0, total: diamondTotal,
+  };
+}
+
+/**
+ * Loyalty OR the referral reward, never both (founder, 2026-11-12): whichever takes more rupees off
+ * this bill, diamond plus capped making counted. A tie keeps loyalty, so the reward stays banked for
+ * a bill where it does win. loyalty may be a refusal (below tier / no eligible pieces); referral may
+ * be a refusal too. reward is the referral_rewards row that would be used (null = none open). The
+ * referral winner carries `reward` and `loyaltyTotal`; a loyalty winner carries `referralTotal`.
+ */
+function pickBenefit(loyalty, referral, reward) {
+  const loyTotal = loyalty && loyalty.ok ? Number(loyalty.total) || 0 : 0;
+  if (!referral || !referral.ok || !reward || !(Number(referral.total) > loyTotal)) {
+    return loyalty ? { ...loyalty, kind: 'loyalty', referralTotal: reward && referral && referral.ok ? referral.total : 0 } : loyalty;
+  }
+  return { ...referral, reward: { id: reward.id, expires_at: reward.expires_at || null }, loyaltyTotal: loyTotal };
+}
+
 /** Paise rounded DOWN, so lines scaled to a cap never add up to a paisa over it. */
 function floor2(v) {
   return Math.floor((Number(v) || 0) * 100 + 1e-6) / 100;
@@ -367,11 +412,13 @@ function otherDiscountOnDraft(mfMap = {}) {
 function withLoyaltyEntries(lineDiscArr, productItems, applied) {
   if (!applied || !(Number(applied.rate) > 0)) return lineDiscArr;
   const eligible = new Set((applied.eligible_variants || []).map(String));
+  // The referral reward rides in loyalty's slot (the two never combine) but is its own breakup source.
+  const src = applied.kind === 'referral' ? 'referral' : 'loyalty';
   const out = (productItems || []).map((_, i) => (Array.isArray(lineDiscArr[i]) ? [...lineDiscArr[i]] : []));
   (productItems || []).forEach((item, i) => {
     if (!item || !item.variant_id || !eligible.has(String(item.variant_id))) return;
-    out[i] = out[i].filter(e => !(e && e.src === 'loyalty'));
-    out[i].push({ t: 'dia', m: 'pct', v: Number(applied.rate), src: 'loyalty' });
+    out[i] = out[i].filter(e => !(e && (e.src === 'loyalty' || e.src === 'referral')));
+    out[i].push({ t: 'dia', m: 'pct', v: Number(applied.rate), src });
     // The making cut carries the tier's per-transaction cap; capLoyaltyMaking enforces it across lines.
     if (Number(applied.mk) > 0) out[i].push({ t: 'mk', m: 'pct', v: Number(applied.mk), src: 'loyalty', cap: Number(applied.mkcap) || 0 });
   });
@@ -408,6 +455,7 @@ module.exports = {
   tierFor, sortedTiers, qualifyingMin,
   monthOf, istMonth, istDate, istMonthStartIso, occasionBonus,
   lineEligibility, computeLoyalty, onlineAmount,
+  REFERRAL_TIER, computeReferral, pickBenefit,
   isExchangeLine, orderEarnValue, orderNumber, earnPoints,
   readApplied, otherDiscountOnDraft, withLoyaltyEntries, capLoyaltyMaking,
 };

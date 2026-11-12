@@ -13,6 +13,8 @@
  *     GET  /api/loyalty/proxy/benefits      the logged-in customer's tier, rate and open vouchers
  *     POST /api/loyalty/proxy/apply         one-time code for the cart's pieces: tier % off diamond + capped % off making
  *     POST /api/loyalty/proxy/promo         typed promo code (e.g. ISB10) -> one-time diamond-only code
+ *     GET  /api/loyalty/proxy/referral      the logged-in customer's referral link, rewards and friends
+ *     POST /api/loyalty/proxy/referral/claim   { code } — this new customer arrived on that code
  *   Staff panel (Shopify admin session token):
  *     GET  /api/loyalty/draft-preview?draft=<id>   what "Apply loyalty" would do on this draft
  *   Operator (x-admin-secret header or ?secret=):
@@ -25,6 +27,7 @@
  *     GET  /api/loyalty/redemptions         redemptions; ?mismatch=1 for GoKwik phone mismatches
  *     POST /api/loyalty/voucher-combos      let open voucher codes sit beside a loyalty code
  *     POST /api/loyalty/sweep               run the daily sweep now (?dryRun=1)
+ *     GET  /api/loyalty/referrals           referral rewards; ?status=earned&referrer=<customer id>
  *
  * Everything except /setup answers 503 while LOYALTY_ENABLED is off.
  */
@@ -45,6 +48,7 @@ const online = require('./online');
 const promo = require('./promo');
 const backfill = require('./backfill');
 const { runLoyaltySweep } = require('./sweep');
+const referral = require('./referral');
 
 function requireAdmin(req, res, next) {
   const expected = config.adminApiSecret;
@@ -228,6 +232,24 @@ function register(app /* , ctx */) {
     catch (e) { log.error('loyalty', `promo ${body.code} for ${cid || 'guest'}: ${e.message}`); return res.status(500).json({ ok: false, reason: 'We could not apply this code just now. Please try again.' }); }
   });
 
+  // Referral (referral.js). The "Refer a friend" card reads this; logged out it says so.
+  app.get('/api/loyalty/proxy/referral', requireEnabled, requireProxy, async (req, res) => {
+    const cid = String(req.query.logged_in_customer_id || '');
+    if (!cid) return res.json({ loggedIn: false });
+    try { return res.json(await referral.viewFor(cid)); }
+    catch (e) { log.error('referral', `view for ${cid}: ${e.message}`); return res.status(500).json({ loggedIn: true, error: 'unavailable' }); }
+  });
+
+  // The cart embed remembered a ?ref= from this browser and the visitor is logged in now.
+  app.post('/api/loyalty/proxy/referral/claim', requireEnabled, requireProxy, async (req, res) => {
+    const cid = String(req.query.logged_in_customer_id || '');
+    if (!cid) return res.json({ ok: false, reason: 'not logged in' });
+    let body = req.body;
+    if (typeof body === 'string') { try { body = JSON.parse(body); } catch { body = {}; } }
+    try { return res.json(await referral.claim(cid, (body || {}).code)); }
+    catch (e) { log.error('referral', `claim for ${cid}: ${e.message}`); return res.status(500).json({ ok: false, reason: 'unavailable' }); }
+  });
+
   // ── Customer account: the tier graphic (public; it draws only the points number it is given) ─
   app.get('/api/loyalty/tier.svg', requireEnabled, async (req, res) => {
     try {
@@ -373,6 +395,14 @@ function register(app /* , ctx */) {
       const { data: row } = await supabase.from('loyalty_ledger').select('*').eq('entry_key', `order:${id}`).maybeSingle();
       return res.json({ success: true, order: order.name, customerId: order.customer && order.customer.id,
         earns: E.earnPoints(order, await loadConfig(), { amountRefunded: refunded }), ledger: row || null });
+    } catch (e) { return res.status(500).json({ success: false, error: e.message }); }
+  });
+
+  app.get('/api/loyalty/referrals', requireEnabled, requireAdmin, async (req, res) => {
+    try {
+      const q = req.query || {};
+      const rows = await referral.listRewards({ status: q.status || null, referrer: q.referrer || null });
+      return res.json({ success: true, count: rows.length, rewards: rows });
     } catch (e) { return res.status(500).json({ success: false, error: e.message }); }
   });
 
