@@ -306,6 +306,8 @@ const {
   materializeLegacyLeg,
 } = require('./src/modules/payments/installments');
 const { isCommsTag, commsTagsFromMetafields } = require('./src/core/comms_tags');
+// Savings Scheme Vouchers (SSV…) may be used in part: apply/settle hooks below. Inert for every other code.
+const savingsRedeem = require('./src/modules/payments/savings-plan/redeem');
 // Refunds — money OUT, a parallel dimension to the legs above. amount_paid is never written down;
 // paymentState is the single place the net-of-refund balance is derived, so the four call sites that
 // compute one cannot drift. See src/modules/payments/refunds.js.
@@ -3084,7 +3086,7 @@ async function handleApplyVoucherTag(draft) {
 
     const inst = await creditInstruments.getBySerial(supabase, { instrumentType: 'voucher', serialCode: vchNumber });
     if (!inst)                    { await finishTags([`voucher-invalid: ${vchNumber} not found`]); return; }
-    const value = parseFloat(inst.value);
+    let value = parseFloat(inst.value);
     if (!(value > 0))             { await finishTags([`voucher-invalid: ${vchNumber} no value`]); return; }
     const expired = inst.expires_at && new Date(inst.expires_at).getTime() < Date.now();
     if (inst.status === 'voided') { await finishTags([`voucher-invalid: ${vchNumber} voided`]); return; }
@@ -3133,6 +3135,16 @@ async function handleApplyVoucherTag(draft) {
         return;
       }
     }
+    // A Savings Scheme Voucher may be used in part (savings-plan/redeem.js): apply only what this bill
+    // needs after the other credits; the rest stays on the voucher when this draft converts.
+    const ssvTags = [];
+    if (savingsRedeem.isSavingsCode(vchNumber)) {
+      const otherCredits = mfVal('exchange_note_value') + mfVal('old_gold_value') + mfVal('advance');
+      value = savingsRedeem.usableOn(inst, parseFloat(draft.total_price || 0) - otherCredits);
+      if (!(value > 0)) { await finishTags([`voucher-invalid: ${vchNumber} has nothing left, or the bill is already covered`]); return; }
+      const plan = String(inst.source_order_name || '').match(/^SAVINGS\s+(\S+)/);
+      ssvTags.push(`vch-original:savings plan ${plan ? plan[1] : ''}`.trim());
+    }
     const adjustments  = value + mfVal('exchange_note_value') + mfVal('old_gold_value') + mfVal('advance');
     const netToCollect = Math.max(0, parseFloat(draft.total_price || 0) - adjustments).toFixed(2);
     // voucher_code rides alongside the value so the applied instrument is identifiable from the
@@ -3140,7 +3152,7 @@ async function handleApplyVoucherTag(draft) {
     // survives draft→order conversion so invoices can print it.
     await updateDraftOrderMetafields(draftOrderId, {
       voucher_code: vchNumber, voucher_value: value.toFixed(2), amount_to_be_collected: netToCollect });
-    await finishTags(['vch-applied', `vch-num:${vchNumber}`]);
+    await finishTags(['vch-applied', `vch-num:${vchNumber}`, ...ssvTags]);
 
     try { await creditInstruments.apply(supabase, { instrumentType: 'voucher', serialCode: vchNumber, targetDraftId: draftOrderId, value }); }
     catch (e) { console.error('[apply-voucher] ledger:', e.message); }
@@ -3701,6 +3713,16 @@ app.post('/api/shopify-draft-updated', async (req, res) => {
           ].filter(x => x.code);
           for (const { type, code } of toRedeem) {
             try {
+              // A Savings Scheme Voucher: settle what THIS order used (the draft's voucher_value) and keep
+              // the balance on the voucher; redeem.js closes it once nothing is left. Idempotent per order.
+              if (type === 'voucher' && savingsRedeem.isSavingsCode(code)) {
+                const { data: dmf } = await axios.get(
+                  `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}/metafields.json`,
+                  { headers: { 'X-Shopify-Access-Token': token }, timeout: 10000 });
+                const usedMf = (dmf.metafields || []).find(m => m.namespace === 'custom' && m.key === 'voucher_value');
+                await savingsRedeem.settleUse({ code, used: Math.abs(parseFloat(usedMf?.value) || 0), orderId, orderName, channel: 'store' });
+                continue;
+              }
               const inst = await creditInstruments.getBySerial(supabase, { instrumentType: type, serialCode: code });
               if (inst && inst.status === 'redeemed' && String(inst.target_order_id || '') !== String(orderId)) {
                 console.warn(`[ledger] ${type} ${code} already redeemed on ${inst.target_order_name || inst.target_order_id} — NOT double-redeeming on ${orderName || orderId}`);

@@ -111,7 +111,7 @@ async function runVoucherExpirySweep(deps, { dryRun = false, now = Date.now() } 
   // Not yet expired, and expiring no later than the end of the 30th day out.
   const { data, error } = await supabase
     .from('credit_instruments')
-    .select('serial_code, value, customer_id, customer_name, source_order_name, expires_at, status')
+    .select('*')   // * not a column list: 'remaining' exists only once savings-plan/migration.sql has run
     .eq('instrument_type', 'voucher')
     .eq('status', 'open')
     .gte('expires_at', new Date(now).toISOString())
@@ -179,7 +179,8 @@ async function runVoucherExpirySweep(deps, { dryRun = false, now = Date.now() } 
         subject: `Your Timanti Voucher expires in 30 days — ${row.serial_code}`,
         html:    buildVoucherExpiryHtml({
           cnNumber:      row.serial_code,
-          creditValue:   row.value,
+          // A part-used Savings Scheme Voucher reminds for its balance (savings-plan/redeem.js).
+          creditValue:   row.remaining !== null && row.remaining !== undefined ? row.remaining : row.value,
           expiryDate,
           originalOrder: row.source_order_name
         })

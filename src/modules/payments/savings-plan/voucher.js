@@ -5,23 +5,22 @@
 //     never mistaken for an ordinary VCH voucher.
 //   - Valid 1 year, bound to the customer, online or in store.
 //   - Value = the money paid + the bonus. The ledger row keeps the two apart (paid_part, bonus_part) so
-//     Accounts can book the customer's money and Timanti's bonus separately.
+//     Accounts can book the customer's money and Timanti's bonus separately, and carries the balance
+//     (remaining), which starts at the full value.
 //   - It sits in the credit-instrument ledger as instrument_type 'voucher', so the store applies it to a
 //     purchase draft exactly like any voucher (apply-voucher:<code>) and the invoice prints it.
-//
-// PART USE is decided (the balance stays on the voucher) but not built yet: until it is, the Shopify
-// discount needs a purchase of at least the voucher's value, like a buy-plan voucher, so it can never
-// be spent online on a smaller order and lose its balance. In store, staff apply it only to a purchase
-// of at least its value. The module stays switched off until part use is built.
+//   - PART USE: the balance stays on the voucher (redeem.js). So the Shopify code has no minimum
+//     purchase: Shopify caps it at the order, and the balance is re-made after the order.
 
 const { config } = require('../../../core/config');
 const { supabase } = require('../../../core/supabase');
-const { getShopifyToken, postJson } = require('../../../core/shopify');
+const { getShopifyToken } = require('../../../core/shopify');
 const { updateDraftOrderMetafields } = require('../../../core/metafields');
 const { log } = require('../../../core/logger');
 const serialization = require('../../serialization');
 const creditInstruments = require('../../adjustments/credit_instruments');
 const { addMonths } = require('../../adjustments/cad_advance');
+const { makeDiscount } = require('./redeem');
 const R = require('./rules');
 
 const DEFAULT_STORE_CODE = 'KA-HSR';
@@ -39,36 +38,24 @@ async function issueSavingsVoucher({ plan, d, paid, bonus, today }) {
   });
   const code = minted.serial_code;
   const validUntil = addMonths(today, R.VOUCHER_MONTHS);
+  const endsAt = `${validUntil}T23:59:59+05:30`;
   try {
-    const { price_rule: rule } = await postJson('price_rules.json', { price_rule: {
-      title: code,
-      target_type: 'line_item',
-      target_selection: 'all',
-      allocation_method: 'across',
-      value_type: 'fixed_amount',
-      value: `-${amount.toFixed(2)}`,
-      customer_selection: 'prerequisite',
-      prerequisite_customer_ids: [Number(plan.customer_id)],
-      prerequisite_subtotal_range: { greater_than_or_equal_to: amount.toFixed(2) },
-      starts_at: new Date().toISOString(),
-      ends_at: `${validUntil}T23:59:59+05:30`,
-      usage_limit: 1,
-    } });
-    await postJson(`price_rules/${rule.id}/discount_codes.json`, { discount_code: { code } });
+    const priceRuleId = await makeDiscount({ code, amount, customerId: plan.customer_id, endsAt });
     await creditInstruments.upsertIssued(supabase, {
       instrumentType: 'voucher', serialCode: code, value: amount,
       customerId: plan.customer_id, customerName: plan.customer_name,
       sourceOrderId: plan.draft_order_id,
       sourceOrderName: `SAVINGS ${plan.draft_name} (paid ${Math.round(paid)} + bonus ${Math.round(bonus)})`,
-      stateCode: storeCode, expiresAt: `${validUntil}T23:59:59+05:30`, priceRuleId: String(rule.id),
+      stateCode: storeCode, expiresAt: endsAt, priceRuleId,
     });
   } catch (e) {
     const detail = e.response?.data ? JSON.stringify(e.response.data) : e.message;
     throw new Error(`voucher ${code} was numbered but not finished in Shopify: ${detail}`);
   }
-  // The paid / bonus split (migration.sql). Bookkeeping only: never fails the issue.
+  // The paid / bonus split and the opening balance (migration.sql). Bookkeeping: never fails the issue,
+  // but a missing balance is read as the full value (redeem.js remainingOf), so nothing is lost.
   const { error } = await supabase.from('credit_instruments')
-    .update({ paid_part: Math.round(paid), bonus_part: Math.round(bonus), updated_at: new Date().toISOString() })
+    .update({ paid_part: Math.round(paid), bonus_part: Math.round(bonus), remaining: amount, updated_at: new Date().toISOString() })
     .eq('instrument_type', 'voucher').eq('serial_code', code);
   if (error) log.error('savings-plan', `${code}: paid/bonus split not recorded: ${error.message}`);
   if (config.loyalty.enabled) {

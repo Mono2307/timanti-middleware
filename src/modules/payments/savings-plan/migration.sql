@@ -60,3 +60,21 @@ create table if not exists savings_plan_reminders (
 -- split into the customer's money and Timanti's bonus, so Accounts can book them apart.
 alter table credit_instruments add column if not exists paid_part  numeric(12,2);
 alter table credit_instruments add column if not exists bonus_part numeric(12,2);
+
+-- Part use (redeem.js): the balance left on a Savings Scheme Voucher. Null on every other voucher (and
+-- read as the full value), so nothing else changes.
+alter table credit_instruments add column if not exists remaining  numeric(12,2);
+
+-- One row per order a Savings Scheme Voucher was used on. The unique key is what makes a replayed
+-- conversion / order webhook a no-op instead of a second deduction.
+create table if not exists savings_voucher_uses (
+  id            bigserial primary key,
+  serial_code   text not null,
+  order_id      text not null,
+  order_name    text,
+  amount        numeric(12,2) not null check (amount > 0),
+  balance_after numeric(12,2) not null,
+  channel       text not null check (channel in ('store','online')),
+  used_at       timestamptz not null default now(),
+  unique (serial_code, order_id)
+);

@@ -149,6 +149,17 @@ async function sendVoucherIssued(plan, d, voucher) {
   });
 }
 
+// After a part use: what is left on the voucher.
+async function sendVoucherBalance(plan, { code, used, left, orderName, expiresAt }) {
+  await toCustomer(plan, {
+    subject: `${rupees(left)} left on your Savings Scheme Voucher`, heading: `${rupees(left)} left on your voucher`,
+    body: who(plan, `you used <strong>${rupees(used)}</strong> of your Savings Scheme Voucher <strong>${code}</strong>${orderName ? ` on order ${orderName}` : ''}. `
+      + `<strong>${rupees(left)}</strong> is left on it. Use it on any Timanti jewellery, online or at the store`
+      + `${expiresAt ? `, until <strong>${T.planDate(String(expiresAt).slice(0, 10))}</strong>` : ''}.`),
+    early: false,
+  });
+}
+
 // Internal: one item that needs the store. facts: [{ label, value }].
 async function toStore(plan, d, { subject, heading, body, facts = [] }) {
   await sendEmail({
@@ -177,6 +188,6 @@ async function sendDigest(rows, { today } = {}) {
 
 module.exports = {
   termsFor, whatsappToStore, whatsappToCustomer,
-  sendStarted, sendDue, sendGraceWarning, sendReceived, sendEarlyOpen, sendFullyPaid, sendTerminated, sendVoucherIssued,
+  sendStarted, sendDue, sendGraceWarning, sendReceived, sendEarlyOpen, sendFullyPaid, sendTerminated, sendVoucherIssued, sendVoucherBalance,
   toStore, sendDigest,
 };

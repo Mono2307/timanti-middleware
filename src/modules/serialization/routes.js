@@ -147,7 +147,8 @@ app.post('/api/serial/cancel-by-code', async (req, res) => {
 // Only touches orders carrying a VCH code (offline vouchers are metafields, not codes); idempotent.
 async function freezeOnlineVoucher(order, token) {
   const codes = order.discount_codes || [];
-  if (!codes.some(c => /^VCH/i.test(String(c.code || '')))) return; // no online voucher here
+  // VCH = a voucher; SSV = a Savings Scheme Voucher (savings-plan), settled in part below.
+  if (!codes.some(c => /^(VCH|SSV)/i.test(String(c.code || '')))) return; // no online voucher here
 
   const { data: mfData } = await axios.get(
     `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/orders/${order.id}/metafields.json`,
@@ -168,7 +169,7 @@ async function freezeOnlineVoucher(order, token) {
     }
     if (amt <= 0) return;
     const ident = String(app.code || app.title || '');
-    if (/^VCH/i.test(ident)) voucherValue += amt; else discountApplied += amt;
+    if (/^(VCH|SSV)/i.test(ident)) voucherValue += amt; else discountApplied += amt;
   });
 
   // Fallback when allocations are missing: classify straight off discount_codes amounts.
@@ -176,7 +177,7 @@ async function freezeOnlineVoucher(order, token) {
     for (const c of codes) {
       const amt = parseFloat(c.amount || 0);
       if (amt <= 0) continue;
-      if (/^VCH/i.test(String(c.code || ''))) voucherValue += amt; else discountApplied += amt;
+      if (/^(VCH|SSV)/i.test(String(c.code || ''))) voucherValue += amt; else discountApplied += amt;
     }
   }
   if (voucherValue <= 0) return; // nothing classified as a voucher — leave the order alone
@@ -194,8 +195,12 @@ async function freezeOnlineVoucher(order, token) {
   console.log(`[voucher-freeze] order ${order.name || order.id}: gross=${grossValue.toFixed(2)} discount_applied=${discountPreTax.toFixed(2)} (incl ${discountApplied.toFixed(2)}) voucher_value=${voucherValue.toFixed(2)}`);
 
   // Record the online voucher redemption in the credit-instrument ledger.
-  const vchCode = (codes.find(c => /^VCH/i.test(String(c.code || ''))) || {}).code;
-  if (vchCode) {
+  const vchCode = (codes.find(c => /^(VCH|SSV)/i.test(String(c.code || ''))) || {}).code;
+  if (vchCode && /^SSV/i.test(vchCode)) {
+    // Part use: what this order took comes off the balance; the rest stays on the code (redeem.js).
+    await require('../payments/savings-plan/redeem').settleUse({
+      code: vchCode, used: voucherValue, orderId: order.id, orderName: order.name, channel: 'online' });
+  } else if (vchCode) {
     try {
       await creditInstruments.redeem(supabase, {
         instrumentType: 'voucher', serialCode: vchCode,

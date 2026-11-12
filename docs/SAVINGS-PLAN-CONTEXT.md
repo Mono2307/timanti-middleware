@@ -50,10 +50,18 @@ A monthly savings scheme on the BlueStone Gold Mine 10+1 model.
 3. Deploy the panel extensions (`shopify app deploy`), so the panel shows slots 7–10.
 4. Paste `templates/Shopify-Notifications-PASTE/1 - Draft order invoice (advance receipt).html` into Shopify, under Notifications → Draft order invoice.
 5. Optional: set `SAVINGS_WHATSAPP` if the customer WhatsApp number should not be 917710968305.
-6. **Do not switch on before part 2.** Part use of the voucher is decided but not built. Until it is, the voucher can only be used on a purchase worth at least its value. Shopify enforces this online; in store, staff have to check it.
+6. Paste the updated `templates/tax-invoice.liquid`, `order-confirmation-receipt.liquid` and `pricing-estimate.liquid` into Order Printer. They print an SSV code as "Less: Savings Scheme Voucher".
+
+## Part use of the voucher (`savings-plan/redeem.js`)
+These steps act only on codes starting with `SSV`. Every other voucher behaves as before.
+- **Applying in store** (`server.js handleApplyVoucherTag`): only what the bill needs after other credits is applied, and `voucher_value` is set to that amount. The draft is tagged `vch-original:savings plan #D…`.
+- **When the purchase converts** (the draft-completed lock) **or an online order arrives** (`serialization/routes.js freezeOnlineVoucher`): `settleUse` writes one row per order in `savings_voucher_uses`. That row also stops a repeated webhook from deducting twice. Then:
+   - **balance left:** the ledger row goes back to `open` with `remaining` set to the balance, and the Shopify code is re-made for the balance with the same code and expiry. The customer is emailed the balance, and the plan draft shows `savings_voucher_balance`.
+   - **nothing left:** the voucher is marked redeemed and its code deleted. The plan becomes `redeemed` and its draft is tagged `savings-redeemed`; from then on the draft may be deleted.
+- **The 30-day expiry reminder** quotes the balance.
+- **The Shopify code has no minimum purchase.** Shopify caps a fixed discount at the order total, and the balance is re-made afterwards.
 
 ## Not built yet
-- **Part 2: part use of the Savings Scheme Voucher**, with the balance kept on the same code. This changes the apply-voucher, lock-on-conversion and online-freeze steps. When the balance reaches zero, the plan should move to `savings-redeemed`.
 - **Part 3:**
   - a Savings tab on the staff screen (start, status, send link, issue voucher)
   - the sales report split into orders, order advances, buy plans and savings plans

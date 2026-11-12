@@ -655,7 +655,7 @@ below spans a different number of cells. One variable keeps them all in step.{% 
       {% if voucher_value > 0 %}
         {% assign voucher_value_paise = voucher_value | times: 100 | round %}
         <tr class="totals-row">
-          <td colspan="{{ span }}" class="text-right" style="border-top: 1px solid #ccc;">Less: Voucher Adjustment{% if voucher_code != "" %} ({{ voucher_code }}){% endif %}</td>
+          <td colspan="{{ span }}" class="text-right" style="border-top: 1px solid #ccc;">{% assign _vl = voucher_code | upcase | slice: 0, 3 %}{% if _vl == "SSV" %}Less: Savings Scheme Voucher{% else %}Less: Voucher Adjustment{% endif %}{% if voucher_code != "" %} ({{ voucher_code }}){% endif %}</td>
           <td class="text-right" style="border-top: 1px solid #ccc;">− ₹{{ voucher_value_paise | money_without_currency | remove: ',' }}</td>
         </tr>
         {% assign final_payable = final_payable | minus: voucher_value_paise %}

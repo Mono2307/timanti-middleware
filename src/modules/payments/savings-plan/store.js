@@ -29,6 +29,13 @@ async function listPlansByStatus(status) {
   return data || [];
 }
 
+// The plan a Savings Scheme Voucher was issued on.
+async function getPlanByVoucher(code) {
+  const { data, error } = await supabase.from(TABLE).select('*').eq('voucher_code', String(code)).maybeSingle();
+  if (error) fail('read', error);
+  return data || null;
+}
+
 async function listPlansForCustomer(customerId) {
   const { data, error } = await supabase.from(TABLE).select('*').eq('customer_id', String(customerId)).order('id');
   if (error) fail('list', error);
@@ -93,6 +100,6 @@ async function setConfigValue(key, value) {
 }
 
 module.exports = {
-  getPlanByDraft, getPlan, listPlansByStatus, listPlansForCustomer, insertPlan, updatePlan, deletePlan,
+  getPlanByDraft, getPlan, getPlanByVoucher, listPlansByStatus, listPlansForCustomer, insertPlan, updatePlan, deletePlan,
   wasSent, markSent, syncContact, getConfigValue, setConfigValue,
 };
