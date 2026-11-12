@@ -2287,7 +2287,9 @@ async function computeChallanReprice(draft, token) {
       if (!dia)    dia    = parseFloat(varMf.price_breakup_diamond || 0) * (item.quantity || 1);
       if (!making) making = parseFloat(varMf.price_breakup_making  || 0) * (item.quantity || 1);
     }
-    const basis = (gold * pctGold + dia * pctDia + making * pctMaking) * 1.03;  // GST-inclusive, same convention as reprice/catalog
+    // A delivery challan carries NO tax element (founder, 2026-11-11): the value is the taxable
+    // value itself, never grossed up by the 3% the tax-inclusive retail prices carry.
+    const basis = gold * pctGold + dia * pctDia + making * pctMaking;
     return { item, basis };
   }));
 
@@ -2299,9 +2301,7 @@ async function computeChallanReprice(draft, token) {
   for (const { item, basis } of resolved) {
     // Prorate any order-level discount by this item's share of the weighted basis.
     const itemDiscount = totalBasis > 0 ? totalDiscount * (basis / totalBasis) : 0;
-    const finalValue   = Math.max(0, basis - itemDiscount);   // tax-inclusive
-    const taxableValue = finalValue / 1.03;
-    const gst          = taxableValue * 0.03;
+    const finalValue   = Math.max(0, basis - itemDiscount);   // = taxable value; no GST on a challan
 
     // The split props are stripped, never rewritten: this reprice prorates a NATIVE order-level
     // discount across the weighted basis, so its cut is not attributable to diamond or making at all.
@@ -2311,8 +2311,7 @@ async function computeChallanReprice(draft, token) {
     const updatedProps = (item.properties || []).filter(p => !OVERWRITE.has(p.name));
     updatedProps.push(
       { name: 'Gross Value',      value: `Rs${basis.toFixed(2)}` },
-      { name: 'Taxable Value',    value: `Rs${taxableValue.toFixed(2)}` },
-      { name: 'GST',              value: `Rs${gst.toFixed(2)}` },
+      { name: 'Taxable Value',    value: `Rs${finalValue.toFixed(2)}` },
       { name: 'Discount Applied', value: `Rs${itemDiscount.toFixed(2)}` },
     );
     repricedMap.set(item.id, {

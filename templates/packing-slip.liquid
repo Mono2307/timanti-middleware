@@ -35,28 +35,54 @@
     <img src="https://cdn.shopify.com/s/files/1/0775/8322/0993/files/Timanti_Logo_Black.jpg?v=1766506323" alt="Timanti" class="logo">
     <div class="order-info">
       <div class="slip-label">Packing Slip</div>
-      <div class="order-num">{{ name }}</div>
+      {% assign ps_num = name %}
+      {% if order.metafields.custom.document_type == "delivery_challan" and order.metafields.custom.serial_code != blank %}{% assign ps_num = order.metafields.custom.serial_code %}{% endif %}
+      <div class="order-num">{{ ps_num }}</div>
       <div class="order-date">{{ created_at | date: "%d %b %Y, %I:%M %p" }}</div>
     </div>
   </div>
+
+  {% assign ps_from = order.metafields.custom.state_code | strip | upcase | remove: "-" | remove: " " %}
+  {% assign ps_to = order.metafields.custom.delivery_code | strip | upcase | remove: "-" | remove: " " %}
+  {% assign ps_outside = order.metafields.custom.ship_outside_codes | strip | downcase %}
+  {% assign ps_to_store = false %}
+  {% unless ps_outside == "yes" or ps_outside == "true" %}{% if ps_to == "KAHSR" or ps_to == "MHHQ" %}{% assign ps_to_store = true %}{% endif %}{% endunless %}
 
   <div class="addresses">
     <div class="address-box">
       <h3>Pickup From</h3>
       <p>
+        {% if ps_from == "MHHQ" %}
+        <span class="lbl">Auracarat Pvt Ltd</span><br>
+        408, 1 Aerocity, Safed Pul, Saki Naka,<br>
+        Mumbai – 400072, Maharashtra<br>
+        <span class="lbl">Tel:</span> 9820059416
+        {% else %}
         <span class="lbl">Timanti by Auracarat</span><br>
         17th Cross, 19th Main Rd,<br>
         HSR Layout Sec 2,<br>
         Opp. Gnan Srishti School,<br>
         Bengaluru – 560102, Karnataka<br>
         <span class="lbl">Tel:</span> +91-7710938305
+        {% endif %}
       </p>
     </div>
 
     <div class="address-box">
       <h3>Deliver To</h3>
       <p>
-        {% if shipping_address != blank %}
+        {% if ps_to_store and ps_to == "MHHQ" %}
+          <span class="lbl">Auracarat Pvt Ltd</span><br>
+          408, 1 Aerocity, Safed Pul, Saki Naka,<br>
+          Mumbai – 400072, Maharashtra<br>
+          <span class="lbl">Tel:</span> 9820059416<br>
+        {% elsif ps_to_store and ps_to == "KAHSR" %}
+          <span class="lbl">Timanti by Auracarat</span><br>
+          17th Cross, 19th Main Rd, HSR Layout Sec 2,<br>
+          Opp. Gnan Srishti School,<br>
+          Bengaluru – 560102, Karnataka<br>
+          <span class="lbl">Tel:</span> +91-7710938305<br>
+        {% elsif shipping_address != blank %}
           <span class="lbl">{{ shipping_address.name }}</span><br>
           {{ shipping_address.address1 }}{% if shipping_address.address2 %}, {{ shipping_address.address2 }}{% endif %}<br>
           {{ shipping_address.city }}, {{ shipping_address.province }} {{ shipping_address.zip }}<br>

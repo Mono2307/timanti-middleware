@@ -123,10 +123,8 @@ function register(app, ctx) {
       let preview = null;
       if (challan.enabled && !(row && row.status === 'active' && tags.includes(ISSUED_TAG))) {
         const r = await challan.computeChallanReprice(draft, await ctx.getShopifyToken());
-        // A delivery challan states no tax: the template prints each line's Taxable Value (the
-        // reprice's tax-inclusive figure ÷ 1.03). Show staff that same figure, not the ×1.03 line
-        // price the draft carries, so the preview and the printed challan agree.
-        const lines = r.preview.map(l => ({ ...l, challan: +(l.challan / 1.03).toFixed(2) }));
+        // The reprice carries no tax, so its line figure IS the Taxable Value the challan prints.
+        const lines = r.preview;
         preview = { lines, total: +lines.reduce((s, l) => s + l.challan, 0).toFixed(2) };
       }
       return res.json({
