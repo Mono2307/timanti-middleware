@@ -379,8 +379,9 @@ function paymentLegPatch(state, { value, mode, date }, cumulativePaid) {
   // free slot after it and the leg sum reconciles to amount_paid. Without this the older money has
   // no leg, and the next recompute writes the balance down by exactly that amount.
   const { rows, patch: legacyPatch } = materializeLegacyLeg(state.map, state.rows);
-  // A buy-plan draft has 6 slots; anything else 4 (maxInstallmentsFor, payments/installments.js).
-  // A buy plan adds the payment to its installment's own slot instead (planLegPatch).
+  // A buy-plan draft has 6 slots, a savings-plan draft 10, anything else 4 (maxInstallmentsFor,
+  // payments/installments.js). A buy plan adds the payment to its installment's own slot instead
+  // (planLegPatch). A savings draft carries no plan_due_dates, so it takes the second branch.
   const dueDatesCsv = String((state.map || {}).plan_due_dates || '').trim();
   const leg = dueDatesCsv ? planLegPatch(rows, { value, mode, date }, dueDatesCsv)
     : installmentLegPatch(rows, { value, mode, date }, { max: maxInstallmentsFor(state.map) });
@@ -2423,7 +2424,7 @@ async function copyDraftMetafieldsToOrder(draftOrderId, orderId, token) {
 function isPaymentDerivedTag(t) {
   return t.toLowerCase() === 'sync-payment' ||
     t.startsWith('deposit:') || t.startsWith('paid:') || t.startsWith('pending:') ||
-    t.startsWith('pmode-') || t.startsWith('pmodes:') || /^i[1-9]:/.test(t) || t.startsWith('total:') ||
+    t.startsWith('pmode-') || t.startsWith('pmodes:') || /^i(10|[1-9]):/.test(t) || t.startsWith('total:') ||
     t.startsWith('refunded:') || /^r[1-9]:/.test(t);
 }
 

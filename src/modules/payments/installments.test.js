@@ -36,15 +36,29 @@ t('any slot can be cad_advance — a Path B advance lands wherever is free', () 
   assert.strictEqual(rows[0].type, 'payment');
   assert.strictEqual(rows[1].type, 'cad_advance');
 });
-t('reads up to PLAN_MAX_INSTALLMENTS (6) — slots past it are ignored', () => {
+t('reads up to 10 slots (a savings plan) — slots past it are ignored', () => {
   const map = {};
-  for (let i = 1; i <= PLAN_MAX_INSTALLMENTS + 3; i++) map[`installment_${i}_value`] = '10';
-  assert.strictEqual(readInstallments(map).length, PLAN_MAX_INSTALLMENTS);
+  for (let i = 1; i <= 13; i++) map[`installment_${i}_value`] = '10';
+  assert.strictEqual(readInstallments(map).length, 10);
+  assert.deepStrictEqual(readInstallments(map).map(r => r.slot).slice(-2), [9, 10]);
 });
-t('the cap is 4, or 6 on a buy plan (custom.plan_total set)', () => {
+t('the cap is 4, 6 on a buy plan (custom.plan_total set), 10 on a savings plan (custom.savings_months)', () => {
   assert.strictEqual(maxInstallmentsFor({}), MAX_INSTALLMENTS);
   assert.strictEqual(maxInstallmentsFor({ plan_total: '' }), MAX_INSTALLMENTS);
   assert.strictEqual(maxInstallmentsFor({ plan_total: '120000' }), PLAN_MAX_INSTALLMENTS);
+  assert.strictEqual(maxInstallmentsFor({ savings_months: '10' }), 10);
+});
+t('a savings plan 10th payment takes slot 10; an 11th folds into it', () => {
+  const { installmentLegPatch } = require('./installments');
+  const rows = Array.from({ length: 9 }, (_, i) => ({ slot: i + 1, value: 2000 }));
+  assert.ok(installmentLegPatch(rows, { value: 2000, mode: 'upi', date: '2027-08-12' }, { max: 10 }).installment_10_value);
+  const full = [...rows, { slot: 10, value: 2000 }];
+  assert.strictEqual(installmentLegPatch(full, { value: 2000, mode: 'upi', date: '2027-09-12' }, { max: 10 }).installment_10_value, '4000.00');
+});
+t('slot 10 keys and the i10: tag mark a document as in the installment model', () => {
+  const { hadInstallments } = require('./installments');
+  assert.ok(hadInstallments({ installment_10_value: '0' }, []));
+  assert.ok(hadInstallments({}, ['i10:2000@upi@2027-08-12']));
 });
 
 console.log('sumInstallments');

@@ -35,13 +35,23 @@ const MAX_INSTALLMENTS = 4;
 // cap is decided without an extra read. Reading always covers all 6: slots 5-6 are simply empty on
 // any other document, because nothing but a plan ever writes them.
 const PLAN_MAX_INSTALLMENTS = 6;
-const maxInstallmentsFor = (mfMap) => (String((mfMap || {}).plan_total || '').trim() ? PLAN_MAX_INSTALLMENTS : MAX_INSTALLMENTS);
+// A savings plan is paid in up to 10 monthly instalments, so its draft gets 10 slots. Recognised by
+// custom.savings_months, which POST /api/savings-plan/start writes (savings-plan/routes.js). Slots
+// 7-10 are written only on savings drafts.
+const SAVINGS_MAX_INSTALLMENTS = 10;
+// The most slots any document can carry — every reader covers this many.
+const ALL_MAX_INSTALLMENTS = SAVINGS_MAX_INSTALLMENTS;
+const maxInstallmentsFor = (mfMap) => {
+  const map = mfMap || {};
+  if (String(map.savings_months || '').trim()) return SAVINGS_MAX_INSTALLMENTS;
+  return String(map.plan_total || '').trim() ? PLAN_MAX_INSTALLMENTS : MAX_INSTALLMENTS;
+};
 
 // Sparse-safe: a draft may have slots 1 and 3 populated with 2 empty. Legs come back in slot order.
 function readInstallments(mfMap) {
   const map = mfMap || {};
   const rows = [];
-  for (let n = 1; n <= PLAN_MAX_INSTALLMENTS; n++) {
+  for (let n = 1; n <= ALL_MAX_INSTALLMENTS; n++) {
     const value = parseFloat(map[`installment_${n}_value`]);
     if (!Number.isFinite(value) || value <= 0) continue;
     rows.push({
@@ -90,8 +100,8 @@ function installmentModes(rows) {
 // (#D242). A document has been in the installment model if it carries an `iN:` tag (written on
 // every recompute while a leg exists) or any leftover installment_N_* key. Those documents get
 // `cleared: true` — no fold, and the caller resets amount_paid to 0.
-const INSTALLMENT_TAG_RE = /^i[1-9]:/;
-const INSTALLMENT_KEY_RE = /^installment_[1-9]_(value|mode|date|type)$/;
+const INSTALLMENT_TAG_RE = /^i(10|[1-9]):/;
+const INSTALLMENT_KEY_RE = /^installment_(10|[1-9])_(value|mode|date|type)$/;
 function hadInstallments(mfMap, tags) {
   const tagList = Array.isArray(tags) ? tags : String(tags || '').split(',');
   if (tagList.some(t => INSTALLMENT_TAG_RE.test(String(t).trim()))) return true;
@@ -170,6 +180,9 @@ module.exports = {
   planLegPatch,
   MAX_INSTALLMENTS,
   PLAN_MAX_INSTALLMENTS,
+  SAVINGS_MAX_INSTALLMENTS,
+  ALL_MAX_INSTALLMENTS,
+  INSTALLMENT_TAG_RE,
   maxInstallmentsFor,
   readInstallments,
   sumInstallments,

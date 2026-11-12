@@ -132,13 +132,27 @@ const FIELD_CONFIG = {
   installment_4_value: { section: "Installments", label: "4 · Amount", editable: true, applies: "both" },
   installment_4_mode: { section: "Installments", label: "4 · Mode", editable: true, applies: "both" },
   installment_4_date: { section: "Installments", label: "4 · Date", editable: true, applies: "both" },
-  // Slots 5-6 exist only for buy plans (up to 6 installments); hidden everywhere else.
+  // Slots 5-6 exist only for buy plans (up to 6 installments) and savings plans; hidden everywhere else.
   installment_5_value: { section: "Installments", label: "5 · Amount", editable: true, applies: "both", buyPlanOnly: true },
   installment_5_mode: { section: "Installments", label: "5 · Mode", editable: true, applies: "both", buyPlanOnly: true },
   installment_5_date: { section: "Installments", label: "5 · Date", editable: true, applies: "both", buyPlanOnly: true },
   installment_6_value: { section: "Installments", label: "6 · Amount", editable: true, applies: "both", buyPlanOnly: true },
   installment_6_mode: { section: "Installments", label: "6 · Mode", editable: true, applies: "both", buyPlanOnly: true },
   installment_6_date: { section: "Installments", label: "6 · Date", editable: true, applies: "both", buyPlanOnly: true },
+  // Slots 7-10 exist only for savings plans (up to 10 monthly instalments, the savings-plan tag).
+  // Unlike a buy plan, staff record a savings instalment taken in store straight into these slots.
+  installment_7_value: { section: "Installments", label: "7 · Amount", editable: true, applies: "both", savingsOnly: true },
+  installment_7_mode: { section: "Installments", label: "7 · Mode", editable: true, applies: "both", savingsOnly: true },
+  installment_7_date: { section: "Installments", label: "7 · Date", editable: true, applies: "both", savingsOnly: true },
+  installment_8_value: { section: "Installments", label: "8 · Amount", editable: true, applies: "both", savingsOnly: true },
+  installment_8_mode: { section: "Installments", label: "8 · Mode", editable: true, applies: "both", savingsOnly: true },
+  installment_8_date: { section: "Installments", label: "8 · Date", editable: true, applies: "both", savingsOnly: true },
+  installment_9_value: { section: "Installments", label: "9 · Amount", editable: true, applies: "both", savingsOnly: true },
+  installment_9_mode: { section: "Installments", label: "9 · Mode", editable: true, applies: "both", savingsOnly: true },
+  installment_9_date: { section: "Installments", label: "9 · Date", editable: true, applies: "both", savingsOnly: true },
+  installment_10_value: { section: "Installments", label: "10 · Amount", editable: true, applies: "both", savingsOnly: true },
+  installment_10_mode: { section: "Installments", label: "10 · Mode", editable: true, applies: "both", savingsOnly: true },
+  installment_10_date: { section: "Installments", label: "10 · Date", editable: true, applies: "both", savingsOnly: true },
 
   // All system-computed (net-based) — read-only so staff never hand-type a balance.
   // amount_paid is the SUM of the installment legs above, recomputed server-side on every save.
@@ -323,6 +337,11 @@ function isBuyPlan(tags) {
   return (tags ?? []).some((t) => ["buy-plan", "ot:buy-plan"].includes(String(t).trim().toLowerCase()));
 }
 
+// A savings plan's draft carries the savings-plan tag for its whole life (it never becomes an order).
+function isSavingsPlan(tags) {
+  return (tags ?? []).some((t) => String(t).trim().toLowerCase() === "savings-plan");
+}
+
 // On a buy-plan DRAFT every payment goes through Buy plan → Record payment (founder, 2026-11-09), so
 // the installment slots are read-only there: an amount typed here has no payment record behind it,
 // and the plan's schedule reads the slots. On the order they stay editable (money still owed on a
@@ -334,7 +353,9 @@ const planSlotLabel = (key, label, scope, buyPlan) =>
 
 function buildSections(scope, tags) {
   const buyPlan = isBuyPlan(tags);
-  const inScope = fieldsForScope(scope).filter((key) => buyPlan || !FIELD_CONFIG[key].buyPlanOnly);
+  const savings = isSavingsPlan(tags);
+  const inScope = fieldsForScope(scope).filter((key) =>
+    (buyPlan || savings || !FIELD_CONFIG[key].buyPlanOnly) && (savings || !FIELD_CONFIG[key].savingsOnly));
   const inScopeSet = new Set(inScope);
 
   // Required staff inputs → single top section, in REQUIRED_FIELDS priority order.
@@ -534,6 +555,10 @@ const PAYMENT_TRIGGER_KEYS = [
   "installment_4_value", "installment_4_mode", "installment_4_date",
   "installment_5_value", "installment_5_mode", "installment_5_date",
   "installment_6_value", "installment_6_mode", "installment_6_date",
+  "installment_7_value", "installment_7_mode", "installment_7_date",
+  "installment_8_value", "installment_8_mode", "installment_8_date",
+  "installment_9_value", "installment_9_mode", "installment_9_date",
+  "installment_10_value", "installment_10_mode", "installment_10_date",
 ];
 
 // A metafield save alone never fires the resource webhook, so the middleware never recomputes on its

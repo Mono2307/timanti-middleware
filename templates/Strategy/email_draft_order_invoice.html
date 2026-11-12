@@ -19,15 +19,25 @@
   {% assign cad_sku = line.sku | upcase %}
   {% if cad_title contains 'cad advance' or cad_sku contains 'CAD-ADV' %}{% assign is_cad = true %}{% break %}{% endif %}
 {% endfor %}
+{% comment %} A savings plan draft: its only line is the custom item "Savings Plan" (the middleware's isSavingsLine) and it
+   carries the savings-plan tag. Nothing is being bought: it gets its own heading and copy, and neither the MTO timing box
+   nor the balance note. {% endcomment %}
+{% assign is_savings = false %}
+{% for line in subtotal_line_items %}
+  {% assign sv_title = line.title | downcase | strip %}
+  {% if sv_title == 'savings plan' %}{% assign is_savings = true %}{% break %}{% endif %}
+{% endfor %}
+{% for tag in order.tags %}{% assign sv_tag = tag | downcase | strip %}{% if sv_tag == 'savings-plan' %}{% assign is_savings = true %}{% break %}{% endif %}{% endfor %}
+{% if is_savings %}{% assign is_cad = false %}{% endif %}
 {% assign support_phone = "7710938305" %}
 {% if ch == "offline" %}{% assign support_phone = "7710968305" %}{% endif %}
 {% comment %} ===== LOGO SIZE: change the number below to set the logo width in pixels ===== {% endcomment %}
 {% assign logo_width = 120 %}
-{% if is_cad %}{% capture email_title %}We've received your design advance{% endcapture %}{% else %}{% capture email_title %}Thank you for your purchase!{% endcapture %}{% endif %}
+{% if is_savings %}{% capture email_title %}We've received your savings plan payment{% endcapture %}{% elsif is_cad %}{% capture email_title %}We've received your design advance{% endcapture %}{% else %}{% capture email_title %}Thank you for your purchase!{% endcapture %}{% endif %}
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <title>{% if is_cad %}Your Timanti Design Advance Receipt{% else %}Your Timanti Order Advance Receipt{% endif %}</title>
+  <title>{% if is_savings %}Your Timanti Savings Plan Receipt{% elsif is_cad %}Your Timanti Design Advance Receipt{% else %}Your Timanti Order Advance Receipt{% endif %}</title>
   <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
   <meta name="viewport" content="width=device-width">
   <link rel="stylesheet" type="text/css" href="/assets/notifications/styles.css">
@@ -102,6 +112,9 @@
                   <tr>
                     <td style="text-align: center;">
                       <h2>{{ email_title }}</h2>
+                      {% if is_savings %}
+                        <p style="margin-top: 10px;">Thank you for your payment into your Timanti Savings Plan. When your plan is complete, the amount you have saved, plus your bonus, comes to you as a Savings Scheme Voucher to spend on any Timanti jewellery.</p>
+                      {% endif %}
                       {% if is_cad %}
                         <p style="margin-top: 10px;">Thank you for your advance towards your custom design. Our team will share your design for approval. This advance will be adjusted against your final purchase and is valid for 12 months.</p>
                       {% endif %}
@@ -137,7 +150,7 @@
                         </tr>
                         {% endif %}
                       </table>
-                      {% if is_mto and is_cad == false %}
+                      {% if is_mto and is_cad == false and is_savings == false %}
                         <div style="background: #F6F6F6; padding: 14px 18px; margin: 16px auto; text-align: center; max-width: 480px; border-radius: 4px; font-size: 13px; line-height: 1.6; color: #333;">
                           Made to order pieces take up to 21 business days.
                         </div>
@@ -192,7 +205,7 @@
                           <td>
                             <table class="row subtotal-table subtotal-table--total">
                               <tr class="subtotal-line">
-                                <td class="subtotal-line__title" style="font-size: 15px !important;"><p style="margin: 0;"><span style="font-size: 15px !important; font-weight: 600;">Advance received</span></p></td>
+                                <td class="subtotal-line__title" style="font-size: 15px !important;"><p style="margin: 0;"><span style="font-size: 15px !important; font-weight: 600;">{% if is_savings %}Paid into your plan so far{% else %}Advance received{% endif %}</span></p></td>
                                 <td class="subtotal-line__value" style="font-size: 16px !important; text-align: right;"><strong style="font-size: 16px !important; font-weight: 600;">{{ amt_paid | times: 100 | money }}</strong></td>
                               </tr>
                             </table>
@@ -200,7 +213,7 @@
                         </tr>
                       </table>
                       {% endif %}
-                      {% unless is_cad %}<p style="font-size: 12px; color: #666; line-height: 1.5; margin: 14px 0 0 0; text-align: left;">We will let you know the exact balance amount to be paid once your jewellery is ready, based on its exact gold and diamond weight.</p>{% endunless %}
+                      {% unless is_cad or is_savings %}<p style="font-size: 12px; color: #666; line-height: 1.5; margin: 14px 0 0 0; text-align: left;">We will let you know the exact balance amount to be paid once your jewellery is ready, based on its exact gold and diamond weight.</p>{% endunless %}
                     </td>
                   </tr>
                 </table>

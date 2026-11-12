@@ -56,7 +56,7 @@ const backfillInstallments = require('../payments/backfill-installments');
 // buildInstallmentMfDefs loops to MAX_INSTALLMENTS. It read the bare name — in scope while this
 // lived in server.js, a free variable once it moved — so /api/metafield-definitions/ensure threw
 // the moment it was called. It is exported by the payments module; take it from there.
-const { MAX_INSTALLMENTS, PLAN_MAX_INSTALLMENTS, readInstallments, sumInstallments, hadInstallments } = require('../payments/installments');
+const { MAX_INSTALLMENTS, PLAN_MAX_INSTALLMENTS, ALL_MAX_INSTALLMENTS, readInstallments, sumInstallments, hadInstallments } = require('../payments/installments');
 // paymentState is the shared balance arithmetic. The audit below takes it from here rather than
 // re-deriving the formula: an auditor that computes the balance its own way would drift from the live
 // path and start reporting healthy documents as broken.
@@ -795,7 +795,8 @@ async function fetchPaymentModeChoices(token) {
 function buildInstallmentMfDefs(modeChoices) {
   const choices = (list) => [{ name: 'choices', value: JSON.stringify(list) }];
   const defs = [];
-  for (let n = 1; n <= PLAN_MAX_INSTALLMENTS; n++) {
+  // Slots 7-10 exist for savings-plan drafts (payments/installments.js SAVINGS_MAX_INSTALLMENTS).
+  for (let n = 1; n <= ALL_MAX_INSTALLMENTS; n++) {
     defs.push({ key: `installment_${n}_value`, name: `Installment ${n} — Value`, type: 'number_decimal',
       description: `Amount received in installment ${n}. amount_paid is the sum of all installment values.` });
     defs.push({ key: `installment_${n}_mode`, name: `Installment ${n} — Mode`, type: 'single_line_text_field',
@@ -809,7 +810,7 @@ function buildInstallmentMfDefs(modeChoices) {
   //
   // A cad_advance leg renders as "Design Advance" on the invoice and COUNTS toward amount_paid like
   // any other leg — it is money settled, not decoration. See CAD_ADVANCE_TRACKING_SPEC §1/§2.
-  for (let n = 1; n <= PLAN_MAX_INSTALLMENTS; n++) {
+  for (let n = 1; n <= ALL_MAX_INSTALLMENTS; n++) {
     defs.push({ key: `installment_${n}_type`, name: `Installment ${n} — Type`, type: 'single_line_text_field',
       description: `payment (default) or cad_advance. cad_advance labels installment ${n} as the CAD design advance on the invoice; it still counts toward amount_paid.`,
       validations: choices(['payment', 'cad_advance']) });
