@@ -16,6 +16,7 @@ const { runRecon, toCSV: reconToCSV } = require('./recon');
 const { readInstallments, installmentModes } = require('../payments/installments');
 const { readRefunds } = require('../payments/refunds');
 const S = require('../payments/buy-plan/schedule');
+const SR = require('../payments/savings-plan/rules');
 
 // ── Small helpers ────────────────────────────────────────────────────────────
 
@@ -103,7 +104,7 @@ function optionValuesFromVariantTitle(variantTitle) {
 //
 // Emitted on the first line of a document only, like every other document-level figure here, so
 // summing a column never multiplies by the number of line items.
-const MAX_INST_COLS   = 6;   // 4 legs on any document, 6 on a buy plan (payments/installments.js)
+const MAX_INST_COLS   = 10;  // 4 legs on any document, 6 on a buy plan, 10 on a savings plan (payments/installments.js)
 const MAX_REFUND_COLS = 2;
 
 // Per-leg DATE and TYPE are deliberately not emitted. The legs still carry both (the parsers below
@@ -228,6 +229,48 @@ function planColumns(plan, legs, today, draftExists = true) {
   };
 }
 
+// ── Savings plans ────────────────────────────────────────────────────────────
+// A savings plan is a draft whose only line is "Savings Plan" (savings-plan/rules.js). Its money counts in
+// this report (HQ, 12 Nov 2026: it is never refunded, it becomes a voucher), but it is not a sale of goods:
+// no GST columns, sale_kind 'savings plan'. Its standing comes from savings_plans, read best-effort.
+const NO_SAVINGS = { byId: {} };
+async function loadSavingsPlans(deps) {
+  if (!deps.supabase) return NO_SAVINGS;
+  try {
+    const { data, error } = await deps.supabase.from('savings_plans').select('*');
+    if (error) throw new Error(error.message);
+    const out = { byId: {} };
+    for (const p of data || []) if (p.status !== 'cancelled') out.byId[String(p.draft_order_id)] = p;
+    return out;
+  } catch (e) {
+    console.warn(`[sales-report] savings plans unavailable: ${e.message}`);
+    return NO_SAVINGS;
+  }
+}
+
+const SAVINGS_STATUS = { completed: 'Completed (voucher issued)', terminated: 'Closed (voucher, no bonus)', redeemed: 'Voucher used up', cancelled: 'Cancelled' };
+// The plan columns for a savings draft (the same PLAN_COLS a buy plan fills), plus savings_plan.
+function savingsColumns(splan, legs, today) {
+  if (!splan) return { savings_plan: 'Savings plan', ...BLANK_PLAN_COLUMNS };
+  const st = SR.savingsState(splan, legs || [], today);
+  const active = splan.status === 'active';
+  const total = st.n * st.A;
+  return {
+    savings_plan:      `${splan.months} months x Rs${Math.round(splan.instalment)}`,
+    plan_status:       active ? (st.fullyPaid ? 'Active: fully paid, voucher to issue' : st.overdueDays > 0 ? `Active: ${st.overdueDays} days late` : 'Active: on track')
+                              : (SAVINGS_STATUS[splan.status] || splan.status),
+    plan_installments: st.n,
+    plan_total:        total,
+    plan_paid:         st.paid,
+    plan_balance:      Math.max(0, total - st.paid),
+    plan_next_due:     active && st.next ? st.next.due : '',
+    plan_next_amount:  active && st.next ? st.A : '',
+    plan_closes_on:    active && st.overdueDays > 0 ? st.closeOn : '',
+    plan_voucher:      splan.voucher_code && splan.voucher_code !== 'ISSUING' ? `${splan.voucher_code} (Rs${splan.voucher_value})` : '',
+  };
+}
+const NO_GST = { gross_sales: '', discount: '', net_sales: '', taxable_value: '', igst: '', sgst: '', cgst: '' };
+
 function collectClosedPlans({ from, to }, rows, plans) {
   const today = todayIst();
   const inWindow = (d) => (!from || d >= from) && (!to || d <= to);
@@ -244,6 +287,7 @@ function collectClosedPlans({ from, to }, rows, plans) {
     (lines.length ? lines : [{}]).forEach((li, idx) => {
       rows.push({
         stage: 'plan-closed',
+        sale_kind: 'buy plan',
         payment_type: `buy plan · closed (${plan.closed_reason || plan.status})`,
         buy_plan: planCols.buy_plan,
         draft_name: plan.draft_name || '',
@@ -387,6 +431,8 @@ async function collectOrders(deps, { from, to }, rows, draftByOrderId = {}, plan
         });
         rows.push({
           stage,
+          // order · buy plan (a plan's draft converted). An order is never a savings plan.
+          sale_kind:     plan ? 'buy plan' : 'order',
           payment_type:  plan ? `buy plan · ${paymentType}` : paymentType,
           buy_plan:      planCols.buy_plan,
           draft_name:   originDraft,
@@ -477,7 +523,7 @@ async function fetchProductTypes(deps, productIds) {
 // the identical draft list). Filter on d.created_at here instead, and never trust the endpoint to
 // have narrowed anything.
 
-async function collectDrafts(deps, { from, to }, rows, plans = NO_PLANS) {
+async function collectDrafts(deps, { from, to }, rows, plans = NO_PLANS, savingsPlans = NO_SAVINGS) {
   const today = todayIst();
   const { axios, storeUrl, token } = deps;
   const hdrs = { 'X-Shopify-Access-Token': token };
@@ -584,6 +630,12 @@ async function collectDrafts(deps, { from, to }, rows, plans = NO_PLANS) {
     const plan = planFor(plans, d.id, d.name);
     const planCols = planColumns(plan, draftLegs.inst.filter(l => l.type !== 'cad_advance'), today);
     if (plan) plans.reported.add(plan.id);
+    // A savings plan's draft: money held for the customer, not a sale of goods (see savingsColumns).
+    const isSavings = SR.isSavingsDraftTags(tags);
+    const savingsCols = isSavings ? savingsColumns(savingsPlans.byId[String(d.id)] || null, draftLegs.inst, today) : null;
+    const docCols = savingsCols || planCols;
+    // order advance: money taken on a draft that has not become an order yet.
+    const saleKind = isSavings ? 'savings plan' : plan ? 'buy plan' : 'order advance';
 
     const shipState  = d.shipping_address?.province_code || '';
     // Draft has no custom.state_code inline. Mirror the invoice's supplier default (KA) so the
@@ -608,8 +660,10 @@ async function collectDrafts(deps, { from, to }, rows, plans = NO_PLANS) {
       });
       rows.push({
         stage,
-        payment_type: plan ? `buy plan · ${paymentType}` : paymentType,
+        sale_kind:   saleKind,
+        payment_type: isSavings ? `savings plan · ${paymentType}` : plan ? `buy plan · ${paymentType}` : paymentType,
         buy_plan:    planCols.buy_plan,
+        savings_plan: savingsCols ? savingsCols.savings_plan : '',
         draft_name:  d.name || '',
         order_name:  '',
         day:         fmtDay(d.created_at),
@@ -626,7 +680,7 @@ async function collectDrafts(deps, { from, to }, rows, plans = NO_PLANS) {
         sku:             item.sku || '',
         hsn:             HSN_DEFAULT,
         qty:             item.quantity || 0,
-        ...money,
+        ...(isSavings ? NO_GST : money),
         custom_serial:   '',
         ...(idx === 0 ? legCols : BLANK_LEG_COLUMNS),
         amount_paid:     idx === 0 ? r2(paid)     : '',
@@ -636,17 +690,23 @@ async function collectDrafts(deps, { from, to }, rows, plans = NO_PLANS) {
         net_to_collect:  idx === 0 ? r2(total)    : '',
         payment_mode:    idx === 0 ? pmode        : '',
         installments:    idx === 0 ? legCount     : '',
-        ...(idx === 0 ? planCols : BLANK_PLAN_COLUMNS),
+        ...(idx === 0 ? docCols : BLANK_PLAN_COLUMNS),
         buy_plan:        planCols.buy_plan,
+        savings_plan:    savingsCols ? savingsCols.savings_plan : '',
       });
     });
   }
 }
 
 const SALES_COLS = [
-  'stage', 'payment_type',
+  'stage',
+  // order · order advance (paid on a draft not yet an order) · buy plan · savings plan (HQ, 12 Nov 2026).
+  'sale_kind',
+  'payment_type',
   // Gold value lock / Equal on every line of a buy-plan document, blank otherwise — filter on it.
   'buy_plan',
+  // "10 months x Rs2000" on every line of a savings-plan draft, blank otherwise.
+  'savings_plan',
   'draft_name', 'order_name', 'day', 'customer',
   // Who raised the sale (custom.employee_name). Free on the orders side; the drafts side pays one
   // metafield read per draft, because the draft list endpoint carries no metafields at all.
@@ -673,6 +733,10 @@ const SALES_COLS = [
   'i4_value', 'i4_mode',
   'i5_value', 'i5_mode',   // buy plans only
   'i6_value', 'i6_mode',
+  'i7_value', 'i7_mode',   // savings plans only
+  'i8_value', 'i8_mode',
+  'i9_value', 'i9_mode',
+  'i10_value', 'i10_mode',
   'r1_value', 'r1_mode', 'r1_ref',
   'r2_value', 'r2_mode', 'r2_ref',
   // ── Totals, to the right of the legs they are computed from ──
@@ -698,7 +762,7 @@ async function buildSalesReport(deps, { from, to, state, paymentStatus } = {}) {
   await collectOrders(deps, { from, to }, rows, draftByOrderId, plans);
   // An order converted from a plan's draft accounts for that plan, whatever its date.
   for (const o of Object.values(draftByOrderId)) { const p = planFor(plans, o.id, o.name); if (p) plans.reported.add(p.id); }
-  await collectDrafts(deps, { from, to }, rows, plans);
+  await collectDrafts(deps, { from, to }, rows, plans, await loadSavingsPlans(deps));
   collectClosedPlans({ from, to }, rows, plans);
   let out = rows;
   if (state)         out = out.filter(r => r.place_of_supply === normState(state));
@@ -790,6 +854,7 @@ function toCSV(rows, cols) {
 }
 
 module.exports = {
+  savingsColumns, loadSavingsPlans,
   buildSalesReport,
   buildSerialCounters,
   SALES_COLS,

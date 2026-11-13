@@ -5301,7 +5301,10 @@ app.listen(PORT, async () => {
   // Loyalty: expire unused online codes, keep the occasion-month tag current. No-op unless LOYALTY_ENABLED.
   startLoyaltySweep();
   startBuyPlanSweep({ restore: restoreDeletedPlanDraft });   // buy-plan reminders, staff digest, completion
-  if (config.savingsPlan.enabled) require('./src/modules/payments/savings-plan/sweep').startSavingsSweep();   // savings-plan reminders, grace, termination
+  if (config.savingsPlan.enabled) {
+    require('./src/modules/payments/savings-plan/sweep').startSavingsSweep();   // savings-plan reminders, grace, termination
+    require('./src/modules/payments/savings-plan/sheet').startSheetSync();      // the "Savings Plans" tab of the tracker sheet
+  }
 
   // Counter-vs-ledger reconciliation. Emails accounts only when a document number has gone missing;
   // silence means the counters and the ledger agree. This is the layer that catches a cause we have

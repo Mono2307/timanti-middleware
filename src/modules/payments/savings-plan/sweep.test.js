@@ -211,5 +211,24 @@ const paid = (k, late = 0) => D.slice(0, k).map((d, i) => ({ value: 2000, date: 
     assert.deepStrictEqual(world.sent.filter(s => s.startsWith('store:')), ['store:the draft was converted to an order']);
   });
 
+  console.log('tracker sheet');
+  await t('a sheet row: saved, paid count, late, status, close date', async () => {
+    const { rowFor, COLUMNS } = require('./sheet');
+    const plan = setup({ legs: paid(3, 1) });
+    const row = rowFor(plan, world.drafts['900'].legs, R.addDays(D[3], 5));
+    const at = (c) => row[COLUMNS.indexOf(c)];
+    assert.strictEqual(row.length, COLUMNS.length);
+    assert.deepStrictEqual([at('Saved'), at('Instalments paid'), at('Late payments'), at('Status'), at('Closes on')],
+      [6000, 3, 1, 'Late 5 days', R.addDays(D[3], 31)]);
+  });
+  await t('an ended plan shows its voucher and the figures it ended on', async () => {
+    const { rowFor, COLUMNS } = require('./sheet');
+    const plan = setup({ status: 'completed' });
+    Object.assign(plan, { paid_at_end: 20000, late_count: 0, voucher_code: 'SSV27-KAHSR-0001', voucher_value: 22000 });
+    const row = rowFor(plan, [], D[9]);
+    const at = (c) => row[COLUMNS.indexOf(c)];
+    assert.deepStrictEqual([at('Saved'), at('Status'), at('Voucher')], [20000, 'Completed (voucher issued)', 'SSV27-KAHSR-0001 (Rs22000)']);
+  });
+
   console.log(`\n${n} savings-plan sweep tests passed`);
 })().catch((e) => { console.error(e); process.exit(1); });

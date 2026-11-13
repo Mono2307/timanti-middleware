@@ -33,6 +33,7 @@ const store = require('./store');
 const notify = require('./notify');
 const { issueVoucher, choices, CLAIM } = require('./end');
 const { runSavingsSweep, linkAmount } = require('./sweep');
+const sheet = require('./sheet');
 const { createPlanLink, cancelOpenLinks } = require('../buy-plan/links');
 const {
   readDraft, todayIst, startCheck, tagsFor, writeTags, makeLineNonTaxable, termsMetafields, writeMetafields,
@@ -163,6 +164,7 @@ async function startPlan(req, res) {
     }
     await notify.sendStarted(plan, d, st, first).catch(e => log.error('savings-plan', `started email ${d.draft.name}: ${e.message}`));
     if (first) await store.markSent(plan.id, 1, 'customer', 'due');
+    sheet.pushSoon();
     log.info('savings-plan', `${d.draft.name}: ${months}-month plan started at Rs${c.instalment}/month from ${start}`);
     return res.json({ ...view({ ...d, tags: tagsFor(d, 'active') }, plan), firstLink: first ? first.shortUrl : null });
   } catch (e) { return fail(res, e, 'start'); }
@@ -200,6 +202,7 @@ async function issueVoucherHandler(req, res) {
     if (!['full', 'early', 'stopped', 'terminated'].includes(how)) throw refuse('Choose how the plan ends');
     const today = todayIst();
     const r = await issueVoucher(plan, d, R.savingsState(plan, d.legs, today), { how, today, by: req.staff?.sub ? String(req.staff.sub) : null });
+    sheet.pushSoon();
     return res.json({ ok: true, ...r });
   } catch (e) { return fail(res, e, 'issue-voucher'); }
 }

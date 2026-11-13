@@ -1,0 +1,15 @@
+api_version = "2026-01"
+
+[[extensions]]
+name = "t:name"
+handle = "savings-plan"
+type = "ui_extension"
+
+# Admin action: "Savings plan" under More actions on a draft order. Starts a 6- or 10-month savings plan
+# on a draft whose only line is the custom item "Savings Plan" (instalment x months), then shows the
+# schedule, sends payment links, and issues the Savings Scheme Voucher. Payments taken in store go into
+# the Jewellery Workspace panel's Installments section, as on any draft. The uid is assigned by the
+# Shopify CLI on the first deploy.
+[[extensions.targeting]]
+module = "./src/SavingsPlan.jsx"
+target = "admin.draft-order-details.action.render"

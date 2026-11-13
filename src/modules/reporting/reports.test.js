@@ -43,7 +43,7 @@ t('net_sales stays tax-INCLUSIVE post-discount', () => {
 console.log('legColumns — legs spread rightward');
 t('every slot gets four columns, empty when absent', () => {
   const c = legColumns([], []);
-  assert.strictEqual(Object.keys(c).length, 6 * 2 + 2 * 3);   // 6 installment slots (buy plans use 5-6), 2 refund
+  assert.strictEqual(Object.keys(c).length, 10 * 2 + 2 * 3);  // 10 installment slots (buy plans use 5-6, savings plans 7-10), 2 refund
   assert.strictEqual(c.i1_value, '');
   assert.strictEqual(c.r2_ref, '');
 });
@@ -239,6 +239,44 @@ console.log('buy plans in the sales report');
     collectClosedPlans({ from: '2026-11-01', to: '2026-11-30' },
       rows, { all: [{ ...plan, status: 'forfeited' }], reported: new Set([plan.id]) });
     assert.strictEqual(rows.length, 0);
+  });
+}
+
+console.log('savings plans in the sales report');
+{
+  const { savingsColumns, PLAN_COLS } = require('./reports');
+  const R = require('../payments/savings-plan/rules');
+  const START = '2026-11-12';
+  const splan = { id: 3, draft_order_id: '900', draft_name: '#D900', months: 10, instalment: 2000, start_date: START,
+    due_dates: R.dueDates(START, 10), status: 'active' };
+  const legs = legsFromTags(['i1:2000@upi@2026-11-12', 'i2:2000@cash@2026-12-12']).inst;
+  t('the sale kinds are columns, and savings drafts have slots 7-10', () => {
+    for (const k of ['sale_kind', 'savings_plan', 'i7_value', 'i10_mode']) assert.ok(SALES_COLS.includes(k), k);
+    assert.strictEqual(SALES_COLS.indexOf('sale_kind'), SALES_COLS.indexOf('stage') + 1);
+  });
+  t('i10: tags are read back into slot 10', () => {
+    const l = legsFromTags(['i10:2000@upi@2027-08-12']).inst;
+    assert.deepStrictEqual(l.map(x => [x.slot, x.value]), [[10, 2000]]);
+    assert.strictEqual(legColumns(l, []).i10_value, 2000);
+  });
+  t('a savings draft: its plan, what is saved, what is next', () => {
+    const c = savingsColumns(splan, legs, '2026-12-20');
+    assert.strictEqual(c.savings_plan, '10 months x Rs2000');
+    assert.deepStrictEqual([c.plan_status, c.plan_installments, c.plan_total, c.plan_paid, c.plan_balance, c.plan_next_due, c.plan_next_amount],
+      ['Active: on track', 10, 20000, 4000, 16000, '2027-01-12', 2000]);
+  });
+  t('a late savings plan shows how late and when it closes', () => {
+    const c = savingsColumns(splan, legs, '2027-01-20');
+    assert.deepStrictEqual([c.plan_status, c.plan_closes_on], ['Active: 8 days late', '2027-02-12']);
+  });
+  t('an ended savings plan shows its voucher', () => {
+    const c = savingsColumns({ ...splan, status: 'completed', voucher_code: 'SSV27-KAHSR-0001', voucher_value: 22000 }, legs, '2027-09-12');
+    assert.deepStrictEqual([c.plan_status, c.plan_voucher], ['Completed (voucher issued)', 'SSV27-KAHSR-0001 (Rs22000)']);
+  });
+  t('a savings draft with no plan row still says what it is, plan columns blank', () => {
+    const c = savingsColumns(null, legs, '2027-01-20');
+    assert.strictEqual(c.savings_plan, 'Savings plan');
+    for (const k of PLAN_COLS) assert.strictEqual(c[k], '');
   });
 }
 

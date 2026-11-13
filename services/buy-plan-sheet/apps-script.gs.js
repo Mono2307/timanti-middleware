@@ -3,6 +3,8 @@
  *
  * The middleware (src/modules/payments/buy-plan/sheet.js) POSTs the whole plan table here every
  * 10 minutes and after each payment or plan change. This script rewrites the "Buy Plans" tab.
+ * The savings plan (src/modules/payments/savings-plan/sheet.js) POSTs its table with tab: "Savings Plans"
+ * and gets a tab of its own; any other tab name is refused.
  * The sheet is a view: edits made in it are overwritten on the next push.
  *
  * Setup (once):
@@ -12,16 +14,19 @@
  *  4. On Fly set BUY_PLAN_SHEET_URL = that URL and BUY_PLAN_SHEET_SECRET = the same SECRET.
  */
 var TAB = 'Buy Plans';
+var TABS = ['Buy Plans', 'Savings Plans'];
 
 function doPost(e) {
   try {
     var body = JSON.parse(e.postData.contents || '{}');
     var secret = PropertiesService.getScriptProperties().getProperty('SECRET');
     if (!secret || body.secret !== secret) return json({ ok: false, error: 'unauthorized' });
+    var tab = body.tab || TAB;
+    if (TABS.indexOf(tab) < 0) return json({ ok: false, error: 'unknown tab ' + tab });
     var columns = body.columns || [];
     var rows = body.rows || [];
     var ss = SpreadsheetApp.getActiveSpreadsheet();
-    var sh = ss.getSheetByName(TAB) || ss.insertSheet(TAB);
+    var sh = ss.getSheetByName(tab) || ss.insertSheet(tab);
     sh.clearContents();
     var stamp = 'Last update: ' + Utilities.formatDate(new Date(), 'Asia/Kolkata', 'dd MMM yyyy HH:mm') + ' IST  ·  ' + rows.length + ' plan(s)';
     sh.getRange(1, 1).setValue(stamp).setFontStyle('italic');
@@ -45,8 +50,8 @@ function colour(sh, columns, n) {
   var vals = range.getValues();
   var bg = vals.map(function (r) {
     var s = String(r[0]);
-    if (/closing|overdue|missing/i.test(s)) return ['#f8d7da'];
-    if (/on track|Completed/i.test(s)) return ['#d4edda'];
+    if (/closing|overdue|missing|Late /i.test(s)) return ['#f8d7da'];
+    if (/on track|Completed|used up/i.test(s)) return ['#d4edda'];
     if (/Closed|Cancelled/i.test(s)) return ['#e2e3e5'];
     return ['#fff3cd'];
   });
