@@ -47,7 +47,7 @@ A monthly savings scheme on the BlueStone Gold Mine 10+1 model.
 ## Before switching on (`SAVINGS_PLAN_ENABLED=true`)
 1. Run `savings-plan/migration.sql` in Supabase.
 2. Create the definitions for slots 7–10: `POST /api/metafield-definitions/ensure?group=installments`.
-3. ~~Deploy the Shopify app~~ Done on 14 Nov 2026 as `timanti-custom-extension-app-4`: the Savings plan action and the panel's slots 7–10. Until the middleware is deployed and switched on, More actions → Savings plan shows an error. Deploy the app from this branch, or from `main` once it is merged; a deploy from a branch without `extensions/savings-plan` would add it back only with `--allow-deletes`, never silently remove it.
+3. ~~Deploy the Shopify app~~ Done on 14 Nov 2026 as `timanti-custom-extension-app-4`: the Savings plan action and the panel's slots 7–10. Until the middleware is deployed and switched on, More actions → Savings plan shows an error. Merge this branch before the next app deploy: a deploy from a branch without `extensions/savings-plan` would try to remove the Savings plan action (the CLI only removes an extension with `--allow-deletes`).
 4. Paste `templates/Shopify-Notifications-PASTE/1 - Draft order invoice (advance receipt).html` into Shopify, under Notifications → Draft order invoice.
 5. Optional: set `SAVINGS_WHATSAPP` if the customer WhatsApp number should not be 917710968305.
 6. Paste the updated `templates/tax-invoice.liquid`, `order-confirmation-receipt.liquid` and `pricing-estimate.liquid` into Order Printer. They print an SSV code as "Less: Savings Scheme Voucher".
