@@ -3,6 +3,7 @@ api_version = "2026-01"
 [[extensions]]
 name = "t:name"
 handle = "savings-plan"
+uid = "754fef68-6c16-6528-4cf0-3c2c640100e737c58b82"
 type = "ui_extension"
 
 # Admin action: "Savings plan" under More actions on a draft order. Starts a 6- or 10-month savings plan
