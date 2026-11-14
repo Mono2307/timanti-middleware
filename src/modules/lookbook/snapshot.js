@@ -33,7 +33,7 @@ const { log } = require('../../core/logger');
  * of a customer. A version stamp makes a deploy that changes the shape of the data rebuild on boot
  * instead of waiting for the clock.
  */
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;   // v4: designId on variants, designIds on products (design-code search)
 
 const PRODUCT_PAGE = 100;
 const VARIANT_PAGE = 100;
@@ -295,6 +295,9 @@ function normalize(products, variants) {
       return {
         id:    numericId(v.id),
         sku:   v.sku || null,
+        // The Gati ID / design code: SKU segment 0. RG00048 and RG00048A are different pieces,
+        // and this is the only field that tells them apart on screen.
+        designId: sku.designId ? sku.designId.toUpperCase() : null,
         title: v.title && v.title !== 'Default Title' ? v.title : null,
         price: num(v.price),
         // The pricer skips zero-weight variants (shopify_snapshot.py:219-236), so their price is
@@ -353,6 +356,8 @@ function normalize(products, variants) {
       vendor: p.vendor || null,
       tags: p.tags || [],
       family: firstSku.family,
+      // Usually one code per product; a list because nothing in Shopify enforces that.
+      designIds: uniq(variantRecords.map((v) => v.designId)),
       media,
       // Product-level design spec. Per server.js:1141-1143 the per-unit RATES are product-level;
       // the values they produce are variant-level.

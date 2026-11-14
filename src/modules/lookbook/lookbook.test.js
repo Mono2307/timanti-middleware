@@ -441,4 +441,175 @@ t('the app page ships self-contained', () => {
   assert.ok(!/<link[^>]+stylesheet/.test(html), 'the page must not load external stylesheets');
 });
 
-console.log(`\n${n} assertions passed`);
+// ── Design-code search ───────────────────────────────────────────────────────
+console.log('design codes are matched as codes, so RG00048 and RG00048A are never confused');
+
+const search = require('./search');
+
+t('the short form and the padded form are the same code', () => {
+  assert.strictEqual(search.codeScore('RG48', 'RG00048'), 3);
+  assert.strictEqual(search.codeScore('rg00048', 'RG00048'), 3);
+  assert.strictEqual(search.codeScore('rg-00048', 'RG00048'), 3);
+});
+
+t('a family query offers the letter variants, ranked after the exact code', () => {
+  assert.strictEqual(search.codeScore('RG48', 'RG00048A'), 2);
+  const rows = ['RG00048A', 'RG00480', 'RG00048', 'RG00048B']
+    .map((code) => ({ code, score: search.codeScore('RG48', code) }))
+    .filter((r) => r.score).sort(search.compareSuggestions).map((r) => r.code);
+  assert.deepStrictEqual(rows, ['RG00048', 'RG00048A', 'RG00048B', 'RG00480']);
+});
+
+t('a suffixed query is exact: RG48A does not offer RG00048 or RG00048B', () => {
+  assert.strictEqual(search.codeScore('RG48A', 'RG00048A'), 3);
+  assert.strictEqual(search.codeScore('RG48A', 'RG00048'), 0);
+  assert.strictEqual(search.codeScore('RG48A', 'RG00048B'), 0);
+});
+
+t('a half-typed code is a typeahead over its continuations', () => {
+  assert.strictEqual(search.codeScore('RG00', 'RG00048'), 1);
+  assert.strictEqual(search.codeScore('RG4', 'RG00048'), 1);
+  assert.strictEqual(search.codeScore('RG4', 'NK00048'), 0, 'a different prefix never matches');
+  assert.strictEqual(search.codeScore('RG49', 'RG00048'), 0);
+});
+
+t('only letters-then-digits counts as a code query; titles still search as text', () => {
+  assert.strictEqual(search.looksLikeCode('rg4'), true);
+  assert.strictEqual(search.looksLikeCode('ring'), false);
+  assert.strictEqual(search.looksLikeCode('48'), false);
+});
+
+t('the page ships the same matcher the tests exercise', () => {
+  const html = appPage();
+  assert.ok(html.includes(search.codeScore.toString()), 'page.js must inject search.js verbatim');
+  assert.ok(!/<script[^>]*>[\s\S]*\$\{/.test(html.split('</style>')[1]), 'no un-interpolated template');
+  // And it must parse as a script.
+  new Function(html.split('<script>')[1].split('</script>')[0]);
+});
+
+t('every product carries its design codes, upper-cased, from SKU segment 0', () => {
+  const { items } = snap.normalize(
+    [{ id: 'gid://shopify/Product/1', title: 'Ring', status: 'ACTIVE', media: { nodes: [] } }],
+    [{ id: 'gid://shopify/ProductVariant/11', sku: 'rg00048a|Y|18|VVS-EF|H|12|1.0|NA', product: { id: 'gid://shopify/Product/1' } },
+     { id: 'gid://shopify/ProductVariant/12', sku: 'RG00048A|W|18|VVS-EF|H|12|1.0|NA', product: { id: 'gid://shopify/Product/1' } }]);
+  assert.deepStrictEqual(items[0].designIds, ['RG00048A']);
+  assert.strictEqual(items[0].variants[0].designId, 'RG00048A');
+});
+
+t('the schema version moved with the new fields', () => {
+  assert.ok(snap.SCHEMA_VERSION >= 4, 'designIds changed the snapshot shape; bump SCHEMA_VERSION');
+});
+
+// ── Live price freshness ─────────────────────────────────────────────────────
+console.log('the PDP breakup is read live with the price, and open pages hear about a reprice');
+
+const live = require('./live');
+
+t('a full live read carries the breakup; an unset metafield stays absent, not zero', () => {
+  const row = live.shape({
+    id: 'gid://shopify/ProductVariant/1', price: '51234.00', inventoryQuantity: 1, availableForSale: true,
+    product: { status: 'ACTIVE' },
+    pricedAt: { value: '2026-11-14T13:05:00+05:30' }, goldRate: { value: '7420' },
+    bGold: { value: '30000' }, bDiamond: { value: '15000' }, bMaking: { value: '4742' },
+    bGem: null, bGst: { value: '1492' }, bSubtotal: { value: '49742' }, bTotal: { value: '51234' },
+  }, true);
+  assert.strictEqual(row.full, true);
+  assert.strictEqual(row.price, 51234);
+  assert.strictEqual(row.breakup.total, 51234);
+  assert.strictEqual(row.breakup.gemstone, null);
+  assert.strictEqual(row.goldRate, 7420);
+});
+
+t('a lean live read stays lean (the grid must stay one cheap call)', () => {
+  const row = live.shape({ id: 'x', price: '100', inventoryQuantity: 0, product: {} }, false);
+  assert.strictEqual(row.full, undefined);
+  assert.strictEqual(row.breakup, undefined);
+});
+
+t('the full read is chunked under the 1000-point query budget', () => {
+  assert.ok(live.FULL_CHUNK * 12 < 1000);
+});
+
+t('a finished reprice moves the price epoch that open pages poll', () => {
+  const before = store.pulse().priceEpoch;
+  const realSetTimeout = global.setTimeout;
+  global.setTimeout = () => 0;            // do not schedule the real rebuild from a test
+  try {
+    const later = before + 5;
+    const realNow = Date.now;
+    Date.now = () => later;
+    try { store.afterPriceUpdate(); } finally { Date.now = realNow; }
+  } finally { global.setTimeout = realSetTimeout; }
+  assert.ok(store.pulse().priceEpoch > before);
+  assert.strictEqual(typeof store.pulse().repricing, 'boolean');
+});
+
+// ── Draft orders ─────────────────────────────────────────────────────────────
+console.log('Create draft order pushes the exact variant against the placeholder customer');
+
+(async () => {
+  const gqlMod = require('./shopify-gql');
+  const realGql = gqlMod.gql;
+  const calls = [];
+  gqlMod.gql = async (query, vars) => {
+    calls.push({ query, vars });
+    if (query.includes('productVariant(')) {
+      return { data: { productVariant: { id: vars.id, legacyResourceId: '42', sku: 'RG00048A|Y|18|VVS-EF|H|12|1.0|NA',
+        title: '18K / Yellow / 12', price: '51234.00', inventoryQuantity: 1, product: { id: 'p', title: 'Ring', status: 'ACTIVE' } } } };
+    }
+    if (query.includes('customers(')) return { data: { customers: { nodes: [] } } };
+    if (query.includes('customerCreate')) return { data: { customerCreate: { customer: { id: 'gid://shopify/Customer/9' }, userErrors: [] } } };
+    if (query.includes('draftOrderCreate')) {
+      return { data: { draftOrderCreate: { draftOrder: { id: 'gid://shopify/DraftOrder/77', legacyResourceId: '77', name: '#D300' }, userErrors: [] } } };
+    }
+    throw new Error('unexpected query');
+  };
+  // draft.js destructured gql at require time, so require it AFTER the stub is in place.
+  delete require.cache[require.resolve('./draft')];
+  const draft = require('./draft');
+  require('../../core/config').config.lookbook.draftCustomerId = null;   // exercise the find-or-create path
+  const at = async (name, fn) => { await fn(); n++; console.log('  ok  ' + name); };
+
+  try {
+    await at('a non-numeric variant id is refused before Shopify is called', async () => {
+      await assert.rejects(() => draft.createDraft('abc'), (e) => e.status === 400);
+      assert.strictEqual(calls.length, 0);
+    });
+
+    await at('the draft carries the variant re-read from Shopify, one unit, the placeholder customer', async () => {
+      const r = await draft.createDraft('42');
+      const create = calls.find((c) => c.query.includes('draftOrderCreate')).vars.input;
+      assert.deepStrictEqual(create.lineItems, [{ variantId: 'gid://shopify/ProductVariant/42', quantity: 1 }]);
+      assert.deepStrictEqual(create.purchasingEntity, { customerId: 'gid://shopify/Customer/9' });
+      assert.ok(create.tags.includes(draft.DRAFT_TAG));
+      assert.strictEqual(r.name, '#D300');
+      assert.ok(r.adminUrl.endsWith('/draft_orders/77'));
+      const cust = calls.find((c) => c.query.includes('customerCreate')).vars.input;
+      assert.strictEqual(cust.email, undefined, 'the placeholder must have no email - nothing can be sent to it');
+      assert.strictEqual(cust.phone, undefined);
+    });
+
+    await at('a double tap returns the same draft instead of making a second one', async () => {
+      const before = calls.filter((c) => c.query.includes('draftOrderCreate')).length;
+      const r = await draft.createDraft('42');
+      assert.strictEqual(r.duplicate, true);
+      assert.strictEqual(calls.filter((c) => c.query.includes('draftOrderCreate')).length, before);
+    });
+
+    await at('the placeholder customer is created once, then reused', async () => {
+      draft._reset();
+      const made = calls.filter((c) => c.query.includes('customerCreate')).length;
+      // _reset forgot the cache, so a fresh process finds it by tag instead of creating another.
+      const orig = gqlMod.gql;
+      gqlMod.gql = async (q, v) => (q.includes('customers(')
+        ? { data: { customers: { nodes: [{ id: 'gid://shopify/Customer/9' }] } } } : orig(q, v));
+      delete require.cache[require.resolve('./draft')];
+      const d2 = require('./draft');
+      await d2.createDraft('43');
+      assert.strictEqual(calls.filter((c) => c.query.includes('customerCreate')).length, made);
+    });
+  } finally {
+    gqlMod.gql = realGql;
+  }
+  console.log(`\n${n} assertions passed`);
+})().catch((err) => { console.error(err); process.exit(1); });

@@ -164,6 +164,8 @@ const FIXTURES = {
   '/lookbook/catalog.json': { headers: { cookie: lookbookCookie } },
   '/lookbook/live':         { headers: { cookie: lookbookCookie }, query: { ids: '1,2' } },
   '/lookbook/refresh':      { headers: { cookie: lookbookCookie } },
+  '/lookbook/pulse':        { headers: { cookie: lookbookCookie } },
+  '/lookbook/draft':        { headers: { cookie: lookbookCookie }, body: { variantId: '1' } },
   '/api/trigger-price-update': {
     headers: { 'x-webhook-secret': process.env.PRICE_UPDATE_WEBHOOK_SECRET },
     // A plausible rate; manual mode is deliberately NOT used so the ±10% guard cannot reject it.

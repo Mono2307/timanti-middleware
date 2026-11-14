@@ -169,8 +169,25 @@ function rebuildSoon(why, { tries = 0, defers = 0 } = {}) {
   });
 }
 
+/**
+ * Moves whenever prices may have moved: at boot, and the moment a reprice exits. Open pages poll
+ * pulse() and drop their cached live prices when it changes, so nobody needs to reload, sign in
+ * again or open a new tab after a gold-rate run. One machine (fly.toml), so memory is the truth.
+ */
+let _priceEpoch = Date.now();
+
+/** What an open page polls: cheap, no Shopify call, no Supabase call. */
+const pulse = () => ({
+  priceEpoch: _priceEpoch,
+  repricing: repriceRunning(),
+  etag: _etag,
+  builtAt: _snapshot ? _snapshot.builtAt : null,
+});
+
 /** Called when the reprice child exits, so the lookbook carries the new prices within minutes. */
 function afterPriceUpdate() {
+  // Prices are already written in Shopify; tell open pages now, not after the rebuild.
+  _priceEpoch = Date.now();
   // A short pause lets Shopify's bucket refill after the reprice's last mutations.
   setTimeout(() => rebuildSoon('post-reprice'), 60 * 1000);
 }
@@ -205,4 +222,4 @@ function start() {
 /** Pre-gzipped response body, or null before the first snapshot exists. */
 const gzipped = () => _gzip;
 
-module.exports = { get, etag, gzipped, ageMs, refresh, start, afterPriceUpdate, loadFromSupabase, msUntilNextRebuild, CONFIG_KEY, REBUILD_HOUR_IST, REBUILD_HOURS };
+module.exports = { get, etag, gzipped, ageMs, refresh, start, afterPriceUpdate, pulse, loadFromSupabase, msUntilNextRebuild, CONFIG_KEY, REBUILD_HOUR_IST, REBUILD_HOURS };

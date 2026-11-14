@@ -22,6 +22,8 @@
  * dollar-brace would be interpolated by Node at render time instead of by the browser at runtime.
  */
 
+const { CLIENT_SOURCE: CODE_SEARCH_JS } = require('./search');
+
 const esc = (s) => String(s === null || s === undefined ? '' : s)
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
@@ -220,6 +222,50 @@ ${SHELL_CSS}
   .staff.on{display:block}
   .staff code{color:var(--ink);font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
   .staff a{color:var(--accent)}
+
+  /* -- design-code search ---------------------------------------------------- */
+  .searchwrap{position:relative}
+  .suggest{position:absolute;right:0;top:calc(100% + 4px);width:min(440px,92vw);max-height:70vh;overflow-y:auto;
+           background:var(--bg);border:1px solid var(--ink);z-index:50;display:none;text-align:left}
+  .suggest.open{display:block}
+  /* Phones: hang the list off the sticky header, full width, instead of off the narrow input. */
+  @media(max-width:700px){.searchwrap{position:static}.suggest{left:12px;right:12px;width:auto;top:100%}}
+  .sg{display:grid;grid-template-columns:auto 1fr auto;gap:4px 12px;padding:10px 12px;border-bottom:1px solid var(--line);cursor:pointer;align-items:baseline}
+  .sg:last-child{border-bottom:none}
+  .sg.on,.sg:hover{background:var(--tile)}
+  .sg .c{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:14px;font-weight:700;letter-spacing:.02em}
+  .sg .c.exact{color:var(--accent)}
+  .sg .t{font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .sg .p{font-size:12px;color:var(--muted);white-space:nowrap}
+  .sg .s{grid-column:1 / -1;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+  .sg .s.in{color:var(--accent)}
+  .sghint{padding:8px 12px;font-size:11.5px;color:var(--muted)}
+  .code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;letter-spacing:.03em;margin-bottom:4px}
+  .code.hit{color:var(--accent);font-weight:700}
+  .instock{font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);margin-top:4px}
+  .mto{font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-top:4px}
+
+  /* -- PDP: live price, available variant, draft order ---------------------- */
+  .livenote{font-size:11px;letter-spacing:.05em;color:var(--muted);margin-bottom:20px}
+  .livenote.wait{color:var(--accent)}
+  .actions{margin:20px 0 6px;display:flex;flex-direction:column;gap:10px}
+  .act{padding:11px 14px;border:1px solid var(--ink);font-size:12.5px;letter-spacing:.08em;text-transform:uppercase;text-align:center}
+  .act:hover{background:var(--ink);color:#fff}
+  .act.primary{background:var(--ink);color:#fff}
+  .act.primary:hover{background:var(--accent);border-color:var(--accent)}
+  .act[disabled]{opacity:.5;cursor:default}
+  .actrow{display:flex;gap:8px}
+  .actions .row{display:flex;flex-wrap:wrap;gap:8px}
+  .actrow .act{flex:1}
+  .res{font-size:12.5px;line-height:1.5}
+  .res.err{color:var(--accent)}
+  .res a{color:var(--accent)}
+  .res code,.vline code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--ink)}
+  .vline{font-size:11.5px;color:var(--muted);line-height:1.5}
+  .signedout{position:fixed;left:0;right:0;bottom:0;z-index:90;background:var(--accent);color:#fff;
+             padding:12px 18px;text-align:center;font-size:13px;display:none}
+  .signedout.on{display:block}
+  .signedout a{color:#fff;font-weight:700}
 </style></head><body>
 
 <div class="announce">Certified and hallmarked lab grown diamond jewellery</div>
@@ -228,7 +274,11 @@ ${SHELL_CSS}
   <div class="brandline">
     <span class="meta" id="count"></span>
     <div class="wordmark">TIMANTI</div>
-    <div class="tools"><input class="search" id="q" type="search" placeholder="Search name or code" autocomplete="off"></div>
+    <div class="tools"><div class="searchwrap">
+      <input class="search" id="q" type="search" placeholder="Search name or design code" autocomplete="off"
+             autocapitalize="characters" spellcheck="false" role="combobox" aria-autocomplete="list" aria-controls="suggest">
+      <div class="suggest" id="suggest" role="listbox"></div>
+    </div></div>
   </div>
   <nav class="nav" id="nav"></nav>
 </header>
@@ -259,13 +309,28 @@ ${SHELL_CSS}
   </div>
 </div>
 
+<div class="signedout" id="signedout">This screen has been signed out, so prices can no longer be checked live.
+  <a href="/lookbook">Sign in again</a></div>
+
 <script>
 (function () {
   'use strict';
 
+  /* Design-code matching, shared verbatim with search.js (and its tests). */
+  ${CODE_SEARCH_JS}
+
   var S = { items: [], facets: {}, built: null, hidden: 0, etag: null, sel: {}, q: '',
             pmin: null, pmax: null, sort: 'featured',
-            filtered: [], live: {}, card: {}, open: null, idx: -1, img: 0, axis: {}, staff: false };
+            filtered: [], live: {}, card: {}, open: null, idx: -1, img: 0, axis: {}, staff: false,
+            /* PDP state, reset on every open: the pinned variant, the in-stock lookup, the draft box */
+            vid: null, avail: null, draft: null, pdpLive: 'idle',
+            /* what the last /lookbook/pulse said */
+            epoch: null, repricing: false,
+            sugg: { list: [], idx: -1 } };
+
+  /* A live price older than this is re-read before it is shown on a card. The PDP always re-reads. */
+  var LIVE_TTL = 3 * 60 * 1000;
+  var PULSE_MS = 45 * 1000;
 
   var FACET_LABELS = { subCategory:'Type', karat:'Karat', tone:'Metal', size:'Size',
                        stoneCut:'Stone cut', grade:'Diamond grade', priceBand:'Price',
@@ -362,13 +427,43 @@ ${SHELL_CSS}
     var l = S.live[v.id];
     return l && typeof l.price === 'number' ? l.price : v.price;
   }
+  /* Live stock when it has been read, the snapshot's otherwise. null = not tracked. */
+  function stockOf(v) {
+    if (!v) return null;
+    var l = S.live[v.id];
+    if (l && typeof l.stock === 'number') return l.stock;
+    return typeof v.stock === 'number' ? v.stock : null;
+  }
+  function inStockVariants(it) {
+    return it.variants.filter(function (v) { var s = stockOf(v); return s !== null && s >= 1; });
+  }
+  function isFresh(id, needFull) {
+    var l = S.live[id];
+    return !!l && Date.now() - l.at < LIVE_TTL && (!needFull || l.full);
+  }
+  /* "18K · Yellow Gold · 12": the words staff use for a variant. */
+  function variantLabel(v) {
+    var bits = [v.karat, v.toneLabel, v.size ? 'size ' + v.size : null, v.grade].filter(Boolean);
+    return bits.length ? bits.join(' · ') : (v.title || 'Single variant');
+  }
+  function codesOf(it) { return it.designIds || []; }
+  function stockHtml(it) {
+    var ins = inStockVariants(it);
+    if (!ins.length) return '<div class="mto">Made to order</div>';
+    if (ins.length === 1) return '<div class="instock">In stock · ' + esc(variantLabel(ins[0])) + '</div>';
+    return '<div class="instock">' + ins.length + ' variants in stock</div>';
+  }
 
   /* -- filtering ---------------------------------------------------------- */
   function matches(it) {
+    it._score = 0;
     if (S.q) {
+      /* A design code is matched as a code (RG48 == RG00048, and RG48A excludes RG00048), not as
+         a substring - that is what put RG00048 and RG00048A side by side, indistinguishable. */
+      if (looksLikeCode(S.q)) it._score = bestCodeScore(S.q, codesOf(it));
       var hay = (it.title + ' ' + (it.family || '') + ' ' +
                  it.variants.map(function (v) { return v.sku || ''; }).join(' ')).toLowerCase();
-      if (hay.indexOf(S.q) === -1) return false;
+      if (!it._score && hay.indexOf(S.q) === -1) return false;
     }
     /* An explicit range beats guessing which bucket the customer meant. Overlap, not containment:
        a piece spanning 40k-60k should surface for someone who asked for "under 50k". */
@@ -411,6 +506,9 @@ ${SHELL_CSS}
        piece is still real and still findable, it just belongs at the end rather than removed. */
     var dir = S.sort === 'asc' ? 1 : (S.sort === 'desc' ? -1 : 0);
     S.filtered.sort(function (a, b) {
+      /* A searched code leads everything, photographed or not: the exact RG00048 first, then its
+         letter variants, then typeahead continuations. */
+      if (a._score !== b._score) return b._score - a._score;
       if (!!a.noImage !== !!b.noImage) return a.noImage ? 1 : -1;
       if (!dir) return 0;
       var pa = sortPrice(a), pb = sortPrice(b);
@@ -529,8 +627,12 @@ ${SHELL_CSS}
       : '<div class="noimg">&#9671;</div><div class="nophoto">Photo coming soon</div>');
     if (it.draft) out.push('<span class="flag">Not published</span>');
     out.push('</div><div class="info">');
+    /* The design code on every card: the one thing that tells RG00048 from RG00048A. */
+    if (codesOf(it).length)
+      out.push('<div class="code' + (it._score === 3 ? ' hit' : '') + '">' + esc(codesOf(it).join(' / ')) + '</div>');
     out.push('<div class="name">' + esc(it.title) + '</div>');
     out.push('<div class="cost" data-price="' + it.id + '">' + priceHtml(it, v) + '</div>');
+    out.push('<div data-stock="' + it.id + '">' + stockHtml(it) + '</div>');
     out.push('<div class="swatches">');
     for (var t = 0; t < it.tones.length; t++) {
       var tone = it.tones[t];
@@ -557,27 +659,53 @@ ${SHELL_CSS}
     return (multi ? '<span class="from">From </span>' : '') + money.format(p);
   }
 
-  function refreshVisiblePrices() {
+  /* force: ignore the TTL - used when a pulse says prices just moved. */
+  function refreshVisiblePrices(force) {
     var ids = [];
     for (var i = 0; i < S.filtered.length && ids.length < 100; i++) {
       var v = cardVariant(S.filtered[i]);
-      if (v && !S.live[v.id]) ids.push(v.id);
+      if (v && (force || !isFresh(v.id))) ids.push(v.id);
     }
     if (!ids.length) return;
-    fetchLive(ids).then(function () {
-      for (var i = 0; i < S.filtered.length; i++) {
-        var it = S.filtered[i], v = cardVariant(it);
-        var pEl = document.querySelector('[data-price="' + it.id + '"]');
-        if (pEl) pEl.innerHTML = priceHtml(it, v);
-      }
-    });
+    fetchLive(ids).then(repaintCards);
+  }
+  function repaintCards() {
+    for (var i = 0; i < S.filtered.length; i++) {
+      var it = S.filtered[i], v = cardVariant(it);
+      var pEl = document.querySelector('[data-price="' + it.id + '"]');
+      if (pEl) pEl.innerHTML = priceHtml(it, v);
+      var sEl = document.querySelector('[data-stock="' + it.id + '"]');
+      if (sEl) sEl.innerHTML = stockHtml(it);
+    }
   }
 
-  function fetchLive(ids) {
+  function signedOut() { $('signedout').className = 'signedout on'; }
+
+  /* full: also the price breakup (the PDP). The server chunks it to stay inside Shopify's budget. */
+  function fetchLive(ids, full) {
     if (!ids.length) return Promise.resolve();
-    return fetch('/lookbook/live?ids=' + encodeURIComponent(ids.join(',')))
-      .then(function (r) { return r.ok ? r.json() : null; })
-      .then(function (j) { if (j && j.variants) for (var k in j.variants) S.live[k] = j.variants[k]; })
+    var at = Date.now();
+    return fetch('/lookbook/live?ids=' + encodeURIComponent(ids.slice(0, 100).join(',')) + (full ? '&full=1' : ''),
+                 { cache: 'no-store' })
+      .then(function (r) {
+        /* Before this, a session that lapsed while the page sat open made every live read fail
+           silently, and the page went on showing snapshot prices - the "only a re-login fixes it"
+           symptom. Now it says so. */
+        if (r.status === 401) { signedOut(); return null; }
+        return r.ok ? r.json() : null;
+      })
+      .then(function (j) {
+        if (!j || !j.variants) return;
+        for (var k in j.variants) {
+          var row = j.variants[k];
+          /* A lean read must not throw away a breakup a full read already holds for this epoch. */
+          var prev = S.live[k];
+          if (!row.full && prev && prev.full && prev.price === row.price) { row.full = true; row.breakup = prev.breakup;
+            row.pricedAt = prev.pricedAt; row.goldRate = prev.goldRate; }
+          row.at = at;
+          S.live[k] = row;
+        }
+      })
       .catch(function () { /* keep the snapshot price rather than blanking the card */ });
   }
 
@@ -597,6 +725,9 @@ ${SHELL_CSS}
     return urls;
   }
   function pickVariant(it) {
+    /* A variant chosen by "Show available variant" is exact - karat/tone/size alone can leave two
+       variants tied (they can differ by diamond grade), and the draft must carry the in-stock one. */
+    if (S.vid) for (var j = 0; j < it.variants.length; j++) if (it.variants[j].id === S.vid) return it.variants[j];
     var best = null, bestScore = -1;
     for (var i = 0; i < it.variants.length; i++) {
       var v = it.variants[i], score = 0;
@@ -615,11 +746,25 @@ ${SHELL_CSS}
     var it = S.filtered[i];
     var v = cardVariant(it) || it.variants[0] || {};
     S.axis = { karat: v.karat, tone: v.toneLabel, size: v.size };
+    S.vid = null; S.avail = null; S.draft = null;
     $('pdp').classList.add('open');
     document.body.style.overflow = 'hidden';
+    refreshPdpLive();
+  }
+
+  /* The PDP ALWAYS re-reads price, stock and breakup from Shopify when it opens - never a cached
+     number - so a piece opened minutes after a gold-rate run shows the new price with no reload. */
+  function refreshPdpLive() {
+    if (S.idx < 0) return Promise.resolve();
+    var it = S.filtered[S.idx];
+    var ids = it.variants.map(function (v2) { return v2.id; });
+    S.pdpLive = 'wait';
     renderPdp();
-    var ids = it.variants.map(function (v2) { return v2.id; }).filter(function (id) { return !S.live[id]; });
-    if (ids.length) fetchLive(ids.slice(0, 100)).then(renderPdp);
+    return fetchLive(ids, true).then(function () {
+      if (S.filtered[S.idx] !== it) return;   // the staff member moved on meanwhile
+      S.pdpLive = 'done';
+      renderPdp();
+    });
   }
   function closePdp() {
     $('pdp').classList.remove('open');
@@ -645,10 +790,18 @@ ${SHELL_CSS}
     [imgs[S.img + 1], imgs[S.img - 1]].forEach(function (u) { if (u) { var im = new Image(); im.src = px(u, 1400); } });
 
     var p = (v && v.priceManaged) ? priceOf(v) : null;
+    var lv = v ? S.live[v.id] : null;
     var out = [];
-    if (it.category) out.push('<div class="eyebrow">' + esc(it.category) + '</div>');
+    var eyebrow = [it.category].concat(codesOf(it)).filter(Boolean).join('  ·  ');
+    if (eyebrow) out.push('<div class="eyebrow">' + esc(eyebrow) + '</div>');
     out.push('<h1>' + esc(it.title) + '</h1>');
     out.push('<div class="price">' + (p > 0 ? money.format(p) : 'Price on request') + '</div>');
+    if (S.pdpLive === 'wait' && !(lv && lv.full && Date.now() - lv.at < 15000)) {
+      out.push('<div class="livenote wait">Checking today’s price…</div>');
+    } else if (lv && lv.full) {
+      out.push('<div class="livenote">Live price · checked ' +
+        esc(new Date(lv.at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })) + '</div>');
+    }
     /* Availability is deliberately not shown. Nearly everything here is made to order, so the
        label carried no information and read as a caveat next to the price in front of a customer. */
     if (it.draft) out.push('<div class="stock"><span class="flag">Not published</span></div>');
@@ -656,6 +809,7 @@ ${SHELL_CSS}
     out.push(optHtml('karat', 'Karat', it.karats));
     out.push(optHtml('tone', 'Metal', it.tones));
     out.push(optHtml('size', 'Size', it.sizes));
+    out.push(actionsHtml(it, v));
 
     var rows = [];
     if (it.carats > 0) rows.push(['Diamonds', it.carats + ' ct' + (it.stones > 0 ? '  ·  ' + it.stones + ' stones' : '')]);
@@ -673,10 +827,14 @@ ${SHELL_CSS}
        disclosure - it is already on the estimate and the tax invoice - so it belongs in the open
        panel, not behind the staff toggle. Only rows the pricer actually wrote are rendered: a
        missing metafield must not become a zero row, which reads as "no making charge". */
-    var b = (v && v.breakup) || {};
+    /* The breakup comes from the same live read as the price above it. The snapshot's copy is a
+       fallback only: between a reprice and the next rebuild it is the PREVIOUS day's split. */
+    var b = (lv && lv.full && lv.breakup) || (v && v.breakup) || {};
+    var goldRate = (lv && lv.full && lv.goldRate > 0) ? lv.goldRate : (v && v.goldRate);
+    var pricedAt = (lv && lv.full && lv.pricedAt) || (v && v.pricedAt);
     if (v && v.priceManaged) {
       var br = [];
-      if (b.gold > 0)     br.push(['Gold' + (v.goldRate > 0 ? ' @ ' + money.format(v.goldRate) + '/g' : ''), b.gold]);
+      if (b.gold > 0)     br.push(['Gold' + (goldRate > 0 ? ' @ ' + money.format(goldRate) + '/g' : ''), b.gold]);
       if (b.diamond > 0)  br.push(['Diamonds', b.diamond]);
       if (b.gemstone > 0) br.push(['Coloured stones', b.gemstone]);
       if (b.making > 0)   br.push(['Making', b.making]);
@@ -688,7 +846,8 @@ ${SHELL_CSS}
         if (b.gst > 0)      out.push('<div class="r"><span>GST 3%</span><span>' + money.format(b.gst) + '</span></div>');
         var grand = b.total > 0 ? b.total : priceOf(v);
         if (grand > 0) out.push('<div class="r tot"><span>Total</span><span>' + money.format(grand) + '</span></div>');
-        if (v.pricedAt) out.push('<div class="note">Gold rate as of ' + esc(new Date(v.pricedAt).toLocaleDateString('en-IN')) + '</div>');
+        if (pricedAt) out.push('<div class="note">Gold rate as of ' + esc(new Date(pricedAt).toLocaleString('en-IN',
+          { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })) + '</div>');
         out.push('</div>');
       }
     }
@@ -703,6 +862,110 @@ ${SHELL_CSS}
 
     $('buybox').innerHTML = out.join('');
     $('staffBtn').className = 'iconbtn' + (S.staff ? ' on' : '');
+  }
+
+  /* "Show available variant" and "Create draft order". */
+  function actionsHtml(it, v) {
+    var out = ['<div class="actions">'];
+
+    out.push('<button class="act" data-act="avail"' + (S.avail && S.avail.busy ? ' disabled' : '') + '>' +
+             (S.avail && S.avail.busy ? 'Checking stock…' : 'Show available variant') + '</button>');
+    if (S.avail && !S.avail.busy) {
+      if (S.avail.error) {
+        out.push('<div class="res err">' + esc(S.avail.error) + '</div>');
+      } else if (!S.avail.ids.length) {
+        out.push('<div class="res">No variant of this design is in stock right now - it is made to order.</div>');
+      } else {
+        var list = it.variants.filter(function (x) { return S.avail.ids.indexOf(x.id) !== -1; });
+        out.push('<div class="res">' + (list.length === 1
+          ? 'In stock: <b>' + esc(variantLabel(list[0])) + '</b> - selected below.'
+          : list.length + ' variants are in stock. Tap one to select it:') + '</div>');
+        if (list.length > 1) {
+          out.push('<div class="row">');
+          for (var i = 0; i < list.length; i++) {
+            out.push('<button class="chip' + (v && v.id === list[i].id ? ' on' : '') + '" data-vid="' + esc(list[i].id) + '">' +
+                     esc(variantLabel(list[i])) + ' <span class="n">' + stockOf(list[i]) + '</span></button>');
+          }
+          out.push('</div>');
+        }
+      }
+    }
+
+    /* The draft box always says exactly which variant it will push. */
+    var d = S.draft && v && S.draft.vid === v.id ? S.draft : null;
+    if (v && v.id) {
+      var st = stockOf(v);
+      out.push('<div class="vline">Variant: ' + esc(variantLabel(v)) +
+               (v.sku ? '<br>SKU <code>' + esc(v.sku) + '</code>' : '') +
+               (st !== null ? '<br>' + (st >= 1 ? st + ' in stock' : 'Not in stock') : '') + '</div>');
+      if (!d) {
+        out.push('<button class="act primary" data-act="draft">Create draft order</button>');
+      } else if (d.state === 'confirm') {
+        out.push('<div class="res">Create a draft in Shopify for <b>' + esc(variantLabel(v)) +
+                 '</b>, against the “Lookbook Walk-in” customer?</div>');
+        out.push('<div class="actrow"><button class="act primary" data-act="draft-yes">Yes, create</button>' +
+                 '<button class="act" data-act="draft-no">Cancel</button></div>');
+      } else if (d.state === 'busy') {
+        out.push('<button class="act primary" disabled>Creating draft…</button>');
+      } else if (d.state === 'done') {
+        out.push('<div class="res">Draft <b>' + esc(d.name) + '</b> ' + (d.duplicate ? 'was already created a moment ago' : 'created') +
+                 '. <a href="' + esc(d.url) + '" target="_blank" rel="noopener">Open it in Shopify</a> and replace the ' +
+                 'Lookbook Walk-in customer before billing.</div>');
+      } else if (d.state === 'error') {
+        out.push('<div class="res err">' + esc(d.msg) + '</div>');
+        out.push('<button class="act primary" data-act="draft">Try again</button>');
+      }
+    }
+    out.push('</div>');
+    return out.join('');
+  }
+
+  function showAvailable() {
+    var it = S.filtered[S.idx];
+    if (!it) return;
+    S.avail = { busy: true };
+    renderPdp();
+    /* Stock must be live here: the snapshot's figure is up to a day old and a piece may have sold. */
+    fetchLive(it.variants.map(function (x) { return x.id; }), true).then(function () {
+      if (S.filtered[S.idx] !== it) return;
+      var fresh = it.variants.filter(function (x) { return isFresh(x.id); });
+      if (fresh.length < it.variants.length) {
+        S.avail = { error: 'Could not read live stock from Shopify. Check the connection and try again.' };
+        renderPdp();
+        return;
+      }
+      var ins = inStockVariants(it);
+      S.avail = { ids: ins.map(function (x) { return x.id; }) };
+      if (ins.length) selectVariant(ins[0]);
+      S.img = 0;
+      renderPdp();
+    });
+  }
+  function selectVariant(v) {
+    S.vid = v.id;
+    S.axis = { karat: v.karat, tone: v.toneLabel, size: v.size };
+  }
+
+  function createDraft(v) {
+    S.draft = { vid: v.id, state: 'busy' };
+    renderPdp();
+    fetch('/lookbook/draft', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                               body: JSON.stringify({ variantId: v.id }) })
+      .then(function (r) {
+        if (r.status === 401) signedOut();
+        return r.json().catch(function () { return { success: false, error: 'HTTP ' + r.status }; });
+      })
+      .then(function (j) {
+        if (!S.draft || S.draft.vid !== v.id) return;
+        S.draft = j && j.success
+          ? { vid: v.id, state: 'done', name: j.name, url: j.adminUrl, duplicate: j.duplicate }
+          : { vid: v.id, state: 'error', msg: (j && j.error) || 'The draft was not created.' };
+        renderPdp();
+      })
+      .catch(function () {
+        S.draft = { vid: v.id, state: 'error', msg: 'No connection - the draft was not created.' };
+        renderPdp();
+      });
   }
 
   function optHtml(key, label, values) {
@@ -802,12 +1065,106 @@ ${SHELL_CSS}
     if (btn) btn.click();
   });
 
+  /* -- predictive design-code search ---------------------------------------
+     As soon as the box holds letters + a digit, a list drops down of every design code that fits,
+     each with its title, price and what is in stock, so RG00048 and RG00048A are told apart before
+     anything is opened. Picking one opens that exact piece. */
+  var SUGGEST_MAX = 12;
+
+  function buildSuggestions(q) {
+    if (!looksLikeCode(q)) return [];
+    var rows = [];
+    for (var i = 0; i < S.items.length; i++) {
+      var it = S.items[i], codes = codesOf(it);
+      for (var c = 0; c < codes.length; c++) {
+        var sc = codeScore(q, codes[c]);
+        if (sc) rows.push({ item: it, code: codes[c], score: sc });
+      }
+    }
+    return rows.sort(compareSuggestions);
+  }
+
+  function renderSuggest() {
+    var box = $('suggest'), all = S.sugg.all || [];
+    if (!all.length) {
+      box.className = 'suggest' + (looksLikeCode($('q').value) ? ' open' : '');
+      box.innerHTML = looksLikeCode($('q').value) ? '<div class="sghint">No design code starts like that.</div>' : '';
+      return;
+    }
+    var out = [];
+    for (var i = 0; i < S.sugg.list.length; i++) {
+      var r = S.sugg.list[i], it = r.item, ins = inStockVariants(it);
+      var cv = cheapest(it), cp = cv && cv.priceManaged ? priceOf(cv) : null;
+      var price = cp > 0 ? (it.priceFrom !== it.priceTo ? 'from ' : '') + money.format(cp) : '';
+      out.push('<div class="sg' + (i === S.sugg.idx ? ' on' : '') + '" data-sg="' + i + '" role="option">' +
+        '<span class="c' + (r.score === 3 ? ' exact' : '') + '">' + esc(r.code) + '</span>' +
+        '<span class="t">' + esc(it.title) + '</span>' +
+        '<span class="p">' + esc(price) + '</span>' +
+        '<span class="s' + (ins.length ? ' in' : '') + '">' +
+          (ins.length ? 'In stock: ' + esc(ins.map(variantLabel).join('  |  ')) : 'Made to order') +
+          (it.draft ? '  ·  not published' : '') + '</span>' +
+        '</div>');
+    }
+    if (all.length > S.sugg.list.length)
+      out.push('<div class="sghint">' + (all.length - S.sugg.list.length) + ' more - keep typing to narrow it down</div>');
+    box.innerHTML = out.join('');
+    box.className = 'suggest open';
+  }
+
+  var sgLive;
+  function updateSuggest(val) {
+    var all = buildSuggestions(val);
+    S.sugg = { all: all, list: all.slice(0, SUGGEST_MAX), idx: -1 };
+    renderSuggest();
+    /* The in-stock line is what staff choose on, so read it live, a beat after typing settles. */
+    clearTimeout(sgLive);
+    sgLive = setTimeout(function () {
+      var ids = [];
+      S.sugg.list.forEach(function (r) { r.item.variants.forEach(function (v) { if (!isFresh(v.id) && ids.length < 100) ids.push(v.id); }); });
+      if (ids.length) fetchLive(ids).then(renderSuggest);
+    }, 250);
+  }
+  function closeSuggest() { $('suggest').className = 'suggest'; S.sugg.idx = -1; }
+
+  function chooseSuggestion(r) {
+    closeSuggest();
+    $('q').value = r.code;
+    clearTimeout(qt);
+    S.q = r.code.toLowerCase();
+    apply();
+    var at = S.filtered.indexOf(r.item);
+    if (at !== -1) openAt(at);
+  }
+
   var qt;
   $('q').addEventListener('input', function (e) {
     clearTimeout(qt);
-    var val = e.target.value.trim().toLowerCase();
+    var raw = e.target.value.trim();
+    var val = raw.toLowerCase();
+    updateSuggest(raw);
     qt = setTimeout(function () { S.q = val; apply(); }, 140);
   });
+  $('q').addEventListener('keydown', function (e) {
+    var list = S.sugg.list || [];
+    if (e.key === 'ArrowDown' && list.length) { e.preventDefault(); S.sugg.idx = Math.min(S.sugg.idx + 1, list.length - 1); renderSuggest(); }
+    else if (e.key === 'ArrowUp' && list.length) { e.preventDefault(); S.sugg.idx = Math.max(S.sugg.idx - 1, 0); renderSuggest(); }
+    else if (e.key === 'Escape') closeSuggest();
+    else if (e.key === 'Enter') {
+      /* Enter opens a highlighted row, or the code typed in full when exactly one piece has it. */
+      var exact = list.filter(function (r) { return r.score === 3; });
+      if (S.sugg.idx >= 0 && list[S.sugg.idx]) { e.preventDefault(); chooseSuggestion(list[S.sugg.idx]); }
+      else if (exact.length === 1) { e.preventDefault(); chooseSuggestion(exact[0]); }
+    }
+  });
+  $('q').addEventListener('focus', function (e) { if (e.target.value.trim()) updateSuggest(e.target.value.trim()); });
+  /* mousedown, not click: click fires after the input's blur has already closed the list. */
+  $('suggest').addEventListener('mousedown', function (e) {
+    var row = e.target.closest('[data-sg]');
+    if (!row) return;
+    e.preventDefault();
+    chooseSuggestion(S.sugg.list[Number(row.dataset.sg)]);
+  });
+  $('q').addEventListener('blur', function () { setTimeout(closeSuggest, 120); });
 
   $('closeBtn').addEventListener('click', closePdp);
   $('navPrev').addEventListener('click', function () { step(-1); });
@@ -819,9 +1176,27 @@ ${SHELL_CSS}
     renderPdp();
   });
   $('buybox').addEventListener('click', function (e) {
+    var it = S.filtered[S.idx];
+    var act = e.target.closest('[data-act]');
+    if (act && it && !act.disabled) {
+      var a = act.dataset.act, v = pickVariant(it);
+      if (a === 'avail') showAvailable();
+      else if (a === 'draft' && v) { S.draft = { vid: v.id, state: 'confirm' }; renderPdp(); }
+      else if (a === 'draft-no') { S.draft = null; renderPdp(); }
+      else if (a === 'draft-yes' && v) createDraft(v);
+      return;
+    }
+    var pick = e.target.closest('[data-vid]');
+    if (pick && it) {
+      for (var i = 0; i < it.variants.length; i++) if (it.variants[i].id === pick.dataset.vid) selectVariant(it.variants[i]);
+      S.img = 0;
+      renderPdp();
+      return;
+    }
     var chip = e.target.closest('[data-axis]');
     if (!chip) return;
     S.axis[chip.dataset.axis] = chip.dataset.val;
+    S.vid = null;   /* a hand-picked option overrides the in-stock pick */
     S.img = 0;
     renderPdp();
   });
@@ -863,26 +1238,72 @@ ${SHELL_CSS}
     S.live = {};                       // force live price + stock to be re-read
     fetch('/lookbook/catalog.json', { headers: S.etag ? { 'If-None-Match': S.etag } : {} })
       .then(function (r) {
-        if (r.status === 304) { renderGrid(); return null; }   // catalog unchanged; prices refresh
+        if (r.status === 401) { signedOut(); return null; }
+        if (r.status === 304) {                                  // catalog unchanged; prices refresh
+          renderGrid();
+          if (S.idx >= 0) refreshPdpLive();
+          return null;
+        }
         var t = r.headers.get('ETag');
         if (t) S.etag = t;
         return r.json();
       })
       .then(function (snap) {
         if (!snap) return;
+        /* Keep the SAME piece open across a rebuild. The old code re-rendered by index, and the
+           index can point at a different product once the new catalog is filtered and sorted. */
+        var openId = S.idx >= 0 && S.filtered[S.idx] ? S.filtered[S.idx].id : null;
         S.items = snap.items || [];
         S.facets = snap.facets || {};
         S.built = snap.builtAt;
         S.hidden = snap.droppedNoImage || 0;
         apply();
-        if (S.idx >= 0) renderPdp();
+        if (openId !== null) {
+          var at = -1;
+          for (var i = 0; i < S.filtered.length; i++) if (S.filtered[i].id === openId) at = i;
+          if (at === -1) closePdp();
+          else { S.idx = at; refreshPdpLive(); }
+        }
       })
       .catch(function () { /* stay on what is already rendered */ });
   }
 
-  setInterval(revalidate, CHECK_MS);
+  /* The pulse. Every ~45s (and the moment the tab comes back) the page asks the server one cheap
+     question: has a reprice moved prices, or has the catalog been rebuilt? The server answers from
+     memory. When prices moved, every cached live price is dropped and what is on screen - the
+     cards and the open PDP - is re-read straight away. While a reprice is still RUNNING, prices
+     change piece by piece, so the open PDP and visible cards are re-read on every pulse until it
+     ends. Net effect: after a gold-rate run the screen corrects itself within a minute, with no
+     reload, re-login or new tab. */
+  function pulse() {
+    fetch('/lookbook/pulse', { cache: 'no-store' })
+      .then(function (r) {
+        if (r.status === 401) { signedOut(); return null; }
+        return r.ok ? r.json() : null;
+      })
+      .then(function (p) {
+        if (!p) return;
+        var moved = S.epoch !== null && p.priceEpoch !== S.epoch;
+        S.epoch = p.priceEpoch;
+        S.repricing = !!p.repricing;
+        if (p.etag && S.etag && p.etag !== S.etag) { revalidate(); return; }   // revalidate re-reads everything
+        if (moved) S.live = {};
+        if (moved || S.repricing) {
+          refreshVisiblePrices(true);
+          if (S.idx >= 0) refreshPdpLive();
+        }
+      })
+      .catch(function () { /* offline for a moment; the next pulse tries again */ });
+  }
+
+  setInterval(pulse, PULSE_MS);
+  setInterval(revalidate, CHECK_MS);   // belt and braces, should the pulse ever be unreachable
   document.addEventListener('visibilitychange', function () {
-    if (!document.hidden && Date.now() - lastCheck > CHECK_MS) revalidate();
+    if (document.hidden) return;
+    pulse();
+    if (Date.now() - lastCheck > CHECK_MS) revalidate();
+    /* A tablet woken from sleep: whatever the PDP shows is from before it slept. */
+    else if (S.idx >= 0) refreshPdpLive();
   });
 
   /* -- boot ---------------------------------------------------------------- */
@@ -903,6 +1324,7 @@ ${SHELL_CSS}
         return;
       }
       apply();
+      pulse();   // learn the current price epoch now, so the first change is noticed
     })
     .catch(function (err) {
       $('loading').textContent = 'Could not load the catalog. ' + (err && err.message ? err.message : '');

@@ -123,10 +123,15 @@ const config = {
     /**
      * IST hours at which the catalog snapshot is rebuilt, comma separated. The gold-rate reprice
      * runs at 13:00 and 18:00 IST, so these sit an hour after each: building DURING a reprice
-     * would capture half-updated prices, and the breakup metafields exist only in the snapshot,
-     * so a stale build shows a stale component table until the next one.
+     * would capture half-updated prices. (The PDP no longer depends on this for its breakup: it
+     * reads price, stock and breakup live on open - see lookbook/live.js.)
      */
     rebuildHours:  String(process.env.LOOKBOOK_REBUILD_HOURS || '14,19'),
+    /**
+     * Shopify customer id that "Create draft order" drafts are created against. Unset: the
+     * "Lookbook Walk-in" placeholder is found by tag, or created once (see lookbook/draft.js).
+     */
+    draftCustomerId: process.env.LOOKBOOK_DRAFT_CUSTOMER_ID || null,
   },
 
   // ── Savings plan (src/modules/payments/savings-plan) ──────────────────────

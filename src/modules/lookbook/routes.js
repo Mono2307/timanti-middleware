@@ -7,15 +7,19 @@
  *   POST /lookbook/login         password -> signed session cookie
  *   POST /lookbook/logout        drop the cookie
  *   GET  /lookbook/catalog.json  the nightly snapshot, ETag'd
- *   GET  /lookbook/live?ids=     live price + stock for up to 100 variants
+ *   GET  /lookbook/live?ids=     live price + stock for up to 100 variants (&full=1 adds the breakup)
+ *   GET  /lookbook/pulse         tiny poll: has a reprice moved prices / has the snapshot changed
+ *   POST /lookbook/draft         create a one-line draft order for a variant (placeholder customer)
  *   POST /lookbook/refresh       force a rebuild (session, or the operator admin secret)
  *
- * Read-only with respect to Shopify: this module never writes a product, variant or metafield.
+ * Never writes a product, variant or metafield. The one write is POST /lookbook/draft, which creates
+ * a draft order (and, once, the placeholder customer it is created against) - see draft.js.
  */
 
 const auth = require('../../core/auth');
 const store = require('./store');
 const { fetchLive, MAX_IDS } = require('./live');
+const { createDraft, DraftError } = require('./draft');
 const { loginPage, appPage } = require('./page');
 const { log } = require('../../core/logger');
 
@@ -100,12 +104,35 @@ function register(app) {
     if (ids.length > MAX_IDS) return res.status(400).json({ success: false, error: `at most ${MAX_IDS} ids` });
 
     try {
-      const variants = await fetchLive(ids);
+      const full = String((req.query && req.query.full) || '') === '1';
+      const variants = await fetchLive(ids, { full });
       return res.json({ success: true, variants });
     } catch (err) {
       // The page falls back to the snapshot price on a failure here, so this must not be fatal.
       log.error('lookbook', 'live lookup failed:', err.message);
       return res.status(502).json({ success: false, error: err.message });
+    }
+  });
+
+  // Polled by every open page about once a minute. Answers from memory only, so a counter full of
+  // tablets left open all day costs Shopify nothing. no-store: a cached pulse is a stale pulse.
+  app.get('/lookbook/pulse', auth.requireLookbookJson, (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json(Object.assign({ success: true }, store.pulse()));
+  });
+
+  app.post('/lookbook/draft', auth.requireLookbookJson, async (req, res) => {
+    let body = req.body || {};
+    // express.text() is mounted with a wildcard type (see formBody), so a body the JSON parser did
+    // not claim arrives as a string.
+    if (typeof body === 'string') { try { body = JSON.parse(body); } catch (_) { body = formBody(req); } }
+    try {
+      const draft = await createDraft(body.variantId);
+      return res.json(Object.assign({ success: true }, draft));
+    } catch (err) {
+      if (err instanceof DraftError) return res.status(err.status).json({ success: false, error: err.message });
+      log.error('lookbook', 'draft create failed:', err.message);
+      return res.status(502).json({ success: false, error: 'Shopify did not create the draft: ' + err.message });
     }
   });
 
