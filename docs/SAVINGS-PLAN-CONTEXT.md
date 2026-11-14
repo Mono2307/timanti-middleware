@@ -47,10 +47,12 @@ A monthly savings scheme on the BlueStone Gold Mine 10+1 model.
 ## Before switching on (`SAVINGS_PLAN_ENABLED=true`)
 1. Run `savings-plan/migration.sql` in Supabase.
 2. Create the definitions for slots 7–10: `POST /api/metafield-definitions/ensure?group=installments`.
-3. Deploy the panel extensions (`shopify app deploy`), so the panel shows slots 7–10.
+3. ~~Deploy the Shopify app~~ Done on 14 Nov 2026 as `timanti-custom-extension-app-4`: the Savings plan action and the panel's slots 7–10. Until the middleware is deployed and switched on, More actions → Savings plan shows an error. Deploy the app from this branch, or from `main` once it is merged; a deploy from a branch without `extensions/savings-plan` would add it back only with `--allow-deletes`, never silently remove it.
 4. Paste `templates/Shopify-Notifications-PASTE/1 - Draft order invoice (advance receipt).html` into Shopify, under Notifications → Draft order invoice.
 5. Optional: set `SAVINGS_WHATSAPP` if the customer WhatsApp number should not be 917710968305.
 6. Paste the updated `templates/tax-invoice.liquid`, `order-confirmation-receipt.liquid` and `pricing-estimate.liquid` into Order Printer. They print an SSV code as "Less: Savings Scheme Voucher".
+7. Re-paste `services/buy-plan-sheet/apps-script.gs.js` into the tracker sheet's Apps Script and deploy a new version. It now writes a "Savings Plans" tab when the savings module pushes one.
+8. Deploy the middleware (this branch), then set `SAVINGS_PLAN_ENABLED=true` on Fly.
 
 ## Part use of the voucher (`savings-plan/redeem.js`)
 These steps act only on codes starting with `SSV`. Every other voucher behaves as before.
@@ -61,11 +63,13 @@ These steps act only on codes starting with `SSV`. Every other voucher behaves a
 - **The 30-day expiry reminder** quotes the balance.
 - **The Shopify code has no minimum purchase.** Shopify caps a fixed discount at the order total, and the balance is re-made afterwards.
 
-## Not built yet
-- **Part 3:**
-  - a Savings tab on the staff screen (start, status, send link, issue voucher)
-  - the sales report split into orders, order advances, buy plans and savings plans
-  - the tracker sheet columns
-  - the staff SOP
+## Staff side
+- **Screen:** More actions → Savings plan on a draft (`apps/metafield-manager/extensions/savings-plan`). It starts the plan, shows its standing, sends a link and has the end buttons.
+- **Sales report:** a `sale_kind` column (order · order advance · buy plan · savings plan) and a `savings_plan` column. Savings rows have no GST columns. There are also columns for instalments 7–10.
+- **Tracker sheet:** a "Savings Plans" tab, pushed every 10 minutes while switched on (`savings-plan/sheet.js`).
+- **Staff documents:** drafts in `Timanti Store Manuals/Loyalty and EMIs/`: `Timanti_SOP4_SavingsPlan_DRAFT_v1` and `Timanti_Manual_Ch4_SavingsPlan_DRAFT_v1`. Publish them at launch (HQ register SP-6, SP-7).
+
+## Open
+- **Reconciliation** does not match plan payments to settlements yet (HQ register SP-2).
 - **Open with the founder:** whether a full prepayment earns the bonus at once (current setting) or only at maturity. The prepay loophole is in design §4.
 - **Open with Accounts:** GST on the bonus and on lapsed balances (HQ register SP-5).
