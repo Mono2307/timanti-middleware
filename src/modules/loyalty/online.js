@@ -35,6 +35,7 @@ const E = require('./engine');
 const ledger = require('./ledger');
 const { loadConfig } = require('./config');
 const { readCustomer } = require('./customer');
+const referral = require('./referral');
 
 const MAX_CODES_PER_HOUR = 10;
 
@@ -97,6 +98,16 @@ async function benefitsFor(customerId) {
     vouchers = (await creditInstruments.listOpenForCustomer(supabase, { customerId, instrumentType: 'voucher' }))
       .map(v => ({ code: v.serial_code, value: Number(v.value) || 0, expires_at: v.expires_at || null }));
   } catch (e) { log.warn('loyalty', `voucher list for ${customerId} failed: ${e.message}`); }
+  // Banked referral rewards (referral.js). The cart applies whichever of loyalty and the reward saves
+  // more, so a member with a reward still sees one Apply. Never shown to the excluded (top) tier.
+  let ref = null;
+  const rc = cfg.referral || {};
+  if (rc.enabled && !referral.tierExcluded(info.tier ? info.tier.key : null, cfg)) {
+    try {
+      const open = await referral.openRewards(supabase, customerId);
+      if (open.length) ref = { available: open.length, pct: rc.pct, expires_at: open[0].expires_at || null };
+    } catch (e) { log.warn('referral', `rewards for ${customerId} not shown: ${e.message}`); }
+  }
   return {
     loggedIn: true, found: true,
     firstName: customer.firstName,
@@ -107,6 +118,7 @@ async function benefitsFor(customerId) {
     occasion: occasion.occasions,
     rate: info.tier ? info.tier.pct + occasion.pct : 0,
     vouchers,
+    referral: ref,
   };
 }
 
@@ -141,14 +153,25 @@ async function deleteDiscountNode(nodeId) {
  * The member's loyalty benefit on described cart lines (diamond + making per line). excludeCodes are
  * this cart's live codes about to be replaced: a bonus they carry is not "already used".
  * Returns { r } (r.ok false when nothing applies) or { r: null } when there is no such customer.
+ *
+ * r is the member's BEST benefit: loyalty, or a banked referral reward when that saves more
+ * (referral.bestFor; r.kind says which, and a referral r carries r.reward). Same shape either way,
+ * so the cart code and the promo code (promo.js) take it unchanged.
  */
 async function loyaltyForCart(customerId, described, cfg, { excludeCodes = [] } = {}) {
   const customer = await readCustomer(customerId);
   if (!customer) return { r: null };
   const points = await ledger.customerPoints(supabase, customerId);
-  const r = E.computeLoyalty({ points, birthday: customer.birthday, anniversary: customer.anniversary, lines: described, cfg,
+  const loyalty = E.computeLoyalty({ points, birthday: customer.birthday, anniversary: customer.anniversary, lines: described, cfg,
     occasionUsed: await occasionUsed(customerId, { excludeCodes }) });
-  return { r };
+  return { r: await referral.bestFor(String(customerId), loyalty, described, cfg) };
+}
+
+/** The Shopify discount title, as staff see it in admin → Discounts. */
+function benefitTitle(r) {
+  return r.kind === 'referral'
+    ? `Referral reward ${r.rate}% dia`
+    : `Loyalty ${r.tier.name} ${r.rate}% dia + ${r.makingPct}% making`;
 }
 
 /** Retire live codes a new code replaces: the Shopify discount goes, the row is marked expired. */
@@ -214,7 +237,7 @@ async function createCartCode(customerId, lines) {
 
   // Same cart, same customer, code still live → hand back the same code instead of minting another.
   const reuse = sameCart.find(p => !p.promo_code && Math.abs(Number(p.discount_incl_tax) - amountIncl) < 0.01);
-  if (reuse) return { ok: true, code: reuse.code, amount: amountIncl, rate: r.rate, tier: r.tier.name, reused: true };
+  if (reuse) return { ok: true, code: reuse.code, amount: amountIncl, rate: r.rate, tier: r.tier.name, kind: r.kind || 'loyalty', reused: true };
 
   const prefix = cfg.online.code_prefix;
   const code = randomCode(prefix);
@@ -224,7 +247,7 @@ async function createCartCode(customerId, lines) {
       discountCodeBasicCreate(basicCodeDiscount: $d) {
         codeDiscountNode { id } userErrors { field message } } }`, {
     d: {
-      title: `Loyalty ${r.tier.name} ${r.rate}% dia + ${r.makingPct}% making — customer ${customerId}`,
+      title: `${benefitTitle(r)} — customer ${customerId}`,
       code,
       startsAt: startsAt.toISOString(),
       endsAt: endsAt.toISOString(),
@@ -248,13 +271,15 @@ async function createCartCode(customerId, lines) {
     code, discount_node_id: out.codeDiscountNode.id, channel: 'online', status: 'pending',
     customer_id: String(customerId), tier: r.tier.key, rate: r.rate,
     occasion: r.occasion.occasions.join('+') || null,
+    // Only when a referral reward is on the code, so loyalty rows never need the referral column.
+    ...(r.reward ? { referral_reward_id: r.reward.id } : {}),
     diamond_base: r.perLine.filter(l => l.eligible).reduce((s, l) => s + l.diamond, 0),
     discount_pre_tax: r.total, discount_incl_tax: amountIncl,
     lines: { signature, perLine: r.perLine.map((l, i) => ({ variant_id: described[i].variant_id, diamond: l.diamond, discount: l.discount, making: l.making, making_discount: l.makingDiscount, eligible: l.eligible })) },
     expires_at: endsAt.toISOString(),
   });
   log.info('loyalty', `code ${code} for customer ${customerId}: ${r.tier.key} ${r.rate}% = Rs${amountIncl} incl. GST on ${eligibleVariants.length} variant(s)`);
-  return { ok: true, code, amount: amountIncl, rate: r.rate, tier: r.tier.name, expires_at: endsAt.toISOString() };
+  return { ok: true, code, amount: amountIncl, rate: r.rate, tier: r.tier.name, kind: r.kind || 'loyalty', expires_at: endsAt.toISOString() };
 }
 
-module.exports = { verifyProxySignature, benefitsFor, createCartCode, deleteDiscountNode, cartLineFacts, loyaltyForCart, supersedeCodes };
+module.exports = { verifyProxySignature, benefitsFor, createCartCode, deleteDiscountNode, cartLineFacts, loyaltyForCart, supersedeCodes, benefitTitle };

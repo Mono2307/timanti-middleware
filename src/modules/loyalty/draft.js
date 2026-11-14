@@ -44,6 +44,7 @@ const ledger = require('./ledger');
 const { loadConfig } = require('./config');
 const { readCustomer } = require('./customer');
 const { isRateLocked } = require('../payments/buy-plan/lock');
+const referral = require('./referral');
 
 const APPLIED_KEY = 'loyalty_applied';
 const NOTE_KEY = 'loyalty_note';
@@ -194,10 +195,18 @@ async function evaluateDraft(draft, mfMap) {
 
   const lines = await describeDraftLines(draft);
   const occasionUsed = await occasionUsedThisMonth(customerId, draft.id);
-  const r = E.computeLoyalty({ points, birthday: customer.birthday, anniversary: customer.anniversary, lines, cfg, occasionUsed });
+  const loyalty = E.computeLoyalty({ points, birthday: customer.birthday, anniversary: customer.anniversary, lines, cfg, occasionUsed });
+  // Loyalty, or the customer's banked referral reward when that saves more (never both; referral.js).
+  // The standing fields (tier, spend, next tier) are always loyalty's; the benefit fields are the winner's.
+  const r = await referral.bestFor(String(customerId), loyalty, lines, cfg);
+  const isRef = r.kind === 'referral';
   const base = {
     ...standing,
-    points: r.points, tier: r.tier, next: r.next, gapToNext: r.gapToNext,
+    points: loyalty.points, tier: loyalty.tier, next: loyalty.next, gapToNext: loyalty.gapToNext,
+    benefit: isRef ? 'referral' : 'loyalty', benefitTier: r.tier,
+    reward: isRef ? r.reward : null,
+    loyaltyTotal: isRef ? r.loyaltyTotal : loyalty.total,
+    referralTotal: isRef ? r.total : (r.referralTotal || 0),
     rate: r.rate, basePct: r.basePct, occasion: r.occasion, total: r.total,
     makingPct: r.makingPct, makingCap: r.makingCap, diamondTotal: r.diamondTotal, makingTotal: r.makingTotal,
     lines: lines.map((l, i) => ({
@@ -235,8 +244,11 @@ async function occasionUsedThisMonth(customerId, draftId) {
 
 /** custom.loyalty_applied — compact, it is stored as a text metafield. */
 function appliedRecord(draft, ev) {
+  const t = ev.benefitTier || ev.tier;
   return JSON.stringify({
-    tier: ev.tier.key, name: ev.tier.name, rate: ev.rate,
+    tier: t.key, name: t.name, rate: ev.rate,
+    // kind 'referral' + rid: the referral reward this bill uses (marked used at conversion).
+    ...(ev.benefit === 'referral' && ev.reward ? { kind: 'referral', rid: ev.reward.id } : {}),
     mk: ev.makingPct || 0, mkcap: ev.makingCap || 0,
     occ: ev.occasion.occasions.join('+') || '',
     cid: String(ev.customer.id),
@@ -313,7 +325,7 @@ async function handleLoyaltyStep(draft) {
     await deleteDraftMetafield(draftId, all, NOTE_KEY);
     const next = tags.filter(t => t.toLowerCase() !== T_APPLY && !/^loyalty-invalid/i.test(t));
     await setDraftTags(draftId, [...next, T_ON, 'reprice']);
-    log.info('loyalty', `draft ${draft.name || draftId}: ${ev.tier.key} ${ev.rate}% dia + ${ev.makingPct}% making (cap Rs${ev.makingCap}) applied to ${ev.lines.filter(l => l.eligible).length} line(s), est. Rs${ev.total}`);
+    log.info('loyalty', `draft ${draft.name || draftId}: ${(ev.benefitTier || ev.tier).key} ${ev.rate}% dia + ${ev.makingPct}% making (cap Rs${ev.makingCap}) applied to ${ev.lines.filter(l => l.eligible).length} line(s), est. Rs${ev.total}`);
     return;
   }
 
@@ -370,8 +382,12 @@ async function recordStoreRedemption(draft, orderId, orderName) {
     tier: applied.tier, rate: applied.rate, occasion: applied.occ || null,
     diamond_base: diamondBase, discount_pre_tax: pre, discount_incl_tax: E.onlineAmount(pre),
     lines: applied.eligible_variants, used_at: new Date().toISOString(),
+    ...(applied.kind === 'referral' && applied.rid ? { referral_reward_id: applied.rid } : {}),
   });
   log.info('loyalty', `order ${orderName || orderId}: store redemption recorded — ${applied.tier} ${applied.rate}%, Rs${pre.toFixed(2)} pre-tax`);
+  if (applied.kind === 'referral' && applied.rid) {
+    await referral.markUsed(supabase, applied.rid, { orderId, orderName, channel: 'store' });
+  }
 }
 
 // Draft custom.* keys that carry an ORDER-LEVEL discount. While loyalty is on they are ignored by

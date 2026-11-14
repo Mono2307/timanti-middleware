@@ -86,6 +86,23 @@ stub('src/modules/loyalty/after_sales.js', {
   TYPES: ['voucher', 'exchange_note'],
 });
 
+// ── fake referral rewards: the real best-of maths over an in-memory list of open rewards ────────
+const refRewards = {};
+const refUsed = [];
+stub('src/modules/loyalty/referral.js', {
+  bestFor: async (cid, loyalty, lines, cfg) => {
+    const r = refRewards[cid];
+    if (!r) return loyalty;
+    const Eng = require('./engine');
+    return Eng.pickBenefit(loyalty, Eng.computeReferral({ lines, cfg }), r);
+  },
+  markUsed: async (_s, id, info) => { refUsed.push({ id, ...info }); return true; },
+  openRewards: async (_s, cid) => (refRewards[cid] ? [refRewards[cid]] : []),
+  tierExcluded: (k, cfg) => !!k && (((cfg || {}).referral || {}).exclude_tiers || []).includes(k),
+  onOrder: async () => null,
+  handleReferralTagStep: async () => {},
+});
+
 // ── fake ledger ─────────────────────────────────────────────────────────────────────────────────
 const db = { ledger: {}, redemptions: [] };
 stub('src/modules/loyalty/ledger.js', {
@@ -338,6 +355,49 @@ t('server.js: the pricing hook runs AFTER the draft metafields are read (regress
   const hook = fn.indexOf('applyLoyaltyToPricingInputs(mfMap');
   assert.ok(decl > 0 && hook > 0, 'hook or declaration missing');
   assert.ok(hook > decl, 'loyalty hook is above the mfMap declaration');
+});
+
+// ── Referral reward in loyalty's slot (referral.js) ─────────────────────────────────────────────
+t('referral: a customer below the first tier with a reward gets 10% off the diamond on Apply', async () => {
+  shop.draftMf[DRAFT_ID] = {};
+  shop.customers['778'] = { tags: [] };
+  refRewards['778'] = { id: 55, expires_at: '2999-01-01T00:00:00Z' };
+  await draftMod.handleLoyaltyStep(makeDraft('apply-loyalty', { customer: { id: 778 } }));
+  const applied = E.readApplied(shop.draftMf[DRAFT_ID].loyalty_applied);
+  assert.strictEqual(applied.kind, 'referral');
+  assert.strictEqual(applied.rid, 55);
+  assert.strictEqual(applied.tier, 'REF');
+  assert.strictEqual(applied.rate, 10);
+  assert.strictEqual(applied.mk, 0);
+  assert.deepStrictEqual(applied.eligible_variants, ['11']);
+  assert.ok(shop.draftTags[DRAFT_ID].split(', ').includes('loyalty-applied'));
+  // The pricing hook: one referral diamond entry on the ring, no making entry, nothing on the coin.
+  const mf = { loyalty_applied: shop.draftMf[DRAFT_ID].loyalty_applied };
+  draftMod.applyLoyaltyToPricingInputs(mf, makeDraft('loyalty-applied', { customer: { id: 778 } }));
+  assert.deepStrictEqual(JSON.parse(mf.line_discounts), [[{ t: 'dia', m: 'pct', v: 10, src: 'referral' }], []]);
+});
+
+t('referral: conversion records the redemption against the reward and marks it used', async () => {
+  // A fresh draft id: the store-redemption test above already recorded one for draft 9001.
+  shop.draftMf['9002'] = { ...shop.draftMf[DRAFT_ID], discount_applied: '6000.00' };
+  await draftMod.recordStoreRedemption(makeDraft('loyalty-applied', { id: 9002, customer: { id: 778 } }), 7101, '#1201');
+  const row = db.redemptions.find(r => r.order_id === '7101');
+  assert.strictEqual(row.referral_reward_id, 55);
+  assert.strictEqual(row.tier, 'REF');
+  assert.deepStrictEqual(refUsed.pop(), { id: 55, orderId: 7101, orderName: '#1201', channel: 'store' });
+});
+
+t('referral: the preview says which benefit applies and what the other would have saved', async () => {
+  shop.draftMf[DRAFT_ID] = {};
+  const ev = await draftMod.evaluateDraft(makeDraft('', { customer: { id: 778 } }), {});
+  assert.strictEqual(ev.ok, true);
+  assert.strictEqual(ev.benefit, 'referral');
+  assert.strictEqual(ev.total, 6000);
+  assert.strictEqual(ev.tier, null, 'standing stays loyalty\'s: no tier yet');
+  // Member 501 has no reward: plain loyalty, unchanged.
+  const member = await draftMod.evaluateDraft(makeDraft(''), {});
+  assert.strictEqual(member.benefit, 'loyalty');
+  assert.ok(member.tier && member.tier.key !== 'REF');
 });
 
 (async () => {

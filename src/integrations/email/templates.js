@@ -770,6 +770,19 @@ function buildLoyaltyTierUpHtml({ firstName, tierName, pct, makingPct, makingCap
     + foot();
 }
 
+function buildReferralRewardHtml({ firstName, pct, months }) {
+  return head()
+    + contentBlock({
+        heading: `Thank you${firstName ? ', ' + esc(firstName) : ''}`,
+        body: `A friend you referred has just made their first Timanti purchase. Your next piece comes with <strong>${esc(pct)}% off the diamond value</strong>.`,
+        buttonsHtml: button('Browse New Arrivals', CATALOGUE_URL),
+        storeLinkHtml: storeLink('or visit our HSR Layout store', STORE_MAP_URL),
+        timelineHtml: timeline(`Valid for ${esc(months)} months on one purchase, online or in store. Your Timanti loyalty benefit and this reward do not combine: we apply whichever saves you more.`),
+      })
+    + standardFooter()
+    + foot();
+}
+
 function buildLoyaltyOccasionHtml({ firstName, occasion, totalPct, bonusPct, monthEnd, inStoreOnly = true }) {
   const label = occasion === 'anniversary' ? 'anniversary' : 'birthday';
   return head()
@@ -1231,6 +1244,7 @@ module.exports = {
   buildSavingsPlanStaffHtml,
   buildSavingsPlanDigestHtml,
   buildLoyaltyTierUpHtml,
+  buildReferralRewardHtml,
   buildBuyPlanStartedHtml,
   buildBuyPlanGoldLinkHtml,
   buildBuyPlanFinalPriceHtml,

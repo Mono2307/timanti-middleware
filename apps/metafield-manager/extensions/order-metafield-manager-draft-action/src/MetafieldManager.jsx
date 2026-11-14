@@ -1485,8 +1485,9 @@ export default function MetafieldManager({ surface = "block" } = {}) {
     const rows = [
       [`Campaign${b.campaign?.label ? `: ${b.campaign.label}` : ""}`, b.campaign?.amount],
       ["Manual discount", b.manual],
-      [`Loyalty${a ? ` (${a.name} ${a.rate}%${a.occ ? ` incl. ${String(a.occ).replace("+", " & ")} month` : ""})` : ""}`, b.loyalty],
+      [`Loyalty${a && a.kind !== "referral" ? ` (${a.name} ${a.rate}%${a.occ ? ` incl. ${String(a.occ).replace("+", " & ")} month` : ""})` : ""}`, b.loyalty],
     ];
+    if (Number(b.referral) > 0) rows.push([`Referral reward${a && a.kind === "referral" ? ` (${a.rate}% off diamond)` : ""}`, b.referral]);
     if (Number(b.other) > 0) rows.push(["Shopify discount", b.other]);
     if (Number(b.code) > 0) rows.push(["Discount code", b.code]);
     return (
@@ -1568,7 +1569,12 @@ export default function MetafieldManager({ surface = "block" } = {}) {
                   {l.eligible ? `${l.title}: ${inr(l.discount)} off diamond ${inr(l.diamond)}${Number(l.makingDiscount) > 0 ? ` + ${inr(l.makingDiscount)} off making ${inr(l.making)}` : ""}` : `${l.title}: not eligible (${l.reason})`}
                 </s-text>
               ))}
-              <s-text>{`Estimated loyalty saving: ${inr(p.total)} before GST (${p.rate}% of the diamond value${occNames.length ? `, incl. +${p.occasion.pct}% ${occNames.join(" & ")} month` : ""}${Number(p.makingPct) > 0 ? `; ${p.makingPct}% of making${Number(p.makingCap) > 0 ? `, capped at ${inr(p.makingCap)} a bill` : ""}` : ""})`}</s-text>
+              {p.benefit === "referral" ? (
+                <s-badge tone="info">{`Referral reward applies: ${p.rate}% off the diamond value${Number(p.loyaltyTotal) > 0 ? `, saves more than the tier benefit (${inr(p.loyaltyTotal)})` : ""}. It replaces loyalty on this bill.`}</s-badge>
+              ) : Number(p.referralTotal) > 0 ? (
+                <s-text tone="subdued">{`Referral reward available (${inr(p.referralTotal)} here); the tier benefit saves more, so the reward stays for another bill.`}</s-text>
+              ) : null}
+              <s-text>{`Estimated ${p.benefit === "referral" ? "referral reward" : "loyalty"} saving: ${inr(p.total)} before GST (${p.rate}% of the diamond value${occNames.length && p.benefit !== "referral" ? `, incl. +${p.occasion.pct}% ${occNames.join(" & ")} month` : ""}${Number(p.makingPct) > 0 ? `; ${p.makingPct}% of making${Number(p.makingCap) > 0 ? `, capped at ${inr(p.makingCap)} a bill` : ""}` : ""})`}</s-text>
             </s-stack>
           ) : null}
           {p && !p.ok && !applied && p.code !== "below tier" ? <s-text tone="subdued">{p.reason}</s-text> : null}

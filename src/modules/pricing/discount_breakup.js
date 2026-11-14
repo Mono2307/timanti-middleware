@@ -14,6 +14,7 @@
  * SOURCES — read off each custom.line_discounts entry's `src`:
  *   'auto-dia'  → campaign  (the automatic diamond discount; its `camp` names the campaign)
  *   'loyalty'   → loyalty
+ *   'referral'  → referral  (the referral reward, which takes loyalty's place on a bill; referral.js)
  *   'native'    → other     (a Shopify collection / order discount captured onto the line)
  *   anything else, or none → manual (what staff typed in the per-line editor)
  * An order-level code is not a per-line entry; on a line with no entries it lands as `code`.
@@ -24,7 +25,7 @@
  * rounding. Pre-tax rupees throughout, like every other discount figure in the engine.
  */
 
-const SOURCES = ['campaign', 'manual', 'loyalty', 'other', 'code'];
+const SOURCES = ['campaign', 'manual', 'loyalty', 'referral', 'other', 'code'];
 
 const r2 = (v) => Math.round((Number(v) || 0) * 100) / 100;
 
@@ -33,6 +34,7 @@ function sourceOf(entry) {
   const src = String((entry && entry.src) || '').toLowerCase();
   if (src === 'auto-dia') return 'campaign';
   if (src === 'loyalty') return 'loyalty';
+  if (src === 'referral') return 'referral';
   if (src === 'native') return 'other';
   return 'manual';
 }
@@ -116,6 +118,9 @@ function buildBreakup(lines, { fallbackCampaign = 'Auto diamond discount' } = {}
     campaign: { label: sum.campaign > 0.005 ? (labels.join(' + ') || fallbackCampaign) : '', amount: r2(sum.campaign) },
     manual: r2(sum.manual),
     loyalty: r2(sum.loyalty),
+    // Only when there is one, so every breakup written before the referral programme stays byte-identical
+    // (an unchanged breakup is never rewritten — see the webhook rate-limit note in server.js).
+    ...(sum.referral > 0.005 ? { referral: r2(sum.referral) } : {}),
     other: r2(sum.other),
     code: r2(sum.code),
     total: r2(total),

@@ -32,7 +32,7 @@ const { log } = require('../../core/logger');
 const E = require('./engine');
 const ledger = require('./ledger');
 const { loadConfig } = require('./config');
-const { cartLineFacts, deleteDiscountNode, loyaltyForCart, supersedeCodes } = require('./online');
+const { cartLineFacts, deleteDiscountNode, loyaltyForCart, supersedeCodes, benefitTitle } = require('./online');
 
 const CODE_PREFIX = 'PRM-';
 const MAX_CODES_PER_HOUR = 10;          // per logged-in customer (shared with loyalty codes)
@@ -131,7 +131,7 @@ async function createPromoCode(customerId, rawCode, lines) {
       discountCodeBasicCreate(basicCodeDiscount: $d) {
         codeDiscountNode { id } userErrors { field message } } }`, {
     d: {
-      title: `Promo ${key} ${promo.pct}% on diamond${loy ? ` + Loyalty ${loy.tier.name} ${loy.rate}% dia + ${loy.makingPct}% making` : ''}${isGuest ? '' : ' - customer ' + cid}`,
+      title: `Promo ${key} ${promo.pct}% on diamond${loy ? ` + ${benefitTitle(loy)}` : ''}${isGuest ? '' : ' - customer ' + cid}`,
       code,
       startsAt: startsAt.toISOString(),
       endsAt: endsAt.toISOString(),
@@ -158,6 +158,8 @@ async function createPromoCode(customerId, rawCode, lines) {
     // With loyalty on the code: tier/rate/occasion as a loyalty code records them (earn.js credits the
     // member and the bonus counts as used); the promo's own % and amount sit in lines.promo.
     ...(loy ? { tier: loy.tier.key, rate: loy.rate, occasion: loy.occasion.occasions.join('+') || null } : { rate: promo.pct }),
+    // A referral reward riding on the promo code (instead of loyalty): settled as used with the order.
+    ...(loy && loy.reward ? { referral_reward_id: loy.reward.id } : {}),
     diamond_base: r2(r.perLine.reduce((s, l, i) => s + (l.eligible || (loy && loy.perLine[i].eligible) ? l.diamond : 0), 0)),
     discount_pre_tax: totalPreTax, discount_incl_tax: amountIncl,
     lines: {
