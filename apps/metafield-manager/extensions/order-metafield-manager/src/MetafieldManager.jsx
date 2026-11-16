@@ -647,6 +647,11 @@ export default function MetafieldManager({ surface = "block" } = {}) {
   const [loyaltyErr, setLoyaltyErr] = useState("");
   const [loyaltyBusy, setLoyaltyBusy] = useState(false);
   const [loyaltyNote, setLoyaltyNote] = useState("");
+  // Referral (in store): staff type the referrer's phone; the middleware checks it and answers in the
+  // loyalty preview. Staff never see or type the tags behind it.
+  const [refPhone, setRefPhone] = useState("");
+  const [refBusy, setRefBusy] = useState(false);
+  const [refNote, setRefNote] = useState("");
   const [offerBusy, setOfferBusy] = useState("");
   const [refundEmailBusy, setRefundEmailBusy] = useState(false);
   const [refundEmailNote, setRefundEmailNote] = useState("");
@@ -1426,6 +1431,33 @@ export default function MetafieldManager({ surface = "block" } = {}) {
     }
   }
 
+  // Record or remove a referral. The middleware's referral step turns ref:<phone> into referred:<CODE>
+  // (or a refusal with its reason) within a few seconds; the preview then shows the referrer by name.
+  async function referralAction({ add = [], remove = [] }, msg) {
+    if (!ownerId) return;
+    setRefBusy(true);
+    setRefNote("");
+    try {
+      if (remove.length) {
+        const r1 = await shopify.query(TAGS_REMOVE_MUTATION, { variables: { id: ownerId, tags: remove } });
+        const e1 = collectErrors(r1, "tagsRemove");
+        if (e1.length) throw new Error(e1.join("; "));
+      }
+      if (add.length) {
+        const r2 = await shopify.query(TAGS_ADD_MUTATION, { variables: { id: ownerId, tags: add } });
+        const e2 = collectErrors(r2, "tagsAdd");
+        if (e2.length) throw new Error(e2.join("; "));
+      }
+      setRefNote(msg);
+      setRefPhone("");
+      setTimeout(() => setRefreshTick((t) => t + 1), 6000);
+    } catch (e) {
+      setRefNote(`Couldn't update the referral: ${e?.message || e}`);
+    } finally {
+      setRefBusy(false);
+    }
+  }
+
   // "Use" on one of the customer's open vouchers / exchange notes: the same trigger tags as typing the
   // code under Apply an Adjustment, so the middleware's checks and maths are unchanged.
   async function useOffer(o) {
@@ -1485,8 +1517,9 @@ export default function MetafieldManager({ surface = "block" } = {}) {
     const rows = [
       [`Campaign${b.campaign?.label ? `: ${b.campaign.label}` : ""}`, b.campaign?.amount],
       ["Manual discount", b.manual],
-      [`Loyalty${a ? ` (${a.name} ${a.rate}%${a.occ ? ` incl. ${String(a.occ).replace("+", " & ")} month` : ""})` : ""}`, b.loyalty],
+      [`Loyalty${a && a.kind !== "referral" ? ` (${a.name} ${a.rate}%${a.occ ? ` incl. ${String(a.occ).replace("+", " & ")} month` : ""})` : ""}`, b.loyalty],
     ];
+    if (Number(b.referral) > 0) rows.push([`Referral reward${a && a.kind === "referral" ? ` (${a.rate}% off diamond)` : ""}`, b.referral]);
     if (Number(b.other) > 0) rows.push(["Shopify discount", b.other]);
     if (Number(b.code) > 0) rows.push(["Discount code", b.code]);
     return (
@@ -1505,6 +1538,76 @@ export default function MetafieldManager({ surface = "block" } = {}) {
           <s-text tone="subdued">Before GST. Staff only; not printed for the customer.</s-text>
         </s-stack>
       </s-section>
+    );
+  };
+
+  // Why a referral was refused, in words staff can say to the customer.
+  const REF_REASONS = {
+    "no customer with that phone": "No Timanti customer has that phone number. Check the number with the customer.",
+    "referrer has not bought yet": "That customer has not bought from Timanti yet, so they cannot refer anyone.",
+    "own code": "A customer cannot refer themselves.",
+    "referrer is top tier": "The referrer is a Platinum member. Platinum members are not part of the referral programme.",
+    "customer has bought before": "This customer has bought from Timanti before. Referrals are for first purchases only.",
+    "same phone as referrer": "This customer has the same phone number as the referrer.",
+    "unknown code": "That referral code does not exist.",
+    "programme off": "The referral programme is switched off.",
+  };
+
+  const renderReferral = () => {
+    const r = loyalty?.referral;
+    if (!r || !r.enabled) return null;
+    const pct = r.pct || 10;
+    const digits = String(refPhone || "").replace(/\D/g, "").slice(-10);
+    const a = r.asReferrer;
+    return (
+      <s-stack direction="block" gap="small-200">
+        <s-text type="strong">Referral</s-text>
+        {r.pending ? <s-text tone="subdued">Checking the referral… this takes a few seconds.</s-text> : null}
+        {r.referredBy ? (
+          <s-stack direction="block" gap="small-200">
+            <s-badge tone="success">{`Referred by ${r.referredBy.name || "a customer"}${r.referredBy.phoneEnd ? ` (phone ending ${r.referredBy.phoneEnd})` : ""}`}</s-badge>
+            <s-text tone="subdued">{`${r.referredBy.firstName || "The referrer"} gets ${pct}% off the diamond value of a later purchase once this order is fully paid. This customer pays the normal price.`}</s-text>
+            <s-button
+              onClick={() => referralAction({ remove: [r.referredBy.tag] }, "Removing the referral…")}
+              loading={Boolean(refBusy)}
+              disabled={Boolean(refBusy)}
+            >
+              Remove referral
+            </s-button>
+          </s-stack>
+        ) : null}
+        {r.invalid && !r.pending ? (
+          <s-banner tone="warning">{REF_REASONS[r.invalid.reason] || `The referral was not recorded: ${r.invalid.reason}.`}</s-banner>
+        ) : null}
+        {r.canBeReferred && !r.pending ? (
+          <s-stack direction="block" gap="small-200">
+            <s-text tone="subdued">First purchase. If an existing customer sent them, enter that customer's phone number.</s-text>
+            <s-text-field
+              label="Referrer's phone number"
+              value={refPhone}
+              disabled={Boolean(refBusy)}
+              onChange={(e) => setRefPhone(e.target.value ?? "")}
+            />
+            <s-button
+              onClick={() => referralAction({ add: [`ref:${digits}`], remove: r.invalid ? [r.invalid.tag] : [] }, "Checking the referrer…")}
+              loading={Boolean(refBusy)}
+              disabled={Boolean(refBusy || digits.length !== 10)}
+            >
+              Record referral
+            </s-button>
+          </s-stack>
+        ) : null}
+        {a && a.excluded ? <s-text tone="subdued">{`${a.tierName || "Platinum"} members are not part of the referral programme.`}</s-text> : null}
+        {a && !a.excluded ? (
+          <s-stack direction="block" gap="small-200">
+            <s-text>{(a.rewards || []).length
+              ? `${a.rewards.length} referral reward${a.rewards.length > 1 ? "s" : ""} ready: ${pct}% off the diamond value, one per purchase. Next one to use by ${shortDate(a.rewards[0].expires_at)}.`
+              : "No referral rewards ready."}</s-text>
+            <s-text tone="subdued">{`Friends referred who bought: ${a.friends || 0}${(a.awaiting || []).length ? ` · waiting for full payment: ${a.awaiting.join(", ")}` : ""}`}</s-text>
+          </s-stack>
+        ) : null}
+        {refNote ? <s-text>{refNote}</s-text> : null}
+      </s-stack>
     );
   };
 
@@ -1568,7 +1671,12 @@ export default function MetafieldManager({ surface = "block" } = {}) {
                   {l.eligible ? `${l.title}: ${inr(l.discount)} off diamond ${inr(l.diamond)}${Number(l.makingDiscount) > 0 ? ` + ${inr(l.makingDiscount)} off making ${inr(l.making)}` : ""}` : `${l.title}: not eligible (${l.reason})`}
                 </s-text>
               ))}
-              <s-text>{`Estimated loyalty saving: ${inr(p.total)} before GST (${p.rate}% of the diamond value${occNames.length ? `, incl. +${p.occasion.pct}% ${occNames.join(" & ")} month` : ""}${Number(p.makingPct) > 0 ? `; ${p.makingPct}% of making${Number(p.makingCap) > 0 ? `, capped at ${inr(p.makingCap)} a bill` : ""}` : ""})`}</s-text>
+              {p.benefit === "referral" ? (
+                <s-badge tone="info">{`The referral reward saves more here (${inr(p.total)}${Number(p.loyaltyTotal) > 0 ? ` against ${inr(p.loyaltyTotal)} from the tier benefit` : ""}). Apply uses one referral reward instead of loyalty; the two never combine.`}</s-badge>
+              ) : Number(p.referralTotal) > 0 ? (
+                <s-text tone="subdued">{`The tier benefit saves more here (${inr(p.total)} against ${inr(p.referralTotal)} from a referral reward). Apply uses loyalty; the referral reward stays for another purchase.`}</s-text>
+              ) : null}
+              <s-text>{`Estimated ${p.benefit === "referral" ? "referral reward" : "loyalty"} saving: ${inr(p.total)} before GST (${p.rate}% of the diamond value${occNames.length && p.benefit !== "referral" ? `, incl. +${p.occasion.pct}% ${occNames.join(" & ")} month` : ""}${Number(p.makingPct) > 0 ? `; ${p.makingPct}% of making${Number(p.makingCap) > 0 ? `, capped at ${inr(p.makingCap)} a bill` : ""}` : ""})`}</s-text>
             </s-stack>
           ) : null}
           {p && !p.ok && !applied && p.code !== "below tier" ? <s-text tone="subdued">{p.reason}</s-text> : null}
@@ -1576,21 +1684,22 @@ export default function MetafieldManager({ surface = "block" } = {}) {
           {loyalty?.note ? <s-text tone="subdued">{loyalty.note}</s-text> : null}
           <s-stack direction="inline" gap="base">
             <s-button
-              onClick={() => loyaltyAction("apply-loyalty", "Applying loyalty… prices update in a few seconds.")}
+              onClick={() => loyaltyAction("apply-loyalty", `Applying ${p?.benefit === "referral" ? "the referral reward" : "loyalty"}… prices update in a few seconds.`)}
               loading={Boolean(loyaltyBusy)}
               disabled={Boolean(loyaltyBusy || !p || (!p.ok && !applied))}
             >
-              {applied ? "Re-apply loyalty" : "Apply loyalty"}
+              {applied ? (applied.kind === "referral" ? "Re-apply referral reward" : "Re-apply loyalty") : p?.benefit === "referral" ? "Apply referral reward" : "Apply loyalty"}
             </s-button>
             {applied ? (
               <s-button
-                onClick={() => loyaltyAction("remove-loyalty", "Removing loyalty… prices update in a few seconds.")}
+                onClick={() => loyaltyAction("remove-loyalty", "Removing… prices update in a few seconds.")}
                 disabled={Boolean(loyaltyBusy)}
               >
-                Remove loyalty
+                {applied.kind === "referral" ? "Remove referral reward" : "Remove loyalty"}
               </s-button>
             ) : null}
           </s-stack>
+          {renderReferral()}
           {renderOffers()}
           {loyaltyNote ? <s-text>{loyaltyNote}</s-text> : null}
         </s-stack>
