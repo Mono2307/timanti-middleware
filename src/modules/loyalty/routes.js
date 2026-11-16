@@ -273,7 +273,11 @@ function register(app /* , ctx */) {
       const evMap = { ...map };
       if (applied) delete evMap.discount_applied;
       const ev = await evaluateDraft(draft, evMap);
-      return res.json({ success: true, applied, note: map[NOTE_KEY] || '', preview: ev, offers: await draftOffers(draft, map) });
+      const ref = await referral.draftPanel(draft).catch((e) => {
+        log.warn('loyalty', `draft-preview ${draftId} referral: ${e.message}`);
+        return { enabled: false, error: e.message };
+      });
+      return res.json({ success: true, applied, note: map[NOTE_KEY] || '', preview: ev, offers: await draftOffers(draft, map), referral: ref });
     } catch (e) {
       log.error('loyalty', `draft-preview ${draftId}: ${e.message}`);
       return res.status(500).json({ success: false, error: e.message });

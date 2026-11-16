@@ -268,9 +268,15 @@ test('the reward is used once; a second use is refused', async () => {
   assert.strictEqual(await R.markUsed(fakeSupabase, open.id, { orderId: 9500, orderName: '#2050', channel: 'online' }), true);
   assert.strictEqual(await R.markUsed(fakeSupabase, open.id, { orderId: 9501, orderName: '#2051', channel: 'store' }), false);
   assert.strictEqual((await R.openRewards(fakeSupabase, '100')).length, 0);
-  // Refunding the friend's order AFTER the reward was used leaves it used.
+  // Refunding the friend's order AFTER the reward was used leaves it used, with a dated record.
   await R.onOrder(online({ financial_status: 'refunded' }), { points: 0, cfg });
-  assert.strictEqual(T('referral_rewards').find(r => r.source_order_id === '5001').status, 'used');
+  const row = T('referral_rewards').find(r => r.source_order_id === '5001');
+  assert.strictEqual(row.status, 'used');
+  assert.ok(row.source_refunded_at, 'refund after use is recorded');
+  assert.match(row.reason, /not recovered/);
+  const at = row.source_refunded_at;
+  await R.onOrder(online({ financial_status: 'refunded' }), { points: 0, cfg });
+  assert.strictEqual(T('referral_rewards').find(r => r.source_order_id === '5001').source_refunded_at, at, 'recorded once');
 });
 
 test('store order (buy plan style): waits for full payment, then earns; a refund before use voids', async () => {
@@ -332,17 +338,44 @@ test('bestFor: an open reward wins over a weaker benefit; Platinum never sees it
 });
 
 test('in store: ref:<code or phone> becomes referred:<CODE>; bad input is flagged', async () => {
-  await R.handleReferralTagStep({ id: 1, name: '#D1', tags: `ref:${priyaCode.toLowerCase()}, reprice`, customer: { id: 200 } });
+  await R.handleReferralTagStep({ id: 1, name: '#D1', tags: `ref:${priyaCode.toLowerCase()}, reprice`, customer: { id: 500 } });
   assert.strictEqual(tagWrites.pop(), `reprice, referred:${priyaCode}`);
-  await R.handleReferralTagStep({ id: 2, name: '#D2', tags: 'ref:+91 98000 00100', customer: { id: 200 } });
+  await R.handleReferralTagStep({ id: 2, name: '#D2', tags: 'ref:+91 98000 00100', customer: { id: 500 } });
   assert.strictEqual(tagWrites.pop(), `referred:${priyaCode}`);
   await R.handleReferralTagStep({ id: 3, name: '#D3', tags: 'ref:NOSUCH1', customer: { id: 200 } });
   assert.strictEqual(tagWrites.pop(), 'ref-invalid: unknown code');
   await R.handleReferralTagStep({ id: 4, name: '#D4', tags: `ref:${priyaCode}`, customer: { id: 100 } });
   assert.strictEqual(tagWrites.pop(), 'ref-invalid: own code');
+  await R.handleReferralTagStep({ id: 6, name: '#D6', tags: 'ref:9800000100', customer: { id: 400 } });
+  assert.strictEqual(tagWrites.pop(), 'ref-invalid: customer has bought before');
+  customers[510] = { firstName: 'Twin', email: 'tw@x.in', phone: '+919800000100', numberOfOrders: '0', first: null };
+  await R.handleReferralTagStep({ id: 7, name: '#D7', tags: 'ref:9800000100', customer: { id: 510 } });
+  assert.strictEqual(tagWrites.pop(), 'ref-invalid: same phone as referrer');
   const n = tagWrites.length;
   await R.handleReferralTagStep({ id: 5, name: '#D5', tags: `referred:${priyaCode}, loyalty-applied` });
   assert.strictEqual(tagWrites.length, n, 'no ref: tag → no write');
+});
+
+test('draft panel: a new customer can be referred; a referred draft names the referrer; a referrer sees rewards', async () => {
+  const fresh = await R.draftPanel({ id: 10, tags: '', customer: { id: 500 } });
+  assert.strictEqual(fresh.enabled, true);
+  assert.strictEqual(fresh.canBeReferred, true);
+  assert.strictEqual(fresh.asReferrer, undefined);
+  const noCustomer = await R.draftPanel({ id: 11, tags: '' });
+  assert.strictEqual(noCustomer.canBeReferred, true);
+  const referred = await R.draftPanel({ id: 12, tags: `referred:${priyaCode}`, customer: { id: 500 } });
+  assert.strictEqual(referred.canBeReferred, false);
+  assert.strictEqual(referred.referredBy.customerId, '100');
+  assert.strictEqual(referred.referredBy.firstName, 'Priya');
+  assert.strictEqual(referred.referredBy.phoneEnd, '0100');
+  const refused = await R.draftPanel({ id: 13, tags: 'ref-invalid: own code', customer: { id: 100 } });
+  assert.strictEqual(refused.invalid.reason, 'own code');
+  assert.strictEqual(refused.canBeReferred, false, 'a buying customer cannot be referred');
+  assert.strictEqual(refused.asReferrer.excluded, false);
+  assert.ok(Array.isArray(refused.asReferrer.rewards));
+  const plat = await R.draftPanel({ id: 14, tags: '', customer: { id: 300 } });
+  assert.strictEqual(plat.asReferrer.excluded, true);
+  assert.strictEqual((await R.draftPanel({ id: 15, tags: 'ref:9800000100', customer: { id: 500 } })).pending, true);
 });
 
 (async () => {

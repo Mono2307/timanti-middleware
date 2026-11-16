@@ -315,6 +315,14 @@ async function onOrder(order, { points = 0, cfg } = {}) {
   const existing = await rewardBySourceOrder(supabase, order.id);
   const paid = points > 0 && isPaidInFull(order);
   if (existing) {
+    // Founder (2026-11-16): the friend's piece refunded AFTER the referrer used the reward. Nothing is
+    // recovered from the referrer; the row stays `used` and carries a dated note so staff can see it.
+    if (existing.status === 'used' && (isDead(order) || !(points > 0)) && !existing.source_refunded_at) {
+      const reason = 'friend\'s order refunded after the reward was used; not recovered';
+      await updateReward(supabase, existing.id, { source_refunded_at: new Date().toISOString(), reason });
+      log.warn('referral', `order ${order.name}: refunded after reward ${existing.id} was used on ${existing.used_order_name || existing.used_order_id} — recorded, not recovered`);
+      return { ...existing, reason };
+    }
     const dead = isDead(order) || (existing.status === 'earned' && !(points > 0));
     const next = nextStatus(existing.status, { paid, dead });
     if (next === existing.status) return existing;
@@ -471,10 +479,63 @@ async function handleReferralTagStep(draft) {
   }
   if (!invalid && draft.customer && String(draft.customer.id) === owner) invalid = 'own code';
   if (!invalid && tierExcluded(await tierKeyOf(owner, cfg), cfg)) invalid = 'referrer is top tier';
+  // Stop at the counter what would be rejected at the sale: a returning customer, or the referrer's
+  // own phone on another customer record.
+  if (!invalid && draft.customer && draft.customer.id) {
+    const [me, ref] = await Promise.all([customerFacts(draft.customer.id), customerFacts(owner)]);
+    if (me && me.orders > 0) invalid = 'customer has bought before';
+    else if (me && ref && me.phone && me.phone === ref.phone) invalid = 'same phone as referrer';
+  }
   const next = tags.filter(t => !T_INPUT.test(t) && !/^ref-invalid/i.test(t) && !t.toLowerCase().startsWith(T_DONE));
   next.push(invalid ? `${T_INVALID}: ${invalid}`.slice(0, 40) : `${T_DONE}${code}`);
   await putJson(`draft_orders/${draft.id}.json`, { draft_order: { id: draft.id, tags: [...new Set(next)].join(', ') } });
   log.info('referral', `draft ${draft.name || draft.id}: ${input} → ${invalid ? `invalid (${invalid})` : `referred by ${owner} (${code})`}`);
+}
+
+/**
+ * What the Loyalty section of the draft panel shows about referrals, so staff never handle tags:
+ *   referredBy    this draft's customer was referred (tag referred:<CODE>): who, and the phone's end
+ *   invalid       the last referral staff entered was refused: the reason and the tag to clear
+ *   pending       staff just entered one and the middleware has not checked it yet
+ *   canBeReferred a new customer (or none on the draft yet): show "Referrer's phone"
+ *   asReferrer    the draft's customer as a referrer: open rewards, friends, or Platinum-excluded
+ */
+async function draftPanel(draft) {
+  const cfg = await loadConfig();
+  const r = cfg.referral || {};
+  if (!r.enabled || !draft) return { enabled: false };
+  const tags = splitTags(draft.tags);
+  const out = { enabled: true, pct: r.pct, months: r.reward_months, pending: tags.some(t => T_INPUT.test(t)) };
+  const done = tags.find(t => t.toLowerCase().startsWith(T_DONE));
+  if (done) {
+    const code = normalizeCode(done.slice(T_DONE.length));
+    const owner = code ? await ownerOfCode(supabase, code) : null;
+    const f = owner ? await customerFacts(owner) : null;
+    out.referredBy = { code, tag: done, customerId: owner, name: f ? (f.name || f.firstName) : '', firstName: f ? f.firstName : '',
+      phoneEnd: f && f.phone ? f.phone.slice(-4) : '' };
+  }
+  const bad = tags.find(t => /^ref-invalid/i.test(t));
+  if (bad) out.invalid = { tag: bad, reason: bad.slice(bad.indexOf(':') + 1).trim() };
+  const cid = draft.customer && draft.customer.id ? String(draft.customer.id) : '';
+  const me = cid ? await customerFacts(cid) : null;
+  out.newCustomer = !me || me.orders === 0;
+  out.canBeReferred = !done && out.newCustomer;
+  if (me && me.orders > 0) {
+    const tierKey = await tierKeyOf(cid, cfg);
+    if (tierExcluded(tierKey, cfg)) {
+      const tier = (cfg.tiers || []).find(t => t.key === tierKey);
+      out.asReferrer = { excluded: true, tierName: tier ? tier.name : '' };
+    } else {
+      const open = await openRewards(supabase, cid);
+      const { count } = await supabase.from(REWARDS).select('id', { count: 'exact', head: true })
+        .eq('referrer_customer_id', cid).in('status', ['earned', 'used']);
+      const { data: waiting } = await supabase.from(REWARDS).select('source_order_name')
+        .eq('referrer_customer_id', cid).eq('status', 'awaiting_payment');
+      out.asReferrer = { excluded: false, rewards: open.map(x => ({ expires_at: x.expires_at })), friends: count || 0,
+        awaiting: (waiting || []).map(w => w.source_order_name).filter(Boolean) };
+    }
+  }
+  return out;
 }
 
 // ── Operator ───────────────────────────────────────────────────────────────────────────────────
@@ -493,7 +554,7 @@ module.exports = {
   normalizeCode, normalizePhone, makeCode, linkFor, expiryFrom, attributionFrom, isPaidInFull, isDead,
   nextStatus, isOpen, tierExcluded,
   // flows
-  onOrder, qualify, bestFor, markUsed, viewFor, claim, handleReferralTagStep, listRewards,
+  onOrder, qualify, bestFor, markUsed, viewFor, claim, handleReferralTagStep, listRewards, draftPanel,
   getOrCreateCode, ownerOfCode, openRewards,
   T_DONE,
 };

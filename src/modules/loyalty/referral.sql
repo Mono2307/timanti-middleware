@@ -48,6 +48,10 @@ create table if not exists referral_rewards (
 );
 create index if not exists referral_rewards_referrer_idx on referral_rewards (referrer_customer_id, status);
 
+-- The friend's order was refunded after the referrer had already used the reward (founder: nothing
+-- is recovered, but it is recorded).
+alter table referral_rewards add column if not exists source_refunded_at timestamptz;
+
 -- The online code / store redemption that used a reward points back at it.
 alter table loyalty_redemptions add column if not exists referral_reward_id bigint;
 
