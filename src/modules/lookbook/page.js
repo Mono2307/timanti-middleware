@@ -446,7 +446,23 @@ ${SHELL_CSS}
     var bits = [v.karat, v.toneLabel, v.size ? 'size ' + v.size : null, v.grade].filter(Boolean);
     return bits.length ? bits.join(' · ') : (v.title || 'Single variant');
   }
-  function codesOf(it) { return it.designIds || []; }
+  /* Design codes for a product. The snapshot carries them (designIds), but a snapshot written by an
+     older build does not - and one is served for the whole length of a rebuild after every deploy.
+     So fall back to SKU segment 0, the same field the snapshot derives them from. Memoised on the
+     item: buildSuggestions calls this for every product on every keystroke. */
+  function codesOf(it) {
+    if (it.designIds && it.designIds.length) return it.designIds;
+    if (it._codes) return it._codes;
+    var seen = {}, out = [];
+    for (var i = 0; i < it.variants.length; i++) {
+      var sku = String(it.variants[i].sku || '');
+      if (sku.indexOf('|') === -1) continue;    /* not a pipe SKU: no code in it */
+      var c = sku.split('|')[0].trim().toUpperCase();
+      if (c && !seen[c]) { seen[c] = 1; out.push(c); }
+    }
+    it._codes = out;
+    return out;
+  }
   function stockHtml(it) {
     var ins = inStockVariants(it);
     if (!ins.length) return '<div class="mto">Made to order</div>';
