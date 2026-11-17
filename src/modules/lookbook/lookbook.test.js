@@ -541,6 +541,23 @@ t('centre and side diamonds, quality, size and chain are carried; absent stays a
   assert.strictEqual(bare.hasColouredStones, false);
 });
 
+// The PDP's own row builder, cut out of the shipped page script and run as the browser runs it.
+const pdpSpecRows = (() => {
+  const js = appPage().split('<script>')[1].split('</script>')[0];
+  const body = js.slice(js.indexOf('function ct('), js.indexOf('/* "Show available variant"'));
+  return new Function(body + '\nreturn specRows;')();
+})();
+const specRow = (it, label) => (pdpSpecRows(it, null).find((r) => r[0] === label) || [])[1];
+
+t('the centre stone row shows weight AND count, even a single stone, like the side row', () => {
+  assert.strictEqual(specRow({ cstWeight: 1.54, cstCount: 1 }, 'Centre stone'), '1.54 ct  ·  1 stone');
+  assert.strictEqual(specRow({ cstWeight: 0.6, cstCount: 2, cstCut: 'OVAL' }, 'Centre stone'), '0.6 ct  ·  2 stones  ·  Oval');
+  assert.strictEqual(specRow({ cstCount: 1 }, 'Centre stone'), '1 stone', 'a count with no weight still shows');
+  assert.strictEqual(specRow({ cstWeight: 1.54, cstCount: 1, sideWeight: 0.36, sideCount: 16 }, 'Side diamonds'), '0.36 ct  ·  16 stones');
+  assert.strictEqual(specRow({ sideWeight: 0.36, sideCount: 16 }, 'Centre stone'), undefined);
+  assert.strictEqual(specRow({ sideWeight: 0.36, sideCount: 16 }, 'Side diamonds'), undefined, 'no centre: side stones are the total');
+});
+
 // ── Live price freshness ─────────────────────────────────────────────────────
 console.log('the PDP breakup is read live with the price, and open pages hear about a reprice');
 

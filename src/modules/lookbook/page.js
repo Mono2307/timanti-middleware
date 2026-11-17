@@ -894,12 +894,16 @@ ${SHELL_CSS}
   function specRows(it, v) {
     var rows = [];
     if (it.carats > 0) rows.push(['Total diamonds', ct(it.carats) + (it.stones > 0 ? '  ·  ' + pcs(it.stones, 'stone', 'stones') : '')]);
-    if (it.cstWeight > 0) {
-      rows.push(['Centre stone', ct(it.cstWeight) +
-        (it.cstCount > 1 ? '  ·  ' + pcs(it.cstCount, 'stone', 'stones') : '') +
-        (it.cstCut ? '  ·  ' + titleCase(it.cstCut) : '')]);
+    /* Weight and count side by side, like the total and side rows - count shows even when it is 1. */
+    var hasCentre = it.cstWeight > 0 || it.cstCount > 0;
+    if (hasCentre) {
+      var cst = [];
+      if (it.cstWeight > 0) cst.push(ct(it.cstWeight));
+      if (it.cstCount > 0) cst.push(pcs(it.cstCount, 'stone', 'stones'));
+      if (it.cstCut) cst.push(titleCase(it.cstCut));
+      rows.push(['Centre stone', cst.join('  ·  ')]);
     }
-    if (it.sideWeight > 0 && it.cstWeight > 0) {
+    if (it.sideWeight > 0 && hasCentre) {
       /* Side stones only mean something next to a centre stone; on a pavé piece they ARE the total. */
       rows.push(['Side diamonds', ct(it.sideWeight) + (it.sideCount > 0 ? '  ·  ' + pcs(it.sideCount, 'stone', 'stones') : '')]);
     }
