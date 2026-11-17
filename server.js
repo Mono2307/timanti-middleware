@@ -3053,7 +3053,8 @@ async function stripInstrumentFromDraft(draftId, type, token) {
   const net = Math.max(0, parseFloat(draft.total_price || 0) - remaining).toFixed(2);
   await updateDraftOrderMetafields(draftId, { amount_to_be_collected: net });
   const tags = (draft.tags || '').split(',').map(t => t.trim())
-    .filter(t => t && t !== appliedTag && !t.startsWith(numPrefix)).join(', ');
+    // vch-original: rides with the voucher (its source order), so it goes when the voucher goes.
+    .filter(t => t && t !== appliedTag && !t.startsWith(numPrefix) && !(type === 'voucher' && t.startsWith('vch-original:'))).join(', ');
   await axios.put(`${base}/admin/api/2024-01/draft_orders/${draftId}.json`,
     { draft_order: { id: Number(draftId), tags } }, { headers, timeout: 10000 });
   // This draft just lost a credit it was counting on, so it owes MORE than it did a moment ago. The net

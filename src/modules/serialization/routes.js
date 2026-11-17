@@ -187,6 +187,11 @@ app.post('/api/voucher/void-by-code', async (req, res) => {
     if (inst && inst.status === 'redeemed') {
       return res.status(409).json({ success: false, error: `${code} was already redeemed on ${inst.target_order_name || inst.target_order_id || 'an order'} — it cannot be voided` });
     }
+    // Already void: change nothing (the original void time stays) and say so.
+    if (inst && inst.status === 'voided') {
+      return res.json({ success: true, alreadyVoided: true, serialCode: code, serialCancelled: true, ledgerVoided: true,
+                        discountDeleted: true, strippedFrom: null, voidedAt: inst.voided_at });
+    }
     const token = await getShopifyToken();
     let strippedFrom = null, discountDeleted = false;
     if (inst && inst.status === 'applied' && inst.target_draft_id && _stripInstrumentFromDraft) {
