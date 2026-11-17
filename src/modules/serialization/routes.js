@@ -53,6 +53,35 @@ const creditInstruments = require('../adjustments/credit_instruments');
 const { isCadAdvanceOnly } = require('../adjustments/cad_advance');
 const loyaltyEarn = require('../loyalty/earn');
 
+// ── One live voucher per source order ──────────────────────────────────────────────────────────
+// '#1079', '1079' and ' #1079 ' are the same order.
+function normOrderName(v) {
+  const s = String(v || '').trim().replace(/^#+/, '');
+  return s ? '#' + s.toUpperCase() : '';
+}
+const _voucherOrderInFlight = new Set();
+
+// Vouchers still worth money against this order: open or applied in the credit ledger, PLUS any
+// number already minted for it whose ledger row has not been written yet (a run in its first few
+// seconds — the serial is taken ~4 s before the credit row exists). Redeemed/voided/expired/
+// refunded vouchers are history, not duplicates.
+async function liveVouchersForOrder(order) {
+  const names = [order, order.slice(1)];
+  const { data: ci, error } = await supabase.from('credit_instruments')
+    .select('serial_code,value,status').eq('instrument_type', 'voucher').in('source_order_name', names);
+  if (error) throw new Error(`liveVouchersForOrder: ${error.message}`);
+  const out = (ci || []).filter(r => r.status === 'open' || r.status === 'applied')
+    .map(r => ({ serial_code: r.serial_code, value: Number(r.value), status: r.status }));
+  const known = new Set((ci || []).map(r => r.serial_code));
+  const { data: sl } = await supabase.from('serial_ledger')
+    .select('serial_code').eq('doc_type', 'voucher').eq('status', 'active').in('resource_name', names);
+  for (const r of (sl || [])) if (!known.has(r.serial_code)) out.push({ serial_code: r.serial_code, value: null, status: 'being issued' });
+  return out;
+}
+
+// Injected at register() — server.js owns the draft-strip helper.
+let _stripInstrumentFromDraft = null;
+
 // Single-flight guard for order numbering, the order-side twin of processingDrafts in
 // modules/after-sales. One staff action produces SEVERAL orders/updated deliveries, because this
 // middleware writes tags to the very order whose webhook it is handling and each write makes Shopify
@@ -84,6 +113,7 @@ function register(app, ctx) {
   // resolves it when the handler runs, so the app booted clean and every orders/updated webhook
   // then died on a ReferenceError — after the 200 ack, and before the serial mint.
   const { applyPaymentTagsToOrder } = ctx;
+  _stripInstrumentFromDraft = ctx.stripInstrumentFromDraft || null;
 
 // Body: { docType, stateCode?, shopifyLocationId?, shippingAddress?, draftOrderId?, orderId?, documentType? }
 app.post('/api/serial/allocate', async (req, res) => {
@@ -98,6 +128,35 @@ app.post('/api/serial/allocate', async (req, res) => {
       // EXC/VCH are now per-store (EXC27-KAHSR-0001) — the caller must pass the issuing store code.
       const storeCode = (req.body.stateCode || req.body.storeCode || '').toUpperCase().trim();
       if (!storeCode) return res.status(400).json({ success: false, error: `stateCode (store code) required for ${docType}` });
+      // One live voucher per source order, enforced HERE — before a number is spent. The sheet's
+      // own check read its After-Sales Log, which is written at the END of a run, so two runs 18 s
+      // apart both passed it and #1079 got VCH27-KAHSR-0003 and 0004 (17 Nov). Only callers that
+      // send sourceOrderName are guarded (the exchange sheet); old-gold and repair vouchers have no
+      // source order and are unaffected. overrideReason lets a genuine second voucher through
+      // (e.g. a repair voucher on an order that was also exchanged).
+      const sourceOrder = docType === 'voucher' ? normOrderName(req.body.sourceOrderName) : '';
+      if (sourceOrder) {
+        if (_voucherOrderInFlight.has(sourceOrder)) {
+          return res.status(409).json({ success: false, duplicate: true, inProgress: true,
+            error: `a voucher for ${sourceOrder} is being created right now — wait for it to finish`, existing: [] });
+        }
+        _voucherOrderInFlight.add(sourceOrder);
+        try {
+          const override = String(req.body.overrideReason || '').trim();
+          const existing = await liveVouchersForOrder(sourceOrder);
+          if (existing.length && !override) {
+            return res.status(409).json({ success: false, duplicate: true, existing,
+              error: `${sourceOrder} already has ${existing.map(e => e.serial_code).join(', ')} — void it, or give a reason to issue another` });
+          }
+          if (existing.length) console.warn(`[serial] voucher for ${sourceOrder} issued past ${existing.map(e => e.serial_code).join(', ')} — reason: ${override}`);
+          const r = await serialization.mintSerial(SERIAL_DEPS(), {
+            docType, storeCode, resourceType: docType, resourceIdFromCode: true, resourceName: sourceOrder,
+          });
+          return res.json({ success: true, allocated: r.minted, serial_no: r.seq, serial_code: r.serial_code, serial_display: r.serial_code });
+        } finally {
+          _voucherOrderInFlight.delete(sourceOrder);
+        }
+      }
       const r = await serialization.mintSerial(SERIAL_DEPS(), {
         docType, storeCode, resourceType: docType, resourceIdFromCode: true,
       });
@@ -108,6 +167,49 @@ app.post('/api/serial/allocate', async (req, res) => {
   } catch (err) {
     if (err.code === 'NO_STATE') return res.status(400).json({ success: false, error: err.message });
     console.error('[serial] allocate failed:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST /api/voucher/void-by-code — the sheet's "Void Voucher". Body: { serialCode, reason? }.
+// Voids the voucher EVERYWHERE, keyed by its full code (VCH27-KAHSR-0003), never by bare seq:
+//   1. takes it off any unbilled draft it is applied to (value, code, tags, collect figures)
+//   2. deletes its Shopify discount (404 = already gone, fine)
+//   3. numbering ledger → cancelled;  credit ledger → voided
+// The sheet used to call /api/serial/cancel-by-code with seq alone, which matches every store's
+// voucher with that seq, and it never touched the credit ledger — so a "voided" voucher stayed
+// open and spendable in store. A voucher already REDEEMED on an order cannot be voided.
+app.post('/api/voucher/void-by-code', async (req, res) => {
+  try {
+    const code = String((req.body || {}).serialCode || '').trim().toUpperCase();
+    if (!/^VCH/.test(code)) return res.status(400).json({ success: false, error: 'serialCode (VCH…) required' });
+    const inst = await creditInstruments.getBySerial(supabase, { instrumentType: 'voucher', serialCode: code });
+    if (inst && inst.status === 'redeemed') {
+      return res.status(409).json({ success: false, error: `${code} was already redeemed on ${inst.target_order_name || inst.target_order_id || 'an order'} — it cannot be voided` });
+    }
+    const token = await getShopifyToken();
+    let strippedFrom = null, discountDeleted = false;
+    if (inst && inst.status === 'applied' && inst.target_draft_id && _stripInstrumentFromDraft) {
+      await _stripInstrumentFromDraft(inst.target_draft_id, 'voucher', token);
+      strippedFrom = inst.target_draft_id;
+    }
+    if (inst && inst.price_rule_id) {
+      try {
+        await axios.delete(`${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/price_rules/${inst.price_rule_id}.json`,
+          { headers: { 'X-Shopify-Access-Token': token }, timeout: 10000 });
+        discountDeleted = true;
+      } catch (e) {
+        if (e.response && e.response.status === 404) discountDeleted = true;
+        else console.error(`[voucher-void] price-rule delete ${code}:`, e.message);
+      }
+    }
+    const serial = await serialization.cancelSerial(SERIAL_DEPS(), { docType: 'voucher', serialCode: code });
+    if (inst) await creditInstruments.voidInstrument(supabase, { instrumentType: 'voucher', serialCode: code });
+    console.log(`[voucher-void] ${code} voided${req.body.reason ? ' — ' + req.body.reason : ''}`);
+    return res.json({ success: true, serialCode: code, serialCancelled: !!serial, ledgerVoided: !!inst,
+                      discountDeleted, strippedFrom });
+  } catch (err) {
+    console.error('[voucher-void] failed:', err.message);
     return res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -125,6 +227,8 @@ app.post('/api/serial/cancel-by-code', async (req, res) => {
     }
     const r = await serialization.cancelSerial(SERIAL_DEPS(),
       seq != null ? { docType, seq } : { docType, resourceId: String(body.serialCode) });
+    // Logged either way: on 17 Nov a sheet void reported success and left no trace to check it by.
+    console.log(`[serial] cancel-by-code ${docType} ${seq != null ? 'seq ' + seq : body.serialCode} → ${r ? r.serial_code + ' ' + r.status : 'NOT FOUND'}`);
     if (!r) return res.status(404).json({ success: false, error: `no serial found for ${seq != null ? 'seq ' + seq : body.serialCode}` });
     return res.json({ success: true, serial_code: r.serial_code, seq: r.seq, status: r.status, cancelled_at: r.cancelled_at });
   } catch (err) {
@@ -201,6 +305,17 @@ async function freezeOnlineVoucher(order, token) {
     await require('../payments/savings-plan/redeem').settleUse({
       code: vchCode, used: voucherValue, orderId: order.id, orderName: order.name, channel: 'online' });
   } else if (vchCode) {
+    // Spent online while still sitting on an unbilled draft: take it off that draft BEFORE the
+    // ledger stops pointing at it, or the draft keeps deducting a voucher that no longer exists and
+    // staff would bill the customer short. Applying to a draft is only a reservation; the online
+    // checkout is the redemption.
+    try {
+      const held = await creditInstruments.getBySerial(supabase, { instrumentType: 'voucher', serialCode: vchCode });
+      if (held && held.status === 'applied' && held.target_draft_id && _stripInstrumentFromDraft) {
+        await _stripInstrumentFromDraft(held.target_draft_id, 'voucher', token);
+        console.log(`[voucher-freeze] ${vchCode} used online on ${order.name || order.id} — stripped from draft ${held.target_draft_id}`);
+      }
+    } catch (e) { console.error(`[voucher-freeze] strip ${vchCode} from its draft:`, e.message); }
     try {
       await creditInstruments.redeem(supabase, {
         instrumentType: 'voucher', serialCode: vchCode,

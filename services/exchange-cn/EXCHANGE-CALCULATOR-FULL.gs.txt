@@ -1816,6 +1816,21 @@ function removeTriggers() {
 // DOCTYPE_CELL (B37) = "Voucher" (1-year store credit, discount code) or
 // "Exchange Note" (instant post-tax deduction on a new invoice).
 function createDocument() {
+  // ONE Create Document at a time on this sheet. On 17 Nov a second click 18 s into a 44 s run
+  // started a second execution that raised VCH27-KAHSR-0004 on top of 0003 for the same order.
+  // tryLock(0): a second click is refused at once instead of queueing behind the first.
+  const lock = LockService.getDocumentLock();
+  if (!lock.tryLock(0)) {
+    SpreadsheetApp.getUi().alert('⏳ A document is already being created',
+      'Wait for its "Voucher Created" / "Exchange Note Created" message before clicking again.\n\n' +
+      'Nothing was created by this click.', SpreadsheetApp.getUi().ButtonSet.OK);
+    return;
+  }
+  try { return createDocumentLocked_(); }
+  finally { lock.releaseLock(); }
+}
+
+function createDocumentLocked_() {
   const calc = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CALC_SHEET_NAME);
   // The hourly refund + status jobs must exist; a missing one is recreated here. Never blocks issuing.
   try { ensureScheduledTriggers_(); } catch (x) { Logger.log('trigger check skipped: ' + x.message); }
@@ -1857,15 +1872,17 @@ function createVoucher_() {
   const missing = missingIssueData_(orderNumber, netCredit);
   if (missing) { ui.alert(missing); return; }
 
-  // Checked BEFORE the serial is allocated — an abandoned allocation leaves a gap in the ledger.
-  if (!confirmNoDuplicateInstrument_(ss, ui, orderNumber)) return;
+  // Duplicate check is done by the MIDDLEWARE, at the moment the number is taken: it refuses a
+  // second live voucher for the same order unless a reason is given. The old check here read the
+  // After-Sales Log, which is only written at the END of a run — so on 17 Nov two runs 18 s apart
+  // both passed it and #1079 got VCH27-KAHSR-0003 and 0004.
+  SpreadsheetApp.getActiveSpreadsheet().toast('Creating voucher — do not click Create Document again.', '⏳ Working', -1);
+  const alloc = allocateVoucherSerialForOrder_(ui, orderNumber);
+  if (alloc === false) return;          // refused (duplicate, staff gave no reason) — nothing spent
 
   const year   = today.getFullYear();
-  // Serial from the central counter service (atomic, no gaps/dupes across devices).
-  // Falls back to the legacy sheet-row count if the middleware is unreachable.
   // Print the ledger's own code (VCH27-KAHSR-0001) — never re-format locally. Middleware down →
   // legacy sheet-row format so a voucher can still be issued; reconcile that number by hand after.
-  const alloc  = allocateVoucherSerial();
   const cnNum  = (alloc && alloc.serial_code)
                  ? alloc.serial_code
                  : 'VCH-' + year + '-' + String(log.getLastRow()).padStart(4, '0');
@@ -4088,10 +4105,10 @@ function applyVoucherIfDraftGiven_(calc, vchNumber, vchValue, oldOrder, customer
                          ? '↩️ ' + out.displaced + ' was already on ' + name + '. It has been removed and ' +
                            'is OPEN again — the customer can still spend it elsewhere.\n'
                          : '') +
-                      (out.onlineCodeKilled
-                         ? 'Its online discount code was cancelled — it cannot also be used at checkout.\n\n'
-                         : '⚠️ Its online discount code is STILL LIVE — cancel ' + vchNumber +
-                           ' under Discounts if the customer could also use it online.\n\n') };
+                      // The online code deliberately stays live while the voucher only sits on a
+                      // draft: applying is a reservation. It is deleted when this bill is converted
+                      // to an order; if the customer uses it online first, it comes off this draft.
+                      'Its online discount code stays live until this bill is converted to an order.\n\n' };
   }
   var why = (out && out.error) || 'middleware error';
   return { status: 'Issued (apply failed)', error: why,
@@ -4129,6 +4146,54 @@ function allocateSerial_(docType, storeCode) {
 // Voucher falls back to the sheet-row count if the middleware is down; Exchange Note does not
 // (it must not be applied to an invoice without a real ledger number).
 function allocateVoucherSerial() { return allocateSerial_('voucher', resolveStoreCode_()); }
+
+// Voucher serial for an ORDER-linked voucher, with the middleware's one-live-voucher-per-order guard.
+// Returns the allocation body, null when the middleware is unreachable (caller falls back to the
+// legacy number, as before), or false when the voucher must NOT be created.
+function allocateVoucherSerialForOrder_(ui, orderNumber) {
+  var call = function (overrideReason) {
+    try {
+      var res = UrlFetchApp.fetch(MIDDLEWARE_URL + '/api/serial/allocate', {
+        method: 'post', contentType: 'application/json', muteHttpExceptions: true,
+        payload: JSON.stringify({ docType: 'voucher', stateCode: resolveStoreCode_(),
+                                  sourceOrderName: orderNumber, overrideReason: overrideReason || '' })
+      });
+      var body = {};
+      try { body = JSON.parse(res.getContentText()); } catch (x) {}
+      return { code: res.getResponseCode(), body: body };
+    } catch (e) {
+      Logger.log('voucher serial failed: ' + e.message);
+      return { code: 0, body: {} };
+    }
+  };
+  var r = call('');
+  if (r.code === 200 && r.body.serial_no != null) return r.body;
+  if (r.code !== 409) { Logger.log('voucher serial warning: ' + r.code + ' — ' + JSON.stringify(r.body)); return null; }
+
+  if (r.body.inProgress) {
+    ui.alert('⏳ A voucher for ' + orderNumber + ' is being created right now',
+             'Nothing was created by this click.', ui.ButtonSet.OK);
+    return false;
+  }
+  var list = (r.body.existing || []).map(function (e) {
+    return '  • ' + e.serial_code + (e.value != null
+      ? ' — ₹' + Number(e.value).toLocaleString('en-IN', { minimumFractionDigits: 2 }) : '') +
+      ' (' + e.status + ')';
+  }).join('\n');
+  var resp = ui.prompt('⛔ ' + orderNumber + ' already has a live voucher',
+    list + '\n\nIf this is a mistake or you are correcting the amount: press CANCEL and use ' +
+    '"Void Voucher" on the one above.\n\nOnly if a SECOND voucher is genuinely due on this order ' +
+    '(e.g. a repair voucher), type the reason and press OK:', ui.ButtonSet.OK_CANCEL);
+  var reason = String(resp.getResponseText() || '').trim();
+  if (resp.getSelectedButton() !== ui.Button.OK || reason.length < 5) {
+    ui.alert('No voucher created.', 'Nothing was spent — no number was taken.', ui.ButtonSet.OK);
+    return false;
+  }
+  var r2 = call(reason);
+  if (r2.code === 200 && r2.body.serial_no != null) return r2.body;
+  ui.alert('No voucher created.', (r2.body && r2.body.error) || ('middleware ' + r2.code), ui.ButtonSet.OK);
+  return false;
+}
 function allocateExcSerial()     { return allocateSerial_('exchange_note', resolveStoreCode_()); }
 
 // Issuing store code from STORE_CODE_CELL, falling back to the STORE_CODE constant when the cell
@@ -4223,18 +4288,19 @@ function voidVoucher() {
     ui.ButtonSet.YES_NO);
   if (confirm !== ui.Button.YES) return;
 
-  // 1. Delete the Shopify price rule (removes its discount code too).
-  if (priceRuleId) {
-    shopifyDelete('price_rules/' + priceRuleId + '.json');
-  } else {
-    Logger.log('Void ' + cnNum + ': no price_rule_id on log row — skipping Shopify delete.');
+  // 1. ONE middleware call voids it everywhere, keyed by the FULL code: takes it off any unbilled
+  //    draft, deletes the Shopify discount, cancels the serial AND voids the credit ledger row.
+  //    This used to be a Shopify delete here plus cancelSerialByCode_(seq) — by bare seq, which
+  //    matches every store's voucher with that number, and never touching the credit ledger, so a
+  //    "voided" voucher stayed open and spendable in store.
+  var v = voidVoucherInMiddleware_(cnNum);
+  if (!v.ok) {
+    ui.alert('⛔ ' + cnNum + ' was NOT voided', v.error + '\n\nNothing was changed in the sheet.', ui.ButtonSet.OK);
+    return;
   }
+  var retired = v.body.serialCancelled && v.body.ledgerVoided;
 
-  // 2. Retire the serial (by seq parsed from the voucher number).
-  var seq = parseInt(String(cnNum).split('-').pop(), 10);
-  var retired = cancelSerialByCode_('voucher', seq);
-
-  // 3. Mark the log row voided (col L).
+  // 2. Mark the log row voided (col L) — only after the middleware confirmed.
   log.getRange(rowIdx + 1, 12).setValue('Voided');
 
   // A void is an event in its own right, not just a status flip — the report has to be able to show
@@ -4244,12 +4310,39 @@ function voidVoucher() {
     'Order': String(row[2]).trim(), 'Value': row[9],
     'Customer': String(row[3]).trim(), 'Email': String(row[4]).trim(),
     'Expiry': expiryFmt, 'Status': 'voided',
-    'Reason / Note': retired ? 'Discount deleted, serial retired' : 'Discount deleted, LEDGER RETIRE FAILED',
+    'Reason / Note': retired ? 'Voided in middleware: serial cancelled, ledger voided' +
+                               (v.body.strippedFrom ? ', removed from draft ' + v.body.strippedFrom : '')
+                             : 'PARTIAL VOID — serial ' + (v.body.serialCancelled ? 'cancelled' : 'NOT cancelled') +
+                               ', ledger ' + (v.body.ledgerVoided ? 'voided' : 'NOT voided'),
     'Ref': 'void:' + cnNum
   });
 
-  ui.alert('✅ ' + cnNum + ' voided.\n\nDiscount removed' +
-           (retired ? ' and serial retired in the ledger.' : '. ⚠️ Ledger retire failed — check the logs.'));
+  // Report exactly what the middleware did — never a blanket "done".
+  ui.alert((retired ? '✅ ' : '⚠️ ') + cnNum + (retired ? ' voided.' : ' only PARTLY voided.') + '\n\n' +
+           '• Shopify discount: ' + (v.body.discountDeleted ? 'deleted' : 'none found / NOT deleted') + '\n' +
+           '• Serial number: '    + (v.body.serialCancelled ? 'cancelled' : 'NOT cancelled') + '\n' +
+           '• Voucher ledger: '   + (v.body.ledgerVoided ? 'voided' : 'NOT voided') + '\n' +
+           (v.body.strippedFrom ? '• Removed from draft ' + v.body.strippedFrom + ' — its amount to collect went up.\n' : '') +
+           (retired ? '' : '\nTell the admin — do not issue a replacement until this is fixed.'));
+}
+
+// POST /api/voucher/void-by-code. Returns { ok, body } or { ok:false, error }.
+function voidVoucherInMiddleware_(cnNum) {
+  try {
+    var res = UrlFetchApp.fetch(MIDDLEWARE_URL + '/api/voucher/void-by-code', {
+      method: 'post', contentType: 'application/json', muteHttpExceptions: true,
+      payload: JSON.stringify({ serialCode: cnNum, reason: 'Void Voucher (sheet)' })
+    });
+    var body = {};
+    try { body = JSON.parse(res.getContentText()); } catch (x) {}
+    if (res.getResponseCode() !== 200 || !body.success) {
+      Logger.log('voidVoucher ' + cnNum + ': ' + res.getResponseCode() + ' — ' + res.getContentText());
+      return { ok: false, error: (body && body.error) || ('middleware returned ' + res.getResponseCode()) };
+    }
+    return { ok: true, body: body };
+  } catch (e) {
+    return { ok: false, error: 'middleware unreachable: ' + e.message };
+  }
 }
 
 // ── VOID EXCHANGE NOTE ────────────────────────────────────────────────────────

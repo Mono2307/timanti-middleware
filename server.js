@@ -3711,9 +3711,20 @@ app.post('/api/shopify-draft-updated', async (req, res) => {
             .catch(e => console.error(`[loyalty] store redemption for ${orderName || orderId}:`, e.message));
           const dtags = (draft.tags || '').split(',').map(t => t.trim());
           const codeFrom = (re) => { const t = dtags.find(x => re.test(x)); return t ? t.slice(t.indexOf(':') + 1).trim() : ''; };
+          // The metafield code is authoritative: it is written together with the value that was
+          // actually deducted. A tag can be stale — #D317 carried vch-num for BOTH 0003 and 0004 —
+          // and the first tag would then redeem the wrong voucher. Tags remain the fallback for
+          // drafts written before the *_code metafields existed.
+          let dmfCodes = {};
+          try {
+            const { data: cmf } = await axios.get(
+              `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${draftOrderId}/metafields.json`,
+              { headers: { 'X-Shopify-Access-Token': token }, timeout: 10000 });
+            for (const m of (cmf.metafields || [])) if (m.namespace === 'custom') dmfCodes[m.key] = String(m.value || '').trim();
+          } catch (e) { console.error(`[ledger] conversion metafield read for ${draftOrderId}:`, e.message); }
           const toRedeem = [
-            { type: 'voucher',       code: codeFrom(/^vch-num:/i) },
-            { type: 'exchange_note', code: codeFrom(/^exc-num:/i) },
+            { type: 'voucher',       code: dmfCodes.voucher_code       || codeFrom(/^vch-num:/i) },
+            { type: 'exchange_note', code: dmfCodes.exchange_note_code || codeFrom(/^exc-num:/i) },
           ].filter(x => x.code);
           for (const { type, code } of toRedeem) {
             try {
@@ -4971,7 +4982,11 @@ app.post('/api/voucher-redeem', async (req, res) => {
       amount_to_be_collected: netToCollect,
     });
 
-    const newTags = (draft.tags || '').split(',').map(t => t.trim()).filter(Boolean)
+    // `draft` was read BEFORE any swap-out above, so its tags still carry the displaced voucher's
+    // vch-num. Drop every voucher tag before adding this one's, or the draft ends up holding two
+    // vch-num tags — and conversion redeems whichever comes first (#D317 held 0003 AND 0004).
+    const newTags = (draft.tags || '').split(',').map(t => t.trim())
+      .filter(t => t && t !== 'vch-applied' && !/^vch-num:/i.test(t) && !/^vch-original:/i.test(t))
       .concat(['vch-applied', `vch-num:${vchNumber}`, ...(oldOrderNumber ? [`vch-original:${oldOrderNumber}`] : [])]);
     await axios.put(
       `${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/draft_orders/${newDraftId}.json`,
@@ -4986,19 +5001,16 @@ app.post('/api/voucher-redeem', async (req, res) => {
     // The seed above wrote amount_to_be_collected and nothing else — which is how a draft can show the
     // voucher correctly deducted while still reading "fully paid". Recompute the whole set.
     await recomputeCollection(newDraftId);
-    // Cross-channel single-use: delete the online Shopify discount code so it can't ALSO be used at
-    // checkout (Shopify's usage_limit doesn't see this metafield redemption). Needs price_rule_id,
-    // recorded on the ledger at issue.
-    let onlineCodeKilled = false;
-    if (inst && inst.price_rule_id) {
-      try {
-        await axios.delete(`${process.env.SHOPIFY_STORE_URL}/admin/api/2024-01/price_rules/${inst.price_rule_id}.json`, { headers, timeout: 10000 });
-        onlineCodeKilled = true;
-        console.log(`[voucher-redeem] deleted online price rule ${inst.price_rule_id} for ${vchNumber}`);
-      } catch (e) { console.error('[voucher-redeem] price-rule delete:', e.message); }
-    }
+    // The online discount code is NOT deleted here. Applying a voucher to a draft is a reservation,
+    // not a redemption: the draft may never be billed and the customer may check out online instead.
+    // Deleting it at apply time (f160eb6, Jul 2026) is what left VCH27-KAHSR-0003 and 0004 with no
+    // discount on 17 Nov. The code lives until the voucher is actually spent:
+    //   • billed in store  → deleted at draft conversion (the draft-completed handler)
+    //   • used online      → Shopify's usage_limit spends it; freezeOnlineVoucher strips any draft
+    //   • voided           → deleted by the void
     return res.json({ success: true, draftId: newDraftId, vchNumber, deducted: Math.abs(value).toFixed(2),
-                      onlineCodeKilled, displaced: displacedCode });
+                      onlineCodeKilled: false, onlineCodeLive: !!(inst && inst.price_rule_id),
+                      displaced: displacedCode });
   } catch (err) {
     console.error('voucher-redeem error:', err.message);
     return res.status(500).json({ success: false, error: err.message });
@@ -5200,6 +5212,8 @@ app.post('/api/recompute-payment', async (req, res) => {
 // backfills replay the live payment-tag logic, which has not been extracted yet.
 const ctx = {
   config, supabase, getShopifyToken, log,
+  // An online voucher redemption must pull the voucher off any draft still holding it.
+  stripInstrumentFromDraft,
   handleRecalculatePriceTag,
   applyPaymentTagsToOrder, applyPaymentTagsToDraftOrder,
   // Also still here, for the same reason: the metafield copy runs on the live conversion path
