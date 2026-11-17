@@ -497,7 +497,48 @@ t('every product carries its design codes, upper-cased, from SKU segment 0', () 
 });
 
 t('the schema version moved with the new fields', () => {
-  assert.ok(snap.SCHEMA_VERSION >= 4, 'designIds changed the snapshot shape; bump SCHEMA_VERSION');
+  assert.ok(snap.SCHEMA_VERSION >= 5, 'v4 designIds, v5 PDP spec fields - each changed the snapshot shape');
+});
+
+// ── PDP specification fields ────────────────────────────────────────────────
+console.log('the PDP spec fields come from the metafields that actually carry data');
+
+const specProduct = (mf) => snap.normalize(
+  [Object.assign({ id: 'gid://shopify/Product/5', title: 'Pendant', status: 'ACTIVE', productType: 'Pendants', media: { nodes: [] } }, mf)],
+  [{ id: 'gid://shopify/ProductVariant/51', sku: 'PD00012|Y|18|VVS-EF|H|NA|0.5|NA', product: { id: 'gid://shopify/Product/5' },
+     jewelCode: { value: '00336' } }]).items[0];
+
+t('custom.gati_id leads the design codes, ahead of the SKU', () => {
+  const it = specProduct({ gatiId: { value: 'pd00012a' } });
+  assert.deepStrictEqual(it.designIds, ['PD00012A', 'PD00012']);
+  assert.strictEqual(it.variants[0].jewelCode, '00336');
+});
+
+t('gemstone count comes from custom.gemstone_count, type is trimmed', () => {
+  const it = specProduct({ gemCount: { value: '2' }, gemWeight: { value: '16.16' }, gemQuality: { value: ' LAPIS LAZULI ' } });
+  assert.strictEqual(it.gemPcs, 2);
+  assert.strictEqual(it.gemWeight, 16.16);
+  assert.strictEqual(it.gemType, 'LAPIS LAZULI');
+  assert.strictEqual(it.hasColouredStones, true);
+});
+
+t('centre and side diamonds, quality, size and chain are carried; absent stays absent', () => {
+  const it = specProduct({ cstWeight: { value: '1.54' }, cstCount: { value: '1' }, cstCut: { value: 'Oval' },
+    sideWeight: { value: '0.36' }, sideCount: { value: '16' }, diaQuality: { value: 'VVS-VS-EFG' },
+    itemSize: { value: '16 inches' }, chain: { value: 'true' }, badges: { value: '["Ready To Ship"]' } });
+  assert.strictEqual(it.cstWeight, 1.54);
+  assert.strictEqual(it.cstCut, 'Oval');
+  assert.strictEqual(it.sideWeight, 0.36);
+  assert.strictEqual(it.sideCount, 16);
+  assert.strictEqual(it.diamondQuality, 'VVS-VS-EFG');
+  assert.strictEqual(it.itemSize, '16 inches');
+  assert.strictEqual(it.chain, true);
+  assert.deepStrictEqual(it.badges, ['Ready To Ship']);
+
+  const bare = specProduct({});
+  for (const k of ['cstCut', 'sideWeight', 'diamondQuality', 'gemType', 'itemSize', 'chain', 'gatiId'])
+    assert.strictEqual(bare[k], null, k + ' must be null when the metafield is unset, never 0 or ""');
+  assert.strictEqual(bare.hasColouredStones, false);
 });
 
 // ── Live price freshness ─────────────────────────────────────────────────────

@@ -827,11 +827,7 @@ ${SHELL_CSS}
     out.push(optHtml('size', 'Size', it.sizes));
     out.push(actionsHtml(it, v));
 
-    var rows = [];
-    if (it.carats > 0) rows.push(['Diamonds', it.carats + ' ct' + (it.stones > 0 ? '  ·  ' + it.stones + ' stones' : '')]);
-    if (it.hasColouredStones) rows.push(['Coloured stones', (it.gemPcs > 0 ? it.gemPcs + ' pcs' : 'Yes')]);
-    if (v && v.grossWt > 0) rows.push(['Gold weight', v.grossWt + ' g']);
-    if (v && v.grade) rows.push(['Clarity / colour', v.grade]);
+    var rows = specRows(it, v);
     if (rows.length) {
       out.push('<div class="specs">');
       for (var r = 0; r < rows.length; r++)
@@ -870,14 +866,63 @@ ${SHELL_CSS}
 
     var sb = [];
     if (v && v.sku) sb.push('SKU <code>' + esc(v.sku) + '</code>');
-    if (v && v.netWt > 0) sb.push('net ' + v.netWt + ' g');
+    if (it.gatiId) sb.push('Gati ID <code>' + esc(it.gatiId) + '</code>');
+    if (v && v.jewelCode) sb.push('jewel code <code>' + esc(v.jewelCode) + '</code>');
+    if (it.pplCode) sb.push('PPL <code>' + esc(it.pplCode) + '</code>');
+    if (it.poCode && it.poCode !== it.pplCode) sb.push('PO <code>' + esc(it.poCode) + '</code>');
+    if (it.hsn) sb.push('HSN ' + esc(it.hsn));
     if (it.makingRate > 0) sb.push('making ' + money.format(it.makingRate) + '/g');
+    if (it.badges && it.badges.length) sb.push(esc(it.badges.join(', ')));
     if (!v || !v.priceManaged) sb.push('<b>price NOT maintained by the daily job</b>');
     sb.push('<a href="https://admin.shopify.com/store/auracarat/products/' + esc(it.id) + '" target="_blank" rel="noopener">open in Shopify</a>');
     out.push('<div class="staff' + (S.staff ? ' on' : '') + '">' + sb.join(' &nbsp;·&nbsp; ') + '</div>');
 
     $('buybox').innerHTML = out.join('');
     $('staffBtn').className = 'iconbtn' + (S.staff ? ' on' : '');
+  }
+
+  /* -- PDP specification -----------------------------------------------------
+     One row per fact, and only when the catalog actually holds it: an empty metafield must not
+     become "0 ct" in front of a customer. Weights are the selected VARIANT's; stone detail is the
+     product's design spec. Carats print to two places, grams to two, as on the invoice. */
+  function ct(n) { return (Math.round(n * 100) / 100) + ' ct'; }
+  function grams(n) { return (Math.round(n * 100) / 100) + ' g'; }
+  function pcs(n, one, many) { return n + ' ' + (n === 1 ? one : many); }
+  function titleCase(s) {
+    return String(s).toLowerCase().replace(/(^|[ (/-])([a-z])/g, function (m, a, b) { return a + b.toUpperCase(); });
+  }
+  function specRows(it, v) {
+    var rows = [];
+    if (it.carats > 0) rows.push(['Total diamonds', ct(it.carats) + (it.stones > 0 ? '  ·  ' + pcs(it.stones, 'stone', 'stones') : '')]);
+    if (it.cstWeight > 0) {
+      rows.push(['Centre stone', ct(it.cstWeight) +
+        (it.cstCount > 1 ? '  ·  ' + pcs(it.cstCount, 'stone', 'stones') : '') +
+        (it.cstCut ? '  ·  ' + titleCase(it.cstCut) : '')]);
+    }
+    if (it.sideWeight > 0 && it.cstWeight > 0) {
+      /* Side stones only mean something next to a centre stone; on a pavé piece they ARE the total. */
+      rows.push(['Side diamonds', ct(it.sideWeight) + (it.sideCount > 0 ? '  ·  ' + pcs(it.sideCount, 'stone', 'stones') : '')]);
+    }
+    if (it.stoneCuts && it.stoneCuts.length) rows.push(['Diamond shape' + (it.stoneCuts.length > 1 ? 's' : ''), it.stoneCuts.join(', ')]);
+    var quality = (v && v.grade) || it.diamondQuality;
+    if (quality) rows.push(['Diamond quality', quality]);
+    if (it.hasColouredStones) {
+      var gem = [];
+      if (it.gemType) gem.push(titleCase(it.gemType));
+      if (it.gemPcs > 0) gem.push(pcs(it.gemPcs, 'pc', 'pcs'));
+      if (it.gemWeight > 0) gem.push(ct(it.gemWeight));
+      rows.push(['Gemstones', gem.length ? gem.join('  ·  ') : 'Yes']);
+    }
+    if (v && (v.karat || v.toneLabel)) rows.push(['Metal', [v.karat, v.toneLabel].filter(Boolean).join(' ')]);
+    if (v && v.netWt > 0) rows.push(['Net gold weight', grams(v.netWt)]);
+    if (v && v.grossWt > 0) rows.push(['Gross weight', grams(v.grossWt)]);
+    /* "NA" / "-" in a size slot means no size, not a size called NA - fall through to item_size. */
+    var real = function (s) { return s && !/^(na|n.a|none|-)$/i.test(String(s).trim()) ? s : null; };
+    var size = real(v && v.size) || real(v && v.itemSize) || real(it.itemSize);
+    if (size) rows.push([it.category === 'Rings' || it.category === 'Ring' ? 'Ring size' : 'Size', size]);
+    if (it.chain === true) rows.push(['Chain', 'Included']);
+    else if (it.chain === false && /pendant/i.test(it.category || '')) rows.push(['Chain', 'Not included']);
+    return rows;
   }
 
   /* "Show available variant" and "Create draft order". */

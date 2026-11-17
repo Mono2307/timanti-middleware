@@ -33,7 +33,9 @@ const { log } = require('../../core/logger');
  * of a customer. A version stamp makes a deploy that changes the shape of the data rebuild on boot
  * instead of waiting for the clock.
  */
-const SCHEMA_VERSION = 4;   // v4: designId on variants, designIds on products (design-code search)
+// v4: designId on variants, designIds on products (design-code search)
+// v5: PDP specs - centre/side/gemstone detail, diamond quality, item size, chain, staff codes
+const SCHEMA_VERSION = 5;
 
 const PRODUCT_PAGE = 100;
 const VARIANT_PAGE = 100;
@@ -56,6 +58,19 @@ const PRODUCTS_QUERY = `
         cstWeight:  metafield(namespace: "custom", key: "cst_weight")           { value }
         cstCount:   metafield(namespace: "custom", key: "cst_count")            { value }
         stoneCut:   metafield(namespace: "custom", key: "stone_cut")            { value }
+        cstCut:     metafield(namespace: "custom", key: "cst_cut")              { value }
+        gemCount:   metafield(namespace: "custom", key: "gemstone_count")       { value }
+        gemQuality: metafield(namespace: "custom", key: "gemstone_quality")     { value }
+        sideCount:  metafield(namespace: "custom", key: "other_diamond_count")  { value }
+        sideWeight: metafield(namespace: "custom", key: "other_diamond_weight") { value }
+        diaQuality: metafield(namespace: "custom", key: "diamond_quality")      { value }
+        itemSize:   metafield(namespace: "custom", key: "item_size")            { value }
+        chain:      metafield(namespace: "custom", key: "chain_yes_no")         { value }
+        gatiId:     metafield(namespace: "custom", key: "gati_id")              { value }
+        pplCode:    metafield(namespace: "custom", key: "pplcode")              { value }
+        poCode:     metafield(namespace: "custom", key: "pocode")               { value }
+        hsn:        metafield(namespace: "custom", key: "hsn_code")             { value }
+        badges:     metafield(namespace: "custom", key: "collection_hero_badge") { value }
         channels:   resourcePublicationsV2(first: 10) { nodes { isPublished publication { name } } }
       }
     }
@@ -84,6 +99,8 @@ const VARIANTS_QUERY = `
         bSubtotal:   metafield(namespace: "custom", key: "price_subtotal")        { value }
         bTotal:      metafield(namespace: "custom", key: "price_total")           { value }
         goldRate:    metafield(namespace: "custom", key: "gold_rate")             { value }
+        jewelCode:   metafield(namespace: "custom", key: "jewel_code")            { value }
+        itemSize:    metafield(namespace: "custom", key: "item_size")             { value }
       }
     }
   }`;
@@ -107,6 +124,12 @@ const num = (v) => {
 };
 
 const mfNum = (mf) => num(mf && mf.value);
+
+/** Trimmed text, or null. Several of these carry stray spaces (" LAPIS LAZULI") in the live data. */
+const mfText = (mf) => {
+  const s = mf && mf.value !== null && mf.value !== undefined ? String(mf.value).trim() : '';
+  return s ? s : null;
+};
 
 /** Matches templates/pricing-estimate.liquid:371-380 -- staff and customers both read "Yellow Gold". */
 const TONE_LABELS = {
@@ -318,6 +341,8 @@ function normalize(products, variants) {
         carats: mfNum(v.carats) !== null ? mfNum(v.carats) : productCarats,
         pricedAt: (v.pricedAt && v.pricedAt.value) || null,
         goldRate: mfNum(v.goldRate),
+        jewelCode: mfText(v.jewelCode),
+        itemSize: mfText(v.itemSize),
         // The component breakdown the daily pricer writes. Kept as its own object rather than
         // flattened so the UI can render "every row that exists" without knowing the key names,
         // and so a variant the pricer skipped simply has an empty breakup instead of a row of
@@ -356,17 +381,39 @@ function normalize(products, variants) {
       vendor: p.vendor || null,
       tags: p.tags || [],
       family: firstSku.family,
-      // Usually one code per product; a list because nothing in Shopify enforces that.
-      designIds: uniq(variantRecords.map((v) => v.designId)),
+      // Usually one code per product; a list because nothing in Shopify enforces that. custom.gati_id
+      // is the code of record (682/683 products) and leads; SKU segment 0 covers the rest.
+      designIds: uniq([mfText(p.gatiId) ? mfText(p.gatiId).toUpperCase() : null]
+        .concat(variantRecords.map((v) => v.designId))),
       media,
       // Product-level design spec. Per server.js:1141-1143 the per-unit RATES are product-level;
       // the values they produce are variant-level.
       carats: productCarats,
       stones: mfNum(p.stones),
+      // Centre stone shape: custom.cst_cut where set (5 products today). Never inferred from
+      // stone_cut - ["Round","Cushion"] does not say which of the two is the centre.
+      cstCut: mfText(p.cstCut),
+      // Side (non-centre) diamonds, 565/683 products.
+      sideCount: mfNum(p.sideCount),
+      sideWeight: mfNum(p.sideWeight),
+      diamondQuality: mfText(p.diaQuality),
+      // Coloured stones, in carats (the templates read gemstone_weight as gemstone_cts).
+      // custom.gemstone_count is the populated key; coloured_stone_pcs is empty on every product and
+      // was the reason the PDP could only ever say "Coloured stones: Yes".
       gemWeight: mfNum(p.gemWeight),
-      gemPcs: mfNum(p.gemPcs),
+      gemPcs: mfNum(p.gemCount) !== null ? mfNum(p.gemCount) : mfNum(p.gemPcs),
+      gemType: mfText(p.gemQuality),
+      itemSize: mfText(p.itemSize),
+      // chain_yes_no is a boolean; absent stays null so the PDP says nothing rather than "No".
+      chain: mfText(p.chain) === 'true' ? true : (mfText(p.chain) === 'false' ? false : null),
+      // Staff-only references.
+      gatiId: mfText(p.gatiId),
+      pplCode: mfText(p.pplCode),
+      poCode: mfText(p.poCode),
+      hsn: mfText(p.hsn),
+      badges: parseList(p.badges),
       makingRate: mfNum(p.makingRate),
-      hasColouredStones: (mfNum(p.gemPcs) || 0) > 0 || (mfNum(p.gemWeight) || 0) > 0,
+      hasColouredStones: (mfNum(p.gemCount) || mfNum(p.gemPcs) || 0) > 0 || (mfNum(p.gemWeight) || 0) > 0,
       priceFrom: prices.length ? Math.min.apply(null, prices) : null,
       priceTo:   prices.length ? Math.max.apply(null, prices) : null,
       priceManaged: variantRecords.some((v) => v.priceManaged),
