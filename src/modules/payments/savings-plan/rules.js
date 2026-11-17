@@ -193,6 +193,11 @@ function redeemOptions(plan, st, today) {
 // The voucher for how the plan ends. how: 'full' | 'early' | 'terminated' | 'stopped'.
 // Returns { ok, paid, pct, bonus, value, reason } — ok false with a reason when it cannot end that way.
 function payoutFor(plan, st, how) {
+  // A plan paid in full earns the full bonus (prepaid included): stopping it would only take the bonus
+  // away (founder, 16 Nov 2026). A terminated plan is never fully paid, so this only bites 'stopped'.
+  if (how === 'stopped' && st.fullyPaid) {
+    return { ok: false, reason: 'Every instalment is paid: issue the voucher with the full bonus instead' };
+  }
   if (how === 'terminated' || how === 'stopped') {
     return { ok: st.paid > 0, paid: st.paid, pct: 0, bonus: 0, value: st.paid, reason: st.paid > 0 ? null : 'Nothing has been paid on this plan' };
   }

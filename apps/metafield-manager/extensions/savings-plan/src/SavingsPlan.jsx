@@ -15,7 +15,11 @@ import { useEffect, useState } from "preact/hooks";
 //                                when the customer asks (the WhatsApp link in their emails)
 //   Customer stops the plan      the money paid, no bonus
 //   Issue the voucher (no bonus) a plan the system closed 30 days after an unpaid due date
-// Payments taken in store are typed into the Jewellery Workspace panel's Installments section.
+// Payments taken in store are recorded here (Record payment), with the day the money came in; the
+// Jewellery Workspace panel shows the 10 rows read-only. The start date may be in the past (up to 12
+// months) for a customer who started on paper. Run check now does on this plan what the 6-hourly
+// check does (reminders, the late count, closing a plan 30 days past an unpaid due date).
+// After the voucher is issued: its balance and every purchase it was used on.
 //
 // All maths lives in the middleware (src/modules/payments/savings-plan/rules.js); this only displays.
 
@@ -28,6 +32,8 @@ const fmtDate = (iso) => {
   return d.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
 };
 const val = (e) => e?.currentTarget?.value ?? e?.target?.value ?? "";
+const MODE_NAMES = { cash: "Cash", card: "Card", upi: "UPI", "bank transfer": "Bank transfer" };
+const CHANNEL = { store: "in store", online: "online" };
 const checked = (e) => Boolean(e?.currentTarget?.checked ?? e?.target?.checked);
 
 const STATUS = {
@@ -93,11 +99,15 @@ function SavingsPlan() {
   const [how, setHow] = useState(null);
   const [checkedPayments, setCheckedPayments] = useState(false);
   const [cancelAgreed, setCancelAgreed] = useState(false);
+  const [startDate, setStartDate] = useState("");
+  const [payAmount, setPayAmount] = useState("");
+  const [payMode, setPayMode] = useState("cash");
+  const [payDate, setPayDate] = useState("");
 
-  async function load() {
+  async function load(startOn = startDate) {
     setLoading(true);
     setError("");
-    try { setData(await middleware(`/api/savings-plan/draft/${draftId}`)); }
+    try { setData(await middleware(`/api/savings-plan/draft/${draftId}${startOn ? `?start=${startOn}` : ""}`)); }
     catch (e) { setError(e.message); }
     finally { setLoading(false); }
   }
@@ -111,17 +121,36 @@ function SavingsPlan() {
   }
 
   const start = () => run(async () => {
-    const body = await post("/api/savings-plan/start", { draftId, months, nominee });
+    const body = await post("/api/savings-plan/start", { draftId, months, nominee, startDate: startDate || undefined });
     setData(body);
     setAgreed(false);
-    setNotice(body.firstLink
-      ? "Savings plan started. The customer has been emailed the terms and a link for the first instalment (by SMS too). If they pay at the counter instead, type it into Installments 1 in the Jewellery Workspace panel."
-      : "Savings plan started. The customer has been emailed the terms.");
+    setNotice(body.backdated
+      ? `Savings plan started from ${fmtDate(body.plan.startDate)}. The customer has been emailed the terms. Record the payments already made now, each with the date it came in: the reminder check leaves this plan alone for 24 hours.`
+      : body.firstLink
+        ? "Savings plan started. The customer has been emailed the terms and a link for the first instalment (by SMS too). If they pay at the counter instead, record it below."
+        : "Savings plan started. The customer has been emailed the terms.");
   });
 
   const sendLink = () => run(async () => {
     const body = await post("/api/savings-plan/send-link", { draftId });
-    setNotice(`A payment link for ${inr(body.amount)} is on its way to ${body.phone} by SMS and email.`);
+    setNotice(body.reused
+      ? `The customer's open payment link for ${inr(body.amount)} has been sent to ${body.phone} again, by SMS and email. It is the same link as before.`
+      : `A payment link for ${inr(body.amount)} is on its way to ${body.phone} by SMS and email.`);
+  });
+
+  const recordPayment = () => run(async () => {
+    const body = await post("/api/savings-plan/record-payment", { draftId, amount: payAmount, mode: payMode, date: payDate || undefined });
+    setData(body);
+    setNotice(`${inr(Number(String(payAmount).replace(/[^\d]/g, "")))} by ${MODE_NAMES[payMode] || payMode}, dated ${fmtDate(payDate || body.today)}, recorded. The customer's thank-you email follows with the next reminder check.`);
+    setPayAmount("");
+    setPayDate("");
+  });
+
+  const checkNow = () => run(async () => {
+    const body = await post("/api/savings-plan/check-now", { draftId });
+    setData(body);
+    const sent = body.check?.sent || [];
+    setNotice(`Check run. ${body.check?.action ? `${body.check.action}. ` : ""}${sent.length ? `Sent: ${sent.join(", ")}.` : "Nothing was due to be sent."}`);
   });
 
   const issue = () => run(async () => {
@@ -145,6 +174,8 @@ function SavingsPlan() {
   const actions = data?.actions || [];
   const chosen = actions.find((a) => a.how === how);
   const preview = option ? option.dates.map((due, i) => ({ k: i + 1, due, amount: option.instalment || 0, status: "upcoming" })) : [];
+  const backdated = Boolean(data && !plan && data.startOn && data.today && data.startOn < data.today);
+  const voucher = data?.voucher;
 
   return (
     <s-admin-action heading={heading} loading={loading}>
@@ -160,12 +191,20 @@ function SavingsPlan() {
                 <s-button variant={months === m ? "primary" : "secondary"} onClick={() => { setMonths(m); setAgreed(false); }}>{String(m)}</s-button>
               ))}
             </s-stack>
+            <s-date-field label="Start date (first instalment)" value={startDate || data.startOn || ""}
+              onChange={(e) => { const v = val(e); setStartDate(v); setAgreed(false); load(v); }} />
+            {backdated ? (
+              <s-banner tone="warning" heading="Start date in the past">
+                Use this only for a customer who started on paper, or a demo. After starting, record every payment already made with the date
+                it came in: a payment after its due date counts as late. No payment link is sent. The reminder check leaves the plan alone for 24 hours.
+              </s-banner>
+            ) : null}
             {option.problems?.length ? (
               <s-banner tone="warning" heading="Fix these before starting">{option.problems.join(" · ")}</s-banner>
             ) : (
               <s-stack direction="block" gap="base">
                 <s-text>
-                  {inr(option.instalment)} a month for {months} months, first instalment today. Paid in full (and no more than 2 payments late),
+                  {inr(option.instalment)} a month for {months} months, first instalment {backdated ? `on ${fmtDate(data.startOn)}` : "today"}. Paid in full (and no more than 2 payments late),
                   the customer gets a Savings Scheme Voucher for <s-text type="strong">{inr(option.voucherAtEnd)}</s-text>: {inr(option.instalment * months)} saved
                   plus a bonus of {inr(option.bonus)}.
                 </s-text>
@@ -197,13 +236,27 @@ function SavingsPlan() {
 
             {plan.voucherCode ? (
               <s-banner tone="success" heading={`Savings Scheme Voucher ${plan.voucherCode}: ${inr(plan.voucherValue)}`}>
-                Issued{plan.endKind ? ` (${plan.endKind})` : ""}. The customer can use it in parts, online or in store: apply it to their
-                purchase draft like any voucher. Keep this draft until the voucher is used up.
+                Issued{plan.endKind ? ` (${plan.endKind})` : ""}. The customer can use it in parts, online or in store: apply it to one
+                purchase draft at a time, like any voucher. Keep this draft until the voucher is used up.
               </s-banner>
+            ) : null}
+            {voucher ? (
+              <s-stack direction="block" gap="small-200">
+                <s-text type="strong">Voucher balance: {inr(voucher.left)} of {inr(voucher.value)}</s-text>
+                <s-text color="subdued">
+                  {inr(voucher.paidPart)} saved{voucher.bonusPart > 0 ? ` + ${inr(voucher.bonusPart)} bonus` : ""} · valid until {fmtDate(voucher.validUntil)}
+                  {voucher.status === "applied" ? " · applied to a purchase draft now: the balance changes when that purchase is completed" : ""}
+                  {voucher.status === "redeemed" ? " · used up" : ""}
+                </s-text>
+                {(voucher.uses || []).map((u) => (
+                  <s-text>{`${fmtDate(u.on)} · ${u.order} (${CHANNEL[u.channel] || u.channel}): ${inr(u.amount)} used, ${inr(u.left)} left`}</s-text>
+                ))}
+                {!(voucher.uses || []).length ? <s-text color="subdued">Not used yet.</s-text> : null}
+              </s-stack>
             ) : null}
             {plan.status === "active" && plan.overdueDays > 0 ? (
               <s-banner tone="critical" heading={`Instalment ${plan.next.k} is ${plan.overdueDays} days late`}>
-                The plan closes on {fmtDate(plan.closeOn)} if it stays unpaid. Send a link, or take it in store and type it into the panel.
+                The plan closes on {fmtDate(plan.closeOn)} if it stays unpaid. Send a link, or take it in store and record it below.
               </s-banner>
             ) : null}
             {plan.oddPayments?.length ? (
@@ -218,6 +271,34 @@ function SavingsPlan() {
               <s-text>Redeeming early today pays {inr(plan.redeemNow.value)}{plan.redeemNow.bonus > 0 ? ` (bonus ${inr(plan.redeemNow.bonus)})` : " (no bonus: too many late payments)"}.</s-text>
             ) : null}
             <Schedule rows={data.rows || []} />
+
+            {plan.status === "active" && !plan.fullyPaid ? (
+              <s-stack direction="block" gap="small-200">
+                <s-text type="strong">Record a payment taken in store</s-text>
+                <s-stack direction="inline" gap="small-200" alignItems="end">
+                  <s-number-field label="Amount" min="1" max={String(plan.remaining)} step="1"
+                    placeholder={String(plan.linkAmount || plan.instalment)} value={payAmount} onInput={(e) => setPayAmount(val(e))} />
+                  <s-select label="Paid by" value={payMode} onChange={(e) => setPayMode(val(e))}>
+                    {(data.storeModes || Object.keys(MODE_NAMES)).map((m) => <s-option value={m}>{MODE_NAMES[m] || m}</s-option>)}
+                  </s-select>
+                  <s-date-field label="Paid on" value={payDate || data.today || ""} onChange={(e) => setPayDate(val(e))} />
+                </s-stack>
+                <s-text color="subdued">
+                  {`Up to ${inr(plan.remaining)} is left to pay. The date is the day the money came in: after an instalment's due date it counts as late.`}
+                </s-text>
+                <s-button onClick={recordPayment} loading={busy} disabled={Boolean(busy || !payAmount)}>Record payment</s-button>
+              </s-stack>
+            ) : null}
+
+            {plan.status === "active" ? (
+              <s-stack direction="block" gap="small-200">
+                <s-text color="subdued">
+                  The reminder check runs by itself every 6 hours. Run it now to send what is due today (reminders, late warnings, the
+                  completed message) or to close a plan 30 days past an unpaid due date. Messages really go to the customer.
+                </s-text>
+                <s-button onClick={checkNow} loading={busy} disabled={busy}>Run check now</s-button>
+              </s-stack>
+            ) : null}
 
             {actions.length ? (
               <s-stack direction="block" gap="small-200">

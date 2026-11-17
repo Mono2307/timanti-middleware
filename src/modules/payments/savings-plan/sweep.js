@@ -23,12 +23,22 @@ const store = require('./store');
 const notify = require('./notify');
 const { terminatePlan, CLAIM } = require('./end');
 const { readDraft, todayIst, adminDraftUrl } = require('./draft');
+const { restoreDeletedSavingsDraft, takeSnapshot } = require('./restore');
 const { daysBetween } = R;
 
 const REMIND_DAYS_BEFORE = 3;
 const OVERDUE_AFTER_DAYS = 3;
 const DIGEST_KEY = 'savings_plan_digest_last';
 const RUN_EVERY_MS = 6 * 60 * 60 * 1000;
+// A plan started with a past start date is left alone by the automatic check for its first 24 hours,
+// so staff can record the payments already made before it chases or closes anything. A check run on
+// that one plan (the screen's Run check now, or the operator's draft= run) does not wait.
+const BACKDATED_HOLD_MS = 24 * 60 * 60 * 1000;
+const onHold = (plan, now) => {
+  const made = Date.parse(plan.created_at || '');
+  if (!Number.isFinite(made) || now - made >= BACKDATED_HOLD_MS) return false;
+  return String(plan.start_date).slice(0, 10) < todayIst(made);
+};
 
 const rupees = (n) => `Rs${Math.round(Number(n || 0)).toLocaleString('en-IN')}`;
 const digestRow = (plan, note, waText = null) => ({
@@ -36,7 +46,7 @@ const digestRow = (plan, note, waText = null) => ({
   customerName: plan.customer_name, phone: plan.customer_phone, note,
   waUrl: waText ? notify.whatsappToCustomer(plan, waText) : null,
 });
-const link = (plan, amount) => createPlanLink(plan, amount, { installmentType: 'savings_plan' });
+const link = (plan, amount) => createPlanLink(plan, amount, { installmentType: 'savings_plan', reuse: true });
 
 // What a link should ask for now: everything due and unpaid, or the next instalment (less any part
 // payment already towards it).
@@ -53,8 +63,16 @@ async function once(plan, k, audience, kind, dryRun, send) {
 async function sweepPlan(plan, today, { dryRun }) {
   const out = { plan: plan.draft_name, sent: [], digest: [] };
   const d = await readDraft(plan.draft_order_id);
-  if (!d || d.draft.status === 'completed') {
-    const what = d ? 'was converted to an order' : 'was deleted';
+  // Deleted (the delete webhook normally got there first): rebuilt if it held money, else cancelled.
+  if (!d) {
+    if (dryRun) return { ...out, action: 'draft deleted — would restore it (money on it) or cancel the plan (nothing paid)' };
+    const r = await restoreDeletedSavingsDraft(plan.draft_order_id).catch(e => ({ error: e.message }));
+    if (r?.error) log.error('savings-plan', `${plan.draft_name}: restore: ${r.error}`);
+    return { ...out, action: r?.cancelled ? 'draft deleted with nothing paid — plan cancelled'
+      : r?.rebuilt ? `draft deleted — restored as ${r.newName}` : `draft deleted — ${r?.error || 'not rebuilt, store and HQ told'}` };
+  }
+  if (d.draft.status === 'completed') {
+    const what = 'was converted to an order';
     await once(plan, 0, 'staff', d ? 'converted' : 'missing', dryRun, () => notify.toStore(plan, d, {
       subject: `the draft ${what}`, heading: `the savings draft ${what}`,
       body: `A savings plan draft must stay a draft until its voucher is used. Its payments are the plan's record. Tell HQ: the plan has stopped sending reminders.`,
@@ -62,7 +80,10 @@ async function sweepPlan(plan, today, { dryRun }) {
     out.digest.push(digestRow(plan, `The draft ${what}. Tell HQ.`));
     return { ...out, action: `draft ${what}` };
   }
-  if (!dryRun) await store.syncContact(plan, d.customer);
+  if (!dryRun) {
+    await store.syncContact(plan, d.customer);
+    await takeSnapshot(plan, d);
+  }
   const st = R.savingsState(plan, d.legs, today);
   Object.assign(out, { paid: st.paid, paidCount: st.paidCount, lateCount: st.lateCount, next: st.next });
 
@@ -150,6 +171,10 @@ async function runSavingsSweep({ dryRun = false, now = Date.now(), only = null }
   const results = [];
   const rows = [];
   for (const plan of plans) {
+    if (!only && onHold(plan, now)) {
+      results.push({ plan: plan.draft_name, action: 'backdated today: the automatic check starts 24 hours after it was set up' });
+      continue;
+    }
     try {
       const r = await sweepPlan(plan, today, { dryRun });
       rows.push(...r.digest);
@@ -187,4 +212,4 @@ function startSavingsSweep() {
   setInterval(kick, RUN_EVERY_MS);
 }
 
-module.exports = { runSavingsSweep, startSavingsSweep, sweepPlan, planMatches, linkAmount, REMIND_DAYS_BEFORE, OVERDUE_AFTER_DAYS };
+module.exports = { runSavingsSweep, startSavingsSweep, sweepPlan, planMatches, linkAmount, onHold, REMIND_DAYS_BEFORE, OVERDUE_AFTER_DAYS, BACKDATED_HOLD_MS };

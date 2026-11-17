@@ -56,10 +56,29 @@ async function cancelOpenLinks(draftId) {
   }
 }
 
+// The open link on the draft for exactly `amount`, if it stays payable for at least REUSE_MIN_DAYS more.
+// A savings plan sends the same link again rather than replacing it (founder, 16 Nov 2026): replacing
+// it kills the link already in the customer's inbox.
+const REUSE_MIN_DAYS = 3;
+async function reusableLink(draftId, amount, now = Date.now()) {
+  const { data } = await supabase.from('payment_links')
+    .select('short_url, amount, expires_at, created_at').eq('draft_order_id', String(draftId)).eq('status', 'created')
+    .order('created_at', { ascending: false }).limit(1);
+  const l = (data || [])[0];
+  if (!l || Math.round(Number(l.amount)) !== Math.round(Number(amount))) return null;
+  if (!(Date.parse(l.expires_at) - now >= REUSE_MIN_DAYS * 86400000)) return null;
+  return { shortUrl: l.short_url, amount: Math.round(Number(l.amount)), expiresAt: l.expires_at, reused: true };
+}
+
 // Cancel every open link on the draft, then raise one for `amount`. Returns { shortUrl, amount }.
 // installmentType labels the payment_links row: 'buy_plan', or 'savings_plan' (savings-plan/sweep.js).
-async function createPlanLink(plan, amount, { installmentType = 'buy_plan' } = {}) {
+// reuse: an open link for the same amount is sent again instead (reusableLink).
+async function createPlanLink(plan, amount, { installmentType = 'buy_plan', reuse = false } = {}) {
   const draftId = String(plan.draft_order_id);
+  if (reuse) {
+    const same = await reusableLink(draftId, amount);
+    if (same) { log.info('buy-plan', `${plan.draft_name}: open link for Rs${amount} sent again`); return same; }
+  }
   await cancelOpenLinks(draftId);
 
   const phone = String(plan.customer_phone || '').replace(/\D/g, '').slice(-10);
@@ -78,4 +97,4 @@ async function createPlanLink(plan, amount, { installmentType = 'buy_plan' } = {
   return { shortUrl, amount, expiresAt };
 }
 
-module.exports = { payToken, readPayToken, customPayUrl, createPlanLink, cancelOpenLinks };
+module.exports = { payToken, readPayToken, customPayUrl, createPlanLink, cancelOpenLinks, reusableLink };

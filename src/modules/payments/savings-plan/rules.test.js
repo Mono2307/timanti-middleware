@@ -116,6 +116,12 @@ t('stopping the plan: the money paid, no bonus for the months reached', () => {
   const s = at(plan(10), onTime(D10, 6), D10[6]);
   assert.deepStrictEqual(R.payoutFor(plan(10), s, 'stopped'), { ok: true, paid: 12000, pct: 0, bonus: 0, value: 12000, reason: null });
 });
+t('a plan paid in full cannot be stopped: only the full-bonus voucher (prepaid too)', () => {
+  const s = at(plan(10), [{ value: 20000, date: D10[0] }], D10[0]);
+  assert.ok(s.fullyPaid);
+  assert.strictEqual(R.payoutFor(plan(10), s, 'stopped').ok, false);
+  assert.strictEqual(R.payoutFor(plan(10), s, 'full').bonus, 2000);
+});
 
 console.log('early redemption');
 t('opens only from month 6 with 5 paid, not before', () => {

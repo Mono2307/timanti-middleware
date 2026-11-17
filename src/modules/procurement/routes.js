@@ -102,6 +102,9 @@ app.post('/api/po-webhook', async (req, res) => {
     // A draft on an active buy plan is the customer's reserved piece at a locked price: rebuild it.
     restoreDeletedPlanDraft(String(req.body.id))
       .catch(e => console.error('[buy-plan] restore on draft delete:', e.message));
+    // A savings plan draft holds the customer's money: rebuilt the same way, or cancelled if nothing was paid.
+    require('../payments/savings-plan/restore').restoreDeletedSavingsDraft(String(req.body.id))
+      .catch(e => console.error('[savings-plan] restore on draft delete:', e.message));
     return res.status(200).send('OK');
   }
   if (topic.startsWith('draft_orders') && req.body?.id) {

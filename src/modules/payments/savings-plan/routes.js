@@ -17,8 +17,18 @@
  *   POST /api/savings-plan/cancel           { draftId, confirm } a demo or a plan started by mistake, only
  *                                           while nothing is paid: no voucher, the draft is released
  *
- * Payments taken in store are typed into the draft's Installments section in the panel, exactly as on
- * any draft (HQ, 12 Nov 2026); the plan reads them from the draft.
+ *   POST /api/savings-plan/record-payment   { draftId, amount, mode, date? } a payment taken in store, on
+ *                                           the day it came in (default today). It goes through the same
+ *                                           path as a link payment (handlePaymentCompletion): the next
+ *                                           installment slot, the deposit row, the tags. The panel's
+ *                                           Installments rows are read-only on a savings draft (founder,
+ *                                           16 Nov 2026), so this is the only way staff record one.
+ *   POST /api/savings-plan/check-now        { draftId } run the reminder check on this plan now, as the
+ *                                           6-hourly one would (messages really go)
+ *
+ * startDate on /start may be in the past (up to 12 months): a customer who started on paper, or a demo.
+ * The automatic check leaves a backdated plan alone for its first 24 hours, so the past payments can be
+ * recorded before it chases or closes anything (sweep.js BACKDATED_HOLD_MS).
  *
  * Operator:
  *   POST /api/savings-plan/sweep            run the sweep now (x-webhook-secret = PRICE_UPDATE_WEBHOOK_SECRET);
@@ -32,12 +42,19 @@ const R = require('./rules');
 const store = require('./store');
 const notify = require('./notify');
 const { issueVoucher, choices, CLAIM } = require('./end');
-const { runSavingsSweep, linkAmount } = require('./sweep');
+const { runSavingsSweep, sweepPlan, linkAmount } = require('./sweep');
+const { takeSnapshot } = require('./restore');
+const { supabase } = require('../../../core/supabase');
+const { addMonths } = require('../../adjustments/cad_advance');
 const sheet = require('./sheet');
 const { createPlanLink, cancelOpenLinks } = require('../buy-plan/links');
 const {
   readDraft, todayIst, startCheck, tagsFor, writeTags, makeLineNonTaxable, termsMetafields, writeMetafields,
 } = require('./draft');
+
+const STORE_MODES = ['cash', 'card', 'upi', 'bank transfer'];
+const BACKDATE_MONTHS = 12;
+const isIsoDate = (v) => /^\d{4}-\d{2}-\d{2}$/.test(String(v || ''));
 
 function requireEnabled(req, res, next) {
   if (!config.savingsPlan.enabled) return res.status(503).json({ ok: false, error: 'Savings plans are not switched on yet' });
@@ -77,18 +94,41 @@ async function planOn(draftId) {
   return plan && plan.status !== 'cancelled' ? plan : null;
 }
 
-function view(d, plan) {
+// The Savings Scheme Voucher as it stands: the ledger row (original value, what is left, valid until)
+// and every purchase it was used on (savings_voucher_uses).
+async function voucherDetail(code) {
+  if (!code || code === CLAIM) return null;
+  const { data: inst } = await supabase.from('credit_instruments')
+    .select('serial_code, value, remaining, paid_part, bonus_part, status, expires_at, target_draft_id')
+    .eq('instrument_type', 'voucher').eq('serial_code', code).maybeSingle();
+  if (!inst) return null;
+  const { data: uses } = await supabase.from('savings_voucher_uses')
+    .select('order_name, order_id, amount, balance_after, channel, created_at').eq('serial_code', code).order('created_at');
+  const left = inst.remaining != null ? Number(inst.remaining) : (inst.status === 'redeemed' ? 0 : Number(inst.value));
+  return {
+    code, value: Number(inst.value), left, paidPart: Number(inst.paid_part || 0), bonusPart: Number(inst.bonus_part || 0),
+    status: inst.status, validUntil: inst.expires_at, heldOnDraft: inst.status === 'applied' ? inst.target_draft_id : null,
+    uses: (uses || []).map(u => ({ order: u.order_name || u.order_id, amount: Number(u.amount), left: Number(u.balance_after), channel: u.channel, on: u.created_at })),
+  };
+}
+
+// startOn: the start date being considered on the Start screen (a past one is allowed, BACKDATE_MONTHS).
+async function view(d, plan, { startOn = null } = {}) {
   const today = todayIst();
+  const from = isIsoDate(startOn) && startOn <= today && startOn >= addMonths(today, -BACKDATE_MONTHS) ? startOn : today;
   if (plan) {
     const st = R.savingsState(plan, d.legs, today);
+    const voucher = await voucherDetail(plan.voucher_code).catch(() => null);
     return {
-      ok: true, draft: d.draft.name, customer: d.customer,
+      ok: true, draft: d.draft.name, customer: d.customer, storeModes: STORE_MODES, today,
+      voucher,
       plan: {
         status: plan.status, months: plan.months, instalment: Number(plan.instalment), total: Number(plan.total),
         startDate: plan.start_date, maturity: st.maturity, nominee: plan.nominee || null,
         paid: st.paid, paidCount: st.paidCount, lateCount: st.lateCount, lateLimit: R.LATE_LIMIT, bonusOk: st.bonusOk,
         next: st.next, overdueDays: st.overdueDays, closeOn: st.closeOn, dueNow: st.dueNow, linkAmount: linkAmount(st),
         fullyPaid: st.fullyPaid, oddPayments: st.oddPayments, overpaid: st.overpaid,
+        remaining: Math.max(0, st.n * st.A - st.paid),
         redeemNow: st.redeem,
         voucherCode: plan.voucher_code && plan.voucher_code !== CLAIM ? plan.voucher_code : null,
         voucherValue: plan.voucher_value != null ? Number(plan.voucher_value) : null,
@@ -106,16 +146,16 @@ function view(d, plan) {
       problems: c.problems, instalment: A, total: c.total,
       bonus: A ? Math.round(A * R.PLANS[months].fullPct / 100) : null,
       voucherAtEnd: A ? A * months + Math.round(A * R.PLANS[months].fullPct / 100) : null,
-      dates: R.dueDates(today, months), maturity: R.maturityDate(today, months),
+      dates: R.dueDates(from, months), maturity: R.maturityDate(from, months),
     };
   }
-  return { ok: true, draft: d.draft.name, customer: d.customer, plan: null, options };
+  return { ok: true, draft: d.draft.name, customer: d.customer, plan: null, options, today, startOn: from, earliestStart: addMonths(today, -BACKDATE_MONTHS) };
 }
 
 async function getDraftPlan(req, res) {
   try {
     const d = await mustReadDraft(req.params.draftId);
-    return res.json(view(d, await planOn(d.id)));
+    return res.json(await view(d, await planOn(d.id), { startOn: String(req.query?.start || '') }));
   } catch (e) { return fail(res, e, 'read'); }
 }
 
@@ -134,7 +174,13 @@ async function startPlan(req, res) {
     const earlier = await store.getPlanByDraft(d.id);
     if (earlier) await store.updatePlan(earlier.id, { draft_order_id: `${d.id}-cancelled-${earlier.id}` });
 
-    const start = todayIst();
+    const today = todayIst();
+    const asked = String(req.body?.startDate || '').trim();
+    if (asked && !isIsoDate(asked)) throw refuse('The start date must be a date');
+    if (asked && asked > today) throw refuse('The start date cannot be in the future');
+    if (asked && asked < addMonths(today, -BACKDATE_MONTHS)) throw refuse(`The start date can be at most ${BACKDATE_MONTHS} months back`);
+    const start = asked || today;
+    const backdated = start < today;
     const plan = await store.insertPlan({
       draft_order_id: d.id, draft_name: d.draft.name,
       customer_id: d.customer.id, customer_email: d.customer.email, customer_phone: d.customer.phone, customer_name: d.customer.name,
@@ -156,17 +202,21 @@ async function startPlan(req, res) {
     // savings_months also gives the draft its 10 instalment slots (payments/installments.js).
     await writeMetafields(d, termsMetafields(plan));
 
+    const fresh = await readDraft(d.id).catch(() => null);
+    if (fresh) await takeSnapshot(plan, fresh);
+
     const st = R.savingsState(plan, d.legs, start);
     let first = null;
-    if (st.dueNow > 0) {
-      first = await createPlanLink(plan, linkAmount(st), { installmentType: 'savings_plan' })
+    // A backdated plan sends no link: staff record the payments already made first.
+    if (st.dueNow > 0 && !backdated) {
+      first = await createPlanLink(plan, linkAmount(st), { installmentType: 'savings_plan', reuse: true })
         .catch(e => { log.error('savings-plan', `${d.draft.name}: first link: ${e.message}`); return null; });
     }
     await notify.sendStarted(plan, d, st, first).catch(e => log.error('savings-plan', `started email ${d.draft.name}: ${e.message}`));
     if (first) await store.markSent(plan.id, 1, 'customer', 'due');
     sheet.pushSoon();
-    log.info('savings-plan', `${d.draft.name}: ${months}-month plan started at Rs${c.instalment}/month from ${start}`);
-    return res.json({ ...view({ ...d, tags: tagsFor(d, 'active') }, plan), firstLink: first ? first.shortUrl : null });
+    log.info('savings-plan', `${d.draft.name}: ${months}-month plan started at Rs${c.instalment}/month from ${start}${backdated ? ' (backdated)' : ''}`);
+    return res.json({ ...(await view({ ...d, tags: tagsFor(d, 'active') }, plan)), firstLink: first ? first.shortUrl : null, backdated });
   } catch (e) { return fail(res, e, 'start'); }
 }
 
@@ -185,11 +235,60 @@ async function sendLink(req, res) {
     const st = R.savingsState(plan, d.legs, todayIst());
     if (st.fullyPaid) throw refuse('Every instalment is paid');
     const amount = linkAmount(st);
-    const l = await createPlanLink(plan, amount, { installmentType: 'savings_plan' });
+    const l = await createPlanLink(plan, amount, { installmentType: 'savings_plan', reuse: true });
     await notify.sendDue(plan, d, st, l, { k: st.next.k, dueDate: st.next.due, overdue: st.overdueDays > 0 });
     log.info('savings-plan', `${d.draft.name}: staff sent a link for Rs${amount}`);
-    return res.json({ ok: true, amount, phone: plan.customer_phone, url: l.shortUrl });
+    return res.json({ ok: true, amount, phone: plan.customer_phone, url: l.shortUrl, reused: Boolean(l.reused) });
   } catch (e) { return fail(res, e, 'send-link'); }
+}
+
+// A payment taken in store, on the day it came in.
+function recordPaymentHandler(ctx) {
+  return async function recordPayment(req, res) {
+    try {
+      const d = await mustReadDraft(req.body?.draftId);
+      const plan = await activePlan(d);
+      const today = todayIst();
+      const st = R.savingsState(plan, d.legs, today);
+      const mode = String(req.body?.mode || '').toLowerCase();
+      if (!STORE_MODES.includes(mode)) throw refuse(`How was it paid? ${STORE_MODES.join(', ')}`);
+      const amount = R.parseAmount(req.body?.amount);
+      const remaining = Math.max(0, st.n * st.A - st.paid);
+      if (!(amount > 0)) throw refuse('Enter the amount paid');
+      if (amount !== Number(String(req.body?.amount).replace(/[^\d.]/g, ''))) throw refuse('Enter the amount in whole rupees');
+      if (remaining <= 0) throw refuse('Every instalment is paid');
+      if (amount > remaining) throw refuse(`Only Rs${remaining.toLocaleString('en-IN')} is left to pay on this plan`);
+      const date = String(req.body?.date || '').trim() || today;
+      if (!isIsoDate(date)) throw refuse('The payment date must be a date');
+      if (date > today) throw refuse('The payment date cannot be in the future');
+      if (date < String(plan.start_date).slice(0, 10)) throw refuse(`The plan started on ${String(plan.start_date).slice(0, 10)}: a payment cannot be dated before that`);
+      if (typeof ctx?.handlePaymentCompletion !== 'function') throw new Error('payment recording is not wired');
+
+      await ctx.handlePaymentCompletion({
+        id: `savings-plan-${plan.id}-${Date.now()}`, shopify_draft_id: d.id, draft_order_name: d.draft.name,
+        customer_name: plan.customer_name || d.customer?.name, is_partial: true, amount_paisa: amount * 100, payment_mode: mode,
+      }, { paymentSource: 'savings-plan', paymentModeOverride: mode, paidDate: date });
+      const after = await mustReadDraft(d.id);
+      await takeSnapshot(plan, after);
+      sheet.pushSoon();
+      log.info('savings-plan', `${d.draft.name}: Rs${amount} ${mode} dated ${date} recorded by ${req.staff?.sub || 'staff'}`);
+      return res.json(await view(after, plan));
+    } catch (e) { return fail(res, e, 'record-payment'); }
+  };
+}
+
+// The reminder check on this one plan, now (a real run: messages go, a plan 30 days past an unpaid due
+// date closes). The same as the 6-hourly check, without its 24-hour wait on a backdated plan.
+async function checkNow(req, res) {
+  try {
+    const d = await mustReadDraft(req.body?.draftId);
+    const plan = await activePlan(d);
+    const r = await sweepPlan(plan, todayIst(), { dryRun: false });
+    sheet.pushSoon();
+    log.info('savings-plan', `${d.draft.name}: check run by ${req.staff?.sub || 'staff'} — ${r.action || (r.sent || []).join(', ') || 'nothing due'}`);
+    const after = await mustReadDraft(d.id);
+    return res.json({ ...(await view(after, await planOn(d.id))), check: { sent: r.sent || [], action: r.action || null } });
+  } catch (e) { return fail(res, e, 'check-now'); }
 }
 
 async function issueVoucherHandler(req, res) {
@@ -232,12 +331,14 @@ async function sweepNow(req, res) {
   } catch (e) { return fail(res, e, 'sweep'); }
 }
 
-function register(app) {
+function register(app, ctx = {}) {
   app.get('/api/savings-plan/draft/:draftId', requireEnabled, requireStaffSession, getDraftPlan);
   app.post('/api/savings-plan/start', requireEnabled, requireStaffSession, startPlan);
   app.post('/api/savings-plan/send-link', requireEnabled, requireStaffSession, sendLink);
   app.post('/api/savings-plan/issue-voucher', requireEnabled, requireStaffSession, issueVoucherHandler);
   app.post('/api/savings-plan/cancel', requireEnabled, requireStaffSession, cancelHandler);
+  app.post('/api/savings-plan/record-payment', requireEnabled, requireStaffSession, recordPaymentHandler(ctx));
+  app.post('/api/savings-plan/check-now', requireEnabled, requireStaffSession, checkNow);
   app.post('/api/savings-plan/sweep', requireEnabled, sweepNow);
 }
 

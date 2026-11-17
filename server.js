@@ -395,7 +395,9 @@ function paymentLegPatch(state, { value, mode, date }, cumulativePaid) {
 
 async function handlePaymentCompletion(transaction, overrides = {}) {
   if (!transaction.shopify_draft_id) return;
-  const { utr = null, paymentSource = 'pine', paymentModeOverride = null } = overrides;
+  // paidDate: the day the money came in, when it is not today (a savings-plan payment recorded after the
+  // fact, savings-plan/routes.js). Everything else records today.
+  const { utr = null, paymentSource = 'pine', paymentModeOverride = null, paidDate = null } = overrides;
   const paymentMode = paymentModeOverride || transaction.payment_mode || 'pos';
 
   if (transaction.is_partial) {
@@ -476,7 +478,7 @@ async function handlePaymentCompletion(transaction, overrides = {}) {
       payment_status:  newStatus === 'paid' ? 'Full' : 'Partial',  // choice-list values: Partial|Full|None
       // Record this payment as its OWN installment leg (value + mode + date) and set amount_paid to
       // the cumulative sum. Payments arrive incrementally here, so we append rather than replace.
-      ...paymentLegPatch(state, { value: amountPaidRupees, mode: paymentMode, date: new Date().toISOString().slice(0, 10) }, newAmountPaid),
+      ...paymentLegPatch(state, { value: amountPaidRupees, mode: paymentMode, date: /^\d{4}-\d{2}-\d{2}$/.test(String(paidDate || '')) ? paidDate : new Date().toISOString().slice(0, 10) }, newAmountPaid),
       amount_pending:  Math.max(0, newAmountPending).toFixed(2)
     };
     // DUAL-WRITE (remove at rollout step 6): legacy two-slot modes, still read by unmigrated
@@ -5252,7 +5254,7 @@ lookbook.register(app);
 require('./src/modules/loyalty/routes').register(app, ctx);
 require('./src/modules/payments/buy-plan/routes').register(app, ctx);
 // Savings plan: every route answers 503 until SAVINGS_PLAN_ENABLED is on (config.savingsPlan).
-require('./src/modules/payments/savings-plan/routes').register(app);
+require('./src/modules/payments/savings-plan/routes').register(app, ctx);
 
 // ─────────────────────────────────────────
 // Start

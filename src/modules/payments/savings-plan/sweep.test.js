@@ -65,6 +65,10 @@ require.cache[supa] = { id: supa, filename: supa, loaded: true, exports: { supab
   };
   return q;
 } } } };
+fake('./restore.js', {
+  takeSnapshot: async () => true,
+  restoreDeletedSavingsDraft: async (id) => { world.sent.push(`restore:${id}`); return world.restoreResult || { cancelled: true }; },
+});
 const realDraft = require('./draft');
 fake('./draft.js', { ...realDraft,
   readDraft: async (id) => world.drafts[id] || null,
@@ -201,6 +205,32 @@ const paid = (k, late = 0) => D.slice(0, k).map((d, i) => ({ value: 2000, date: 
     const d = world.drafts['900'];
     assert.deepStrictEqual(choices(plan, R.savingsState(plan, d.legs, D[7])).map(c => c.how), ['early', 'stopped']);
   });
+  await t('prepaid in full: the only choice is the voucher with the full bonus', async () => {
+    const plan = setup({ legs: [{ value: 20000, date: D[0], slot: 1 }] });
+    const d = world.drafts['900'];
+    const c = choices(plan, R.savingsState(plan, d.legs, D[0]));
+    assert.deepStrictEqual(c.map(x => `${x.how}:${x.value}`), ['full:22000']);
+    await assert.rejects(issueVoucher(plan, d, R.savingsState(plan, d.legs, D[0]), { how: 'stopped', today: D[0] }), /full bonus/);
+  });
+
+  console.log('backdated plans');
+  await t('the automatic check leaves a plan backdated today alone for 24 hours; a one-plan check does not wait', async () => {
+    const plan = setup({ legs: [] });
+    const now = at(R.addDays(D[2], 10));
+    plan.created_at = new Date(now - 3600 * 1000).toISOString();
+    const r = await runSavingsSweep({ now });
+    assert.match(r.plans[0].action, /backdated/);
+    assert.deepStrictEqual(world.sent.filter(s => !s.startsWith('digest')), []);
+    await runSavingsSweep({ now, only: '#D900' });
+    assert.strictEqual(plan.status, 'terminated');
+  });
+  await t('a day later the automatic check runs it as usual', async () => {
+    const plan = setup({ legs: paid(1) });
+    const now = at(R.addDays(D[1], 3));
+    plan.created_at = new Date(now - 25 * 3600 * 1000).toISOString();
+    await runSavingsSweep({ now });
+    assert.ok(world.sent.includes('overdue#2:2000'));
+  });
 
   console.log('the draft');
   await t('a converted savings draft is reported to the store, once', async () => {
@@ -209,6 +239,17 @@ const paid = (k, late = 0) => D.slice(0, k).map((d, i) => ({ value: 2000, date: 
     await runSavingsSweep({ now: at(D[2]) });
     await runSavingsSweep({ now: at(R.addDays(D[2], 1)) });
     assert.deepStrictEqual(world.sent.filter(s => s.startsWith('store:')), ['store:the draft was converted to an order']);
+  });
+
+  await t('a deleted savings draft goes to restore (rebuilt, or cancelled when nothing was paid)', async () => {
+    setup({ legs: paid(2) });
+    delete world.drafts['900'];
+    world.restoreResult = { rebuilt: true, newName: '#D901' };
+    const r = await runSavingsSweep({ now: at(D[2]), only: '#D900' });
+    assert.ok(world.sent.includes('restore:900'));
+    assert.match(r.plans[0].action, /restored as #D901/);
+    const dry = await runSavingsSweep({ now: at(D[2]), only: '#D900', dryRun: true });
+    assert.match(dry.plans[0].action, /would restore/);
   });
 
   console.log('tracker sheet');

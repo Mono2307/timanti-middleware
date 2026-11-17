@@ -172,6 +172,19 @@ async function toStore(plan, d, { subject, heading, body, facts = [] }) {
   });
 }
 
+// The store and HQ together: a savings draft deleted (restore.js). HQ is Cc'd when it is configured.
+async function toHq(plan, { subject, heading, body, facts = [] }) {
+  const hq = [config.email.hq, config.email.hqCc].filter(Boolean);
+  await sendEmail({
+    to: STORE(), cc: hq.length ? hq : undefined, internal: true,
+    subject: `Savings plan ${plan.draft_name}: ${subject}`,
+    html: T.buildSavingsPlanStaffHtml({
+      heading: `${plan.draft_name}: ${heading}`, body, adminUrl: adminDraftUrl(plan.draft_order_id),
+      facts: [{ label: 'Customer', value: `${plan.customer_name || '—'} ${plan.customer_phone || ''}` }, ...facts],
+    }),
+  });
+}
+
 // The message staff send by hand on WhatsApp to the customer (the digest's link).
 function whatsappToCustomer(plan, text) {
   const phone = phoneOf(plan.customer_phone);
@@ -187,6 +200,7 @@ async function sendDigest(rows, { today } = {}) {
 }
 
 module.exports = {
+  toHq,
   termsFor, whatsappToStore, whatsappToCustomer,
   sendStarted, sendDue, sendGraceWarning, sendReceived, sendEarlyOpen, sendFullyPaid, sendTerminated, sendVoucherIssued, sendVoucherBalance,
   toStore, sendDigest,

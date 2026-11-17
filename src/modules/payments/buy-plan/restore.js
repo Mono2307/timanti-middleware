@@ -37,9 +37,10 @@ function addressInput(a) {
   return Object.keys(out).length ? out : undefined;
 }
 
-function draftInput(snap) {
+// keys: which metafields come back (a savings draft passes its own list, savings-plan/restore.js).
+function draftInput(snap, keys = RESTORE_KEYS) {
   const metafields = Object.entries(snap.metafields || {})
-    .filter(([k, v]) => RESTORE_KEYS.test(k) && String(v ?? '').trim() !== '')
+    .filter(([k, v]) => keys.test(k) && String(v ?? '').trim() !== '')
     .map(([key, value]) => ({ namespace: 'custom', key, type: getMetafieldType(key), value: String(value) }));
   const input = {
     lineItems: (snap.line_items || []).map(lineInput),
