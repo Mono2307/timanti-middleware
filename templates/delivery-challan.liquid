@@ -153,18 +153,18 @@
 {% assign grand_gem_c   = 0 %}
 
 {% comment %}
-  ── Grouping key set: karat (SKU segment 3) × HSN (product.custom.hsn_code) ──
+  ── Grouping key set: karat (SKU segment 3) ──
+  HSN is not printed on this challan (founder, 2026-11-17), so rows group by karat alone.
   Built from the data, not a fixed karat list, so an unexpected karat can never drop a line
   silently out of the totals. "@" delimits the key list on both ends of every entry so a
-  `contains` probe can't partially match (e.g. "9~7113" inside "19~7113").
+  `contains` probe can't partially match (e.g. "8" inside "18").
 {% endcomment %}
 {% assign group_keys = "@" %}
 {% for li in order.line_items %}
   {% assign _sku = li.sku | split: "|" %}
   {% assign _kt  = _sku[2] | strip %}
   {% if _kt == blank %}{% assign _kt = "?" %}{% endif %}
-  {% assign _hsn = li.product.metafields.custom.hsn_code | default: hsn_default %}
-  {% assign _key   = _kt | append: "~" | append: _hsn %}
+  {% assign _key   = _kt %}
   {% assign _probe = "@" | append: _key | append: "@" %}
   {% unless group_keys contains _probe %}
     {% assign group_keys = group_keys | append: _key | append: "@" %}
@@ -241,23 +241,20 @@
     <thead>
       <tr>
         <th style="width:5%;"  class="text-center">S.No.</th>
-        <th style="width:27%;">Description of Goods</th>
-        <th class="text-center" style="width:10%;">HSN of Goods</th>
+        <th style="width:37%;">Description of Goods</th>
         <th class="text-center" style="width:6%;">Qty</th>
         <th class="text-center" style="width:9%;">Gross Wt (g)</th>
         <th class="text-center" style="width:9%;">Net Wt (g)</th>
         <th class="text-center" style="width:9%;">Dia Wt (cts)</th>
         <th class="text-center" style="width:9%;">Gem Wt (cts)</th>
-        <th class="text-right"  style="width:16%;">Taxable Value (₹)</th>
+        <th class="text-right"  style="width:16%;">Value (₹)</th>
       </tr>
     </thead>
     <tbody>
 
       {% for _gkey in key_list %}
         {% if _gkey == blank %}{% continue %}{% endif %}
-        {% assign _parts = _gkey | split: "~" %}
-        {% assign g_kt  = _parts[0] %}
-        {% assign g_hsn = _parts[1] %}
+        {% assign g_kt  = _gkey %}
 
         {% assign g_qty=0 %}{% assign g_gross=0 %}{% assign g_net=0 %}{% assign g_dia=0 %}{% assign g_gem=0 %}{% assign g_value=0 %}
 
@@ -266,8 +263,6 @@
           {% assign _kt  = _sku[2] | strip %}
           {% if _kt == blank %}{% assign _kt = "?" %}{% endif %}
           {% unless _kt == g_kt %}{% continue %}{% endunless %}
-          {% assign _hsn = li.product.metafields.custom.hsn_code | default: hsn_default %}
-          {% unless _hsn == g_hsn %}{% continue %}{% endunless %}
 
           {% comment %}
             ── Physical: hidden line props first, catalog metafields as fallback ──
@@ -332,7 +327,6 @@
         <tr>
           <td class="text-center">{{ sno }}.</td>
           <td>{% if g_kt == "?" %}Gold Jewellery <em>(karat not set in SKU)</em>{% else %}{{ g_kt }}Kt Gold Jewellery{% endif %}</td>
-          <td class="text-center">{{ g_hsn }}</td>
           <td class="text-center">{{ g_qty }}</td>
           <td class="text-center">{{ g_gross | round: 3 }}</td>
           <td class="text-center">{{ g_net | round: 3 }}</td>
@@ -343,7 +337,7 @@
       {% endfor %}
 
       <tr style="background:#f0f0f0; font-weight:bold;">
-        <td colspan="3" class="text-right" style="font-size:8px; padding:4px 5px;">Total</td>
+        <td colspan="2" class="text-right" style="font-size:8px; padding:4px 5px;">Total</td>
         <td class="text-center" style="font-size:8px;">{{ grand_qty }}</td>
         <td class="text-center" style="font-size:8px;">{{ grand_gross_g | round: 3 }}</td>
         <td class="text-center" style="font-size:8px;">{{ grand_net_g | round: 3 }}</td>
@@ -352,7 +346,7 @@
         <td class="text-right" style="font-size:8px;">{{ grand_value | money_without_currency | remove: ',' }}</td>
       </tr>
       <tr class="total-row">
-        <td colspan="8" class="text-right"><strong>Total Taxable Value</strong></td>
+        <td colspan="7" class="text-right"><strong>Total Value</strong></td>
         <td class="text-right"><strong>₹{{ grand_value | money_without_currency | remove: ',' }}</strong></td>
       </tr>
     </tbody>
@@ -368,7 +362,7 @@
       {% assign thousands = total_int | divided_by: 1000 %}{% if thousands > 0 %}{% assign temp = thousands | modulo: 100 %}{% if temp < 20 %}{% assign words = words | append: ones[temp] | append: " " %}{% else %}{% assign td = temp | divided_by: 10 %}{% assign od = temp | modulo: 10 %}{% assign words = words | append: tens[td] %}{% if od > 0 %}{% assign words = words | append: "-" | append: ones[od] %}{% endif %}{% assign words = words | append: " " %}{% endif %}{% assign words = words | append: "Thousand " %}{% assign total_int = total_int | modulo: 1000 %}{% endif %}
       {% assign hundreds = total_int | divided_by: 100 %}{% if hundreds > 0 %}{% assign words = words | append: ones[hundreds] | append: " Hundred " %}{% assign total_int = total_int | modulo: 100 %}{% endif %}
       {% if total_int > 0 %}{% if total_int < 20 %}{% assign words = words | append: ones[total_int] %}{% else %}{% assign td = total_int | divided_by: 10 %}{% assign od = total_int | modulo: 10 %}{% assign words = words | append: tens[td] %}{% if od > 0 %}{% assign words = words | append: "-" | append: ones[od] %}{% endif %}{% endif %}{% endif %}
-      Total Taxable Value in Words: Rupees {{ words }} Only
+      Total Value in Words: Rupees {{ words }} Only
     </span>
     <span>E. &amp; O. E.</span>
   </div>
