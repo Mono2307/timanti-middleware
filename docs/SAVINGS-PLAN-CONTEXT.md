@@ -21,14 +21,15 @@ A monthly savings scheme on the BlueStone Gold Mine 10+1 model.
 | How a plan ends; issuing the voucher | `savings-plan/end.js`, `voucher.js` |
 | Routes | `savings-plan/routes.js` (`/api/savings-plan/*`) |
 | Emails | `savings-plan/notify.js` and the savings section of `src/integrations/email/templates.js` |
-| Tables | `savings-plan/migration.sql` (`savings_plans`, `savings_plan_reminders`, and `credit_instruments.paid_part/bonus_part`) |
+| Tables | `savings-plan/migration.sql` (`savings_plans`, `savings_plan_reminders`, and `credit_instruments.paid_part/bonus_part`); `migration_002.sql` (`savings_plans.snapshot`) |
+| A deleted draft | `savings-plan/restore.js`: rebuilt from the snapshot when it held money (store + HQ emailed), cancelled when nothing was paid. From the `draft_orders/delete` webhook and the sweep |
 | 10 instalment slots | `payments/installments.js` (`custom.savings_months` gives a draft 10 slots); the panel shows slots 7–10 only on `savings-plan` drafts |
 | Never converts | `buy-plan/convert.js savingsBlock` |
 | Advance receipt copy | `templates/Strategy/email_draft_order_invoice.html`, copied to the paste folder |
 
 ## How staff run it
 1. **Create the draft.** In Shopify, create a draft for the customer with one custom item, **"Savings Plan"**, priced at instalment × months. For example, ₹2,000 × 10 = ₹20,000.
-2. **Start the plan** with `POST /api/savings-plan/start {draftId, months, nominee}`. The staff screen for this is not built yet. Starting the plan does five things:
+2. **Start the plan** on More actions → Savings plan (`POST /api/savings-plan/start {draftId, months, nominee, startDate?}`). The start date may be up to 12 months back; a backdated plan sends no link, and the automatic check leaves it alone for 24 hours. Starting the plan does five things:
    - turns off "Charge tax" on the line
    - tags the draft `savings-plan` and `savings-in-progress`
    - writes the `custom.savings_*` terms
@@ -36,7 +37,9 @@ A monthly savings scheme on the BlueStone Gold Mine 10+1 model.
    - sends the start email
 3. **Payments** come in two ways:
    - GoKwik links, which go out 3 days before each due date, on overdue, and with the day-15 and day-25 grace warnings. The existing webhook writes them into the next free slot.
-   - Payments taken in store, which staff type into the panel's Installments section as on any draft.
+   - Payments taken in store, recorded on the Savings plan screen with the date they came in (`POST /api/savings-plan/record-payment`, through `handlePaymentCompletion` with `paidDate`). The panel's rows are read-only on a savings draft (16 Nov 2026).
+   - A link is never replaced while an open one for the same amount has 3+ days left: it is sent again (`buy-plan/links.js reusableLink`).
+   - **Run check now** on the screen runs the sweep on that one plan (`POST /api/savings-plan/check-now`).
 4. **When a voucher is due**, the store is emailed and the plan appears on the daily digest. Staff press Issue voucher (`POST /api/savings-plan/issue-voucher {how: full|early|stopped|terminated, confirm}`). This:
    - writes `savings_bonus`, `savings_voucher_code` and the other outcome fields
    - adds the tags `savings-completed` or `savings-terminated`, plus `ssv:<code>`, `ssv-value:rs…` and `ssv-bonus:rs…`
@@ -53,6 +56,10 @@ A monthly savings scheme on the BlueStone Gold Mine 10+1 model.
 6. Paste the updated `templates/tax-invoice.liquid`, `order-confirmation-receipt.liquid` and `pricing-estimate.liquid` into Order Printer. They print an SSV code as "Less: Savings Scheme Voucher".
 7. Re-paste `services/buy-plan-sheet/apps-script.gs.js` into the tracker sheet's Apps Script and deploy a new version. It now writes a "Savings Plans" tab when the savings module pushes one.
 8. Deploy the middleware (this branch), then set `SAVINGS_PLAN_ENABLED=true` on Fly.
+9. Run `savings-plan/migration_002.sql` (the snapshot a deleted draft is rebuilt from).
+
+## Test round 1 (16 Nov 2026) and what changed
+Checklist: `docs/Savings-Plan-UAT-v3.md`. Fixed or changed after round 1: link reuse, deleted-draft restore, no "stops the plan" on a fully paid plan, Record payment with a date, backdated start, Run check now, the voucher balance on the screen. Fly `eb04cef`, app `timanti-metafield-manager-new-69`.
 
 ## Part use of the voucher (`savings-plan/redeem.js`)
 These steps act only on codes starting with `SSV`. Every other voucher behaves as before.
