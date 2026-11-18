@@ -155,7 +155,11 @@ async function view(d, plan, { startOn = null } = {}) {
 async function getDraftPlan(req, res) {
   try {
     const d = await mustReadDraft(req.params.draftId);
-    return res.json(await view(d, await planOn(d.id), { startOn: String(req.query?.start || '') }));
+    const plan = await planOn(d.id);
+    // Opening the screen refreshes the rebuild copy for any plan still holding money or a voucher (the
+    // sweep only refreshes running ones): a test tag added since is then seen if the draft is deleted.
+    if (plan && !['cancelled', 'redeemed'].includes(plan.status)) await takeSnapshot(plan, d);
+    return res.json(await view(d, plan, { startOn: String(req.query?.start || '') }));
   } catch (e) { return fail(res, e, 'read'); }
 }
 

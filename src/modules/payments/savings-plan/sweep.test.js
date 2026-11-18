@@ -185,25 +185,27 @@ const paid = (k, late = 0) => D.slice(0, k).map((d, i) => ({ value: 2000, date: 
     await assert.rejects(issueVoucher(plan, d, R.savingsState(plan, d.legs, D[4]), { how: 'early', today: D[4] }), /month 6/);
     assert.strictEqual(plan.voucher_code, undefined);
   });
-  await t('customer stops: the money paid, no bonus, plan terminated', async () => {
-    const plan = setup({ legs: paid(6) });
+  await t('customer stops before any step: the money paid, no bonus, plan terminated', async () => {
+    const plan = setup({ legs: paid(4) });
     const d = world.drafts['900'];
-    const r = await issueVoucher(plan, d, R.savingsState(plan, d.legs, D[6]), { how: 'stopped', today: D[6] });
-    assert.deepStrictEqual([r.voucher.value, r.voucher.bonus, plan.status], [12000, 0, 'terminated']);
+    const r = await issueVoucher(plan, d, R.savingsState(plan, d.legs, D[4]), { how: 'stopped', today: D[4] });
+    assert.deepStrictEqual([r.voucher.value, r.voucher.bonus, plan.status], [8000, 0, 'terminated']);
   });
-  await t('a terminated plan can only issue the no-bonus voucher', async () => {
+  await t('a terminated plan issues only its closed-plan voucher, with the step bonus already earned', async () => {
     const plan = setup({ legs: paid(7), status: 'terminated' });
     const d = world.drafts['900'];
     const st = R.savingsState(plan, d.legs, R.addDays(D[7], 40));
-    assert.deepStrictEqual(choices(plan, st).map(c => [c.how, c.value]), [['terminated', 14000]]);
+    assert.deepStrictEqual(choices(plan, st).map(c => [c.how, c.value, c.bonus]), [['terminated', 15000, 1000]]);
     await assert.rejects(issueVoucher(plan, d, st, { how: 'early', today: R.addDays(D[7], 40) }), /closed/);
     const r = await issueVoucher(plan, d, st, { how: 'terminated', today: R.addDays(D[7], 40) });
-    assert.strictEqual(r.voucher.value, 14000);
+    assert.deepStrictEqual([r.voucher.value, r.voucher.bonus], [15000, 1000]);
   });
   await t('choices on a running plan: what staff can press', async () => {
     const plan = setup({ legs: paid(7) });
     const d = world.drafts['900'];
-    assert.deepStrictEqual(choices(plan, R.savingsState(plan, d.legs, D[7])).map(c => c.how), ['early', 'stopped']);
+    assert.deepStrictEqual(choices(plan, R.savingsState(plan, d.legs, D[7])).map(c => c.how), ['early']);
+    const before = setup({ legs: paid(4) });
+    assert.deepStrictEqual(choices(before, R.savingsState(before, world.drafts['900'].legs, D[4])).map(c => c.how), ['stopped']);
   });
   await t('prepaid in full: the only choice is the voucher with the full bonus', async () => {
     const plan = setup({ legs: [{ value: 20000, date: D[0], slot: 1 }] });

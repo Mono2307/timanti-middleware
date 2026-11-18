@@ -34,22 +34,33 @@ async function terminatePlan(plan, d, st, today, reason) {
     await writeMetafields(d, { savings_status: 'terminated' });
   }
   await notify.sendTerminated(plan, d, st).catch(e => log.error('savings-plan', `${plan.draft_name}: terminated email: ${e.message}`));
+  const due = R.payoutFor(plan, st, 'terminated');
+  const rs = (v) => `Rs${Number(v || 0).toLocaleString('en-IN')}`;
   await notify.toStore(plan, d, {
     subject: 'closed — issue the voucher', heading: 'plan closed for non-payment',
-    body: `Instalment ${st.next ? st.next.k : ''} was not paid within ${R.GRACE_DAYS} days of its due date. Check the payments on the draft, then open the savings plan screen and press Issue voucher. The voucher is the money paid, with no bonus. Do not delete the draft.`,
-    facts: [{ label: 'Paid', value: `Rs${st.paid.toLocaleString('en-IN')}` }, { label: 'Voucher due', value: `Rs${st.paid.toLocaleString('en-IN')}` }],
+    body: `Instalment ${st.next ? st.next.k : ''} was not paid within ${R.GRACE_DAYS} days of its due date. Check the payments on the draft, then open the savings plan screen and press Issue voucher. `
+      + (due.bonus > 0
+        ? `The voucher is the money paid plus the ${due.pct}% bonus the plan had already earned (${rs(due.bonus)}). `
+        : 'The voucher is the money paid, with no bonus. ')
+      + 'Do not delete the draft.',
+    facts: [{ label: 'Paid', value: rs(st.paid) }, ...(due.bonus > 0 ? [{ label: 'Bonus kept', value: rs(due.bonus) }] : []), { label: 'Voucher due', value: rs(due.value) }],
   }).catch(e => log.error('savings-plan', `${plan.draft_name}: store email: ${e.message}`));
   await store.markSent(plan.id, st.n, 'staff', 'terminated');
-  log.info('savings-plan', `${plan.draft_name}: terminated (${reason}), Rs${st.paid} owed as a voucher`);
+  log.info('savings-plan', `${plan.draft_name}: terminated (${reason}), Rs${due.value} owed as a voucher (bonus Rs${due.bonus})`);
 }
 
 // What staff may do now, for the screen: [{ how, value, bonus, pct, label }]. Empty when nothing.
 function choices(plan, st) {
   if (plan.voucher_code && plan.voucher_code !== CLAIM) return [];
-  if (plan.status === 'terminated') return [{ how: 'terminated', ...R.payoutFor(plan, st, 'terminated'), label: 'Issue the voucher (no bonus)' }];
+  if (plan.status === 'terminated') {
+    const p = R.payoutFor(plan, st, 'terminated');
+    return [{ how: 'terminated', ...p, label: p.bonus > 0 ? `Issue the voucher (with the ${p.pct}% bonus already earned)` : 'Issue the voucher (no bonus)' }];
+  }
   if (plan.status !== 'active') return [];
   const out = [];
   for (const [how, label] of [['full', 'Issue the voucher'], ['early', 'Redeem early'], ['stopped', 'Customer stops the plan (no bonus)']]) {
+    // On an early-redemption step, stopping pays exactly what redeeming early does: show only Redeem early.
+    if (how === 'stopped' && out.some(c => c.how === 'early')) continue;
     const p = R.payoutFor(plan, st, how);
     if (p.ok) out.push({ how, ...p, label });
   }
@@ -59,7 +70,7 @@ function choices(plan, st) {
 async function issueVoucher(plan, d, st, { how, today, by = null }) {
   // Already issued comes first: it is the answer staff need on a second press, whatever the status now is.
   if (plan.voucher_code && plan.voucher_code !== CLAIM) throw refuse(`Voucher ${plan.voucher_code} was already issued on this plan`, 409);
-  if (plan.status === 'terminated' && how !== 'terminated') throw refuse('This plan has closed: its voucher is the money paid, with no bonus');
+  if (plan.status === 'terminated' && how !== 'terminated') throw refuse('This plan has closed for non-payment: issue its voucher with the closed-plan option');
   if (plan.status === 'active' && how === 'terminated') throw refuse('This plan is still running');
   if (!['active', 'terminated'].includes(plan.status)) throw refuse(`This savings plan is ${plan.status}`, 409);
   const p = R.payoutFor(plan, st, how);

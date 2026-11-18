@@ -13,8 +13,9 @@ import { useEffect, useState } from "preact/hooks";
 //   Issue the voucher            every instalment paid (the full bonus)
 //   Redeem early                 10-month plan, month 6 with 5 paid (25%) or month 8 with 7 paid (50%),
 //                                when the customer asks (the WhatsApp link in their emails)
-//   Customer stops the plan      the money paid, no bonus
-//   Issue the voucher (no bonus) a plan the system closed 30 days after an unpaid due date
+//   Customer stops the plan      the money paid, no bonus (shown only before an early-redemption step)
+//   Issue the voucher            a plan the system closed 30 days after an unpaid due date: the money
+//                                paid plus any early-redemption bonus it had already reached
 // Payments taken in store are recorded here (Record payment), with the day the money came in; the
 // Jewellery Workspace panel shows the 10 rows read-only. The start date may be in the past (up to 12
 // months) for a customer who started on paper. Run check now does on this plan what the 6-hourly
@@ -50,7 +51,7 @@ const END_NOTE = {
   full: "The full bonus. The voucher is the money paid plus the bonus.",
   early: "The early-redemption bonus for the step the plan has reached. Only when the customer has asked to redeem now.",
   stopped: "The customer is giving up the plan. The voucher is the money paid, with no bonus. This cannot be undone.",
-  terminated: "The plan closed for non-payment. The voucher is the money paid, with no bonus.",
+  terminated: "The plan closed for non-payment. The voucher is the money paid, plus the early-redemption bonus the plan had already reached, if any.",
 };
 
 async function middleware(path, init = {}) {
@@ -212,7 +213,7 @@ function SavingsPlan() {
                 <s-text color="subdued">
                   {months === 10 ? "Early redemption: from month 6 with 5 paid (a quarter of an instalment as bonus), or month 8 with 7 paid (half). " : ""}
                   A missed instalment can be paid up to 30 days after its due date; after that the plan closes and the money paid comes back
-                  as a voucher, without the bonus. No cash refunds. The voucher is valid for 1 year, on any jewellery except coins, silver
+                  as a voucher{months === 10 ? ", with any early-redemption bonus already reached but not the bonus still to come" : ", without the bonus"}. No cash refunds. The voucher is valid for 1 year, on any jewellery except coins, silver
                   and loose solitaires.
                 </s-text>
                 <s-text-field label="Nominee (optional)" value={nominee} onInput={(e) => setNominee(val(e))} />

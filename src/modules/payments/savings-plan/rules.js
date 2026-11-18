@@ -16,8 +16,11 @@
 //     PREPAID_BONUS_NOW; the founder may move it to the maturity date).
 //   - Late = an instalment covered after its due date. More than LATE_LIMIT late → no bonus at all.
 //   - Grace: an unpaid instalment may be paid up to GRACE_DAYS after its due date. On the day after
-//     that the plan terminates: a voucher for the money paid, no bonus.
-//   - The customer stopping the plan is a termination too.
+//     that the plan terminates: a voucher for the money paid, plus the bonus of the early-redemption
+//     step already reached (10-month plan: 25% after 5 from month 6, 50% after 7 from month 8). A
+//     bonus the plan has earned is never taken back; only the bonus still to come is lost (founder,
+//     18 Nov 2026). The late rule still applies: more than LATE_LIMIT late, no bonus at all.
+//   - The customer stopping the plan is a termination too, on the same terms.
 //   - Never a cash refund.
 //
 // HOW PAYMENTS COUNT. Money is never refused. Payments are taken in date order and fill
@@ -199,7 +202,9 @@ function payoutFor(plan, st, how) {
     return { ok: false, reason: 'Every instalment is paid: issue the voucher with the full bonus instead' };
   }
   if (how === 'terminated' || how === 'stopped') {
-    return { ok: st.paid > 0, paid: st.paid, pct: 0, bonus: 0, value: st.paid, reason: st.paid > 0 ? null : 'Nothing has been paid on this plan' };
+    // The bonus already earned: the early-redemption step reached (st.redeem, late rule applied).
+    const kept = accruedBonus(st);
+    return { ok: st.paid > 0, paid: st.paid, pct: kept.pct, bonus: kept.bonus, value: st.paid + kept.bonus, reason: st.paid > 0 ? null : 'Nothing has been paid on this plan' };
   }
   const r = st.redeem;
   if (how === 'full' && r.kind !== 'full') return { ok: false, reason: `${st.paidCount} of ${st.n} instalments are paid` };
@@ -210,6 +215,13 @@ function payoutFor(plan, st, how) {
       : 'Early redemption opens from month 6 with 5 instalments paid, or month 8 with 7 paid' };
   }
   return { ok: true, paid: st.paid, pct: r.pct, bonus: r.bonus, value: r.value, reason: null };
+}
+
+// The bonus a plan that ends early keeps: the early-redemption step it has reached, if any. A full
+// bonus is not "accrued" (a fully paid plan cannot be terminated or stopped). { pct, bonus }.
+function accruedBonus(st) {
+  const r = st && st.redeem;
+  return r && r.kind === 'early' ? { pct: r.pct, bonus: r.bonus } : { pct: 0, bonus: 0 };
 }
 
 // The status tag for a plan row's status.
@@ -224,6 +236,6 @@ const isSavingsDraftTags = (tags) => (Array.isArray(tags) ? tags : String(tags |
 module.exports = {
   MONTH_CHOICES, MIN_INSTALMENT, MAX_INSTALMENT, INSTALMENT_STEP, LATE_LIMIT, GRACE_DAYS, GRACE_WARN_DAYS,
   VOUCHER_MONTHS, PREPAID_BONUS_NOW, PLANS, SAVINGS_LINE_TITLE, PLAN_TAG, STATUS_TAGS,
-  dueDates, maturityDate, enrolmentProblems, instalmentFromLine, savingsState, redeemOptions, payoutFor,
+  dueDates, maturityDate, enrolmentProblems, instalmentFromLine, savingsState, redeemOptions, payoutFor, accruedBonus,
   statusTag, isSavingsStatusTag, isSavingsLine, isSavingsDraftTags, parseAmount, daysBetween, addDays,
 };

@@ -94,6 +94,23 @@ const t = async (name, fn) => { Object.assign(world, { updates: [], mails: [], c
     assert.match(world.mails[0], /Rs4,000 paid/);
     assert.strictEqual(plan.status, 'active');
   });
+  await t('a test plan (test-order tag in the snapshot): cancelled, voucher voided, nothing rebuilt, no email', async () => {
+    const plan = basePlan({ snapshot: { ...snap([1000, 1000]), tags: ['savings-plan', 'test-order'] }, voucher_code: 'SSV27-KATEST-0001' });
+    const voided = [];
+    const r = await restoreDeletedSavingsDraft('500', { store: mkStore(plan), voidVoucher: async (c) => { voided.push(c); return true; } });
+    assert.deepStrictEqual(r, { cancelled: true, test: true, voided: 'SSV27-KATEST-0001' });
+    assert.deepStrictEqual(voided, ['SSV27-KATEST-0001']);
+    assert.strictEqual(plan.status, 'cancelled');
+    assert.strictEqual(plan.draft_order_id, '500-deleted-7');
+    assert.deepStrictEqual(world.mails, []);
+  });
+  await t('the old "test orders" tag counts too; a plan without a test tag is still rebuilt', async () => {
+    const plan = basePlan({ snapshot: { ...snap([1000]), tags: 'savings-plan, test orders' } });
+    assert.strictEqual((await restoreDeletedSavingsDraft('500', { store: mkStore(plan) })).test, true);
+    const real = basePlan({ snapshot: { ...snap([1000]), tags: ['savings-plan', 'tested-ok'] } });
+    const graphql = async () => ({ draftOrderCreate: { draftOrder: { legacyResourceId: 503, name: '#D503' }, userErrors: [] } });
+    assert.strictEqual((await restoreDeletedSavingsDraft('500', { store: mkStore(real), graphql })).rebuilt, true);
+  });
   await t('a cancelled or used-up plan is left alone', async () => {
     for (const status of ['cancelled', 'redeemed']) {
       assert.strictEqual(await restoreDeletedSavingsDraft('500', { store: mkStore(basePlan({ status })) }), null);

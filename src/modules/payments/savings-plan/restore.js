@@ -11,6 +11,11 @@
 //   nothing paid      → a demo or a mistake: the plan is cancelled quietly, as Cancel plan would.
 //   money, no snapshot (a plan started before snapshots existed) → cannot be rebuilt: the store and HQ
 //                       are emailed the amount so it is rebuilt by hand.
+//   a TEST plan       → the draft carried a test tag (test-order / test orders) when it was last
+//                       snapshotted: nothing is rebuilt and no one is emailed. The plan is cancelled and
+//                       its voucher, if one was issued, is voided (ledger + Shopify code). How test
+//                       plans are cleared away (founder, 18 Nov 2026): tag the draft, open its Savings plan
+//                       screen once (it re-takes the snapshot), then delete it.
 //
 // Runs from the draft_orders/delete webhook, and from the sweep when it finds the draft gone.
 // The snapshot is taken at start and refreshed by the sweep and every recorded payment (takeSnapshot).
@@ -30,6 +35,22 @@ const notify = require('./notify');
 const SAVINGS_RESTORE_KEYS = /^(installment_(10|[1-9])_(value|mode|date|type)|amount_paid|amount_paid_final|amount_to_be_collected|amount_pending|payment_status|is_finalized|channel|order_type|shipment|employee_name|in_store_sale|state_code|savings_[a-z_]+)$/;
 
 const r0 = (v) => Math.round(Number(v) || 0);
+
+// A test draft: tagged test-order or "test orders" (the Drafts views, 17 Nov 2026).
+const TEST_TAG = /^test[- ]orders?$/i;
+const isTestTags = (tags) => (Array.isArray(tags) ? tags : String(tags || '').split(','))
+  .some(t => TEST_TAG.test(String(t).trim()));
+
+// Void a test plan's voucher everywhere: the credit ledger and the Shopify code.
+async function voidTestVoucher(code) {
+  const ci = require('../../adjustments/credit_instruments');
+  const { deleteDiscount } = require('./redeem');
+  const inst = await ci.getBySerial(supabase, { instrumentType: 'voucher', serialCode: code });
+  if (!inst) return false;
+  await deleteDiscount(inst.price_rule_id).catch(e => log.warn('savings-plan', `${code}: delete code: ${e.message}`));
+  await ci.voidInstrument(supabase, { instrumentType: 'voucher', serialCode: code });
+  return true;
+}
 
 // Keep the rebuild copy current. Never throws: a plan whose table has no snapshot column yet (the
 // migration not run) just logs it.
@@ -54,6 +75,20 @@ async function restoreDeletedSavingsDraft(oldDraftId, deps = {}) {
   const s = deps.store || store;
   const plan = await s.getPlanByDraft(String(oldDraftId));
   if (!plan || ['cancelled', 'redeemed'].includes(plan.status)) return null;
+
+  // A test plan: cancelled, its voucher voided, nothing rebuilt, no one emailed.
+  if (plan.snapshot && isTestTags(plan.snapshot.tags)) {
+    await cancelOpenLinks(oldDraftId).catch(e => log.warn('savings-plan', `${plan.draft_name}: cancel links: ${e.message}`));
+    const code = plan.voucher_code && plan.voucher_code !== 'ISSUING' ? plan.voucher_code : null;
+    if (code) await (deps.voidVoucher || voidTestVoucher)(code).catch(e => log.error('savings-plan', `${code}: void: ${e.message}`));
+    await s.updatePlan(plan.id, {
+      status: 'cancelled', closed_at: new Date().toISOString(),
+      closed_reason: `test plan: draft deleted${code ? `, voucher ${code} voided` : ''}`,
+      draft_order_id: `${oldDraftId}-deleted-${plan.id}`,
+    });
+    log.info('savings-plan', `${plan.draft_name} (test) was deleted — plan cancelled${code ? `, ${code} voided` : ''}`);
+    return { cancelled: true, test: true, voided: code };
+  }
 
   const paid = await paidOnDeleted(plan, oldDraftId);
   await cancelOpenLinks(oldDraftId).catch(e => log.warn('savings-plan', `${plan.draft_name}: cancel links: ${e.message}`));
@@ -111,4 +146,5 @@ async function restoreDeletedSavingsDraft(oldDraftId, deps = {}) {
   return { rebuilt: true, newId, newName: created.name, paid };
 }
 
-module.exports = { restoreDeletedSavingsDraft, takeSnapshot, SAVINGS_RESTORE_KEYS };
+module.exports = {
+  isTestTags, restoreDeletedSavingsDraft, takeSnapshot, SAVINGS_RESTORE_KEYS };

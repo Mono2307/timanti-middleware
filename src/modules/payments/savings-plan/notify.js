@@ -38,7 +38,9 @@ function termsFor(plan) {
     bonusLine,
     ...(Number(plan.months) === 10 ? ['You can also redeem early: from month 6 with 5 paid (a quarter of an instalment as bonus), or from month 8 with 7 paid (half an instalment).'] : []),
     `The bonus needs no more than ${R.LATE_LIMIT} late payments.`,
-    `A missed instalment can be paid up to ${R.GRACE_DAYS} days after its due date. After that the plan closes and what you have paid comes back as a Savings Scheme Voucher, without the bonus.`,
+    Number(plan.months) === 10
+      ? `A missed instalment can be paid up to ${R.GRACE_DAYS} days after its due date. After that the plan closes and what you have paid comes back as a Savings Scheme Voucher, with any early-redemption bonus already reached (month 6 or month 8) but not the bonus still to come.`
+      : `A missed instalment can be paid up to ${R.GRACE_DAYS} days after its due date. After that the plan closes and what you have paid comes back as a Savings Scheme Voucher, without the bonus.`,
     'Your Savings Scheme Voucher is valid for 1 year on any Timanti jewellery except coins, silver and loose solitaires. There are no cash refunds.',
   ];
 }
@@ -91,7 +93,7 @@ async function sendGraceWarning(plan, d, st, link, { days, closeOn, earlyNow }) 
   await toCustomer(plan, {
     subject: `Your savings plan closes on ${T.planDate(closeOn)} unless instalment ${st.next.k} is paid`,
     heading: `Your savings plan closes on ${T.planDate(closeOn)}`,
-    body: who(plan, `instalment ${st.next.k} was due on <strong>${T.planDate(st.next.due)}</strong>, ${days} days ago. If it is not paid by <strong>${T.planDate(R.addDays(closeOn, -1))}</strong>, the plan closes and the <strong>${rupees(st.paid)}</strong> you have saved comes back as a Savings Scheme Voucher, without the bonus.${earlyLine}`),
+    body: who(plan, `instalment ${st.next.k} was due on <strong>${T.planDate(st.next.due)}</strong>, ${days} days ago. If it is not paid by <strong>${T.planDate(R.addDays(closeOn, -1))}</strong>, the plan closes and the <strong>${rupees(st.paid)}</strong> you have saved comes back as a Savings Scheme Voucher${keptLine(st)}.${earlyLine}`),
     st, link, early: Boolean(earlyNow) || undefined,
     sms: `Timanti savings plan ${plan.draft_name}: instalment ${st.next.k} is ${days} days late. Pay by ${T.planDate(R.addDays(closeOn, -1))} or the plan closes. Pay: ${link ? link.shortUrl : 'see your email'}`,
   });
@@ -128,12 +130,20 @@ async function sendFullyPaid(plan, d, st) {
   });
 }
 
+// What a closing plan keeps: the early-redemption bonus already earned, or no bonus.
+function keptLine(st) {
+  const kept = R.accruedBonus(st);
+  return kept.bonus > 0
+    ? `, plus the bonus you have already earned (${rupees(kept.bonus)}), so <strong>${rupees(st.paid + kept.bonus)}</strong> in all. The bonus still to come is lost`
+    : ', without the bonus';
+}
+
 async function sendTerminated(plan, d, st, { stopped = false } = {}) {
   await toCustomer(plan, {
     subject: 'Your savings plan has closed', heading: 'Your savings plan has closed',
     body: who(plan, stopped
-      ? `your savings plan has been closed as you asked. The <strong>${rupees(st.paid)}</strong> you saved comes back to you as a Savings Scheme Voucher, without the bonus.`
-      : `instalment ${st.next ? st.next.k : ''} was not paid within ${R.GRACE_DAYS} days of its due date, so your savings plan has closed. The <strong>${rupees(st.paid)}</strong> you saved comes back to you as a Savings Scheme Voucher, without the bonus.`)
+      ? `your savings plan has been closed as you asked. The <strong>${rupees(st.paid)}</strong> you saved comes back to you as a Savings Scheme Voucher${keptLine(st)}.`
+      : `instalment ${st.next ? st.next.k : ''} was not paid within ${R.GRACE_DAYS} days of its due date, so your savings plan has closed. The <strong>${rupees(st.paid)}</strong> you saved comes back to you as a Savings Scheme Voucher${keptLine(st)}.`)
       + ' Our store team will send it to you shortly.',
     st, early: false,
   });

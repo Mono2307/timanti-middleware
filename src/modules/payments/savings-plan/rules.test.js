@@ -107,14 +107,33 @@ t('grace warnings at day 15 and day 25', () => {
   assert.strictEqual(at(plan(10), onTime(D10, 2), R.addDays(due, 15)).warn, 'grace15');
   assert.strictEqual(at(plan(10), onTime(D10, 2), R.addDays(due, 25)).warn, 'grace25');
 });
-t('termination pays back the money only, even on an early-redemption step', () => {
+t('terminated after 7 paid (month-8 step reached): keeps the 50% bonus, ₹14,000 + ₹1,000', () => {
   const s = at(plan(10), onTime(D10, 7), R.addDays(D10[7], 31));
   assert.ok(s.terminateNow);
-  assert.strictEqual(R.payoutFor(plan(10), s, 'terminated').value, 14000);
+  assert.deepStrictEqual(R.payoutFor(plan(10), s, 'terminated'), { ok: true, paid: 14000, pct: 50, bonus: 1000, value: 15000, reason: null });
 });
-t('stopping the plan: the money paid, no bonus for the months reached', () => {
+t('terminated after 5 paid (month-6 step reached): keeps the 25% bonus, ₹10,000 + ₹500', () => {
+  const s = at(plan(10), onTime(D10, 5), R.addDays(D10[5], 31));
+  assert.ok(s.terminateNow);
+  assert.deepStrictEqual([R.payoutFor(plan(10), s, 'terminated').bonus, R.payoutFor(plan(10), s, 'terminated').value], [500, 10500]);
+});
+t('terminated on a step but with 3 late payments: no bonus', () => {
+  const legs = D10.slice(0, 7).map((d, i) => pay(i >= 4 ? R.addDays(d, 3) : d));
+  const s = at(plan(10), legs, R.addDays(D10[7], 31));
+  assert.strictEqual(s.lateCount, 3);
+  assert.deepStrictEqual([R.payoutFor(plan(10), s, 'terminated').bonus, R.payoutFor(plan(10), s, 'terminated').value], [0, 14000]);
+});
+t('6-month plan terminated: no step to keep, the money only', () => {
+  const s = at(plan(6), onTime(D6, 4), R.addDays(D6[4], 31));
+  assert.deepStrictEqual([s.terminateNow, R.payoutFor(plan(6), s, 'terminated').value], [true, 8000]);
+});
+t('stopping the plan after 6 paid at month 7: keeps the month-6 step bonus (25%)', () => {
   const s = at(plan(10), onTime(D10, 6), D10[6]);
-  assert.deepStrictEqual(R.payoutFor(plan(10), s, 'stopped'), { ok: true, paid: 12000, pct: 0, bonus: 0, value: 12000, reason: null });
+  assert.deepStrictEqual(R.payoutFor(plan(10), s, 'stopped'), { ok: true, paid: 12000, pct: 25, bonus: 500, value: 12500, reason: null });
+});
+t('stopping before any step: the money paid, no bonus', () => {
+  const s = at(plan(10), onTime(D10, 4), D10[4]);
+  assert.deepStrictEqual(R.payoutFor(plan(10), s, 'stopped'), { ok: true, paid: 8000, pct: 0, bonus: 0, value: 8000, reason: null });
 });
 t('a plan paid in full cannot be stopped: only the full-bonus voucher (prepaid too)', () => {
   const s = at(plan(10), [{ value: 20000, date: D10[0] }], D10[0]);
