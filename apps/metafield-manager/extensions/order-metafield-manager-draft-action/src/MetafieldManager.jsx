@@ -519,10 +519,7 @@ const DRAFT_APPROVAL_QUERY = `
     draftOrder(id: $id) { id status tags totalPriceSet { shopMoney { amount } } }
   }
 `;
-const APPROVAL_READY_TAG = "repair-estimate-ready";
 const APPROVAL_DONE_TAG = "repair-store-approved";
-// Any of these means there is nothing left to approve (paid online, approved, finished, or free).
-const APPROVAL_BLOCKING_TAGS = ["repair-paid", APPROVAL_DONE_TAG, "repair-complete", "free-repair", "repair-free"];
 const APPROVAL_CHANNELS = {
   "Phone call": "phone",
   "WhatsApp": "whatsapp",
@@ -540,14 +537,24 @@ function parseDraftApprovalInfo(res) {
   };
 }
 
-// May staff approve this repair now? Only while an estimate is waiting and nothing has settled it.
-// Tags are compared case-insensitively, like every other tag check in this panel.
-function canStaffApprove(info) {
-  if (!info || info.status === "COMPLETED") return false;
+// The card is shown on EVERY draft, so no `repair-estimate-ready` tag or minimum total is needed any
+// more. What still stops an approval is a draft that has already been settled: converted to an order,
+// already approved, paid online, finished, or free. Returns a plain-words reason, or "" if approval
+// is allowed. Tags are compared case-insensitively, like every other tag check in this panel.
+function approvalBlockedReason(info) {
+  if (!info) return "";
+  if (info.status === "COMPLETED") return "This draft has already been converted to an order.";
   const low = info.tags.map((t) => String(t).trim().toLowerCase());
-  if (!low.includes(APPROVAL_READY_TAG)) return false;
-  if (APPROVAL_BLOCKING_TAGS.some((t) => low.includes(t))) return false;
-  return info.total > 0;
+  if (low.includes(APPROVAL_DONE_TAG)) return "This repair has already been approved.";
+  if (low.includes("repair-paid")) return "The customer has already paid for this repair online.";
+  if (low.includes("repair-complete")) return "This repair is already complete.";
+  if (low.includes("free-repair") || low.includes("repair-free")) return "This is a free repair, so there is no estimate to approve.";
+  return "";
+}
+
+// May staff approve this draft now? Yes for any draft nothing has settled yet.
+function canStaffApprove(info) {
+  return Boolean(info) && !approvalBlockedReason(info);
 }
 
 // -- Repair items ------------------------------------------------------------------------------
@@ -2216,16 +2223,18 @@ export default function MetafieldManager({ surface = "block" } = {}) {
     );
   };
 
-  // Staff approval of the repair estimate on the customer's behalf. Only shown on a draft whose
-  // estimate is waiting and nothing has settled it (see canStaffApprove); after an approval the
-  // confirmation message stays visible even though the button itself has gone.
+  // Staff approval of the repair estimate on the customer's behalf. Shown on EVERY draft. When
+  // something has already settled the draft (see approvalBlockedReason) the button is replaced by a
+  // plain-words reason, and after an approval the confirmation message stays visible.
   const renderStaffApproval = () => {
     if (ctx.scope !== "draft") return null;
+    if (!draftInfo && !approvalMsg) return null;
     const can = canStaffApprove(draftInfo);
-    if (!can && !approvalMsg) return null;
+    const blockedReason = draftInfo ? approvalBlockedReason(draftInfo) : "";
     return (
       <s-section key="staff-approval" heading="Approve Repair for Customer">
         <s-stack direction="block" gap="base">
+          {!can && blockedReason && !approvalMsg ? <s-text tone="subdued">{blockedReason}</s-text> : null}
           {can ? (
             <s-text tone="subdued">
               Use this only when the customer has already agreed to the estimate but didn't tap the approval link.
