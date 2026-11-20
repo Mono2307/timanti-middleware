@@ -824,8 +824,12 @@ export default function MetafieldManager({ surface = "block" } = {}) {
       let draftInfoInit = null;
       if (ctx.scope === "draft" && ownerId) {
         try {
-          draftInfoInit = parseDraftApprovalInfo(await shopify.query(DRAFT_APPROVAL_QUERY, { variables: { id: ownerId } }));
-        } catch { /* non-blocking — the button just stays hidden */ }
+          const apRes = await shopify.query(DRAFT_APPROVAL_QUERY, { variables: { id: ownerId } });
+          if (apRes?.errors?.length) warnings.push(`Approval status: ${apRes.errors.map((e) => e.message).join("; ")}`);
+          draftInfoInit = parseDraftApprovalInfo(apRes);
+        } catch (e) {
+          warnings.push(`Couldn't load approval status: ${e?.message || e}`);
+        }
       }
 
       const todayISO = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
@@ -2228,12 +2232,17 @@ export default function MetafieldManager({ surface = "block" } = {}) {
   // plain-words reason, and after an approval the confirmation message stays visible.
   const renderStaffApproval = () => {
     if (ctx.scope !== "draft") return null;
-    if (!draftInfo && !approvalMsg) return null;
     const can = canStaffApprove(draftInfo);
     const blockedReason = draftInfo ? approvalBlockedReason(draftInfo) : "";
     return (
       <s-section key="staff-approval" heading="Approve Repair for Customer">
         <s-stack direction="block" gap="base">
+          {!draftInfo ? (
+            <s-text tone="caution">
+              Couldn't read this draft's details, so approval is unavailable. Close and reopen the panel. If this
+              keeps happening, the app may be missing permission to read draft orders.
+            </s-text>
+          ) : null}
           {!can && blockedReason && !approvalMsg ? <s-text tone="subdued">{blockedReason}</s-text> : null}
           {can ? (
             <s-text tone="subdued">
