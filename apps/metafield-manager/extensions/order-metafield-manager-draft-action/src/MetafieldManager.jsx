@@ -2227,11 +2227,17 @@ export default function MetafieldManager({ surface = "block" } = {}) {
     );
   };
 
-  // Staff approval of the repair estimate on the customer's behalf. Shown on EVERY draft. When
-  // something has already settled the draft (see approvalBlockedReason) the button is replaced by a
-  // plain-words reason, and after an approval the confirmation message stays visible.
+  // Staff approval of the repair estimate on the customer's behalf. HIDDEN until the repair is really
+  // under way: the Linked Repair Order is filled in AND the estimate has actually been sent to the
+  // customer (the middleware stamps "Estimate Sent At" once the email goes out). Both are read from
+  // the SAVED values, so typing a reference without saving does not reveal it. Once shown, a draft
+  // that is already settled (see approvalBlockedReason) gets a plain-words reason instead of the
+  // button, and after an approval the confirmation message stays visible.
   const renderStaffApproval = () => {
     if (ctx.scope !== "draft") return null;
+    const repairDetailsAdded = String(values.repair_order_reference ?? "").trim() !== "";
+    const estimateSent = String(values.repair_estimate_sent_at ?? "").trim() !== "";
+    if (!(repairDetailsAdded && estimateSent) && !approvalMsg) return null;
     const can = canStaffApprove(draftInfo);
     const blockedReason = draftInfo ? approvalBlockedReason(draftInfo) : "";
     return (
