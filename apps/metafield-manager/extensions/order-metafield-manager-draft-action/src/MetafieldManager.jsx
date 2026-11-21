@@ -519,6 +519,9 @@ const DRAFT_APPROVAL_QUERY = `
     draftOrder(id: $id) { id status tags totalPriceSet { shopMoney { amount } } }
   }
 `;
+// The tag that switches the button ON. Without it the button is visible but disabled. To use a
+// different tag, change only this one line.
+const APPROVAL_READY_TAG = "repair-estimate-ready";
 const APPROVAL_DONE_TAG = "repair-store-approved";
 const APPROVAL_CHANNELS = {
   "Phone call": "phone",
@@ -552,9 +555,14 @@ function approvalBlockedReason(info) {
   return "";
 }
 
-// May staff approve this draft now? Yes for any draft nothing has settled yet.
+// Is the enabling tag on the draft? Compared case-insensitively like every other tag check here.
+function hasApprovalTag(info) {
+  return Boolean(info) && info.tags.some((t) => String(t).trim().toLowerCase() === APPROVAL_READY_TAG);
+}
+
+// May staff approve this draft now? Only with the enabling tag AND nothing having settled it yet.
 function canStaffApprove(info) {
-  return Boolean(info) && !approvalBlockedReason(info);
+  return hasApprovalTag(info) && !approvalBlockedReason(info);
 }
 
 // -- Repair items ------------------------------------------------------------------------------
@@ -2227,23 +2235,15 @@ export default function MetafieldManager({ surface = "block" } = {}) {
     );
   };
 
-  // Staff approval of the repair estimate on the customer's behalf. The card is ALWAYS shown on a
-  // draft, below "Pieces in for Repair", but the button stays greyed out (like "Start repair") until
-  // the repair is really under way: the Linked Repair Order is filled in AND the estimate has been
-  // sent to the customer (the middleware stamps "Estimate Sent At" once the email goes out). Both are
-  // read from the SAVED values, so typing a reference without saving does not enable it. A draft that
-  // is already settled (see approvalBlockedReason) also keeps it greyed, with the reason shown.
+  // Staff approval of the repair estimate on the customer's behalf. The card and its button are ALWAYS
+  // visible on a draft, below "Pieces in for Repair". The button stays disabled (and does nothing)
+  // until the draft carries the APPROVAL_READY_TAG; once the tag is there it is clickable and works.
+  // A draft that is already settled (see approvalBlockedReason) keeps it disabled, with the reason.
   const renderStaffApproval = () => {
     if (ctx.scope !== "draft") return null;
-    const repairDetailsAdded = String(values.repair_order_reference ?? "").trim() !== "";
-    const estimateSent = String(values.repair_estimate_sent_at ?? "").trim() !== "";
-    const ready = repairDetailsAdded && estimateSent;
-    const can = ready && canStaffApprove(draftInfo);
+    const tagged = hasApprovalTag(draftInfo);
+    const can = canStaffApprove(draftInfo);
     const blockedReason = draftInfo ? approvalBlockedReason(draftInfo) : "";
-    const waitingOn = [
-      !repairDetailsAdded ? "add the Linked Repair Order and save" : "",
-      !estimateSent ? "send the estimate to the customer (Estimate Sent At is still empty)" : "",
-    ].filter(Boolean);
     return (
       <s-section key="staff-approval" heading="Approve Repair for Customer">
         <s-stack direction="block" gap="base">
@@ -2252,19 +2252,19 @@ export default function MetafieldManager({ surface = "block" } = {}) {
             It does exactly what their approval does: they pay at the store when they collect, the customer is
             emailed a confirmation, and the store is told to start the repair.
           </s-text>
-          {!ready ? (
-            <s-text tone="subdued">{`Available once you ${waitingOn.join(" and ")}.`}</s-text>
+          {!tagged && !approvalMsg ? (
+            <s-text tone="subdued">{`Available once the draft has the "${APPROVAL_READY_TAG}" tag.`}</s-text>
           ) : null}
-          {ready && !draftInfo ? (
+          {!draftInfo ? (
             <s-text tone="caution">
               Couldn't read this draft's details, so approval is unavailable. Close and reopen the panel. If this
               keeps happening, the app may be missing permission to read draft orders.
             </s-text>
           ) : null}
-          {ready && !can && blockedReason && !approvalMsg ? <s-text tone="subdued">{blockedReason}</s-text> : null}
+          {tagged && !can && blockedReason && !approvalMsg ? <s-text tone="subdued">{blockedReason}</s-text> : null}
           {!approvalOpen ? (
             <s-button
-              onClick={() => { setApprovalOpen(true); setApprovalMsg(""); }}
+              onClick={() => { if (can) { setApprovalOpen(true); setApprovalMsg(""); } }}
               disabled={Boolean(!can)}
             >
               Approve on behalf of customer
