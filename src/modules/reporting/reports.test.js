@@ -265,9 +265,9 @@ console.log('savings plans in the sales report');
     assert.deepStrictEqual([c.plan_status, c.plan_installments, c.plan_total, c.plan_paid, c.plan_balance, c.plan_next_due, c.plan_next_amount],
       ['Active: on track', 10, 20000, 4000, 16000, '2027-01-12', 2000]);
   });
-  t('a late savings plan shows how late and when it closes', () => {
+  t('a late savings plan shows how late and when it closes (two late in a row: 8 days after the next due date)', () => {
     const c = savingsColumns(splan, legs, '2027-01-20');
-    assert.deepStrictEqual([c.plan_status, c.plan_closes_on], ['Active: 8 days late', '2027-02-12']);
+    assert.deepStrictEqual([c.plan_status, c.plan_closes_on], ['Active: 8 days late', '2027-02-20']);
   });
   t('an ended savings plan shows its voucher', () => {
     const c = savingsColumns({ ...splan, status: 'completed', voucher_code: 'SSV27-KAHSR-0001', voucher_value: 22000 }, legs, '2027-09-12');

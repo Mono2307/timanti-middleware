@@ -1,25 +1,31 @@
 'use strict';
 
-// Savings plan — the rules. Pure functions, no I/O. (Founder / HQ decisions, 9–12 Nov 2026; the
-// customer terms are Timanti_Savings_Plan_Design_and_TnC_v5.)
+// Savings plan — the rules. Pure functions, no I/O. (Founder / HQ decisions, 9–12 Nov 2026, revised
+// 23 Nov 2026; the customer terms are Timanti_Savings_Plan_Design_and_TnC.)
 //
 // A savings plan is a Shopify draft order with one custom line, "Savings Plan", priced at
 // instalment × months. It never becomes an order: at the end it pays out a Savings Scheme Voucher.
 //
-//   - 6 or 10 monthly instalments of a FIXED amount A, chosen at enrolment (₹1,000 to ₹1,00,000,
+//   - 6 or 10 monthly instalments of a FIXED amount A, chosen at enrolment (₹2,000 to ₹1,00,000,
 //     in multiples of ₹100). A cannot change; the line price is A × months.
 //   - Instalment 1 is due on the start date, the rest on the same day of each following month.
 //   - Bonus (a share of ONE instalment): 6 months → 50%, 10 months → 100% (BlueStone 10+1).
 //   - 10-month plan only, early redemption on BlueStone's steps: from month 6 with 5 instalments
 //     paid → 25%; from month 8 with 7 paid → 50%.
-//   - Paid in full early (prepaid): the full bonus straight away (HQ, 12 Nov 2026 — see
-//     PREPAID_BONUS_NOW; the founder may move it to the maturity date).
-//   - Late = an instalment covered after its due date. More than LATE_LIMIT late → no bonus at all.
-//   - Grace: an unpaid instalment may be paid up to GRACE_DAYS after its due date. On the day after
-//     that the plan terminates: a voucher for the money paid, plus the bonus of the early-redemption
-//     step already reached (10-month plan: 25% after 5 from month 6, 50% after 7 from month 8). A
-//     bonus the plan has earned is never taken back; only the bonus still to come is lost (founder,
-//     18 Nov 2026). The late rule still applies: more than LATE_LIMIT late, no bonus at all.
+//   - LATE = an instalment covered more than LATE_GRACE_DAYS (7) after its due date. One paid within
+//     the 7 days is on time. An instalment still unpaid 7 days after its due date is late too.
+//   - Late payments cut the bonus (founder, 23 Nov 2026): 2 late in the plan → a quarter of the bonus
+//     is lost (75% kept); 4 late → half is lost (50% kept). BONUS_CUTS.
+//   - TWO LATE IN A ROW close the plan (founder, 23 Nov 2026; this replaced the 30-day close). It
+//     closes on the day the second one becomes late: 8 days after its due date. An instalment never
+//     paid is late, so a customer who simply stops is closed 8 days after the NEXT due date (for the
+//     last instalment, 8 days after the maturity date).
+//   - A closing plan pays a voucher for the money paid, plus the bonus of the early-redemption step
+//     already reached (10-month plan), with the late cut. A bonus earned is never taken back; only the
+//     bonus still to come is lost (founder, 18 Nov 2026).
+//   - Paid in full early (prepaid): no bonus in advance (founder, 23 Nov 2026, PREPAID_BONUS_NOW =
+//     false). Redeemed before the maturity date, the voucher carries only the bonus earned by then (a
+//     step reached); left until the maturity date, it gets the full bonus.
 //   - The customer stopping the plan is a termination too, on the same terms.
 //   - Never a cash refund.
 //
@@ -32,14 +38,20 @@
 const { addMonths } = require('../../adjustments/cad_advance');
 
 const MONTH_CHOICES = [6, 10];
-const MIN_INSTALMENT = 1000;
+const MIN_INSTALMENT = 2000;
 const MAX_INSTALMENT = 100000;
 const INSTALMENT_STEP = 100;
-const LATE_LIMIT = 2;
-const GRACE_DAYS = 30;
-const GRACE_WARN_DAYS = [15, 25];
+// Paid within this many days of its due date, an instalment is on time.
+const LATE_GRACE_DAYS = 7;
+// The bonus kept after late payments: the first row whose `late` the count reaches.
+const BONUS_CUTS = [{ late: 4, keepPct: 50 }, { late: 2, keepPct: 75 }];
+// A warning goes out this many days before the plan would close.
+const CLOSE_WARN_DAYS = 5;
 const VOUCHER_MONTHS = 12;
-const PREPAID_BONUS_NOW = true;
+const PREPAID_BONUS_NOW = false;
+
+// The share of the bonus a plan with `lateCount` late payments keeps, in %.
+const bonusKeepPct = (lateCount) => (BONUS_CUTS.find(c => lateCount >= c.late) || { keepPct: 100 }).keepPct;
 
 // The bonus at full payment, and the early-redemption steps, as % of one instalment.
 // step.paid: instalments that must be paid; step.month: the month it opens (the due date of
@@ -106,11 +118,15 @@ const datesOf = (plan) => ((plan.due_dates || []).length ? plan.due_dates.map(is
 //   n, A, dates, maturity        the plan
 //   paid, paidCount              money in; whole instalments it covers (capped at n)
 //   overpaid                     money beyond n × A (staff check; it still goes on the voucher)
-//   lateCount, bonusOk           instalments covered after their due date; lateCount ≤ LATE_LIMIT
+//   lateCount, bonusKeepPct      instalments covered more than 7 days after their due date; the % of
+//                                the bonus kept (BONUS_CUTS). bonusOk: nothing cut.
 //   oddPayments                  payments that are not a whole number of instalments
 //   next                         { k, due } — the first instalment not yet covered, or null
-//   overdueDays, closeOn         how late `next` is; the day the plan terminates if it stays unpaid
-//   terminateNow, warn           closeOn has come; the grace warning due ('grace15' | 'grace25')
+//   overdueDays, lateOn          how late `next` is; the day it counts as late (due + 8)
+//   closeOn, closePair           the day the plan closes (two late in a row) if nothing more is paid,
+//                                and the two instalments [k, k+1] that close it; null when fully paid
+//   terminateNow, warn           closeOn has come; the warning due ('late' — `next` has become late;
+//                                'closing' — the plan closes within CLOSE_WARN_DAYS)
 //   dueNow                       what to ask for now: every instalment due by today and not covered
 //   fullyPaid
 //   redeem                       what redeeming TODAY would pay out (see redeemOptions)
@@ -140,7 +156,7 @@ function savingsState(plan, legs, today) {
     for (let q = before + 1; q <= after; q++) {
       const on = p.date || dates[q - 1];
       coveredOn[q] = on;
-      late[q] = on > dates[q - 1];
+      late[q] = daysBetween(dates[q - 1], on) > LATE_GRACE_DAYS;
     }
   }
   const paidCount = A > 0 ? Math.min(n, Math.floor(paid / A)) : 0;
@@ -150,19 +166,43 @@ function savingsState(plan, legs, today) {
 
   const next = fullyPaid ? null : { k: paidCount + 1, due: dates[paidCount] };
   const overdueDays = next && next.due < now ? daysBetween(next.due, now) : 0;
-  const closeOn = next ? addDays(next.due, GRACE_DAYS + 1) : null;
+  const lateOn = next ? addDays(next.due, LATE_GRACE_DAYS + 1) : null;
+
+  // Two late in a row. lateDay(k): the day instalment k became (or will become) late — due + 8 — or
+  // null if it was covered on time. Covered instalments are known; uncovered ones (from `next` on)
+  // are late from due + 8 unless paid first. The last instalment's partner is the maturity date, so a
+  // plan whose last instalment is never paid still closes.
+  const maturity = maturityDate(plan.start_date, n);
+  const lateDay = (k) => {
+    if (k > n) return coveredOn[n] ? null : addDays(maturity, LATE_GRACE_DAYS + 1);
+    if (coveredOn[k]) return late[k] ? addDays(dates[k - 1], LATE_GRACE_DAYS + 1) : null;
+    return addDays(dates[k - 1], LATE_GRACE_DAYS + 1);
+  };
+  let closeOn = null;
+  let closePair = null;
+  if (!fullyPaid) {
+    for (let k = 1; k <= n; k++) {
+      const a = lateDay(k), b = lateDay(k + 1);
+      if (!a || !b) continue;
+      const on = a > b ? a : b;
+      if (!closeOn || on < closeOn) { closeOn = on; closePair = [k, k + 1]; }
+    }
+  }
   const terminateNow = Boolean(closeOn && now >= closeOn);
   let warn = null;
-  for (const w of GRACE_WARN_DAYS) if (overdueDays >= w && !terminateNow) warn = `grace${w}`;
+  if (next && !terminateNow) {
+    if (closeOn && daysBetween(now, closeOn) <= CLOSE_WARN_DAYS) warn = 'closing';
+    else if (now >= lateOn) warn = 'late';
+  }
 
   const dueByToday = dates.filter(d => d <= now).length;
   const owedInstalments = Math.max(0, dueByToday - paidCount);
   const dueNow = fullyPaid ? 0 : owedInstalments * A - (paid - paidCount * A);
 
   const state = {
-    n, A, dates, maturity: maturityDate(plan.start_date, n),
-    paid, paidCount, overpaid, lateCount, bonusOk: lateCount <= LATE_LIMIT, oddPayments,
-    next, overdueDays, closeOn, terminateNow, warn, dueNow: Math.max(0, dueNow), fullyPaid,
+    n, A, dates, maturity,
+    paid, paidCount, overpaid, lateCount, bonusKeepPct: bonusKeepPct(lateCount), bonusOk: lateCount < BONUS_CUTS[BONUS_CUTS.length - 1].late, oddPayments,
+    next, overdueDays, lateOn, closeOn, closePair, terminateNow, warn, dueNow: Math.max(0, dueNow), fullyPaid,
   };
   state.redeem = redeemOptions(plan, state, now);
   state.rows = dates.map((due, i) => {
@@ -177,7 +217,8 @@ function savingsState(plan, legs, today) {
 //   kind 'full'   every instalment paid (on or before maturity) — the plan's full bonus
 //        'early'  a 10-month plan on an early-redemption step (5 paid from month 6, 7 from month 8)
 //        'none'   nothing earns a bonus yet: stopping now returns the money paid, no bonus
-//   pct, bonus, value = paid + bonus. bonusLost: a bonus the plan would earn but for the late rule.
+//   pct (the share of one instalment, after the late cut), bonus, value = paid + bonus.
+//   bonusLost: what the late cut took off.
 function redeemOptions(plan, st, today) {
   const rules = PLANS[st.n] || { fullPct: 0, steps: [] };
   let kind = 'none';
@@ -189,16 +230,17 @@ function redeemOptions(plan, st, today) {
     }
   }
   const earned = Math.round(st.A * pct / 100);
-  const bonus = st.bonusOk ? earned : 0;
-  return { kind, pct: st.bonusOk ? pct : 0, bonus, value: st.paid + bonus, bonusLost: st.bonusOk ? 0 : earned };
+  const keep = st.bonusKeepPct ?? 100;
+  const bonus = Math.round(earned * keep / 100);
+  return { kind, pct: pct * keep / 100, bonus, value: st.paid + bonus, bonusLost: earned - bonus };
 }
 
 // The voucher for how the plan ends. how: 'full' | 'early' | 'terminated' | 'stopped'.
 // Returns { ok, paid, pct, bonus, value, reason } — ok false with a reason when it cannot end that way.
 function payoutFor(plan, st, how) {
-  // A plan paid in full earns the full bonus (prepaid included): stopping it would only take the bonus
-  // away (founder, 16 Nov 2026). A terminated plan is never fully paid, so this only bites 'stopped'.
-  if (how === 'stopped' && st.fullyPaid) {
+  // A plan with its full bonus due (paid in full, maturity reached): stopping it would only take the
+  // bonus away. A prepaid plan before its maturity date may stop: it gets the bonus earned so far.
+  if (how === 'stopped' && st.redeem.kind === 'full') {
     return { ok: false, reason: 'Every instalment is paid: issue the voucher with the full bonus instead' };
   }
   if (how === 'terminated' || how === 'stopped') {
@@ -234,8 +276,8 @@ const isSavingsDraftTags = (tags) => (Array.isArray(tags) ? tags : String(tags |
   .some(t => String(t).trim().toLowerCase() === PLAN_TAG);
 
 module.exports = {
-  MONTH_CHOICES, MIN_INSTALMENT, MAX_INSTALMENT, INSTALMENT_STEP, LATE_LIMIT, GRACE_DAYS, GRACE_WARN_DAYS,
-  VOUCHER_MONTHS, PREPAID_BONUS_NOW, PLANS, SAVINGS_LINE_TITLE, PLAN_TAG, STATUS_TAGS,
+  MONTH_CHOICES, MIN_INSTALMENT, MAX_INSTALMENT, INSTALMENT_STEP, LATE_GRACE_DAYS, BONUS_CUTS, CLOSE_WARN_DAYS,
+  VOUCHER_MONTHS, PREPAID_BONUS_NOW, bonusKeepPct, PLANS, SAVINGS_LINE_TITLE, PLAN_TAG, STATUS_TAGS,
   dueDates, maturityDate, enrolmentProblems, instalmentFromLine, savingsState, redeemOptions, payoutFor, accruedBonus,
   statusTag, isSavingsStatusTag, isSavingsLine, isSavingsDraftTags, parseAmount, daysBetween, addDays,
 };

@@ -256,7 +256,14 @@ function snapshotLegs(plan, readInstallments) {
   return readInstallments(snap.metafields || {}).filter(l => l.type !== 'cad_advance');
 }
 
+// OFF DISPLAY (founder, 23 Nov 2026). The plan's piece stays on display while the plan runs; one month
+// before the last installment is due it comes off display and a replenishment order is placed for the
+// display (if it sold meanwhile, the replenishment order was placed then). The day that falls due.
+const REORDER_MONTHS_BEFORE = 1;
+const reorderOn = (st) => (st && st.dates && st.dates.length ? addMonths(st.dates[st.dates.length - 1], -REORDER_MONTHS_BEFORE) : null);
+
 module.exports = {
+  REORDER_MONTHS_BEFORE, reorderOn,
   statusLabel, snapshotLegs,
   PLAN_INSTALLMENTS, INSTALLMENT_CHOICES, MIN_PAYMENT, CLOSE_AFTER_DAYS, WARN_DAYS, LAST_CLOSE_AFTER_DAYS, LAST_WARN_DAYS,
   dueDates, countOf, datesOf, periodOf, floats, awaitingFinalPrice, priceChanges, currentTotal,

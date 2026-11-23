@@ -17,7 +17,7 @@ const EVERY_MS = 10 * 60 * 1000;
 const COLUMNS = ['Draft', 'Customer', 'Phone', 'Email', 'Months', 'Instalment', 'Start', 'Matures',
   'Saved', 'Instalments paid', 'Late payments', 'Next due', 'Next amount', 'Status', 'Closes on',
   'Redeem now', 'Voucher', 'Draft link', 'Updated'];
-const STATUS = { completed: 'Completed (voucher issued)', terminated: 'Closed (voucher, no bonus)', redeemed: 'Voucher used up', cancelled: 'Cancelled' };
+const STATUS = { completed: 'Completed (voucher issued)', terminated: 'Closed (two late in a row)', redeemed: 'Voucher used up', cancelled: 'Cancelled' };
 
 // Pure: one sheet row from a plan, its payments (the draft's legs, or none if the draft was not read).
 function rowFor(plan, legs, today) {

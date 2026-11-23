@@ -30,6 +30,7 @@ fake('./notify.js', {
   sendPricePutBack: async (plan, d, fixes, error) => world.sent.push(`put-back:${fixes.map(f => f.to).join(',')}${error ? ':failed' : ''}`),
   sendReceived: async (plan, d, amount) => world.sent.push(`received:${amount}`),
   sendCompleted: async () => world.sent.push('completed'),
+  sendReorder: async (plan, d, o) => world.sent.push(`reorder:${o.lastDue}`),
   sendConvertedOwing: async (plan, d, owed) => world.sent.push(`converted-owing:${owed}`),
   sendStaffDigest: async (rows) => world.sent.push(`digest:${rows.length}`),
   sendFinalPrice: async (plan, d, link) => world.sent.push(`final-price:${plan.final_total}:${link ? link.amount : 'none'}`),
@@ -123,6 +124,18 @@ const five = D.slice(0, 5).map(d => paid(d, 20000));
     world.markers.add('1|1|customer|overdue');
     await runBuyPlanSweep({ now: at('2026-11-21') });
     assert.deepStrictEqual(world.sent.filter(s => !s.startsWith('digest')), ['due#2:40000']);
+  });
+
+  await t('a month before the last installment: the store is told once to take the piece off display and reorder', async () => {
+    reset({ legs: five });
+    await runBuyPlanSweep({ now: at('2027-02-23') });
+    assert.deepStrictEqual(world.sent.filter(s => s.startsWith('reorder')), []);
+    await runBuyPlanSweep({ now: at('2027-02-24') });
+    await runBuyPlanSweep({ now: at('2027-02-25') });
+    assert.deepStrictEqual(world.sent.filter(s => s.startsWith('reorder')), ['reorder:2027-03-24']);
+    const { rowFor, COLUMNS } = require('./sheet');
+    assert.match(rowFor(world.plans[0], five, '2027-02-25')[COLUMNS.indexOf('Off display')], /^Now/);
+    assert.strictEqual(rowFor(world.plans[0], five, '2027-01-10')[COLUMNS.indexOf('Off display')], '2027-02-24');
   });
 
   await t('the digest goes once a day even if the sweep runs four times', async () => {

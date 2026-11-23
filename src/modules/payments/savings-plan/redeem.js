@@ -42,12 +42,63 @@ function afterUse(inst, used) {
   return { used: take, left, closes: left < 1 };
 }
 
+// STUDDED ONLY (founder, 23 Nov 2026): a Savings Scheme Voucher is never spent on a piece with no
+// diamond value (the variant metafield custom.price_breakup_diamond is 0 or missing: chains, coins,
+// plain gold). No product mixes studded and plain variants (checked 23 Nov 2026), so a product-level
+// rule is exact.
+//   online   the Shopify code is limited to the smart collection STUDDED_HANDLE (variant diamond value
+//            > 0), made once by setup-studded.js. Without it the code falls back
+//            to every product, and the log says so.
+//   in store the apply step caps the voucher at the studded share of the bill (studdedBillOnDraft),
+//            and refuses it on a bill with no studded piece.
+const STUDDED_HANDLE = 'savings-voucher-studded';
+const DIAMOND_KEY = { namespace: 'custom', key: 'price_breakup_diamond' };
+let studdedId = null;
+async function studdedCollectionId(deps = {}) {
+  if (studdedId && !deps.graphql) return studdedId;
+  const gql = deps.graphql || require('../../../core/shopify').graphql;
+  const r = await gql(`query($q: String!) { collections(first: 1, query: $q) { nodes { legacyResourceId handle } } }`, { q: `handle:${STUDDED_HANDLE}` });
+  const hit = (r?.collections?.nodes || []).find(c => c.handle === STUDDED_HANDLE);
+  if (hit && !deps.graphql) studdedId = String(hit.legacyResourceId);
+  return hit ? String(hit.legacyResourceId) : null;
+}
+
+// Pure: the part of a bill on studded pieces. lines: [{ amount, diamond }] (amount after line
+// discounts); billTotal: the draft's total (tax in). The bill is shared out in proportion to the lines.
+function studdedBill(lines, billTotal) {
+  const all = (lines || []).reduce((s, l) => s + Math.max(0, Number(l.amount) || 0), 0);
+  const ok = (lines || []).filter(l => Number(l.diamond) > 0).reduce((s, l) => s + Math.max(0, Number(l.amount) || 0), 0);
+  if (!(all > 0) || !(ok > 0)) return 0;
+  return r2((Number(billTotal) || 0) * ok / all);
+}
+
+// The studded part of a draft's bill (REST draft payload). Throws if the diamond values cannot be read.
+async function studdedBillOnDraft(draft, deps = {}) {
+  const gql = deps.graphql || require('../../../core/shopify').graphql;
+  const items = draft.line_items || [];
+  const ids = [...new Set(items.map(li => li.variant_id).filter(Boolean).map(String))];
+  const diamond = {};
+  for (let i = 0; i < ids.length; i += 100) {
+    const r = await gql(`query($ids: [ID!]!) { nodes(ids: $ids) { ... on ProductVariant { legacyResourceId metafield(namespace: "${DIAMOND_KEY.namespace}", key: "${DIAMOND_KEY.key}") { value } } } }`,
+      { ids: ids.slice(i, i + 100).map(id => `gid://shopify/ProductVariant/${id}`) });
+    for (const n of r?.nodes || []) if (n && n.legacyResourceId) diamond[String(n.legacyResourceId)] = Number(n.metafield?.value) || 0;
+  }
+  const lines = items.map(li => ({
+    amount: (Number(li.price) || 0) * (Number(li.quantity) || 1) - (Number(li.applied_discount?.amount) || 0),
+    diamond: li.variant_id ? diamond[String(li.variant_id)] || 0 : 0,
+  }));
+  return studdedBill(lines, draft.total_price);
+}
+
 // The Shopify side of a Savings Scheme Voucher: a customer-bound, single-use fixed discount with no
 // minimum purchase (Shopify caps a fixed discount at the order's subtotal; the balance is re-made by
-// settleUse). Returns the price rule id. Used at issue (voucher.js) and after every part use.
+// settleUse), limited to studded pieces (STUDDED_HANDLE). Returns the price rule id. Used at issue (voucher.js) and after every part use.
 async function makeDiscount({ code, amount, customerId, endsAt }) {
+  const col = await studdedCollectionId().catch(e => { log.error('savings-plan', `${code}: studded collection lookup: ${e.message}`); return null; });
+  if (!col) log.warn('savings-plan', `${code}: no ${STUDDED_HANDLE} collection: the online code works on every product (run savings-plan/setup-studded.js --apply)`);
   const { price_rule: rule } = await postJson('price_rules.json', { price_rule: {
-    title: code, target_type: 'line_item', target_selection: 'all', allocation_method: 'across',
+    title: code, target_type: 'line_item', allocation_method: 'across',
+    ...(col ? { target_selection: 'entitled', entitled_collection_ids: [Number(col)] } : { target_selection: 'all' }),
     value_type: 'fixed_amount', value: `-${r2(amount).toFixed(2)}`,
     customer_selection: 'prerequisite', prerequisite_customer_ids: [Number(customerId)],
     starts_at: new Date().toISOString(), ends_at: endsAt, usage_limit: 1,
@@ -125,4 +176,5 @@ async function settleUse({ code, used, orderId, orderName, channel, deps = {} })
   }
 }
 
-module.exports = { isSavingsCode, remainingOf, usableOn, afterUse, settleUse, makeDiscount, deleteDiscount, USES };
+module.exports = { isSavingsCode, remainingOf, usableOn, afterUse, settleUse, makeDiscount, deleteDiscount, USES,
+  STUDDED_HANDLE, studdedCollectionId, studdedBill, studdedBillOnDraft };

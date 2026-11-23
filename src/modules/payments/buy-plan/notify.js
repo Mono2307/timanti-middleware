@@ -146,6 +146,26 @@ async function sendConvertedOwing(plan, d, owed) {
   });
 }
 
+// Internal: a month before the last installment, the piece comes off display (sweep step 12).
+async function sendReorder(plan, d, { lastDue, reorderOn }) {
+  const pieces = ((d && d.draft && d.draft.line_items) || []).filter(li => li.variant_id).map(li => `${li.title}${li.sku ? ` (${li.sku})` : ''}`);
+  await sendEmail({
+    to: STORE(), internal: true,
+    subject: `Buy plan ${plan.draft_name}: take the piece off display and reorder`,
+    html: T.buildSavingsPlanStaffHtml({
+      heading: `${plan.draft_name}: a month to the last installment`,
+      body: `The last installment is due on ${T.planDate(lastDue)}. Take the piece off display today, keep it for the customer, and place the replenishment order for the display. `
+        + 'If the piece was sold while on display, its replenishment order was placed then: check the piece the customer will get is ready. '
+        + 'If the new piece weighs more, the price does not change. If it weighs less, change the product on the plan: the difference goes back to the customer.',
+      adminUrl: d ? adminDraftUrl(d.id) : adminDraftUrl(plan.draft_order_id),
+      facts: [{ label: 'Customer', value: `${plan.customer_name || '—'} ${plan.customer_phone || ''}` },
+        { label: 'Plan', value: plan.mode === 'gold' ? 'Gold value lock' : 'Equal installments' },
+        ...(pieces.length ? [{ label: 'Pieces', value: pieces.join(', ') }] : []),
+        { label: 'Off display from', value: T.planDate(reorderOn) }],
+    }),
+  });
+}
+
 async function sendCompleted(plan) {
   await sendEmail({
     to: plan.customer_email,
@@ -299,6 +319,6 @@ async function sendRestored({ plan, oldName, newName, newId, d }) {
 }
 
 module.exports = {
-  sendStarted, sendGoldLink, sendLink, sendReceived, sendCompleted, sendConvertedOwing, sendFinalPrice, sendFinalCredit,
+  sendStarted, sendGoldLink, sendLink, sendReceived, sendReorder, sendCompleted, sendConvertedOwing, sendFinalPrice, sendFinalCredit,
   sendClosingSoon, sendForfeited, sendVoucherIssued, sendCancelled, sendChanged, sendLinesChanged, sendPricePutBack, sendStaffDigest, sendRestored, whatsappUrl,
 };

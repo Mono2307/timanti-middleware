@@ -3,7 +3,7 @@
 // Savings plan — how a plan ends. Two steps, as on the buy plan: the system decides that a plan can
 // end, and a person issues the voucher.
 //
-//   terminatePlan  the sweep, 30 days past an unpaid due date: status terminated, the draft tagged,
+//   terminatePlan  the sweep, two instalments in a row late (rules.js): status terminated, the draft tagged,
 //                  open links cancelled, the customer and the store told. No voucher yet.
 //   issueVoucher   staff, on the draft's savings screen: 'full' (every instalment paid), 'early'
 //                  (a 10-month plan on its month-6 / month-8 step, after the customer asked), 'stopped'
@@ -38,7 +38,7 @@ async function terminatePlan(plan, d, st, today, reason) {
   const rs = (v) => `Rs${Number(v || 0).toLocaleString('en-IN')}`;
   await notify.toStore(plan, d, {
     subject: 'closed — issue the voucher', heading: 'plan closed for non-payment',
-    body: `Instalment ${st.next ? st.next.k : ''} was not paid within ${R.GRACE_DAYS} days of its due date. Check the payments on the draft, then open the savings plan screen and press Issue voucher. `
+    body: `The plan closed for non-payment: ${notify.closedWhy(st)} (two late payments in a row). Check the payments on the draft, then open the savings plan screen and press Issue voucher. `
       + (due.bonus > 0
         ? `The voucher is the money paid plus the ${due.pct}% bonus the plan had already earned (${rs(due.bonus)}). `
         : 'The voucher is the money paid, with no bonus. ')
@@ -58,7 +58,9 @@ function choices(plan, st) {
   }
   if (plan.status !== 'active') return [];
   const out = [];
-  for (const [how, label] of [['full', 'Issue the voucher'], ['early', 'Redeem early'], ['stopped', 'Customer stops the plan (no bonus)']]) {
+  // A prepaid plan before its maturity date: 'stopped' is the customer taking the voucher now, with no bonus.
+  const stopLabel = st.fullyPaid ? 'Issue the voucher now (paid ahead: no bonus before the maturity date)' : 'Customer stops the plan (no bonus)';
+  for (const [how, label] of [['full', 'Issue the voucher'], ['early', 'Redeem early'], ['stopped', stopLabel]]) {
     // On an early-redemption step, stopping pays exactly what redeeming early does: show only Redeem early.
     if (how === 'stopped' && out.some(c => c.how === 'early')) continue;
     const p = R.payoutFor(plan, st, how);
@@ -92,7 +94,7 @@ async function issueVoucher(plan, d, st, { how, today, by = null }) {
   }
   const status = how === 'full' || how === 'early' ? 'completed' : 'terminated';
   const patch = {
-    status, end_kind: how, late_count: st.lateCount, paid_at_end: p.paid, bonus_pct: p.pct, bonus: p.bonus,
+    status, end_kind: how, late_count: st.lateCount, paid_at_end: p.paid, bonus_pct: Math.round(p.pct), bonus: p.bonus,
     voucher_code: voucher.code, voucher_value: voucher.value, voucher_issued_at: new Date().toISOString(),
     closed_at: plan.closed_at || new Date().toISOString(),
     closed_reason: plan.closed_reason || (how === 'stopped' ? `stopped by the customer (${by || 'staff'})` : how === 'early' ? 'redeemed early' : 'completed'),

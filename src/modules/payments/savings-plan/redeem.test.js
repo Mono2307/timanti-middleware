@@ -110,5 +110,37 @@ const SSV = { serial_code: 'SSV27-KAHSR-0001', value: 22000, remaining: 22000, s
     assert.deepStrictEqual([r.left, w.inst.status, w.inst.remaining], [17000, 'open', 17000]);
   });
 
+  console.log('studded only');
+  await t('the studded share of a bill: lines with a diamond value, in proportion', async () => {
+    assert.strictEqual(X.studdedBill([{ amount: 60000, diamond: 30000 }, { amount: 40000, diamond: 0 }], 103000), 61800);
+    assert.strictEqual(X.studdedBill([{ amount: 40000, diamond: 0 }], 41200), 0);
+    assert.strictEqual(X.studdedBill([{ amount: 50000, diamond: 1 }], 51500), 51500);
+    assert.strictEqual(X.studdedBill([], 0), 0);
+  });
+  await t('on a draft: variant diamond values are read; custom lines and plain gold count for nothing', async () => {
+    const graphql = async (q, v) => ({ nodes: v.ids.map(g => ({ legacyResourceId: g.split('/').pop(), metafield: g.endsWith('/11') ? { value: '25000.5' } : { value: '0' } })) });
+    const draft = { total_price: '82400.00', line_items: [
+      { variant_id: 11, price: '60000.00', quantity: 1 },
+      { variant_id: 22, price: '15000.00', quantity: 1 },
+      { variant_id: null, title: 'Engraving', price: '5000.00', quantity: 1 },
+    ] };
+    assert.strictEqual(await X.studdedBillOnDraft(draft, { graphql }), 61800);
+    const plain = { total_price: '15450.00', line_items: [{ variant_id: 22, price: '15000.00', quantity: 1 }] };
+    assert.strictEqual(await X.studdedBillOnDraft(plain, { graphql }), 0);
+  });
+  await t('a line discount comes off the line before the share', async () => {
+    const graphql = async (q, v) => ({ nodes: v.ids.map(g => ({ legacyResourceId: g.split('/').pop(), metafield: { value: g.endsWith('/11') ? '1' : '0' } })) });
+    const draft = { total_price: '100000', line_items: [
+      { variant_id: 11, price: '60000', quantity: 1, applied_discount: { amount: '10000' } },
+      { variant_id: 22, price: '50000', quantity: 1 },
+    ] };
+    assert.strictEqual(await X.studdedBillOnDraft(draft, { graphql }), 50000);
+  });
+  await t('the studded collection is found by its handle', async () => {
+    const graphql = async () => ({ collections: { nodes: [{ legacyResourceId: '777', handle: X.STUDDED_HANDLE }] } });
+    assert.strictEqual(await X.studdedCollectionId({ graphql }), '777');
+    assert.strictEqual(await X.studdedCollectionId({ graphql: async () => ({ collections: { nodes: [] } }) }), null);
+  });
+
   console.log(`\n${n} savings-voucher part-use tests passed`);
 })().catch((e) => { console.error(e); process.exit(1); });

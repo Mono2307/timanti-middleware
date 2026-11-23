@@ -14,7 +14,7 @@ const { readInstallments } = require('../installments');
 const { readDraft, todayIst, adminDraftUrl } = require('./draft');
 
 const EVERY_MS = 10 * 60 * 1000;
-const COLUMNS = ['Draft', 'Customer', 'Phone', 'Email', 'Plan', 'Installments', 'Start', 'Last due',
+const COLUMNS = ['Draft', 'Customer', 'Phone', 'Email', 'Plan', 'Installments', 'Start', 'Last due', 'Off display',
   'Plan total', 'Paid', 'Balance', 'Next due', 'Next amount', 'Due now', 'Status', 'Closes on', 'Warning',
   'Voucher', 'Payments', 'Draft link', 'Updated'];
 
@@ -27,6 +27,8 @@ function rowFor(plan, legs, today, draftExists = true) {
   return [
     plan.draft_name, plan.customer_name || '', plan.customer_phone || '', plan.customer_email || '',
     plan.mode === 'gold' ? 'Gold value lock' : 'Equal', st.n, plan.start_date, st.dates[st.n - 1] || '',
+    // A month before the last installment the piece comes off display and is reordered (schedule.js).
+    plan.status === 'active' && S.reorderOn(st) ? (today >= S.reorderOn(st) ? `Now: off display, reorder (from ${S.reorderOn(st)})` : S.reorderOn(st)) : '',
     st.total, st.paid, st.balance,
     plan.status === 'active' && st.upcoming ? st.upcoming.due : '', plan.status === 'active' && st.upcoming ? st.upcoming.amount : '',
     plan.status === 'active' ? st.dueNow : '',

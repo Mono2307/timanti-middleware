@@ -8,9 +8,11 @@
 //   1. draft gone / converted     → the store is told, once (a savings draft must never convert)
 //   2. new money since last time  → "payment received"; a payment that is not a whole number of
 //                                   instalments goes on the digest for staff to check
-//   3. fully paid                 → "your plan is complete" to the customer, "issue the voucher" to the store
-//   4. 30 days past a due date    → terminated (end.js)
-//   5. grace day 15 / day 25      → a warning with a fresh link (and the early-redemption value, if any)
+//   3. fully paid                 → at the maturity date: "your plan is complete" to the customer, "issue
+//                                   the voucher" to the store. Before it (prepaid): "the bonus comes on …"
+//   4. two late in a row          → terminated (end.js): the second late instalment 8 days past its due date
+//   5. late / closing             → a warning when the next instalment becomes late (due + 8), and again
+//                                   5 days before the plan would close, with a fresh link
 //   6. a 10-month plan reaches its month-6 / month-8 step → "you can redeem early"
 //   7. next instalment due within 3 days → a GoKwik link for it, email + SMS
 //   8. 3+ days overdue            → one overdue reminder with a link
@@ -101,12 +103,18 @@ async function sweepPlan(plan, today, { dryRun }) {
   }
   if (st.overpaid > 0) out.digest.push(digestRow(plan, `Paid ${rupees(st.overpaid)} more than the plan. It goes on the voucher; check it was meant.`));
 
-  // 3. Fully paid: the customer is told, the store issues the voucher.
+  // 3. Fully paid. On or after the maturity date: the customer is told, the store issues the voucher
+  //    with the full bonus. Before it (prepaid): the bonus waits for the maturity date (founder, 23 Nov
+  //    2026), so the customer is told that once and nothing is issued yet.
   if (st.fullyPaid) {
+    if (st.redeem.kind !== 'full') {
+      if (await once(plan, st.n, 'customer', 'prepaid', dryRun, () => notify.sendPrepaid(plan, d, st))) out.sent.push('prepaid');
+      return { ...out, action: `fully paid ahead — the full bonus is due on ${st.maturity}` };
+    }
     if (await once(plan, st.n, 'customer', 'fullypaid', dryRun, () => notify.sendFullyPaid(plan, d, st))) out.sent.push('fully paid');
     await once(plan, st.n, 'staff', 'fullypaid', dryRun, () => notify.toStore(plan, d, {
       subject: 'fully paid — issue the voucher', heading: 'fully paid',
-      body: 'Every instalment is paid. Check the payments, then open the savings plan screen and press Issue voucher.',
+      body: 'Every instalment is paid and the plan has reached its maturity date. Check the payments, then open the savings plan screen and press Issue voucher.',
       facts: [{ label: 'Paid', value: rupees(st.paid) }, { label: 'Late payments', value: String(st.lateCount) },
         { label: 'Voucher', value: rupees(st.redeem.value) }],
     }));
@@ -114,26 +122,26 @@ async function sweepPlan(plan, today, { dryRun }) {
     return { ...out, action: 'fully paid — voucher to issue' };
   }
 
-  // 4. Termination.
+  // 4. Termination: two instalments in a row late.
   if (st.terminateNow) {
-    if (dryRun) return { ...out, action: `would terminate: instalment ${st.next.k} unpaid since ${st.next.due}` };
-    await terminatePlan(plan, d, st, today, `instalment ${st.next.k} unpaid ${R.GRACE_DAYS} days after ${st.next.due}`);
+    const why = notify.closedWhy(st);
+    if (dryRun) return { ...out, action: `would terminate: ${why}` };
+    await terminatePlan(plan, d, st, today, why);
     return { ...out, action: 'terminated' };
   }
 
-  // 5. Grace warnings.
+  // 5. Late warnings: the next instalment has become late; the plan closes within a few days.
   if (st.warn) {
-    const days = st.warn === 'grace25' ? 25 : 15;
     const earlyNow = st.redeem.kind === 'early' ? st.redeem : null;
     if (await once(plan, st.next.k, 'customer', st.warn, dryRun, async () => {
       const l = await link(plan, linkAmount(st));
-      await notify.sendGraceWarning(plan, d, st, l, { days, closeOn: st.closeOn, earlyNow });
+      await notify.sendLateWarning(plan, d, st, l, { kind: st.warn, closeOn: st.closeOn, earlyNow });
     })) out.sent.push(st.warn);
   }
 
   // 6. Early-redemption step reached (10-month plans).
   if (st.redeem.kind === 'early') {
-    const kind = `early${st.redeem.pct || (st.paidCount >= 7 ? 50 : 25)}`;
+    const kind = `early${st.paidCount >= 7 ? 50 : 25}`;
     const k = st.paidCount >= 7 ? 8 : 6;
     if (await once(plan, k, 'customer', kind, dryRun, () => notify.sendEarlyOpen(plan, d, st))) out.sent.push(kind);
   }
@@ -152,9 +160,12 @@ async function sweepPlan(plan, today, { dryRun }) {
     })) out.sent.push(`overdue ${st.next.k}`);
   }
   if (st.overdueDays >= OVERDUE_AFTER_DAYS) {
+    const onTimeBy = R.addDays(st.next.due, R.LATE_GRACE_DAYS);
+    const lateNote = today > onTimeBy ? 'It is now a late payment.' : `Paid by ${onTimeBy} it still counts as on time.`;
     out.digest.push(digestRow(plan,
-      `Instalment ${st.next.k} (${rupees(linkAmount(st))}) is ${st.overdueDays} days late. The plan closes on ${st.closeOn} if it stays unpaid.`,
-      `Hello ${plan.customer_name || ''}, this is Timanti. Instalment ${st.next.k} of your savings plan (${plan.draft_name}), ${rupees(linkAmount(st))}, was due on ${st.next.due}. The payment link is in your email. Please pay before ${R.addDays(st.closeOn, -1)} to keep your plan.`));
+      `Instalment ${st.next.k} (${rupees(linkAmount(st))}) is ${st.overdueDays} days overdue. ${lateNote} The plan closes on ${st.closeOn} if nothing more is paid.`,
+      `Hello ${plan.customer_name || ''}, this is Timanti. Instalment ${st.next.k} of your savings plan (${plan.draft_name}), ${rupees(linkAmount(st))}, was due on ${st.next.due}. The payment link is in your email. `
+        + (today > onTimeBy ? `Please pay before ${R.addDays(st.closeOn, -1)} to keep your plan.` : `Please pay by ${onTimeBy} so it counts as on time.`)));
   }
   return out;
 }

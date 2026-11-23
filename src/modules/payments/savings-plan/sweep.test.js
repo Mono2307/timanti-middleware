@@ -29,7 +29,9 @@ const log = (s) => async () => { world.sent.push(s); };
 fake('./notify.js', {
   sendStarted: log('started'),
   sendDue: async (plan, d, st, link, o) => world.sent.push(`${o.overdue ? 'overdue' : 'due'}#${o.k}:${link.amount}`),
-  sendGraceWarning: async (plan, d, st, link, o) => world.sent.push(`grace${o.days}${o.earlyNow ? `:early${o.earlyNow.value}` : ''}`),
+  sendLateWarning: async (plan, d, st, link, o) => world.sent.push(`${o.kind}${o.earlyNow ? `:early${o.earlyNow.value}` : ''}`),
+  sendPrepaid: async (plan, d, st) => world.sent.push(`prepaid:${st.redeem.value}`),
+  closedWhy: (st) => `instalments ${st.closePair.join(' and ')} late`,
   sendReceived: async (plan, d, st, amount) => world.sent.push(`received:${amount}`),
   sendEarlyOpen: async (plan, d, st) => world.sent.push(`early:${st.redeem.pct}:${st.redeem.value}`),
   sendFullyPaid: async (plan, d, st) => world.sent.push(`fullypaid:${st.redeem.value}`),
@@ -85,6 +87,7 @@ const t = async (name, fn) => { reset(); await fn(); n++; console.log('  ok  ' +
 const at = (iso) => Date.parse(`${iso}T06:00:00Z`);   // 11:30 IST
 const START = '2026-11-12';
 const D = R.dueDates(START, 10);
+const M10 = R.maturityDate(START, 10);
 
 function setup({ months = 10, legs = [], status = 'active', acknowledged = null } = {}) {
   const plan = { id: 1, draft_order_id: '900', draft_name: '#D900', customer_name: 'Asha', customer_phone: '9800000000',
@@ -96,7 +99,7 @@ function setup({ months = 10, legs = [], status = 'active', acknowledged = null 
     customer: { id: '55' }, mf: {}, legs, tags: ['savings-plan', 'savings-in-progress'] };
   return plan;
 }
-const paid = (k, late = 0) => D.slice(0, k).map((d, i) => ({ value: 2000, date: R.addDays(d, i < late ? 3 : 0), slot: i + 1 }));
+const paid = (k, late = 0) => D.slice(0, k).map((d, i) => ({ value: 2000, date: R.addDays(d, i < late ? 9 : 0), slot: i + 1 }));
 
 (async () => {
   console.log('reminders');
@@ -120,20 +123,22 @@ const paid = (k, late = 0) => D.slice(0, k).map((d, i) => ({ value: 2000, date: 
     assert.deepStrictEqual(world.sent.filter(s => s.startsWith('received')), ['received:2000']);
   });
 
-  console.log('grace and termination');
-  await t('day 15 and day 25 warnings, each once', async () => {
+  console.log('late and closing (two late in a row)');
+  await t('a late warning on day 8, a closing warning 5 days before the close, each once', async () => {
     setup({ legs: paid(3) });
-    for (const day of [15, 16, 25, 26]) await runSavingsSweep({ now: at(R.addDays(D[3], day)) });
-    assert.deepStrictEqual(world.sent.filter(s => s.startsWith('grace')), ['grace15', 'grace25']);
+    for (const day of [R.addDays(D[3], 7), R.addDays(D[3], 8), R.addDays(D[3], 9), R.addDays(D[4], 3), R.addDays(D[4], 4)]) await runSavingsSweep({ now: at(day) });
+    assert.deepStrictEqual(world.sent.filter(s => s === 'late' || s === 'closing'), ['late', 'closing']);
   });
   await t('a warning on an early-redemption step tells the customer what redeeming now pays', async () => {
     setup({ legs: paid(7) });
-    await runSavingsSweep({ now: at(R.addDays(D[7], 15)) });
-    assert.ok(world.sent.includes('grace15:early15000'));
+    await runSavingsSweep({ now: at(R.addDays(D[7], 8)) });
+    assert.ok(world.sent.includes('late:early15000'));
   });
-  await t('day 31: terminated, links cancelled, draft tagged, store told; no voucher yet', async () => {
+  await t('a customer who stops: closed 8 days after the next due date; links cancelled, draft tagged, store told; no voucher yet', async () => {
     const plan = setup({ legs: paid(4) });
-    await runSavingsSweep({ now: at(R.addDays(D[4], 31)) });
+    await runSavingsSweep({ now: at(R.addDays(D[5], 7)) });
+    assert.strictEqual(plan.status, 'active');
+    await runSavingsSweep({ now: at(R.addDays(D[5], 8)) });
     assert.strictEqual(plan.status, 'terminated');
     assert.ok(world.sent.includes('terminated:8000') && world.sent.includes('links-cancelled'));
     assert.ok(world.tags['900'].includes('savings-terminated') && !world.tags['900'].includes('savings-in-progress'));
@@ -147,11 +152,15 @@ const paid = (k, late = 0) => D.slice(0, k).map((d, i) => ({ value: 2000, date: 
     await runSavingsSweep({ now: at(R.addDays(D[5], 1)) });
     assert.deepStrictEqual(world.sent.filter(s => s.startsWith('early')), ['early:25:10500']);
   });
-  await t('fully paid: the customer and the store are told once, and no more links go out', async () => {
+  await t('prepaid: told once that the bonus comes at maturity; at maturity the customer and the store are told once; no links', async () => {
     setup({ legs: [{ value: 20000, date: START, slot: 1 }] });
     await runSavingsSweep({ now: at(START) });
     await runSavingsSweep({ now: at(R.addDays(START, 1)) });
-    assert.deepStrictEqual(world.sent.filter(s => s.startsWith('fullypaid') || s.startsWith('store:')), ['fullypaid:22000', 'store:fully paid — issue the voucher']);
+    assert.deepStrictEqual(world.sent.filter(s => /^(prepaid|fullypaid|store:)/.test(s)), ['prepaid:20000']);
+    const M = R.maturityDate(START, 10);
+    await runSavingsSweep({ now: at(M) });
+    await runSavingsSweep({ now: at(R.addDays(M, 1)) });
+    assert.deepStrictEqual(world.sent.filter(s => /^(prepaid|fullypaid|store:)/.test(s)), ['prepaid:20000', 'fullypaid:22000', 'store:fully paid — issue the voucher']);
     assert.strictEqual(world.links.length, 0);
   });
 
@@ -159,7 +168,7 @@ const paid = (k, late = 0) => D.slice(0, k).map((d, i) => ({ value: 2000, date: 
   await t('full: Rs22,000 voucher, plan completed, outcome written to the draft (bonus never a payment)', async () => {
     const plan = setup({ legs: paid(10) });
     const d = world.drafts['900'];
-    const r = await issueVoucher(plan, d, R.savingsState(plan, d.legs, D[9]), { how: 'full', today: D[9] });
+    const r = await issueVoucher(plan, d, R.savingsState(plan, d.legs, M10), { how: 'full', today: M10 });
     assert.strictEqual(r.voucher.value, 22000);
     assert.deepStrictEqual([plan.status, plan.bonus, plan.paid_at_end, plan.voucher_code], ['completed', 2000, 20000, 'SSV27-KAHSR-0001']);
     assert.ok(world.tags['900'].includes('savings-completed') && world.tags['900'].includes('ssv:SSV27-KAHSR-0001') && world.tags['900'].includes('ssv-bonus:rs2000'));
@@ -169,8 +178,8 @@ const paid = (k, late = 0) => D.slice(0, k).map((d, i) => ({ value: 2000, date: 
   await t('a second press finds the voucher issued', async () => {
     const plan = setup({ legs: paid(10) });
     const d = world.drafts['900'];
-    await issueVoucher(plan, d, R.savingsState(plan, d.legs, D[9]), { how: 'full', today: D[9] });
-    await assert.rejects(issueVoucher(plan, d, R.savingsState(plan, d.legs, D[9]), { how: 'full', today: D[9] }), /already issued/);
+    await issueVoucher(plan, d, R.savingsState(plan, d.legs, M10), { how: 'full', today: M10 });
+    await assert.rejects(issueVoucher(plan, d, R.savingsState(plan, d.legs, M10), { how: 'full', today: M10 }), /already issued/);
     assert.strictEqual(world.vouchers.length, 1);
   });
   await t('early at month 8 with 7 paid: Rs15,000', async () => {
@@ -207,12 +216,13 @@ const paid = (k, late = 0) => D.slice(0, k).map((d, i) => ({ value: 2000, date: 
     const before = setup({ legs: paid(4) });
     assert.deepStrictEqual(choices(before, R.savingsState(before, world.drafts['900'].legs, D[4])).map(c => c.how), ['stopped']);
   });
-  await t('prepaid in full: the only choice is the voucher with the full bonus', async () => {
+  await t('prepaid in full before maturity: the voucher now carries no bonus; at maturity only the full bonus', async () => {
     const plan = setup({ legs: [{ value: 20000, date: D[0], slot: 1 }] });
     const d = world.drafts['900'];
-    const c = choices(plan, R.savingsState(plan, d.legs, D[0]));
-    assert.deepStrictEqual(c.map(x => `${x.how}:${x.value}`), ['full:22000']);
-    await assert.rejects(issueVoucher(plan, d, R.savingsState(plan, d.legs, D[0]), { how: 'stopped', today: D[0] }), /full bonus/);
+    assert.deepStrictEqual(choices(plan, R.savingsState(plan, d.legs, D[0])).map(x => `${x.how}:${x.value}`), ['stopped:20000']);
+    assert.deepStrictEqual(choices(plan, R.savingsState(plan, d.legs, D[7])).map(x => `${x.how}:${x.value}`), ['early:21000']);
+    assert.deepStrictEqual(choices(plan, R.savingsState(plan, d.legs, M10)).map(x => `${x.how}:${x.value}`), ['full:22000']);
+    await assert.rejects(issueVoucher(plan, d, R.savingsState(plan, d.legs, M10), { how: 'stopped', today: M10 }), /full bonus/);
   });
 
   console.log('backdated plans');
@@ -262,7 +272,7 @@ const paid = (k, late = 0) => D.slice(0, k).map((d, i) => ({ value: 2000, date: 
     const at = (c) => row[COLUMNS.indexOf(c)];
     assert.strictEqual(row.length, COLUMNS.length);
     assert.deepStrictEqual([at('Saved'), at('Instalments paid'), at('Late payments'), at('Status'), at('Closes on')],
-      [6000, 3, 1, 'Late 5 days', R.addDays(D[3], 31)]);
+      [6000, 3, 1, 'Late 5 days', R.addDays(D[4], 8)]);
   });
   await t('an ended plan shows its voucher and the figures it ended on', async () => {
     const { rowFor, COLUMNS } = require('./sheet');

@@ -24,11 +24,12 @@ t('matures month 7 / month 11', () => {
 });
 
 console.log('enrolment');
-t('6 or 10 months, ₹1,000–₹1,00,000 in ₹100 steps', () => {
+t('6 or 10 months, ₹2,000–₹1,00,000 in ₹100 steps', () => {
   assert.deepStrictEqual(R.enrolmentProblems({ months: 10, instalment: 2000 }), []);
   assert.deepStrictEqual(R.enrolmentProblems({ months: 6, instalment: 100000 }), []);
   assert.strictEqual(R.enrolmentProblems({ months: 8, instalment: 2000 }).length, 1);
-  assert.strictEqual(R.enrolmentProblems({ months: 6, instalment: 900 }).length, 1);
+  assert.strictEqual(R.enrolmentProblems({ months: 6, instalment: 1900 }).length, 1);
+  assert.strictEqual(R.enrolmentProblems({ months: 6, instalment: 1000 }).length, 1);
   assert.strictEqual(R.enrolmentProblems({ months: 6, instalment: 100100 }).length, 1);
   assert.strictEqual(R.enrolmentProblems({ months: 6, instalment: 2050 }).length, 1);
 });
@@ -61,29 +62,30 @@ t('10-month plan, early at month 8 with 7 paid: ₹15,000', () => {
   const r = at(plan(10), onTime(D10, 7), D10[7]).redeem;
   assert.deepStrictEqual([r.kind, r.pct, r.value], ['early', 50, 15000]);
 });
-t('10-month plan, all paid but 3 late: ₹20,000, no bonus', () => {
-  const legs = D10.map((d, i) => pay(i >= 7 ? R.addDays(d, 5) : d));
-  const s = at(plan(10), legs, '2027-09-12');
-  assert.strictEqual(s.lateCount, 3);
-  assert.deepStrictEqual([s.redeem.bonus, s.redeem.value, s.redeem.bonusLost], [0, 20000, 2000]);
-});
-t('10-month plan, 4 paid, 5th unpaid past 30 days: terminated, voucher ₹8,000', () => {
-  const s = at(plan(10), onTime(D10, 4), R.addDays(D10[4], 31));
-  assert.ok(s.terminateNow);
-  assert.deepStrictEqual(R.payoutFor(plan(10), s, 'terminated'), { ok: true, paid: 8000, pct: 0, bonus: 0, value: 8000, reason: null });
-});
 
-console.log('late payments');
-t('2 late keeps the bonus, the 3rd loses it', () => {
-  const two = D10.map((d, i) => pay(i < 2 ? R.addDays(d, 1) : d));
-  assert.strictEqual(at(plan(10), two, '2027-09-12').redeem.bonus, 2000);
-  const three = D10.map((d, i) => pay(i < 3 ? R.addDays(d, 1) : d));
-  assert.strictEqual(at(plan(10), three, '2027-09-12').redeem.bonus, 0);
+console.log('late payments (7 days grace; 2 late → 75% of the bonus, 4 late → 50%)');
+const lateAt = (dates, which) => dates.map((d, i) => pay(which.includes(i + 1) ? R.addDays(d, 10) : d));
+t('paid on day 7 after the due date is on time; day 8 is late', () => {
+  assert.strictEqual(at(plan(6), [pay(R.addDays(D6[0], 7))], D6[1]).lateCount, 0);
+  assert.strictEqual(at(plan(6), [pay(R.addDays(D6[0], 8))], D6[1]).lateCount, 1);
 });
-t('the late rule also takes the early-redemption bonus', () => {
-  const legs = D10.slice(0, 5).map((d, i) => pay(i < 3 ? R.addDays(d, 2) : d));
-  const r = at(plan(10), legs, D10[5]).redeem;
-  assert.deepStrictEqual([r.kind, r.bonus, r.value], ['early', 0, 10000]);
+t('1 late: the full bonus', () => {
+  assert.strictEqual(at(plan(10), lateAt(D10, [3]), '2027-09-12').redeem.bonus, 2000);
+});
+t('2 late (not in a row): a quarter of the bonus lost — ₹1,500', () => {
+  const r = at(plan(10), lateAt(D10, [2, 5]), '2027-09-12').redeem;
+  assert.deepStrictEqual([r.bonus, r.value, r.bonusLost, r.pct], [1500, 21500, 500, 75]);
+});
+t('3 late: still 75%', () => {
+  assert.strictEqual(at(plan(10), lateAt(D10, [2, 5, 8]), '2027-09-12').redeem.bonus, 1500);
+});
+t('4 late: half the bonus lost — ₹1,000', () => {
+  const s = at(plan(10), lateAt(D10, [1, 3, 5, 7]), '2027-09-12');
+  assert.deepStrictEqual([s.lateCount, s.terminateNow, s.redeem.bonus, s.redeem.value], [4, false, 1000, 21000]);
+});
+t('the cut applies to the early-redemption bonus too', () => {
+  const r = at(plan(10), lateAt(D10.slice(0, 7), [2, 4]), D10[7]).redeem;
+  assert.deepStrictEqual([r.kind, r.bonus, r.value], ['early', 750, 14750]);
 });
 t('a payment on its due date is on time', () => {
   assert.strictEqual(at(plan(6), onTime(D6, 3), D6[2]).lateCount, 0);
@@ -92,40 +94,54 @@ t('a payment typed in with no date counts as on time', () => {
   assert.strictEqual(at(plan(6), [{ value: 2000, slot: 1 }, { value: 2000, slot: 2 }], '2027-01-20').lateCount, 0);
 });
 
-console.log('grace and termination');
-t('day 30 after the due date may still be paid (late); day 31 terminates', () => {
-  const due = D10[3];
-  const s30 = at(plan(10), onTime(D10, 3), R.addDays(due, 30));
-  assert.deepStrictEqual([s30.terminateNow, s30.overdueDays, s30.warn], [false, 30, 'grace25']);
-  const paidDay30 = at(plan(10), [...onTime(D10, 3), pay(R.addDays(due, 30))], R.addDays(due, 30));
-  assert.deepStrictEqual([paidDay30.paidCount, paidDay30.lateCount, paidDay30.terminateNow], [4, 1, false]);
-  assert.ok(at(plan(10), onTime(D10, 3), R.addDays(due, 31)).terminateNow);
+console.log('closing: two late in a row');
+t('a customer who stops after 4: instalment 5 late on day 8, the plan closes 8 days after instalment 6 is due', () => {
+  const late5 = at(plan(10), onTime(D10, 4), R.addDays(D10[4], 8));
+  assert.deepStrictEqual([late5.terminateNow, late5.warn, late5.closeOn, late5.closePair], [false, 'late', R.addDays(D10[5], 8), [5, 6]]);
+  const before = at(plan(10), onTime(D10, 4), R.addDays(D10[5], 7));
+  assert.deepStrictEqual([before.terminateNow, before.warn], [false, 'closing']);
+  const s = at(plan(10), onTime(D10, 4), R.addDays(D10[5], 8));
+  assert.ok(s.terminateNow);
+  assert.deepStrictEqual(R.payoutFor(plan(10), s, 'terminated'), { ok: true, paid: 8000, pct: 0, bonus: 0, value: 8000, reason: null });
 });
-t('grace warnings at day 15 and day 25', () => {
-  const due = D10[2];
-  assert.strictEqual(at(plan(10), onTime(D10, 2), R.addDays(due, 14)).warn, null);
-  assert.strictEqual(at(plan(10), onTime(D10, 2), R.addDays(due, 15)).warn, 'grace15');
-  assert.strictEqual(at(plan(10), onTime(D10, 2), R.addDays(due, 25)).warn, 'grace25');
+t('a late instalment then the next unpaid 8 days past its due date: closes', () => {
+  const legs = [...onTime(D10, 2), pay(R.addDays(D10[2], 12))];   // 3 late
+  assert.strictEqual(at(plan(10), legs, R.addDays(D10[3], 7)).terminateNow, false);
+  assert.strictEqual(at(plan(10), legs, R.addDays(D10[3], 7)).warn, 'closing');
+  assert.strictEqual(at(plan(10), legs, R.addDays(D10[3], 8)).terminateNow, true);
 });
-t('terminated after 7 paid (month-8 step reached): keeps the 50% bonus, ₹14,000 + ₹1,000', () => {
-  const s = at(plan(10), onTime(D10, 7), R.addDays(D10[7], 31));
+t('a late instalment then the next paid on time: the plan runs on', () => {
+  const legs = [...onTime(D10, 2), pay(R.addDays(D10[2], 12)), pay(D10[3])];
+  const s = at(plan(10), legs, R.addDays(D10[4], 1));
+  assert.deepStrictEqual([s.terminateNow, s.lateCount, s.closePair], [false, 1, [5, 6]]);
+});
+t('two late payments in a row, both paid: closed all the same', () => {
+  const legs = [...onTime(D10, 2), pay(R.addDays(D10[2], 9)), pay(R.addDays(D10[3], 9))];
+  const s = at(plan(10), legs, R.addDays(D10[3], 9));
+  assert.deepStrictEqual([s.terminateNow, s.closeOn, s.closePair], [true, R.addDays(D10[3], 8), [3, 4]]);
+});
+t('the last instalment never paid: closes 8 days after the maturity date', () => {
+  const s = at(plan(6), onTime(D6, 5), R.addDays(D6[5], 9));
+  assert.deepStrictEqual([s.terminateNow, s.closeOn], [false, R.addDays(R.maturityDate(START, 6), 8)]);
+  assert.ok(at(plan(6), onTime(D6, 5), R.addDays(R.maturityDate(START, 6), 8)).terminateNow);
+});
+t('closed after 7 paid (month-8 step reached): keeps the 50% bonus, ₹14,000 + ₹1,000', () => {
+  const s = at(plan(10), onTime(D10, 7), R.addDays(D10[8], 8));
   assert.ok(s.terminateNow);
   assert.deepStrictEqual(R.payoutFor(plan(10), s, 'terminated'), { ok: true, paid: 14000, pct: 50, bonus: 1000, value: 15000, reason: null });
 });
-t('terminated after 5 paid (month-6 step reached): keeps the 25% bonus, ₹10,000 + ₹500', () => {
-  const s = at(plan(10), onTime(D10, 5), R.addDays(D10[5], 31));
+t('closed after 5 paid (month-6 step reached): keeps the 25% bonus, ₹10,000 + ₹500', () => {
+  const s = at(plan(10), onTime(D10, 5), R.addDays(D10[6], 8));
   assert.ok(s.terminateNow);
   assert.deepStrictEqual([R.payoutFor(plan(10), s, 'terminated').bonus, R.payoutFor(plan(10), s, 'terminated').value], [500, 10500]);
 });
-t('terminated on a step but with 3 late payments: no bonus', () => {
-  const legs = D10.slice(0, 7).map((d, i) => pay(i >= 4 ? R.addDays(d, 3) : d));
-  const s = at(plan(10), legs, R.addDays(D10[7], 31));
-  assert.strictEqual(s.lateCount, 3);
-  assert.deepStrictEqual([R.payoutFor(plan(10), s, 'terminated').bonus, R.payoutFor(plan(10), s, 'terminated').value], [0, 14000]);
+t('closed on the month-8 step with 2 late: 75% of the step bonus', () => {
+  const s = at(plan(10), lateAt(D10.slice(0, 7), [2, 5]), R.addDays(D10[8], 8));
+  assert.deepStrictEqual([s.terminateNow, R.payoutFor(plan(10), s, 'terminated').bonus], [true, 750]);
 });
-t('6-month plan terminated: no step to keep, the money only', () => {
-  const s = at(plan(6), onTime(D6, 4), R.addDays(D6[4], 31));
-  assert.deepStrictEqual([s.terminateNow, R.payoutFor(plan(6), s, 'terminated').value], [true, 8000]);
+t('6-month plan closed: no step to keep, the money only', () => {
+  const s = at(plan(6), onTime(D6, 3), R.addDays(D6[4], 8));
+  assert.deepStrictEqual([s.terminateNow, R.payoutFor(plan(6), s, 'terminated').value], [true, 6000]);
 });
 t('stopping the plan after 6 paid at month 7: keeps the month-6 step bonus (25%)', () => {
   const s = at(plan(10), onTime(D10, 6), D10[6]);
@@ -135,9 +151,8 @@ t('stopping before any step: the money paid, no bonus', () => {
   const s = at(plan(10), onTime(D10, 4), D10[4]);
   assert.deepStrictEqual(R.payoutFor(plan(10), s, 'stopped'), { ok: true, paid: 8000, pct: 0, bonus: 0, value: 8000, reason: null });
 });
-t('a plan paid in full cannot be stopped: only the full-bonus voucher (prepaid too)', () => {
-  const s = at(plan(10), [{ value: 20000, date: D10[0] }], D10[0]);
-  assert.ok(s.fullyPaid);
+t('a plan paid in full at maturity cannot be stopped: only the full-bonus voucher', () => {
+  const s = at(plan(10), onTime(D10, 10), R.maturityDate(START, 10));
   assert.strictEqual(R.payoutFor(plan(10), s, 'stopped').ok, false);
   assert.strictEqual(R.payoutFor(plan(10), s, 'full').bonus, 2000);
 });
@@ -159,20 +174,30 @@ t('the 6-month plan has no early redemption', () => {
   assert.strictEqual(s.redeem.kind, 'none');
   assert.strictEqual(R.payoutFor(plan(6), s, 'early').ok, false);
 });
-t('early redemption is refused once every instalment is paid', () => {
-  const s = at(plan(10), onTime(D10, 10), D10[9]);
+t('early redemption is refused once the full bonus is due', () => {
+  const s = at(plan(10), onTime(D10, 10), R.maturityDate(START, 10));
   assert.match(R.payoutFor(plan(10), s, 'early').reason, /full plan/);
 });
 
-console.log('paying ahead (prepaid)');
-t('the whole plan paid on day one: full bonus straight away', () => {
+console.log('paying ahead (prepaid): only the bonus earned so far');
+t('the whole plan paid on day one: no bonus before the maturity date', () => {
   const s = at(plan(10), [pay(START, 20000)], START);
-  assert.deepStrictEqual([s.fullyPaid, s.lateCount, s.redeem.kind, s.redeem.value], [true, 0, 'full', 22000]);
+  assert.deepStrictEqual([s.fullyPaid, s.lateCount, s.redeem.kind, s.redeem.value], [true, 0, 'none', 20000]);
+  assert.deepStrictEqual(R.payoutFor(plan(10), s, 'stopped'), { ok: true, paid: 20000, pct: 0, bonus: 0, value: 20000, reason: null });
+  assert.strictEqual(R.payoutFor(plan(10), s, 'full').ok, false);
+});
+t('prepaid, redeemed in month 8: the month-8 step bonus (50%)', () => {
+  const s = at(plan(10), [pay(START, 20000)], D10[7]);
+  assert.deepStrictEqual([s.redeem.kind, s.redeem.value], ['early', 21000]);
+});
+t('prepaid and left to the maturity date: the full bonus', () => {
+  const s = at(plan(10), [pay(START, 20000)], R.maturityDate(START, 10));
+  assert.deepStrictEqual([s.redeem.kind, s.redeem.value], ['full', 22000]);
 });
 t('the rest prepaid in one go after some late months keeps the late count', () => {
-  const legs = [pay(R.addDays(D6[0], 0)), pay(R.addDays(D6[1], 3)), pay(R.addDays(D6[2], 3)), pay(D6[3], 6000)];
-  const s = at(plan(6), legs, D6[3]);
-  assert.deepStrictEqual([s.paidCount, s.lateCount, s.redeem.value], [6, 2, 13000]);
+  const legs = [pay(D6[0]), pay(R.addDays(D6[1], 9)), pay(D6[2]), pay(R.addDays(D6[3], 9), 6000)];
+  const s = at(plan(6), legs, R.maturityDate(START, 6));
+  assert.deepStrictEqual([s.paidCount, s.lateCount, s.redeem.value], [6, 2, 12750]);
 });
 
 console.log('odd amounts');
@@ -181,11 +206,11 @@ t('a part payment counts toward the next instalment and is flagged', () => {
   assert.deepStrictEqual([s.paid, s.paidCount, s.oddPayments.length, s.dueNow], [3500, 1, 1, 500]);
 });
 t('the top-up covers the instalment on the day it lands', () => {
-  const s = at(plan(6), [pay(START), pay(D6[1], 1500), pay(R.addDays(D6[1], 4), 500)], R.addDays(D6[1], 4));
+  const s = at(plan(6), [pay(START), pay(D6[1], 1500), pay(R.addDays(D6[1], 10), 500)], R.addDays(D6[1], 10));
   assert.deepStrictEqual([s.paidCount, s.lateCount], [2, 1]);
 });
 t('overpaying beyond the plan is reported and still counts on the voucher', () => {
-  const s = at(plan(6), [pay(START, 12500)], START);
+  const s = at(plan(6), [pay(START, 12500)], R.maturityDate(START, 6));
   assert.deepStrictEqual([s.overpaid, s.redeem.value], [500, 13500]);
 });
 
@@ -196,7 +221,7 @@ t('day one: one instalment; two missed months: two', () => {
   assert.strictEqual(at(plan(10), [pay(START)], R.addDays(D10[1], -1)).dueNow, 0);
 });
 t('rows show paid (with late flag), overdue, due and upcoming', () => {
-  const s = at(plan(6), [pay(START), pay(R.addDays(D6[1], 2))], D6[3]);
+  const s = at(plan(6), [pay(START), pay(R.addDays(D6[1], 9))], D6[3]);
   assert.deepStrictEqual(s.rows.map(r => r.status), ['paid', 'paid', 'overdue', 'due', 'upcoming', 'upcoming']);
   assert.deepStrictEqual(s.rows.map(r => Boolean(r.late)), [false, true, false, false, false, false]);
 });

@@ -3145,7 +3145,12 @@ async function handleApplyVoucherTag(draft) {
     const ssvTags = [];
     if (savingsRedeem.isSavingsCode(vchNumber)) {
       const otherCredits = mfVal('exchange_note_value') + mfVal('old_gold_value') + mfVal('advance');
-      value = savingsRedeem.usableOn(inst, parseFloat(draft.total_price || 0) - otherCredits);
+      // Studded jewellery only (founder, 23 Nov 2026): the voucher covers at most the bill's studded pieces.
+      let studded;
+      try { studded = await savingsRedeem.studdedBillOnDraft(draft); }
+      catch (e) { console.error(`[apply-voucher] ${vchNumber} diamond values:`, e.message); await finishTags([`voucher-invalid: ${vchNumber} could not check the pieces, try again`]); return; }
+      if (!(studded > 0)) { await finishTags([`voucher-invalid: ${vchNumber} is for studded jewellery only, and nothing on this bill has a diamond value`]); return; }
+      value = savingsRedeem.usableOn(inst, Math.min(studded, parseFloat(draft.total_price || 0) - otherCredits));
       if (!(value > 0)) { await finishTags([`voucher-invalid: ${vchNumber} has nothing left, or the bill is already covered`]); return; }
       const plan = String(inst.source_order_name || '').match(/^SAVINGS\s+(\S+)/);
       ssvTags.push(`vch-original:savings plan ${plan ? plan[1] : ''}`.trim());

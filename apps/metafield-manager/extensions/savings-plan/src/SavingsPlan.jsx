@@ -8,18 +8,20 @@ import { useEffect, useState } from "preact/hooks";
 // months (₹2,000 × 10 = ₹20,000), and the customer. Staff pick 6 or 10 months, see the schedule and the
 // voucher at the end, add a nominee, and start the plan on a deliberate click.
 //
-// Once started: where the plan stands (paid, late payments, what is due, the date it closes if unpaid),
+// Once started: where the plan stands (paid, late payments, what is due, the date it closes if unpaid —
+// two instalments in a row late, each more than 7 days after its due date),
 // a payment link for what is due, and — when the plan can end — the voucher buttons:
-//   Issue the voucher            every instalment paid (the full bonus)
+//   Issue the voucher            every instalment paid and the maturity date reached (the full bonus)
 //   Redeem early                 10-month plan, month 6 with 5 paid (25%) or month 8 with 7 paid (50%),
 //                                when the customer asks (the WhatsApp link in their emails)
-//   Customer stops the plan      the money paid, no bonus (shown only before an early-redemption step)
-//   Issue the voucher            a plan the system closed 30 days after an unpaid due date: the money
+//   Customer stops the plan      the money paid, no bonus (shown only before an early-redemption step;
+//                                on a plan paid ahead, it is the voucher now, without the bonus)
+//   Issue the voucher            a plan the system closed (two late in a row): the money
 //                                paid plus any early-redemption bonus it had already reached
 // Payments taken in store are recorded here (Record payment), with the day the money came in; the
 // Jewellery Workspace panel shows the 10 rows read-only. The start date may be in the past (up to 12
 // months) for a customer who started on paper. Run check now does on this plan what the 6-hourly
-// check does (reminders, the late count, closing a plan 30 days past an unpaid due date).
+// check does (reminders, the late count, closing a plan after two late instalments in a row).
 // After the voucher is issued: its balance and every purchase it was used on.
 //
 // All maths lives in the middleware (src/modules/payments/savings-plan/rules.js); this only displays.
@@ -205,16 +207,17 @@ function SavingsPlan() {
             ) : (
               <s-stack direction="block" gap="base">
                 <s-text>
-                  {inr(option.instalment)} a month for {months} months, first instalment {backdated ? `on ${fmtDate(data.startOn)}` : "today"}. Paid in full (and no more than 2 payments late),
+                  {inr(option.instalment)} a month for {months} months, first instalment {backdated ? `on ${fmtDate(data.startOn)}` : "today"}. Paid in full, on time,
                   the customer gets a Savings Scheme Voucher for <s-text type="strong">{inr(option.voucherAtEnd)}</s-text>: {inr(option.instalment * months)} saved
                   plus a bonus of {inr(option.bonus)}.
                 </s-text>
                 <Schedule rows={preview} />
                 <s-text color="subdued">
                   {months === 10 ? "Early redemption: from month 6 with 5 paid (a quarter of an instalment as bonus), or month 8 with 7 paid (half). " : ""}
-                  A missed instalment can be paid up to 30 days after its due date; after that the plan closes and the money paid comes back
-                  as a voucher{months === 10 ? ", with any early-redemption bonus already reached but not the bonus still to come" : ", without the bonus"}. No cash refunds. The voucher is valid for 1 year, on any jewellery except coins, silver
-                  and loose solitaires.
+                  A payment within 7 days of its due date is on time; later it is late. 2 late payments take a quarter off the bonus, 4 take half.
+                  Two late in a row close the plan: the money paid comes back as a voucher{months === 10 ? ", with any early-redemption bonus already reached but not the bonus still to come" : ", without the bonus"}.
+                  Paying ahead earns no bonus in advance: the full bonus comes on the maturity date. No cash refunds. The voucher is valid for 1 year,
+                  on studded jewellery only (never on a piece with no diamond value: chains, coins, plain gold).
                 </s-text>
                 <s-text-field label="Nominee (optional)" value={nominee} onInput={(e) => setNominee(val(e))} />
                 <s-checkbox label={`The customer has agreed: ${inr(option.instalment)} a month for ${months} months, and the terms above`}
@@ -231,8 +234,8 @@ function SavingsPlan() {
               <s-text>{inr(plan.instalment)} × {plan.months} months · started {fmtDate(plan.startDate)} · matures {fmtDate(plan.maturity)}</s-text>
             </s-stack>
             <s-text>
-              Saved {inr(plan.paid)} ({plan.paidCount} of {plan.months} instalments) · late payments {plan.lateCount} of {plan.lateLimit} allowed
-              {plan.bonusOk ? "" : " — the bonus is lost"}{plan.nominee ? ` · nominee ${plan.nominee}` : ""}
+              Saved {inr(plan.paid)} ({plan.paidCount} of {plan.months} instalments) · late payments {plan.lateCount}
+              {plan.bonusKeepPct < 100 ? ` — ${100 - plan.bonusKeepPct}% of the bonus is lost` : ""}{plan.nominee ? ` · nominee ${plan.nominee}` : ""}
             </s-text>
 
             {plan.voucherCode ? (
@@ -256,8 +259,9 @@ function SavingsPlan() {
               </s-stack>
             ) : null}
             {plan.status === "active" && plan.overdueDays > 0 ? (
-              <s-banner tone="critical" heading={`Instalment ${plan.next.k} is ${plan.overdueDays} days late`}>
-                The plan closes on {fmtDate(plan.closeOn)} if it stays unpaid. Send a link, or take it in store and record it below.
+              <s-banner tone={plan.overdueDays > (plan.lateGraceDays || 7) ? "critical" : "warning"} heading={`Instalment ${plan.next.k} is ${plan.overdueDays} days overdue`}>
+                {plan.overdueDays > (plan.lateGraceDays || 7) ? "It now counts as a late payment. " : `Paid within ${plan.lateGraceDays || 7} days of its due date it still counts as on time. `}
+                The plan closes on {fmtDate(plan.closeOn)} (two late in a row) if nothing more is paid. Send a link, or take it in store and record it below.
               </s-banner>
             ) : null}
             {plan.oddPayments?.length ? (
@@ -269,7 +273,7 @@ function SavingsPlan() {
               <s-text color="subdued">Next: instalment {plan.next.k}, {inr(plan.linkAmount)}, due {fmtDate(plan.next.due)}.</s-text>
             ) : null}
             {plan.redeemNow?.kind === "early" && plan.status === "active" ? (
-              <s-text>Redeeming early today pays {inr(plan.redeemNow.value)}{plan.redeemNow.bonus > 0 ? ` (bonus ${inr(plan.redeemNow.bonus)})` : " (no bonus: too many late payments)"}.</s-text>
+              <s-text>Redeeming early today pays {inr(plan.redeemNow.value)}{plan.redeemNow.bonus > 0 ? ` (bonus ${inr(plan.redeemNow.bonus)})` : ""}.</s-text>
             ) : null}
             <Schedule rows={data.rows || []} />
 
@@ -285,7 +289,7 @@ function SavingsPlan() {
                   <s-date-field label="Paid on" value={payDate || data.today || ""} onChange={(e) => setPayDate(val(e))} />
                 </s-stack>
                 <s-text color="subdued">
-                  {`Up to ${inr(plan.remaining)} is left to pay. The date is the day the money came in: after an instalment's due date it counts as late.`}
+                  {`Up to ${inr(plan.remaining)} is left to pay. The date is the day the money came in: more than 7 days after an instalment's due date it counts as late.`}
                 </s-text>
                 <s-button onClick={recordPayment} loading={busy} disabled={Boolean(busy || !payAmount)}>Record payment</s-button>
               </s-stack>
@@ -295,7 +299,7 @@ function SavingsPlan() {
               <s-stack direction="block" gap="small-200">
                 <s-text color="subdued">
                   The reminder check runs by itself every 6 hours. Run it now to send what is due today (reminders, late warnings, the
-                  completed message) or to close a plan 30 days past an unpaid due date. Messages really go to the customer.
+                  completed message) or to close a plan with two late instalments in a row. Messages really go to the customer.
                 </s-text>
                 <s-button onClick={checkNow} loading={busy} disabled={busy}>Run check now</s-button>
               </s-stack>

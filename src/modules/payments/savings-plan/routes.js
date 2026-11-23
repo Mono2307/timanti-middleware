@@ -125,7 +125,7 @@ async function view(d, plan, { startOn = null } = {}) {
       plan: {
         status: plan.status, months: plan.months, instalment: Number(plan.instalment), total: Number(plan.total),
         startDate: plan.start_date, maturity: st.maturity, nominee: plan.nominee || null,
-        paid: st.paid, paidCount: st.paidCount, lateCount: st.lateCount, lateLimit: R.LATE_LIMIT, bonusOk: st.bonusOk,
+        paid: st.paid, paidCount: st.paidCount, lateCount: st.lateCount, bonusKeepPct: st.bonusKeepPct, bonusOk: st.bonusOk, lateGraceDays: R.LATE_GRACE_DAYS, closePair: st.closePair,
         next: st.next, overdueDays: st.overdueDays, closeOn: st.closeOn, dueNow: st.dueNow, linkAmount: linkAmount(st),
         fullyPaid: st.fullyPaid, oddPayments: st.oddPayments, overpaid: st.overpaid,
         remaining: Math.max(0, st.n * st.A - st.paid),
@@ -281,8 +281,8 @@ function recordPaymentHandler(ctx) {
   };
 }
 
-// The reminder check on this one plan, now (a real run: messages go, a plan 30 days past an unpaid due
-// date closes). The same as the 6-hourly check, without its 24-hour wait on a backdated plan.
+// The reminder check on this one plan, now (a real run: messages go, a plan with two late instalments in a row
+// closes). The same as the 6-hourly check, without its 24-hour wait on a backdated plan.
 async function checkNow(req, res) {
   try {
     const d = await mustReadDraft(req.body?.draftId);

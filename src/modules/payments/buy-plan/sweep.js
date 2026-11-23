@@ -21,6 +21,8 @@
 //   9. next installment due within 3 days → a GoKwik link for what it asks, email + SMS
 //  10. current installment 3+ days overdue → one overdue reminder with a fresh link
 //  11. the link the customer holds lapses within 3 days, installment still unpaid → a new one, once
+//  12. a month before the last due date → the store: take the piece off display and place the
+//                               replenishment order (once by email; on the digest for a week)
 // Then one staff digest a day: everything due in 3 days, overdue, or about to close — every issue on
 // a plan, not only the first.
 
@@ -270,6 +272,21 @@ async function sweepPlan(plan, today, { dryRun, restore }) {
     else if (!S.awaitingFinalPrice(plan) && !plan.change_pending) rows.push(digestRow(plan, d, n, n, today, st.total, { ready: true,
       note: 'Fully paid: convert the draft to an order.' }));
     return { ...out, digest: rows };
+  }
+
+  // 12. Off display: a month before the last installment (schedule.js reorderOn).
+  const reorder = S.reorderOn(st);
+  if (reorder && today >= reorder) {
+    const lastDue = st.dates[n - 1];
+    if (!(await store.wasSent(plan.id, n, 'staff', 'reorder'))) {
+      if (!dryRun) {
+        await notify.sendReorder(plan, d, { lastDue, reorderOn: reorder });
+        await store.markSent(plan.id, n, 'staff', 'reorder');
+      }
+      out.sent.push('off display: reorder');
+    }
+    if (daysBetween(reorder, today) <= 6) rows.push(digestRow(plan, d, n, n, lastDue, 0, { overdue: true, stuck: true,
+      note: `Last installment due ${lastDue}: take the piece off display and place the replenishment order for the display.` }));
   }
 
   // Five payments in and the customer still holds a link for less than the balance (raised before the
