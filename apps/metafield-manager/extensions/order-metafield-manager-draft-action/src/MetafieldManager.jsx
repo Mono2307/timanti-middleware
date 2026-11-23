@@ -20,12 +20,6 @@ import { useEffect, useRef, useState } from "preact/hooks";
  * Mirrors middleware metafield_governance.csv. Namespace/type are never
  * hardcoded — they come from the live definitions at save time.
  */
-
-// Shown in the heading of the all-fields panel so you can tell at a glance which build the admin is
-// actually serving. If this text is not in the panel heading, the extension has NOT been redeployed
-// (or you edited a different copy of this file). Remove it once the approval card is confirmed.
-const WORKSPACE_BUILD = "build 23-Nov approval card";
-
 // Founder flow: identity header (top, read-only) → Required Inputs → Installments → Payments →
 // Pricing (incl. discounts) → Product Metadata → Adjustments (selector + values) →
 // Repair → Credit Note → System. "Order Details" is gone (its fields are Required),
@@ -514,62 +508,15 @@ const REPAIR_FREE_TAGS = [REPAIR_FREE_TAG, "repair-free"];
 const REPAIR_PAID_DONE_TAG = "repair-hq-notified";
 const REPAIR_FREE_DONE_TAG = "repair-free-notified";
 
-// -- Staff approval of a repair estimate on the customer's behalf ------------------------------
-// The customer normally approves from the estimate email ("pay at store" link), which does exactly
-// one thing: adds the `repair-store-approved` tag. The middleware then emails the customer ("charges
-// have been confirmed") and the store/HQ, and the repair proceeds. When a customer forgets, staff add
-// the SAME tag from here, so the whole downstream flow is identical. `approved-by-staff:<channel>`
-// rides along in the same tagsAdd call (one webhook) so the draft shows who confirmed and how.
-const DRAFT_APPROVAL_QUERY = `
-  query DraftRepairApproval($id: ID!) {
-    draftOrder(id: $id) { id status tags totalPriceSet { shopMoney { amount } } }
-  }
-`;
-// The tag that switches the button ON. Without it the button is visible but disabled. To use a
-// different tag, change only this one line.
-const APPROVAL_READY_TAG = "repair-estimate-ready";
-const APPROVAL_DONE_TAG = "repair-store-approved";
-const APPROVAL_CHANNELS = {
-  "Phone call": "phone",
-  "WhatsApp": "whatsapp",
-  "In person": "in-person",
-  "Email reply": "email",
-};
-
-function parseDraftApprovalInfo(res) {
-  const d = res?.data?.draftOrder;
-  if (!d) return null;
-  return {
-    status: d.status || "",
-    tags: Array.isArray(d.tags) ? d.tags : String(d.tags || "").split(",").map((t) => t.trim()).filter(Boolean),
-    total: Number(d.totalPriceSet?.shopMoney?.amount) || 0,
-  };
-}
-
-// The card is shown on EVERY draft; the button is switched on by the `repair-estimate-ready` tag.
-// What still stops an approval is a draft that has already been settled: converted to an order,
-// already approved, paid online, finished, or free. Returns a plain-words reason, or "" if approval
-// is allowed. Tags are compared case-insensitively, like every other tag check in this panel.
-function approvalBlockedReason(info) {
-  if (!info) return "";
-  if (info.status === "COMPLETED") return "This draft has already been converted to an order.";
-  const low = info.tags.map((t) => String(t).trim().toLowerCase());
-  if (low.includes(APPROVAL_DONE_TAG)) return "This repair has already been approved.";
-  if (low.includes("repair-paid")) return "The customer has already paid for this repair online.";
-  if (low.includes("repair-complete")) return "This repair is already complete.";
-  if (low.includes("free-repair") || low.includes("repair-free")) return "This is a free repair, so there is no estimate to approve.";
-  return "";
-}
-
-// Is the enabling tag on the draft? Compared case-insensitively like every other tag check here.
-function hasApprovalTag(info) {
-  return Boolean(info) && info.tags.some((t) => String(t).trim().toLowerCase() === APPROVAL_READY_TAG);
-}
-
-// May staff approve this draft now? Only with the enabling tag AND nothing having settled it yet.
-function canStaffApprove(info) {
-  return hasApprovalTag(info) && !approvalBlockedReason(info);
-}
+// -- Staff approval on the customer's behalf ----------------------------------------------------
+// When a customer has received a repair estimate but not approved it, staff phone or message them,
+// explain the cost, and take a verbal yes. This tag is how that yes gets recorded. The panel only
+// drops the trigger tag; the middleware must treat it exactly like the customer's own approval
+// click, note that STAFF did it (so the approval is auditable later), and strip the tag afterwards.
+const REPAIR_STAFF_APPROVE_TAG = "staff-approve-repair";
+// Tags that mean the estimate is already approved, by the customer or by staff. Adjust these to
+// whatever the middleware actually writes once it has processed an approval.
+const REPAIR_APPROVED_TAGS = ["repair-approved", "repair-staff-approved"];
 
 // -- Repair items ------------------------------------------------------------------------------
 // WHICH pieces from the linked order are actually on the counter. A repair draft references exactly
@@ -728,6 +675,11 @@ export default function MetafieldManager({ surface = "block" } = {}) {
   const [repairClass, setRepairClass] = useState(""); // "" | "paid" | "free"
   const [repairBusy, setRepairBusy] = useState(false);
   const [repairNote, setRepairNote] = useState("");
+  // Staff approval on the customer's behalf: the "I really spoke to them" tick, the busy flag while
+  // the tag is being written, and the result line shown under the button.
+  const [staffApproveConfirm, setStaffApproveConfirm] = useState(false);
+  const [staffApproveBusy, setStaffApproveBusy] = useState(false);
+  const [staffApproveNote, setStaffApproveNote] = useState("");
   // Which pieces of the linked order are in for repair: what that order actually contains (fetched
   // when the reference resolves) and which of them staff have ticked.
   const [repairOrderItems, setRepairOrderItems] = useState([]);
@@ -743,13 +695,6 @@ export default function MetafieldManager({ surface = "block" } = {}) {
   // True once staff have ticked something they haven't saved. Saving any OTHER field bumps
   // refreshTick, and without this flag that refresh would quietly throw the pending selection away.
   const repairItemsDirty = useRef(false);
-  // Staff approval of a repair estimate on the customer's behalf (draft scope, Repair section).
-  const [draftInfo, setDraftInfo] = useState(null); // { status, tags, total } for the open draft
-  const [approvalOpen, setApprovalOpen] = useState(false);
-  const [approvalChannel, setApprovalChannel] = useState("");
-  const [approvalNote, setApprovalNote] = useState("");
-  const [approvalBusy, setApprovalBusy] = useState(false);
-  const [approvalMsg, setApprovalMsg] = useState("");
   // Unified adjustments selector + discount inputs.
   const [adjType, setAdjType] = useState(""); // "" | "exchange" | "voucher" | "discount"
   const [discountCode, setDiscountCode] = useState("");
@@ -834,18 +779,6 @@ export default function MetafieldManager({ surface = "block" } = {}) {
         } catch { /* non-blocking — the editor just shows no rows */ }
       }
 
-      // Tags + status + total decide whether the "approve for customer" button is enabled (draft scope only).
-      let draftInfoInit = null;
-      if (ctx.scope === "draft" && ownerId) {
-        try {
-          const apRes = await shopify.query(DRAFT_APPROVAL_QUERY, { variables: { id: ownerId } });
-          if (apRes?.errors?.length) warnings.push(`Approval status: ${apRes.errors.map((e) => e.message).join("; ")}`);
-          draftInfoInit = parseDraftApprovalInfo(apRes);
-        } catch (e) {
-          warnings.push(`Couldn't load approval status: ${e?.message || e}`);
-        }
-      }
-
       const todayISO = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
       const editable = {};
       for (const key of fieldsForScope(ctx.scope)) {
@@ -872,7 +805,6 @@ export default function MetafieldManager({ surface = "block" } = {}) {
         setItemsTouched(false);
       }
       setLineRows(lineRowsInit);
-      setDraftInfo(draftInfoInit);
       // On a post-save refresh the user may have started typing again — keep those in-progress edits and
       // don't clobber them; adopt fresh server values as the new baseline for everything else.
       const priorEdits = editsRef.current || {};
@@ -1385,55 +1317,28 @@ export default function MetafieldManager({ surface = "block" } = {}) {
     }
   }
 
-  // Approve the repair estimate for a customer who forgot to. Re-reads the draft first, so a stale panel
-  // can never approve something already paid/approved/finished, or an estimate that has since changed.
-  async function approveForCustomer() {
-    const channelSlug = APPROVAL_CHANNELS[approvalChannel];
-    if (!ownerId || !channelSlug) return;
-    setApprovalBusy(true);
-    setApprovalMsg("");
+  // Record the customer's verbal approval of a repair estimate. Staff have phoned or messaged the
+  // customer, explained the cost, and heard a clear yes. The panel only drops the trigger tag; the
+  // middleware is what moves the repair forward, notes that staff approved on the customer's
+  // behalf, and strips the tag. The tick-box in renderStaffApproval gates this, so a stray click
+  // cannot approve a repair.
+  async function staffApproveRepair() {
+    if (!ownerId || !staffApproveConfirm) return;
+    setStaffApproveBusy(true);
+    setStaffApproveNote("");
     try {
-      const res = await shopify.query(DRAFT_APPROVAL_QUERY, { variables: { id: ownerId } });
-      const errs0 = collectErrors(res, "draftOrder");
-      if (errs0.length) throw new Error(errs0.join("; "));
-      const fresh = parseDraftApprovalInfo(res);
-      if (!canStaffApprove(fresh)) {
-        setDraftInfo(fresh);
-        throw new Error("This repair is no longer waiting for approval (already approved, paid or completed).");
-      }
-      if (draftInfo && Math.round(fresh.total) !== Math.round(draftInfo.total)) {
-        setDraftInfo(fresh);
-        throw new Error("The estimate changed since you opened this. Check the new amount and try again.");
-      }
-
-      // Evidence first. A metafield save fires no webhook, so the flow cannot start before the tags below.
-      // Best-effort: the approved-by-staff tag is the guaranteed record, this adds the date, amount and note.
-      const stamp = new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata", hour12: false });
-      const note = approvalNote.replace(/\s+/g, " ").trim();
-      const record = `Approved by staff on the customer's behalf via ${approvalChannel}${note ? ` (${note})` : ""} on ${stamp} IST. Estimate Rs.${Math.round(fresh.total)}`;
-      try {
-        await shopify.query(SET_MUTATION, {
-          variables: { metafields: [{ ownerId, namespace: "custom", key: "repair_staff_approval", type: "single_line_text_field", value: record.slice(0, 255) }] },
-        });
-      } catch { /* the tag below still records who and how */ }
-
-      // ONE tagsAdd, so the middleware's webhook sees both tags together and runs the store-approve flow.
-      const tagRes = await shopify.query(TAGS_ADD_MUTATION, {
-        variables: { id: ownerId, tags: [APPROVAL_DONE_TAG, `approved-by-staff:${channelSlug}`] },
+      const res = await shopify.query(TAGS_ADD_MUTATION, {
+        variables: { id: ownerId, tags: [REPAIR_STAFF_APPROVE_TAG] },
       });
-      const errs = collectErrors(tagRes, "tagsAdd");
+      const errs = collectErrors(res, "tagsAdd");
       if (errs.length) throw new Error(errs.join("; "));
-
-      setApprovalOpen(false);
-      setApprovalChannel("");
-      setApprovalNote("");
-      setApprovalMsg("Approved on the customer's behalf. The customer is emailed a confirmation and the store is told to start the repair.");
-      setDraftInfo({ ...fresh, tags: [...fresh.tags, APPROVAL_DONE_TAG] });
+      setStaffApproveConfirm(false);
+      setStaffApproveNote("Approval recorded on the customer's behalf. The repair is being moved forward -- this takes a few seconds.");
       setTimeout(() => setRefreshTick((t) => t + 1), 3000);
     } catch (e) {
-      setApprovalMsg(`Couldn't approve: ${e?.message || e}`);
+      setStaffApproveNote(`Couldn't record the approval: ${e?.message || e}`);
     } finally {
-      setApprovalBusy(false);
+      setStaffApproveBusy(false);
     }
   }
 
@@ -2241,83 +2146,57 @@ export default function MetafieldManager({ surface = "block" } = {}) {
     );
   };
 
-  // Staff approval of the repair estimate on the customer's behalf. The card and its button are ALWAYS
-  // visible on a draft, below "Pieces in for Repair". The button stays disabled (and does nothing)
-  // until the draft carries the APPROVAL_READY_TAG; once the tag is there it is clickable and works.
-  // A draft that is already settled (see approvalBlockedReason) keeps it disabled, with the reason.
+  // Estimate approval, taken by staff on the customer's behalf. For the customer who got the
+  // estimate and simply never clicked approve: staff call or message them, explain the cost, and if
+  // the customer says yes out loud, this records it so the repair is not held up.
+  //
+  // Only offered when it can mean something -- a paid repair on a draft whose estimate has actually
+  // been sent -- and never once the estimate is already approved. The tick-box exists so the button
+  // cannot be hit by accident: it is staff attesting that the conversation really happened.
   const renderStaffApproval = () => {
+    // Same reason as the other repair controls: the repairs workflow only watches the draft.
     if (ctx.scope !== "draft") return null;
-    const tagged = hasApprovalTag(draftInfo);
-    const can = canStaffApprove(draftInfo);
-    const blockedReason = draftInfo ? approvalBlockedReason(draftInfo) : "";
+    const tagSet = new Set(docTags.map((t) => t.toLowerCase()));
+    // A free repair never quotes an estimate, so there is nothing to approve.
+    if (repairClassFromTags(docTags) !== "paid") return null;
+    // No estimate sent yet means nothing for the customer (or staff) to approve.
+    if (!(values.repair_estimate_sent_at || "").trim()) return null;
+
+    const alreadyApproved = REPAIR_APPROVED_TAGS.some((t) => tagSet.has(t));
+    // Trigger tag still on the draft: the middleware has not finished with it yet.
+    const pending = tagSet.has(REPAIR_STAFF_APPROVE_TAG);
+
     return (
-      <s-section key="staff-approval" heading="Approve Repair for Customer">
+      <s-section heading="Estimate Approval">
         <s-stack direction="block" gap="base">
-          <s-text tone="subdued">
-            Use this only when the customer has already agreed to the estimate but didn't tap the approval link.
-            It does exactly what their approval does: they pay at the store when they collect, the customer is
-            emailed a confirmation, and the store is told to start the repair.
-          </s-text>
-          {!tagged && !approvalMsg ? (
-            <s-text tone="subdued">{`Available once the draft has the "${APPROVAL_READY_TAG}" tag.`}</s-text>
-          ) : null}
-          {!draftInfo ? (
-            <s-text tone="caution">
-              Couldn't read this draft's details, so approval is unavailable. Close and reopen the panel. If this
-              keeps happening, the app may be missing permission to read draft orders.
-            </s-text>
-          ) : null}
-          {tagged && !can && blockedReason && !approvalMsg ? <s-text tone="subdued">{blockedReason}</s-text> : null}
-          {!approvalOpen ? (
-            <s-button
-              onClick={() => { if (can) { setApprovalOpen(true); setApprovalMsg(""); } }}
-              disabled={Boolean(!can)}
-            >
-              Approve on behalf of customer
-            </s-button>
-          ) : null}
-          {can && approvalOpen ? (
-            <s-stack direction="block" gap="base">
-              <s-text>
-                Approve the estimate of ₹{Math.round(draftInfo.total).toLocaleString("en-IN")}? The customer will pay this at the store.
+          {alreadyApproved ? (
+            <s-badge tone="success">Estimate approved</s-badge>
+          ) : (
+            <>
+              <s-text tone="subdued">
+                Use this only if the customer has not approved the estimate themselves. Call or message
+                them, explain the estimated cost, and get their clear yes first. Then tick the box and
+                press the button so the repair can go ahead.
               </s-text>
-              <s-select
-                label="How did the customer confirm?"
-                value={approvalChannel}
-                disabled={Boolean(approvalBusy)}
-                onChange={(e) => {
-                  // The host hands back the option LABEL for the blank entry, so only a real channel counts.
-                  const v = e.target.value ?? "";
-                  setApprovalChannel(APPROVAL_CHANNELS[v] ? v : "");
-                }}
-              >
-                <s-option value="">{BLANK_CHOICE_LABEL}</s-option>
-                {Object.keys(APPROVAL_CHANNELS).map((label) => (
-                  <s-option key={label} value={label}>{label}</s-option>
-                ))}
-              </s-select>
-              <s-text-field
-                label="Note (optional)"
-                value={approvalNote}
-                disabled={Boolean(approvalBusy)}
-                onChange={(e) => setApprovalNote(e.target.value ?? "")}
+              <s-checkbox
+                label="I contacted the customer, told them the estimate, and they verbally approved it"
+                checked={Boolean(staffApproveConfirm)}
+                disabled={Boolean(staffApproveBusy || pending)}
+                // onInput for the same reason as the repair-piece boxes: `change` waits for blur.
+                onInput={(e) => setStaffApproveConfirm(!!e.currentTarget.checked)}
               />
-              <s-stack direction="inline" gap="base">
-                <s-button
-                  variant="primary"
-                  onClick={approveForCustomer}
-                  loading={Boolean(approvalBusy)}
-                  disabled={Boolean(!APPROVAL_CHANNELS[approvalChannel] || approvalBusy)}
-                >
-                  Confirm approval
-                </s-button>
-                <s-button onClick={() => setApprovalOpen(false)} disabled={Boolean(approvalBusy)}>
-                  Cancel
-                </s-button>
-              </s-stack>
-            </s-stack>
-          ) : null}
-          {approvalMsg ? <s-text>{approvalMsg}</s-text> : null}
+              <s-button
+                variant="primary"
+                onClick={staffApproveRepair}
+                loading={Boolean(staffApproveBusy)}
+                disabled={Boolean(!staffApproveConfirm || staffApproveBusy || pending)}
+              >
+                Staff Approval on Customer's Behalf
+              </s-button>
+              {pending ? <s-text tone="subdued">Approval is being processed...</s-text> : null}
+            </>
+          )}
+          {staffApproveNote ? <s-text>{staffApproveNote}</s-text> : null}
         </s-stack>
       </s-section>
     );
@@ -2454,8 +2333,7 @@ export default function MetafieldManager({ surface = "block" } = {}) {
         return [<s-stack key="adjustment-selector" direction="block">{renderAdjustmentSelector()}</s-stack>, block];
       }
       // Same idea for the repair class selector: it belongs with the repair fields (the Linked
-      // Repair Order it depends on is one of them), not floating at the top of the panel. The
-      // staff-approval card closes the group: type, pieces, then approval of the estimate.
+      // Repair Order it depends on is one of them), not floating at the top of the panel.
       if (section.title === "Repair") {
         const rc = renderRepairClass();
         const ri = renderRepairItems();
@@ -2463,7 +2341,7 @@ export default function MetafieldManager({ surface = "block" } = {}) {
         const extras = [
           rc ? <s-stack key="repair-class" direction="block">{rc}</s-stack> : null,
           ri ? <s-stack key="repair-items" direction="block">{ri}</s-stack> : null,
-          sa ? <s-stack key="repair-approval" direction="block">{sa}</s-stack> : null,
+          sa ? <s-stack key="staff-approval" direction="block">{sa}</s-stack> : null,
         ].filter(Boolean);
         if (extras.length) return [block, ...extras];
       }
@@ -2485,7 +2363,7 @@ export default function MetafieldManager({ surface = "block" } = {}) {
   // "More actions"). No height cap here — every field is shown with room.
   if (surface === "action") {
     return (
-      <s-admin-action heading={`Jewellery Workspace — all fields (${WORKSPACE_BUILD})`}>
+      <s-admin-action heading="Jewellery Workspace — all fields">
         <s-stack direction="block" gap="large-100">
           {renderBanners()}
           {renderSections()}
