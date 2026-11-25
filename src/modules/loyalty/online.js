@@ -99,10 +99,10 @@ async function benefitsFor(customerId) {
       .map(v => ({ code: v.serial_code, value: Number(v.value) || 0, expires_at: v.expires_at || null }));
   } catch (e) { log.warn('loyalty', `voucher list for ${customerId} failed: ${e.message}`); }
   // Banked referral rewards (referral.js). The cart applies whichever of loyalty and the reward saves
-  // more, so a member with a reward still sees one Apply. Never shown to the excluded (top) tier.
+  // more, so a member with a reward still sees one Apply.
   let ref = null;
   const rc = cfg.referral || {};
-  if (rc.enabled && !referral.tierExcluded(info.tier ? info.tier.key : null, cfg)) {
+  if (rc.enabled) {
     try {
       const open = await referral.openRewards(supabase, customerId);
       if (open.length) ref = { available: open.length, pct: rc.pct, expires_at: open[0].expires_at || null };

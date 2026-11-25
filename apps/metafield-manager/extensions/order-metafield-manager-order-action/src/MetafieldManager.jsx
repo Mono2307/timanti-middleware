@@ -1548,9 +1548,7 @@ export default function MetafieldManager({ surface = "block" } = {}) {
   // Why a referral was refused, in words staff can say to the customer.
   const REF_REASONS = {
     "no customer with that phone": "No Timanti customer has that phone number. Check the number with the customer.",
-    "referrer has not bought yet": "That customer has not bought from Timanti yet, so they cannot refer anyone.",
     "own code": "A customer cannot refer themselves.",
-    "referrer is top tier": "The referrer is a Platinum member. Platinum members are not part of the referral programme.",
     "customer has bought before": "This customer has bought from Timanti before. Referrals are for first purchases only.",
     "same phone as referrer": "This customer has the same phone number as the referrer.",
     "unknown code": "That referral code does not exist.",
@@ -1601,8 +1599,7 @@ export default function MetafieldManager({ surface = "block" } = {}) {
             </s-button>
           </s-stack>
         ) : null}
-        {a && a.excluded ? <s-text tone="subdued">{`${a.tierName || "Platinum"} members are not part of the referral programme.`}</s-text> : null}
-        {a && !a.excluded ? (
+        {a ? (
           <s-stack direction="block" gap="small-200">
             <s-text>{(a.rewards || []).length
               ? `${a.rewards.length} referral reward${a.rewards.length > 1 ? "s" : ""} ready: ${pct}% off the diamond value, one per purchase. Next one to use by ${shortDate(a.rewards[0].expires_at)}.`
@@ -1675,10 +1672,12 @@ export default function MetafieldManager({ surface = "block" } = {}) {
                   {l.eligible ? `${l.title}: ${inr(l.discount)} off diamond ${inr(l.diamond)}${Number(l.makingDiscount) > 0 ? ` + ${inr(l.makingDiscount)} off making ${inr(l.making)}` : ""}` : `${l.title}: not eligible (${l.reason})`}
                 </s-text>
               ))}
-              {p.benefit === "referral" ? (
-                <s-badge tone="info">{`The referral reward saves more here (${inr(p.total)}${Number(p.loyaltyTotal) > 0 ? ` against ${inr(p.loyaltyTotal)} from the tier benefit` : ""}). Apply uses one referral reward instead of loyalty; the two never combine.`}</s-badge>
-              ) : Number(p.referralTotal) > 0 ? (
-                <s-text tone="subdued">{`The tier benefit saves more here (${inr(p.total)} against ${inr(p.referralTotal)} from a referral reward). Apply uses loyalty; the referral reward stays for another purchase.`}</s-text>
+              {p.benefit === "referral" || Number(p.referralTotal) > 0 ? (
+                <s-stack direction="block" gap="small-100">
+                  {Number(p.loyaltyTotal) > 0 ? <s-text>{`Loyalty: ${inr(p.loyaltyTotal)}`}</s-text> : null}
+                  <s-text>{`Referral reward: ${inr(p.benefit === "referral" ? p.total : p.referralTotal)}`}</s-text>
+                  <s-badge tone="info">{`Applies: ${p.benefit === "referral" ? "referral reward" : "loyalty"} (the larger one; they never combine)`}</s-badge>
+                </s-stack>
               ) : null}
               <s-text>{`Estimated ${p.benefit === "referral" ? "referral reward" : "loyalty"} saving: ${inr(p.total)} before GST (${p.rate}% of the diamond value${occNames.length && p.benefit !== "referral" ? `, incl. +${p.occasion.pct}% ${occNames.join(" & ")} month` : ""}${Number(p.makingPct) > 0 ? `; ${p.makingPct}% of making${Number(p.makingCap) > 0 ? `, capped at ${inr(p.makingCap)} a bill` : ""}` : ""})`}</s-text>
             </s-stack>
@@ -1688,18 +1687,18 @@ export default function MetafieldManager({ surface = "block" } = {}) {
           {loyalty?.note ? <s-text tone="subdued">{loyalty.note}</s-text> : null}
           <s-stack direction="inline" gap="base">
             <s-button
-              onClick={() => loyaltyAction("apply-loyalty", `Applying ${p?.benefit === "referral" ? "the referral reward" : "loyalty"}… prices update in a few seconds.`)}
+              onClick={() => loyaltyAction("apply-loyalty", "Applying the benefit… prices update in a few seconds.")}
               loading={Boolean(loyaltyBusy)}
               disabled={Boolean(loyaltyBusy || !p || (!p.ok && !applied))}
             >
-              {applied ? (applied.kind === "referral" ? "Re-apply referral reward" : "Re-apply loyalty") : p?.benefit === "referral" ? "Apply referral reward" : "Apply loyalty"}
+              {applied ? "Re-apply benefit" : "Apply benefit"}
             </s-button>
             {applied ? (
               <s-button
                 onClick={() => loyaltyAction("remove-loyalty", "Removing… prices update in a few seconds.")}
                 disabled={Boolean(loyaltyBusy)}
               >
-                {applied.kind === "referral" ? "Remove referral reward" : "Remove loyalty"}
+                Remove benefit
               </s-button>
             ) : null}
           </s-stack>

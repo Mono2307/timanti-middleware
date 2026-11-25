@@ -98,7 +98,6 @@ stub('src/modules/loyalty/referral.js', {
   },
   markUsed: async (_s, id, info) => { refUsed.push({ id, ...info }); return true; },
   openRewards: async (_s, cid) => (refRewards[cid] ? [refRewards[cid]] : []),
-  tierExcluded: (k, cfg) => !!k && (((cfg || {}).referral || {}).exclude_tiers || []).includes(k),
   onOrder: async () => null,
   handleReferralTagStep: async () => {},
 });

@@ -54,9 +54,10 @@ const DEFAULT_CONFIG = Object.freeze({
   promos: { ISB10: { pct: 10, active: true, starts_at: '2026-10-22T18:30:00Z', ends_at: '2026-11-30T18:29:59Z', require_login: false } },
   // Referral (founder, 2026-11-12; referral.js): a friend's first fully paid order earns the referrer
   // pct % off the diamond value of one later bill, usable for reward_months. Never with loyalty: the
-  // bill gets whichever saves more. exclude_tiers have no link and earn nothing (Platinum).
+  // bill gets whichever saves more. Every tier takes part (founder, 2026-11-25: Platinum is no longer
+  // excluded; their tier benefit always wins the best-of, so their rewards are logged and stay banked).
   // enabled:false switches the whole programme off without a deploy.
-  referral: { enabled: true, pct: 10, reward_months: 12, exclude_tiers: ['T3'], link_base: 'https://timanti.in/' },
+  referral: { enabled: true, pct: 10, reward_months: 12, link_base: 'https://timanti.in/' },
 });
 
 /** The diamond % per tier before the 2026-10-24 grid — see the upgrade in normalizeConfig. */
@@ -155,7 +156,6 @@ function normalizeConfig(raw) {
         enabled: r.enabled !== false,
         pct,
         reward_months: Math.max(1, parseInt(r.reward_months, 10) || DEFAULT_CONFIG.referral.reward_months),
-        exclude_tiers: Array.isArray(r.exclude_tiers) ? r.exclude_tiers.map(String) : [...DEFAULT_CONFIG.referral.exclude_tiers],
         link_base: String(r.link_base || DEFAULT_CONFIG.referral.link_base),
       };
     })(),

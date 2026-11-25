@@ -10,7 +10,12 @@
  *   minimum. Rewards bank, one used per bill, each good for reward_months (12) after it is earned.
  *   A buy plan or savings scheme earns it when it COMPLETES (its order exists only once fully paid);
  *   starting one earns nothing. A friend's order fully refunded or cancelled before the reward is used
- *   voids the reward. Platinum (config referral.exclude_tiers) has no link and earns nothing.
+ *   voids the reward.
+ *   Who can refer (2026-11-25): ANY customer record we hold, bought or not, any tier. A Platinum
+ *   member earns and banks rewards like anyone else; the best-of below simply keeps choosing their
+ *   larger tier benefit, so the reward stays logged against them and goes unused rather than refused.
+ *   Who can be referred: anyone who has never BOUGHT from us. A customer record with no order
+ *   (registered online, or created at the counter) still counts as new.
  *
  * NEVER WITH LOYALTY
  *   The reward stacks with the campaign's auto diamond discount, manual cuts and ISB10, exactly as
@@ -148,11 +153,6 @@ function nextStatus(status, { paid, dead }) {
 /** Usable today: earned and not past its expiry. */
 function isOpen(row, now = new Date()) {
   return !!row && row.status === 'earned' && (!row.expires_at || new Date(row.expires_at) > now);
-}
-
-/** Is this loyalty tier key shut out of the programme (Platinum)? */
-function tierExcluded(tierKey, cfg) {
-  return !!tierKey && ((cfg && cfg.referral && cfg.referral.exclude_tiers) || []).includes(String(tierKey));
 }
 
 // ── Supabase ────────────────────────────────────────────────────────────────────────────────────
@@ -301,7 +301,6 @@ async function qualify(order, attr, cfg) {
   if (referee && referee.firstOrderId && referee.firstOrderId !== String(order.id)) {
     return { ok: false, reason: 'not the customer\'s first order', referrerId };
   }
-  if (tierExcluded(await tierKeyOf(referrerId, cfg), cfg)) return { ok: false, reason: 'referrer is on the top tier', referrerId };
   return { ok: true, reason: '', referrerId };
 }
 
@@ -395,7 +394,6 @@ async function notifyEarned(referrerId, cfg) {
  */
 async function bestFor(customerId, loyaltyResult, lines, cfg) {
   if (!cfg || !cfg.referral || !cfg.referral.enabled || !customerId) return loyaltyResult;
-  if (tierExcluded(loyaltyResult && loyaltyResult.tier ? loyaltyResult.tier.key : null, cfg)) return loyaltyResult;
   let rewards = [];
   try { rewards = await openRewards(supabase, customerId); }
   catch (e) { log.warn('referral', `rewards read for ${customerId} failed, loyalty only: ${e.message}`); return loyaltyResult; }
@@ -413,12 +411,6 @@ async function viewFor(customerId) {
   if (!r.enabled) return base;
   const c = await customerFacts(customerId);
   if (!c) return { ...base, found: false };
-  if (c.orders < 1) return { ...base, found: true, eligible: false, reason: 'first-purchase', firstName: c.firstName };
-  const tierKey = await tierKeyOf(customerId, cfg);
-  if (tierExcluded(tierKey, cfg)) {
-    const tier = (cfg.tiers || []).find(t => t.key === tierKey);
-    return { ...base, found: true, eligible: false, reason: 'top-tier', tierName: tier ? tier.name : '', firstName: c.firstName };
-  }
   const code = await getOrCreateCode(supabase, customerId, c.firstName);
   const open = await openRewards(supabase, customerId);
   const { count } = await supabase.from(REWARDS).select('id', { count: 'exact', head: true })
@@ -470,7 +462,6 @@ async function handleReferralTagStep(draft) {
   else if (normalizePhone(raw)) {
     const c = await customerByPhone(raw);
     if (!c) invalid = 'no customer with that phone';
-    else if (c.orders < 1) invalid = 'referrer has not bought yet';
     else { owner = c.id; code = await getOrCreateCode(supabase, c.id, c.firstName); }
   } else {
     code = normalizeCode(raw);
@@ -478,7 +469,6 @@ async function handleReferralTagStep(draft) {
     if (!owner) invalid = 'unknown code';
   }
   if (!invalid && draft.customer && String(draft.customer.id) === owner) invalid = 'own code';
-  if (!invalid && tierExcluded(await tierKeyOf(owner, cfg), cfg)) invalid = 'referrer is top tier';
   // Stop at the counter what would be rejected at the sale: a returning customer, or the referrer's
   // own phone on another customer record.
   if (!invalid && draft.customer && draft.customer.id) {
@@ -498,7 +488,8 @@ async function handleReferralTagStep(draft) {
  *   invalid       the last referral staff entered was refused: the reason and the tag to clear
  *   pending       staff just entered one and the middleware has not checked it yet
  *   canBeReferred a new customer (or none on the draft yet): show "Referrer's phone"
- *   asReferrer    the draft's customer as a referrer: open rewards, friends, or Platinum-excluded
+ *   asReferrer    the draft's customer as a referrer: open rewards, friends, waiting orders. Only when
+ *                 there is something to show, so a plain sale shows nothing extra.
  */
 async function draftPanel(draft) {
   const cfg = await loadConfig();
@@ -520,19 +511,15 @@ async function draftPanel(draft) {
   const me = cid ? await customerFacts(cid) : null;
   out.newCustomer = !me || me.orders === 0;
   out.canBeReferred = !done && out.newCustomer;
-  if (me && me.orders > 0) {
-    const tierKey = await tierKeyOf(cid, cfg);
-    if (tierExcluded(tierKey, cfg)) {
-      const tier = (cfg.tiers || []).find(t => t.key === tierKey);
-      out.asReferrer = { excluded: true, tierName: tier ? tier.name : '' };
-    } else {
-      const open = await openRewards(supabase, cid);
-      const { count } = await supabase.from(REWARDS).select('id', { count: 'exact', head: true })
-        .eq('referrer_customer_id', cid).in('status', ['earned', 'used']);
-      const { data: waiting } = await supabase.from(REWARDS).select('source_order_name')
-        .eq('referrer_customer_id', cid).eq('status', 'awaiting_payment');
-      out.asReferrer = { excluded: false, rewards: open.map(x => ({ expires_at: x.expires_at })), friends: count || 0,
-        awaiting: (waiting || []).map(w => w.source_order_name).filter(Boolean) };
+  if (me) {
+    const open = await openRewards(supabase, cid);
+    const { count } = await supabase.from(REWARDS).select('id', { count: 'exact', head: true })
+      .eq('referrer_customer_id', cid).in('status', ['earned', 'used']);
+    const { data: waiting } = await supabase.from(REWARDS).select('source_order_name')
+      .eq('referrer_customer_id', cid).eq('status', 'awaiting_payment');
+    const awaiting = (waiting || []).map(w => w.source_order_name).filter(Boolean);
+    if (open.length || count || awaiting.length) {
+      out.asReferrer = { rewards: open.map(x => ({ expires_at: x.expires_at })), friends: count || 0, awaiting };
     }
   }
   return out;
@@ -552,7 +539,7 @@ async function listRewards({ status, referrer } = {}) {
 module.exports = {
   // pure
   normalizeCode, normalizePhone, makeCode, linkFor, expiryFrom, attributionFrom, isPaidInFull, isDead,
-  nextStatus, isOpen, tierExcluded,
+  nextStatus, isOpen,
   // flows
   onOrder, qualify, bestFor, markUsed, viewFor, claim, handleReferralTagStep, listRewards, draftPanel,
   getOrCreateCode, ownerOfCode, openRewards,

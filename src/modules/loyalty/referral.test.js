@@ -150,11 +150,9 @@ test('status moves: awaiting → earned → void; used and rejected are final', 
 test('config: referral defaults fill in for a config saved before it existed', () => {
   const { referral, ...old } = DEFAULT_CONFIG;
   const c = normalizeConfig({ ...old, emails: {} });
-  assert.deepStrictEqual(c.referral, { enabled: true, pct: 10, reward_months: 12, exclude_tiers: ['T3'], link_base: 'https://timanti.in/' });
+  assert.deepStrictEqual(c.referral, { enabled: true, pct: 10, reward_months: 12, link_base: 'https://timanti.in/' });
   assert.strictEqual(c.emails.referral_reward, false);
   assert.strictEqual(normalizeConfig({ ...old, referral: { enabled: false } }).referral.enabled, false);
-  assert.strictEqual(R.tierExcluded('T3', c), true);
-  assert.strictEqual(R.tierExcluded('T2', c), false);
 });
 
 // ── The maths: 10% diamond only, and best-of against loyalty ───────────────────────────────────
@@ -229,7 +227,7 @@ test('discount breakup: referral is its own row, absent when unused', () => {
 
 // ── Flows against the fakes ────────────────────────────────────────────────────────────────────
 let priyaCode;
-test('view: a buying customer gets a code and link; new and Platinum customers do not', async () => {
+test('view: every customer gets a code and link, bought or not, any tier', async () => {
   const v = await R.viewFor('100');
   assert.strictEqual(v.eligible, true);
   assert.ok(/^PRIYA[A-Z2-9]{3}$/.test(v.code), v.code);
@@ -237,11 +235,8 @@ test('view: a buying customer gets a code and link; new and Platinum customers d
   assert.strictEqual(v.available, 0);
   priyaCode = v.code;
   assert.strictEqual((await R.viewFor('100')).code, priyaCode, 'same code on every visit');
-  assert.strictEqual((await R.viewFor('500')).reason, 'first-purchase');
-  const pat = await R.viewFor('300');
-  assert.strictEqual(pat.eligible, false);
-  assert.strictEqual(pat.reason, 'top-tier');
-  assert.strictEqual(pat.tierName, 'Platinum');
+  assert.strictEqual((await R.viewFor('500')).eligible, true, 'no purchase yet: still gets a link');
+  assert.strictEqual((await R.viewFor('300')).eligible, true, 'Platinum: still gets a link');
 });
 
 const online = (over = {}) => ({
@@ -292,7 +287,7 @@ test('store order (buy plan style): waits for full payment, then earns; a refund
   assert.strictEqual((await R.openRewards(fakeSupabase, '100')).length, 0);
 });
 
-test('rejections: own code, not a first order, Platinum referrer, same phone', async () => {
+test('rejections: own code, not a first order, same phone; a Platinum referrer earns', async () => {
   const own = await R.onOrder(online({ id: 9001, name: '#2003', customer: { id: 100 }, phone: '+919800000100', email: 'priya@x.in' }), { points: 1000, cfg });
   assert.strictEqual(own.status, 'rejected');
   assert.strictEqual(own.reason, 'own code');
@@ -302,7 +297,8 @@ test('rejections: own code, not a first order, Platinum referrer, same phone', a
   customers[700] = { firstName: 'New', email: 'n@x.in', phone: '+919800000700', numberOfOrders: '1', first: '7001' };
   const plat = await R.onOrder(online({ id: 7001, name: '#2005', customer: { id: 700 }, phone: '+919800000700', email: 'n@x.in',
     note_attributes: [{ name: '_referral', value: patCode }] }), { points: 1000, cfg });
-  assert.strictEqual(plat.reason, 'referrer is on the top tier');
+  assert.strictEqual(plat.status, 'earned', 'Platinum referrer: logged and banked, not refused');
+  assert.strictEqual(plat.referrer_customer_id, '300');
   customers[800] = { firstName: 'Twin', email: 't@x.in', phone: '+919800000100', numberOfOrders: '1', first: '8001' };
   const twin = await R.onOrder(online({ id: 8001, name: '#2006', customer: { id: 800 }, phone: '+919800000100', email: 't@x.in' }), { points: 1000, cfg });
   assert.strictEqual(twin.reason, 'same phone or email as the referrer');
@@ -351,6 +347,10 @@ test('in store: ref:<code or phone> becomes referred:<CODE>; bad input is flagge
   customers[510] = { firstName: 'Twin', email: 'tw@x.in', phone: '+919800000100', numberOfOrders: '0', first: null };
   await R.handleReferralTagStep({ id: 7, name: '#D7', tags: 'ref:9800000100', customer: { id: 510 } });
   assert.strictEqual(tagWrites.pop(), 'ref-invalid: same phone as referrer');
+  // A referrer who has never bought is accepted (founder, 2026-11-25): Neha (500) has no order.
+  customers[520] = { firstName: 'Asha', email: 'asha@x.in', phone: '+919800000520', numberOfOrders: '0', first: null };
+  await R.handleReferralTagStep({ id: 8, name: '#D8', tags: 'ref:9800000500', customer: { id: 520 } });
+  assert.match(tagWrites.pop(), /^referred:NEHA[A-Z2-9]{3}$/);
   const n = tagWrites.length;
   await R.handleReferralTagStep({ id: 5, name: '#D5', tags: `referred:${priyaCode}, loyalty-applied` });
   assert.strictEqual(tagWrites.length, n, 'no ref: tag → no write');
@@ -371,10 +371,11 @@ test('draft panel: a new customer can be referred; a referred draft names the re
   const refused = await R.draftPanel({ id: 13, tags: 'ref-invalid: own code', customer: { id: 100 } });
   assert.strictEqual(refused.invalid.reason, 'own code');
   assert.strictEqual(refused.canBeReferred, false, 'a buying customer cannot be referred');
-  assert.strictEqual(refused.asReferrer.excluded, false);
   assert.ok(Array.isArray(refused.asReferrer.rewards));
+  assert.ok(refused.asReferrer.friends > 0);
+  // Platinum: shown like anyone else, with the reward it earned above (the best-of picks the tier).
   const plat = await R.draftPanel({ id: 14, tags: '', customer: { id: 300 } });
-  assert.strictEqual(plat.asReferrer.excluded, true);
+  assert.ok(plat.asReferrer.rewards.length >= 1, "Platinum keeps its banked rewards");
   assert.strictEqual((await R.draftPanel({ id: 15, tags: 'ref:9800000100', customer: { id: 500 } })).pending, true);
 });
 
