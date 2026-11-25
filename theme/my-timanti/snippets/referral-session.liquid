@@ -1,0 +1,117 @@
+{%- comment -%}
+  Referral session (Timanti middleware: src/modules/loyalty/referral.js). Rendered once in layout/theme.liquid.
+
+  - Opening any URL with ?ref=CODE starts a 14-day referral session in this browser. Opening a referral
+    link again starts a new 14-day session with that link's code (the latest link wins).
+  - While the session is live, the code rides on the cart as the attributes _referral and _referral_at
+    (when the session started), so it travels product page -> cart -> GoKwik -> order. When the session
+    ends, both attributes are removed from the cart.
+  - When the visitor is logged in (KwikPass), the code is also recorded against their customer record
+    and phone through the app proxy (/apps/loyalty/referral/claim), once per session. That is the
+    backstop if the checkout drops cart attributes.
+  The server re-checks the 14 days on the order, so a stale cart can never earn a reward.
+{%- endcomment -%}
+<script>
+  (function () {
+    var DAYS = 14;
+    var KEY = 'tm_ref';
+    var CLAIMED = 'tm_ref_claimed';
+    var SYNCED = 'tm_ref_synced';
+    var LOGGED_IN = {% if customer %}true{% else %}false{% endif %};
+    var CODE_RE = /^[A-Z0-9]{4,12}$/;
+
+    function norm(v) { var c = String(v || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, ''); return CODE_RE.test(c) ? c : ''; }
+    function lsGet(k) { try { return window.localStorage.getItem(k); } catch (e) { return null; } }
+    function lsSet(k, v) { try { if (v == null) window.localStorage.removeItem(k); else window.localStorage.setItem(k, v); } catch (e) {} }
+    function ssSet(k, v) { try { window.sessionStorage.setItem(k, v); } catch (e) {} }
+    function cookieGet() { var m = document.cookie.match(/(?:^|;\s*)tm_ref=([^;]*)/); return m ? decodeURIComponent(m[1]) : null; }
+    function cookieSet(v) {
+      document.cookie = 'tm_ref=' + (v ? encodeURIComponent(v) : '') + ';path=/;SameSite=Lax' + (v ? ';max-age=' + DAYS * 86400 : ';max-age=0');
+    }
+
+    function read() {
+      var raw = lsGet(KEY) || cookieGet();
+      if (!raw) return null;
+      try {
+        var s = JSON.parse(raw);
+        return s && norm(s.code) && s.at ? { code: norm(s.code), at: s.at } : null;
+      } catch (e) { return null; }
+    }
+    function write(s) {
+      var v = s ? JSON.stringify(s) : null;
+      lsSet(KEY, v);
+      cookieSet(v);
+    }
+    function live(s) {
+      var t = Date.parse(s && s.at);
+      return !!s && isFinite(t) && Date.now() - t <= DAYS * 86400000;
+    }
+
+    // 1. A referral link starts (or restarts) the session.
+    var fromUrl = '';
+    try { fromUrl = norm(new URLSearchParams(window.location.search).get('ref')); } catch (e) {}
+    var session = read();
+    if (fromUrl) {
+      session = { code: fromUrl, at: new Date().toISOString() };
+      write(session);
+    } else if (session && !live(session)) {
+      write(null);
+      session = null;
+    }
+
+    window.TimantiReferral = {
+      get: function () { return session ? { code: session.code, startedAt: session.at, days: DAYS } : null; }
+    };
+
+    // 2. Keep the cart in step with the session (add while live, remove once over).
+    function syncCart() {
+      return fetch('/cart.js', { headers: { Accept: 'application/json' }, cache: 'no-store' })
+        .then(function (r) { return r.json(); })
+        .then(function (cart) {
+          var a = (cart && cart.attributes) || {};
+          var want = session ? { _referral: session.code, _referral_at: session.at } : { _referral: '', _referral_at: '' };
+          var same = (a._referral || '') === want._referral && (a._referral_at || '') === want._referral_at;
+          var mark = (cart && cart.token) + '|' + want._referral + '|' + want._referral_at;
+          if (same) { ssSet(SYNCED, mark); return; }
+          if (!session && !a._referral && !a._referral_at) return;
+          return fetch('/cart/update.js', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+            body: JSON.stringify({ attributes: want })
+          }).then(function () { ssSet(SYNCED, mark); });
+        })
+        .catch(function (e) { console.warn('[referral] cart sync skipped', e); });
+    }
+
+    // 3. Logged in during a session: record the claim once per session (the server checks the rest).
+    function claim() {
+      if (!LOGGED_IN || !session) return;
+      var mark = session.code + '|' + session.at;
+      if (lsGet(CLAIMED) === mark) return;
+      fetch('/apps/loyalty/referral/claim', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({ code: session.code, at: session.at })
+      }).then(function (r) { return r.json(); })
+        .then(function () { lsSet(CLAIMED, mark); })
+        .catch(function (e) { console.warn('[referral] claim skipped', e); });
+    }
+
+    function run() { syncCart(); claim(); }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', run); else run();
+
+    // A cart created later in the visit (first add to cart) gets the code too.
+    document.addEventListener('cart:updated', syncCart);
+    var _fetch = window.fetch;
+    if (session && _fetch) {
+      window.fetch = function (input) {
+        var p = _fetch.apply(this, arguments);
+        try {
+          var url = typeof input === 'string' ? input : (input && input.url) || '';
+          if (/\/cart\/(add|change|clear)(\.js)?/.test(url)) p.then(function () { setTimeout(syncCart, 300); });
+        } catch (e) {}
+        return p;
+      };
+    }
+  })();
+</script>

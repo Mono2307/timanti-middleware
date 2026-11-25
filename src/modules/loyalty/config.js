@@ -57,7 +57,8 @@ const DEFAULT_CONFIG = Object.freeze({
   // bill gets whichever saves more. Every tier takes part (founder, 2026-11-25: Platinum is no longer
   // excluded; their tier benefit always wins the best-of, so their rewards are logged and stay banked).
   // enabled:false switches the whole programme off without a deploy.
-  referral: { enabled: true, pct: 10, reward_months: 12, link_base: 'https://timanti.in/' },
+  // session_days: a referral link counts for this many days after it is opened (founder, 2026-11-25).
+  referral: { enabled: true, pct: 10, reward_months: 12, session_days: 14, link_base: 'https://timanti.in/' },
 });
 
 /** The diamond % per tier before the 2026-10-24 grid — see the upgrade in normalizeConfig. */
@@ -156,6 +157,7 @@ function normalizeConfig(raw) {
         enabled: r.enabled !== false,
         pct,
         reward_months: Math.max(1, parseInt(r.reward_months, 10) || DEFAULT_CONFIG.referral.reward_months),
+        session_days: Math.max(1, parseInt(r.session_days, 10) || DEFAULT_CONFIG.referral.session_days),
         link_base: String(r.link_base || DEFAULT_CONFIG.referral.link_base),
       };
     })(),

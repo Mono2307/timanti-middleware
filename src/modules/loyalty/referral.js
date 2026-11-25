@@ -30,9 +30,17 @@
  *                                  handleReferralTagStep checks it and rewrites it to referred:<CODE>
  *   2. note attribute _referral    online: the cart embed copies ?ref= onto the cart (loyalty-benefits.js)
  *   3. landing_site ?ref=          online, when the visit that bought is the one that landed
- *   4. a claim                     the embed records "this logged-in customer came from <CODE>"
+ *   4. a claim                     the theme records "this logged-in customer came from <CODE>"
  *                                  (by customer id, then by phone, since GoKwik can attach the order to
  *                                  another customer record with the same phone)
+ *
+ * THE 14-DAY SESSION (founder, 2026-11-25)
+ *   Opening a referral link starts a session of referral.session_days (14). The friend must buy within
+ *   it; opening a referral link again starts a new session with that link's code (the latest link wins).
+ *   The theme keeps the code on the cart as _referral plus _referral_at (when the session started) and
+ *   drops both when the session ends. Here, a _referral older than the window at order time is ignored,
+ *   and a claim counts only when the order is placed within the window of the claim's last refresh.
+ *   The in-store tag has no window: staff record it on the sale itself.
  */
 
 const crypto = require('crypto');
@@ -95,20 +103,38 @@ function expiryFrom(from, months) {
   return d.toISOString();
 }
 
+/** Days between two instants (b - a); NaN when either is missing or unparseable. */
+function daysBetween(a, b) {
+  const x = new Date(a).getTime();
+  const y = new Date(b).getTime();
+  return Number.isFinite(x) && Number.isFinite(y) ? (y - x) / 864e5 : NaN;
+}
+
+/** Is an instant inside the session window that ends `days` after `start`, as seen at `at`? */
+function inSession(start, at, days) {
+  if (!start) return true; // no start recorded (older carts): do not penalise
+  const d = daysBetween(start, at);
+  if (!Number.isFinite(d)) return true; // unparseable start: do not penalise
+  return d >= -1 && d <= (Number(days) || 14); // -1: clock skew between browser and Shopify
+}
+
 /**
  * Who referred this order, from the order alone: { code, via } or null.
- * The in-store tag beats the cart attribute, which beats the landing page.
+ * The in-store tag beats the cart attribute, which beats the landing page. A cart attribute whose
+ * session started more than sessionDays before the order is ignored.
  */
-function attributionFrom(order) {
+function attributionFrom(order, sessionDays = 14) {
   const tag = splitTags(order && order.tags).find(t => t.toLowerCase().startsWith(T_DONE));
   if (tag) {
     const code = normalizeCode(tag.slice(T_DONE.length));
     if (code) return { code, via: 'store' };
   }
-  const attr = ((order && order.note_attributes) || []).find(a => a && String(a.name || '').toLowerCase() === '_referral');
+  const attrs = (order && order.note_attributes) || [];
+  const attr = attrs.find(a => a && String(a.name || '').toLowerCase() === '_referral');
   if (attr) {
     const code = normalizeCode(attr.value);
-    if (code) return { code, via: 'link' };
+    const at = attrs.find(a => a && String(a.name || '').toLowerCase() === '_referral_at');
+    if (code && inSession(at && at.value, order.created_at || new Date(), sessionDays)) return { code, via: 'link' };
   }
   const landing = String((order && order.landing_site) || '');
   const q = landing.indexOf('?');
@@ -194,7 +220,7 @@ async function claimFor(db, { customerId, phone }) {
   }
   const p = normalizePhone(phone);
   if (!p) return null;
-  const { data, error } = await db.from(CLAIMS).select('*').eq('phone', p).order('created_at', { ascending: true }).limit(1);
+  const { data, error } = await db.from(CLAIMS).select('*').eq('phone', p).order('created_at', { ascending: false }).limit(1);
   if (error) throw new Error(`referral claim read by phone: ${error.message}`);
   return (data && data[0]) || null;
 }
@@ -336,13 +362,14 @@ async function onOrder(order, { points = 0, cfg } = {}) {
     return { ...existing, status: next };
   }
 
-  let attr = attributionFrom(order);
+  const sessionDays = cfg.referral.session_days || 14;
+  let attr = attributionFrom(order, sessionDays);
   if (!attr) {
     const claim = await claimFor(supabase, {
       customerId: order.customer && order.customer.id,
       phone: order.phone || (order.billing_address || {}).phone || (order.customer || {}).phone,
     });
-    if (claim) attr = { code: claim.code, via: 'claim' };
+    if (claim && inSession(claim.created_at, order.created_at || new Date(), sessionDays)) attr = { code: claim.code, via: 'claim' };
   }
   if (!attr) return null;
   if (!(points > 0)) return null; // not a sale: nothing to reward, and the real sale gets its own pass
@@ -417,16 +444,17 @@ async function viewFor(customerId) {
     .eq('referrer_customer_id', String(customerId)).in('status', ['earned', 'used']);
   return {
     ...base, found: true, eligible: true, firstName: c.firstName,
-    code, link: linkFor(code, cfg),
+    code, link: linkFor(code, cfg), sessionDays: r.session_days || 14,
     available: open.length, rewards: open.map(x => ({ expires_at: x.expires_at })), friends: count || 0,
   };
 }
 
 /**
- * The cart embed saw ?ref= in this browser and the visitor is now logged in: remember which code
- * brought them. First claim wins. Ignored for the code's owner and for anyone who has bought before.
+ * The theme saw ?ref= in this browser and the visitor is logged in: remember which code brought them.
+ * The latest link wins and refreshes the 14-day window (created_at is the session start). Ignored for
+ * the code's owner and for anyone who has bought before.
  */
-async function claim(customerId, rawCode) {
+async function claim(customerId, rawCode, rawAt) {
   const code = normalizeCode(rawCode);
   if (!code) return { ok: false, reason: 'no code' };
   const owner = await ownerOfCode(supabase, code);
@@ -435,9 +463,19 @@ async function claim(customerId, rawCode) {
   const c = await customerFacts(customerId);
   if (!c) return { ok: false, reason: 'not found' };
   if (c.orders > 0) return { ok: false, reason: 'existing customer' };
-  const { error } = await supabase.from(CLAIMS).insert({ referee_customer_id: String(customerId), code, phone: c.phone || null });
+  // The session started when the link was opened (the theme sends that time). Anything missing, in the
+  // future or older than the window falls back to now, so the window can only start late, never early.
+  const now = Date.now();
+  const at = new Date(rawAt || NaN).getTime();
+  const windowMs = ((((await loadConfig()).referral || {}).session_days) || 14) * 864e5;
+  const start = Number.isFinite(at) && at <= now + 5 * 60e3 && now - at <= windowMs ? at : now;
+  const row = { code, phone: c.phone || null, created_at: new Date(Math.min(start, now)).toISOString() };
+  const existing = await claimFor(supabase, { customerId });
+  const { error } = existing
+    ? await supabase.from(CLAIMS).update(row).eq('referee_customer_id', String(customerId))
+    : await supabase.from(CLAIMS).insert({ referee_customer_id: String(customerId), ...row });
   if (error && error.code !== '23505') throw new Error(`referral claim ${customerId}: ${error.message}`);
-  if (!error) log.info('referral', `customer ${customerId} claimed referral code ${code}`);
+  if (!error) log.info('referral', `customer ${customerId} ${existing ? 'refreshed' : 'claimed'} referral code ${code}`);
   return { ok: true };
 }
 
@@ -538,7 +576,7 @@ async function listRewards({ status, referrer } = {}) {
 
 module.exports = {
   // pure
-  normalizeCode, normalizePhone, makeCode, linkFor, expiryFrom, attributionFrom, isPaidInFull, isDead,
+  normalizeCode, normalizePhone, makeCode, linkFor, expiryFrom, attributionFrom, inSession, isPaidInFull, isDead,
   nextStatus, isOpen,
   // flows
   onOrder, qualify, bestFor, markUsed, viewFor, claim, handleReferralTagStep, listRewards, draftPanel,

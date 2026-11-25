@@ -1,0 +1,239 @@
+{%- comment -%}
+  My Timanti (page template page.my-timanti). Gated behind the same KwikPass login as the cart drawer:
+  logged out, the "Log in" link is routes.account_login_url, which the KwikPass embed intercepts.
+  Logged in, the loyalty and referral panels read the Timanti middleware through the app proxy
+  (/apps/loyalty/benefits, /apps/loyalty/referral), exactly like the cart drawer's My Timanti Benefits.
+  Recent orders come from Liquid (customer.orders). The after-sales panel is a placeholder.
+{%- endcomment -%}
+{%- style -%}
+  .mt { --mt-orange: #fc7d27; --mt-orange-wash: #fff8f2; --mt-line: #e5e5e5; --mt-wash: #f6f6f6; --mt-soft: rgba(0,0,0,.62);
+        padding-top: {{ section.settings.padding_top | times: 0.75 | round: 0 }}px; padding-bottom: {{ section.settings.padding_bottom | times: 0.75 | round: 0 }}px; }
+  @media screen and (min-width: 750px) { .mt { padding-top: {{ section.settings.padding_top }}px; padding-bottom: {{ section.settings.padding_bottom }}px; } }
+  .mt__inner { display: grid; gap: 2rem; }
+  .mt h1, .mt h2 { font-family: IvyMode, serif; margin: 0; letter-spacing: .01em; }
+  .mt__title { display: flex; justify-content: space-between; align-items: baseline; gap: 1.2rem; flex-wrap: wrap; padding-bottom: 1.6rem; border-bottom: 1px solid var(--mt-line); }
+  .mt__title h1 { font-size: 3.4rem; font-weight: 400; }
+  .mt__title em, .mt__locked h1 em { font-style: italic; }
+  .mt__muted { color: var(--mt-soft); }
+  .mt__ulink { color: inherit; text-decoration: underline; text-underline-offset: .3rem; font-size: 1.4rem; }
+  .mt__grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2rem; }
+  @media screen and (max-width: 749px) { .mt__grid { grid-template-columns: minmax(0, 1fr); } .mt__title h1 { font-size: 2.8rem; } }
+  .mt__panel { border: 1px solid var(--mt-line); padding: 1.8rem 1.8rem 2rem; display: grid; gap: 1.4rem; align-content: start; min-width: 0; }
+  .mt__panel[hidden] { display: none; }
+  .mt__panel h2 { font-size: 1.9rem; font-weight: 600; padding-bottom: 1rem; border-bottom: 1px solid var(--mt-line); }
+  .mt__p { margin: 0; font-size: 1.4rem; line-height: 1.5; }
+  .mt__tier { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; font-size: 1.4rem; }
+  .mt__badge { font-family: IvyMode, serif; font-size: 1.3rem; letter-spacing: .12em; text-transform: uppercase; border: 1px solid #000; padding: .3rem 1rem; }
+  .mt__track { height: .4rem; background: var(--mt-line); position: relative; }
+  .mt__track span { position: absolute; inset: 0 auto 0 0; background: #000; }
+  .mt__track i { position: absolute; top: -.4rem; width: 1.2rem; height: 1.2rem; margin-left: -.6rem; border-radius: 50%; background: var(--mt-orange); }
+  .mt__rows { display: grid; gap: .7rem; font-variant-numeric: tabular-nums; }
+  .mt__row { display: flex; justify-content: space-between; gap: 1.2rem; font-size: 1.4rem; }
+  .mt__item { display: flex; justify-content: space-between; align-items: center; gap: 1.2rem; flex-wrap: wrap; background: var(--mt-wash); padding: 1.1rem 1.2rem; font-size: 1.4rem; color: inherit; text-decoration: none; }
+  a.mt__item:hover { background: #efefef; }
+  .mt__ready { display: flex; justify-content: space-between; align-items: center; gap: 1.2rem; flex-wrap: wrap; background: var(--mt-orange-wash); border-left: 3px solid var(--mt-orange); padding: 1.1rem 1.2rem; font-size: 1.4rem; }
+  .mt__share { display: flex; gap: .8rem; flex-wrap: wrap; }
+  .mt__share input { flex: 1 1 22rem; min-width: 0; height: 4.4rem; border: 1px solid #000; border-radius: 0; padding: 0 1.2rem; font-size: 1.4rem; background: #fff; color: #000; }
+  .mt__btn { display: inline-flex; align-items: center; justify-content: center; min-height: 4.4rem; padding: 0 2.2rem; border: 1px solid #000; border-radius: 0;
+             background: #000; color: #fff; font-family: IvyMode, serif; font-size: 1.5rem; letter-spacing: .1rem; text-decoration: none; cursor: pointer; }
+  .mt__btn--ghost { background: #fff; color: #000; }
+  .mt__btn:focus-visible, .mt__ulink:focus-visible, .mt__item:focus-visible { outline: 2px solid var(--mt-orange); outline-offset: 2px; }
+  .mt__steps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1.6rem; font-size: 1.4rem; }
+  @media screen and (max-width: 749px) { .mt__steps { grid-template-columns: minmax(0, 1fr); } }
+  .mt__steps div { border-top: 1px solid #000; padding-top: 1rem; display: grid; gap: .4rem; }
+  .mt__steps b { font-family: IvyMode, serif; font-weight: 600; font-size: 1.5rem; }
+  .mt__locked { display: grid; gap: 1.6rem; justify-items: start; max-width: 52rem; margin: 0 auto; padding: 2rem 0 4rem; }
+  .mt__locked h1 { font-size: 3.2rem; font-weight: 400; }
+  .mt__locked ul { margin: 0; padding-left: 1.8rem; display: grid; gap: .4rem; font-size: 1.4rem; color: var(--mt-soft); }
+  .mt__msg { font-size: 1.3rem; color: var(--mt-soft); margin: 0; }
+  .mt__msg[hidden] { display: none; }
+  .mt__refbody { display: grid; gap: 1.4rem; }
+  .mt [hidden] { display: none !important; }
+{%- endstyle -%}
+
+<div class="mt">
+  <div class="page-width mt__inner">
+    {%- if customer == blank -%}
+      <div class="mt__locked">
+        <h1>My <em>Timanti</em></h1>
+        <p class="mt__p mt__muted">Log in with your phone number to see:</p>
+        <ul>
+          <li>your loyalty tier and benefits</li>
+          <li>your recent orders and vouchers</li>
+          <li>your referral link and rewards</li>
+          <li>after-sales requests (coming soon)</li>
+        </ul>
+        <a class="mt__btn" href="{{ routes.account_login_url }}" rel="nofollow">Log in</a>
+      </div>
+    {%- else -%}
+      <div class="mt__title">
+        <h1>Hello{% if customer.first_name != blank %}, <em>{{ customer.first_name | escape }}</em>{% endif %}</h1>
+        <a class="mt__ulink" href="{{ routes.account_logout_url }}">Log out</a>
+      </div>
+
+      <div class="mt__grid">
+        <div class="mt__panel" data-mt-loyalty>
+          <h2>Your loyalty</h2>
+          <p class="mt__msg" data-mt-loyalty-msg>Loading your benefits…</p>
+          <div class="mt__tier" data-mt-tier hidden></div>
+          <div class="mt__track" data-mt-track hidden><span></span><i></i></div>
+          <div class="mt__rows" data-mt-loyalty-rows hidden></div>
+        </div>
+
+        <div class="mt__panel" data-mt-referral>
+          <h2>Refer a friend</h2>
+          <p class="mt__msg" data-mt-referral-msg>Loading your link…</p>
+          <div class="mt__refbody" data-mt-referral-body hidden>
+            <p class="mt__p">Share your link. When a friend's first purchase through it is fully paid, you get <strong data-mt-pct>10% off the diamond value</strong> of a later purchase.</p>
+            <div class="mt__share">
+              <input type="text" readonly id="mt-ref-link" aria-label="Your referral link" data-mt-link>
+              <button type="button" class="mt__btn mt__btn--ghost" data-mt-copy>Copy link</button>
+              <a class="mt__btn" data-mt-wa target="_blank" rel="noopener">WhatsApp</a>
+            </div>
+            <div class="mt__ready" data-mt-ready hidden></div>
+            <div class="mt__rows"><div class="mt__row"><span class="mt__muted">Friends who shopped</span><span data-mt-friends>0</span></div></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="mt__grid">
+        <div class="mt__panel">
+          <h2>Recent orders</h2>
+          {%- if customer.orders.size > 0 -%}
+            <div class="mt__rows">
+              {%- for order in customer.orders limit: 3 -%}
+                <a class="mt__item" href="{{ order.customer_url }}">
+                  <span><strong>{{ order.name }}</strong> · {{ order.created_at | date: '%d %b %Y' }} · {{ order.financial_status_label }}</span>
+                  <span>{{ order.total_price | money }}</span>
+                </a>
+              {%- endfor -%}
+            </div>
+          {%- else -%}
+            <p class="mt__p mt__muted">No orders yet.</p>
+          {%- endif -%}
+          <a class="mt__ulink" href="{{ routes.account_url }}">See all orders</a>
+        </div>
+
+        <div class="mt__panel">
+          <h2>After-sales</h2>
+          <p class="mt__p">Repairs, resizing, exchange and returns, raised against an order you have bought.</p>
+          <div class="mt__item"><span class="mt__muted">{{ section.settings.aftersales_text }}</span></div>
+        </div>
+      </div>
+
+      <div class="mt__panel" data-mt-vouchers hidden>
+        <h2>Vouchers</h2>
+        <div class="mt__rows" data-mt-voucher-list></div>
+      </div>
+
+      <div class="mt__panel">
+        <h2>How referrals work</h2>
+        <div class="mt__steps">
+          <div><b>Share</b><span>Send your link, or any product page with your link on it.</span></div>
+          <div><b>Your friend shops</b><span>Within 14 days of opening the link. They pay the normal price.</span></div>
+          <div><b>You are rewarded</b><span>Once their order is fully paid, your reward shows here and in your cart.</span></div>
+        </div>
+      </div>
+
+      <div class="mt__panel">
+        <h2>Your account</h2>
+        <div class="mt__share">
+          <a class="mt__btn mt__btn--ghost" href="{{ routes.account_url }}">Orders</a>
+          <a class="mt__btn mt__btn--ghost" href="{{ section.settings.profile_url | default: routes.account_url }}">Profile &amp; addresses</a>
+        </div>
+      </div>
+    {%- endif -%}
+  </div>
+</div>
+
+{%- if customer -%}
+<script>
+  (function () {
+    var PROXY = '/apps/loyalty';
+    var WA_TEXT = {{ section.settings.whatsapp_text | json }};
+    function $(s) { return document.querySelector(s); }
+    function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+    function inr(n) { return '₹' + Math.round(Number(n) || 0).toLocaleString('en-IN'); }
+    function day(iso) { return iso ? new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata' }) : ''; }
+    function get(path) { return fetch(PROXY + path, { headers: { Accept: 'application/json' }, cache: 'no-store' }).then(function (r) { return r.json(); }); }
+
+    get('/benefits').then(function (b) {
+      var msg = $('[data-mt-loyalty-msg]');
+      if (!b || b.error || b.found === false || b.enabled === false) { msg.textContent = 'Your loyalty benefits are not available right now.'; return; }
+      var tier = $('[data-mt-tier]');
+      var rows = [];
+      if (b.tier) {
+        var mk = Number(b.tier.making_pct) > 0 ? ' · ' + b.tier.making_pct + '% off making' + (Number(b.tier.making_cap) > 0 ? ', up to ' + inr(b.tier.making_cap) + ' a bill' : '') : '';
+        var occ = (b.occasion && b.occasion.length) ? ' (+' + esc(b.occasion.join(' & ')) + ' month bonus)' : '';
+        tier.innerHTML = '<span class="mt__badge">' + esc(b.tier.name) + '</span><span>' + esc(b.rate) + '% off diamonds' + occ + esc(mk) + '</span>';
+        msg.hidden = true;
+      } else {
+        msg.textContent = b.next ? 'Shop a little more to unlock ' + b.next.name + ': ' + b.next.pct + '% off diamonds.' : 'Your loyalty benefits will appear here.';
+      }
+      tier.hidden = !b.tier;
+      rows.push(['Lifetime spend', inr(b.points)]);
+      if (b.next) {
+        rows.push(['To ' + b.next.name, inr(Math.ceil(b.next.gap)) + ' more']);
+        var pct = Math.max(2, Math.min(98, 100 * (Number(b.points) || 0) / ((Number(b.points) || 0) + (Number(b.next.gap) || 1))));
+        var track = $('[data-mt-track]');
+        track.querySelector('span').style.width = pct + '%';
+        track.querySelector('i').style.left = pct + '%';
+        track.hidden = false;
+      } else if (b.tier) {
+        rows.push(['Tier', 'Top tier reached']);
+      }
+      var r = $('[data-mt-loyalty-rows]');
+      r.innerHTML = rows.map(function (x) { return '<div class="mt__row"><span class="mt__muted">' + esc(x[0]) + '</span><span>' + esc(x[1]) + '</span></div>'; }).join('');
+      r.hidden = false;
+
+      var v = b.vouchers || [];
+      if (v.length) {
+        $('[data-mt-voucher-list]').innerHTML = v.map(function (x) {
+          return '<div class="mt__item"><span>Voucher ' + inr(x.value) + '</span><span class="mt__muted">' + (x.expires_at ? 'till ' + day(x.expires_at) : '') + '</span></div>';
+        }).join('');
+        $('[data-mt-vouchers]').hidden = false;
+      }
+    }).catch(function () { $('[data-mt-loyalty-msg]').textContent = 'Your loyalty benefits are not available right now.'; });
+
+    get('/referral').then(function (v) {
+      var msg = $('[data-mt-referral-msg]');
+      if (!v || v.error || v.found === false) { msg.textContent = 'Your referral link is not available right now. Please try again later.'; return; }
+      if (!v.enabled) { msg.textContent = 'Referrals are paused at the moment.'; return; }
+      if (!v.eligible || !v.link) { msg.textContent = 'Your referral link is not available right now.'; return; }
+      msg.hidden = true;
+      $('[data-mt-pct]').textContent = (v.pct || 10) + '% off the diamond value';
+      var input = $('[data-mt-link]');
+      input.value = v.link;
+      input.addEventListener('focus', function () { input.select(); });
+      var copy = $('[data-mt-copy]');
+      copy.addEventListener('click', function () {
+        var done = function () { copy.textContent = 'Copied'; setTimeout(function () { copy.textContent = 'Copy link'; }, 2000); };
+        if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(v.link).then(done, function () { input.select(); });
+        else { input.select(); try { document.execCommand('copy'); done(); } catch (e) {} }
+      });
+      $('[data-mt-wa]').href = 'https://wa.me/?text=' + encodeURIComponent(WA_TEXT + ' ' + v.link);
+      if (v.available > 0) {
+        var r = $('[data-mt-ready]');
+        r.innerHTML = '<span><strong>' + v.available + ' reward' + (v.available > 1 ? 's' : '') + ' ready</strong> · ' + esc(v.pct) + '% off diamonds, one per purchase</span>'
+          + '<span class="mt__muted">' + (v.rewards && v.rewards[0] && v.rewards[0].expires_at ? 'use by ' + day(v.rewards[0].expires_at) : '') + '</span>';
+        r.hidden = false;
+      }
+      $('[data-mt-friends]').textContent = v.friends || 0;
+      $('[data-mt-referral-body]').hidden = false;
+    }).catch(function () { $('[data-mt-referral-msg]').textContent = 'Your referral link is not available right now. Please try again later.'; });
+  })();
+</script>
+{%- endif -%}
+
+{% schema %}
+{
+  "name": "My Timanti",
+  "settings": [
+    { "type": "textarea", "id": "whatsapp_text", "label": "WhatsApp share message", "default": "I love my Timanti jewellery. Have a look:" },
+    { "type": "text", "id": "aftersales_text", "label": "After-sales placeholder", "default": "Coming soon. For now, message us on WhatsApp." },
+    { "type": "text", "id": "profile_url", "label": "Profile & addresses link", "default": "https://shopify.com/77583220993/account/profile" },
+    { "type": "range", "id": "padding_top", "min": 0, "max": 100, "step": 4, "unit": "px", "label": "Top padding", "default": 36 },
+    { "type": "range", "id": "padding_bottom", "min": 0, "max": 100, "step": 4, "unit": "px", "label": "Bottom padding", "default": 36 }
+  ]
+}
+{% endschema %}

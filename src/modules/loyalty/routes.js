@@ -246,7 +246,7 @@ function register(app /* , ctx */) {
     if (!cid) return res.json({ ok: false, reason: 'not logged in' });
     let body = req.body;
     if (typeof body === 'string') { try { body = JSON.parse(body); } catch { body = {}; } }
-    try { return res.json(await referral.claim(cid, (body || {}).code)); }
+    try { return res.json(await referral.claim(cid, (body || {}).code, (body || {}).at)); }
     catch (e) { log.error('referral', `claim for ${cid}: ${e.message}`); return res.status(500).json({ ok: false, reason: 'unavailable' }); }
   });
 

@@ -125,6 +125,12 @@ test('attribution: store tag beats cart attribute beats landing page', () => {
   assert.deepStrictEqual(R.attributionFrom(base), { code: 'LINKCODE', via: 'link' });
   assert.deepStrictEqual(R.attributionFrom({ landing_site: '/products/x?ref=landcode' }), { code: 'LANDCODE', via: 'landing' });
   assert.strictEqual(R.attributionFrom({ tags: 'loyalty-applied', landing_site: '/' }), null);
+  // 14-day session: a cart attribute from a session started 15 days before the order is ignored.
+  const attrAt = (start) => ({ created_at: '2026-12-20T10:00:00Z',
+    note_attributes: [{ name: '_referral', value: 'LINKCODE' }, { name: '_referral_at', value: start }] });
+  assert.deepStrictEqual(R.attributionFrom(attrAt('2026-12-07T10:00:00Z'), 14), { code: 'LINKCODE', via: 'link' });
+  assert.strictEqual(R.attributionFrom(attrAt('2026-12-05T09:00:00Z'), 14), null);
+  assert.strictEqual(R.inSession(null, '2026-12-20T10:00:00Z', 14), true, 'no start recorded: accepted');
 });
 
 test('fully paid: store orders need the payment tag, online orders Shopify paid', () => {
@@ -150,7 +156,7 @@ test('status moves: awaiting → earned → void; used and rejected are final', 
 test('config: referral defaults fill in for a config saved before it existed', () => {
   const { referral, ...old } = DEFAULT_CONFIG;
   const c = normalizeConfig({ ...old, emails: {} });
-  assert.deepStrictEqual(c.referral, { enabled: true, pct: 10, reward_months: 12, link_base: 'https://timanti.in/' });
+  assert.deepStrictEqual(c.referral, { enabled: true, pct: 10, reward_months: 12, session_days: 14, link_base: 'https://timanti.in/' });
   assert.strictEqual(c.emails.referral_reward, false);
   assert.strictEqual(normalizeConfig({ ...old, referral: { enabled: false } }).referral.enabled, false);
 });
@@ -321,6 +327,25 @@ test('claim: a logged-in new visitor\'s code attributes an order that carries no
   const row = await R.onOrder(online({ id: 9902, name: '#2007', customer: { id: 901 }, phone: '+919800000900', email: '', note_attributes: [] }), { points: 30000, cfg });
   assert.strictEqual(row.via, 'claim');
   assert.strictEqual(row.status, 'earned');
+  // A claim older than 14 days at order time does not count; a new click refreshes it.
+  customers[910] = { firstName: 'Old', email: 'oc@x.in', phone: '+919800000910', numberOfOrders: '0', first: null };
+  assert.deepStrictEqual(await R.claim('910', priyaCode), { ok: true });
+  T('referral_claims').find(c => c.referee_customer_id === '910').created_at = new Date(Date.now() - 20 * 864e5).toISOString();
+  customers[910] = { ...customers[910], numberOfOrders: '1', first: '9910' };
+  assert.strictEqual(await R.onOrder(online({ id: 9910, name: '#2010', customer: { id: 910 }, phone: '+919800000910', email: 'oc@x.in', note_attributes: [] }), { points: 1000, cfg }), null, 'stale claim ignored');
+  customers[911] = { firstName: 'Re', email: 're@x.in', phone: '+919800000911', numberOfOrders: '0', first: null };
+  assert.deepStrictEqual(await R.claim('911', priyaCode), { ok: true });
+  T('referral_claims').find(c => c.referee_customer_id === '911').created_at = new Date(Date.now() - 20 * 864e5).toISOString();
+  assert.deepStrictEqual(await R.claim('911', priyaCode), { ok: true }, 'clicking again refreshes the session');
+  // The theme sends when the link was opened; the window runs from then, never from earlier than 14 days.
+  const opened = new Date(Date.now() - 3 * 864e5).toISOString();
+  await R.claim('911', priyaCode, opened);
+  assert.strictEqual(T('referral_claims').find(c => c.referee_customer_id === '911').created_at, opened);
+  await R.claim('911', priyaCode, new Date(Date.now() - 30 * 864e5).toISOString());
+  assert.ok(Date.now() - new Date(T('referral_claims').find(c => c.referee_customer_id === '911').created_at) < 60e3, 'too old: starts now');
+  assert.strictEqual(T('referral_claims').filter(c => c.referee_customer_id === '911').length, 1);
+  customers[911] = { ...customers[911], numberOfOrders: '1', first: '9911' };
+  assert.strictEqual((await R.onOrder(online({ id: 9911, name: '#2011', customer: { id: 911 }, phone: '+919800000911', email: 're@x.in', note_attributes: [] }), { points: 1000, cfg })).via, 'claim');
 });
 
 test('bestFor: an open reward wins over a weaker benefit; Platinum never sees it', async () => {

@@ -1,0 +1,11 @@
+{
+  "sections": {
+    "main": {
+      "type": "main-my-timanti",
+      "settings": {}
+    }
+  },
+  "order": [
+    "main"
+  ]
+}
