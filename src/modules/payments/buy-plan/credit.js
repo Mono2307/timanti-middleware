@@ -25,6 +25,9 @@ const S = require('./schedule');
 const store = require('./store');
 const notify = require('./notify');
 const { issuePlanVoucher } = require('./voucher');
+// Money refunded to the customer's payment (refund.js, or a refund typed into the draft's refund fields)
+// has gone back too: it is never offered again as a voucher.
+const { refundedOn } = require('./refund');
 
 const vouchered = (plan) => Math.max(0, Math.round(Number(plan.voucher_value) || 0));
 const codesOf = (plan) => String(plan.voucher_code || '').split(',').map(c => c.trim()).filter(Boolean);
@@ -51,16 +54,16 @@ function verifiedMoney(d, verifiedSlots) {
 }
 
 // What a plan that ends without its piece gives back: the (verified) money, plus what was handed in,
-// less any voucher already issued on it. verifiedSlots null: every payment (the digest's estimate).
+// less any voucher already issued on it and anything refunded. verifiedSlots null: every payment (the digest's estimate).
 function payout(plan, st, d, verifiedSlots = null) {
   const money = verifiedMoney(d, verifiedSlots);
-  return Math.max(0, (money === null ? Math.round(st.paid) : money) + handedIn(d).total - vouchered(plan));
+  return Math.max(0, (money === null ? Math.round(st.paid) : money) + handedIn(d).total - vouchered(plan) - refundedOn(d));
 }
 
 // What staff may put on a voucher now. { kind, amount } — 0: nothing.
 function voucherDue(plan, st, d = null, verifiedSlots = null) {
   if (plan.status === 'forfeited') return { kind: 'closed', amount: payout(plan, st, d, verifiedSlots) };
-  if (plan.status === 'active' && !plan.change_pending) return { kind: 'credit', amount: Math.max(0, Math.round(st.credit) - vouchered(plan)) };
+  if (plan.status === 'active' && !plan.change_pending) return { kind: 'credit', amount: Math.max(0, Math.round(st.credit) - vouchered(plan) - refundedOn(d)) };
   return { kind: null, amount: 0 };
 }
 

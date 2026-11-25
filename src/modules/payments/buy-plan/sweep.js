@@ -103,7 +103,7 @@ async function finishChange(plan, d, today, { dryRun }) {
   // Paid more than the new piece: no voucher here. The store is prompted to offer a piece of higher
   // value, or to issue a voucher for the difference by hand (credit.js).
   const st = S.planState(plan, d.legs, today);
-  const owed = voucherDue(plan, st).amount;
+  const owed = voucherDue(plan, st, d).amount;
   await notify.sendChanged(plan, d, { oldTotal, newTotal, lostLock: Boolean(pending.lost_lock), credit: owed, today });
   if (owed > 0) await notify.sendFinalCredit(plan, d, owed, { why: 'change', oldTotal, newTotal }).catch(e => log.error('buy-plan', `credit alert: ${e.message}`));
   log.info('buy-plan', `${plan.draft_name}: product changed, Rs${oldTotal} → Rs${newTotal}${owed > 0 ? `, paid Rs${owed} over the new price (store prompted)` : ''}`);
@@ -266,7 +266,7 @@ async function sweepPlan(plan, today, { dryRun, restore }) {
     out.sent.push(`received Rs${st.paid - acknowledged}`);
   }
   if (st.balance <= 0) {   // fully paid; staff complete the draft
-    const owed = voucherDue(plan, st).amount;
+    const owed = voucherDue(plan, st, d).amount;
     if (owed > 0) rows.push(digestRow(plan, d, n, st.k, today, owed, { overdue: true, stuck: true,
       note: `Paid ${owed.toLocaleString('en-IN')} more than the price. Offer a piece of higher value, or open Buy plan and press Issue voucher.` }));
     else if (!S.awaitingFinalPrice(plan) && !plan.change_pending) rows.push(digestRow(plan, d, n, n, today, st.total, { ready: true,

@@ -205,6 +205,29 @@ async function sendForfeited(plan, d, { owed, reason }) {
 
 // Customer: staff issued a voucher (credit.js). kind 'closed': the plan closed for non-payment and this
 // is everything paid; 'credit': what was paid beyond the price.
+// Money paid over the price refunded through GoKwik (refund.js): the customer, and the store's record.
+async function sendRefunded(plan, d, { refunded, parts, short, by }) {
+  await sendEmail({
+    to: plan.customer_email,
+    subject: `Your refund of ${rupees(refunded)} (${plan.draft_name})`,
+    html: T.buildBuyPlanRefundHtml({ customerName: plan.customer_name, draftName: plan.draft_name, amount: refunded, short }),
+  });
+  await sendEmail({
+    to: STORE(), internal: true,
+    subject: `Buy plan ${plan.draft_name}: ${rupees(refunded)} refunded through GoKwik`,
+    html: T.buildSavingsPlanStaffHtml({
+      heading: `${plan.draft_name}: refund made`,
+      body: `${rupees(refunded)} paid over the price has been refunded to the customer's payment through GoKwik, and recorded in the draft's refund fields. `
+        + (short > 0 ? `${rupees(short)} more is still owed (paid at the store): issue a voucher for it on the Buy plan screen, or settle it at the counter. ` : '')
+        + 'The plan is settled at its price: complete the draft when the piece is handed over.',
+      adminUrl: d ? adminDraftUrl(d.id) : adminDraftUrl(plan.draft_order_id),
+      facts: [{ label: 'Customer', value: `${plan.customer_name || '—'} ${plan.customer_phone || ''}` },
+        ...parts.map(p => ({ label: `Refund ${p.refundId}`, value: `${rupees(p.amount)} on payment ${p.txn} (${p.status})` })),
+        ...(by ? [{ label: 'By', value: String(by) }] : [])],
+    }),
+  });
+}
+
 async function sendVoucherIssued(plan, d, { kind, voucher }) {
   await sendEmail({
     to: plan.customer_email,
@@ -319,6 +342,6 @@ async function sendRestored({ plan, oldName, newName, newId, d }) {
 }
 
 module.exports = {
-  sendStarted, sendGoldLink, sendLink, sendReceived, sendReorder, sendCompleted, sendConvertedOwing, sendFinalPrice, sendFinalCredit,
+  sendStarted, sendGoldLink, sendLink, sendReceived, sendReorder, sendRefunded, sendCompleted, sendConvertedOwing, sendFinalPrice, sendFinalCredit,
   sendClosingSoon, sendForfeited, sendVoucherIssued, sendCancelled, sendChanged, sendLinesChanged, sendPricePutBack, sendStaffDigest, sendRestored, whatsappUrl,
 };

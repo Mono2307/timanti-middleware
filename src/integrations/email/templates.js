@@ -1018,6 +1018,21 @@ function buildBuyPlanCreditVoucherHtml({ customerName, draftName, amount, vouche
     + foot();
 }
 
+// Customer: money paid over the price is going back to the card / UPI they paid with (buy-plan/refund.js).
+function buildBuyPlanRefundHtml({ customerName, draftName, amount, short }) {
+  return head()
+    + contentBlock({
+        ref: `Buy Plan — ${draftName}`,
+        heading: 'Your refund is on its way',
+        body: `${customerName ? esc(customerName) + ', you' : 'You'} paid more than the price of your piece. As agreed with our store, <strong>${money(amount)}</strong> is being refunded to the card or UPI account you paid with. Banks usually take 5 to 7 working days to show it.`
+          + (short > 0 ? ` The remaining <strong>${money(short)}</strong> was paid at the store; our team will settle it with you.` : ' Your piece is fully paid.'),
+        buttonsHtml: button('Browse New Arrivals', CATALOGUE_URL),
+        storeLinkHtml: storeLink('or visit our HSR Layout store', STORE_MAP_URL),
+      })
+    + standardFooter()
+    + foot();
+}
+
 // Customer: the plan was cancelled at their request. voucherCode is absent when nothing was paid.
 function buildBuyPlanCancelledHtml({ customerName, draftName, paid, voucherCode, validUntil }) {
   const who = customerName ? esc(customerName) + ', your' : 'Your';
@@ -1259,6 +1274,7 @@ module.exports = {
   buildBuyPlanForfeitedHtml,
   buildBuyPlanForfeitedStaffHtml,
   buildBuyPlanCreditVoucherHtml,
+  buildBuyPlanRefundHtml,
   buildBuyPlanConvertedOwingHtml,
   buildBuyPlanCancelledHtml,
   buildBuyPlanCancelledStaffHtml,

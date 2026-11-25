@@ -58,6 +58,9 @@ const config = {
     baseUrl:       process.env.GOKWIK_BASE_URL,
     appId:         process.env.GOKWIK_APP_ID,
     appSecret:     process.env.GOKWIK_APP_SECRET,
+    /** Buy-plan refunds of money paid over the price, to the customer's GoKwik link payments
+     *  (buy-plan/refund.js). Off until GoKwik confirm how a payment-link payment is refunded. */
+    refundsOn:     process.env.BUY_PLAN_REFUNDS === 'on',
   },
 
   // ── Outbound comms ─────────────────────────────────────────────────────────

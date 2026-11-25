@@ -145,6 +145,7 @@ function BuyPlan() {
   const [cancelAgreed, setCancelAgreed] = useState(false);
   const [cancelNote, setCancelNote] = useState("");
   const [voucherAgreed, setVoucherAgreed] = useState(false);
+  const [refundAgreed, setRefundAgreed] = useState(false);
   const [ticked, setTicked] = useState({});
   const toggle = (slot, on) => setTicked((t) => ({ ...t, [slot]: on }));
   const verifiedSlots = () => Object.keys(ticked).filter((k) => ticked[k]).map(Number);
@@ -200,6 +201,14 @@ function BuyPlan() {
     const body = await post("/api/buy-plan/change-product", { draftId, confirm: true });
     setChangeAgreed(false);
     setNotice(body.message);
+    await load();
+  });
+
+  const issueRefund = () => run(async () => {
+    const body = await post("/api/buy-plan/refund", { draftId, confirm: true });
+    setRefundAgreed(false);
+    setNotice(`${inr(body.refunded)} is being refunded to the customer's payment through GoKwik, and is recorded in the refund fields. `
+      + (body.short > 0 ? `${inr(body.short)} more is owed: issue a voucher for it, or settle it at the counter.` : "The plan is settled at its price: complete the draft when the piece is handed over."));
     await load();
   });
 
@@ -380,8 +389,26 @@ function BuyPlan() {
                   <s-text>
                     Nothing has been issued or sent to the customer. First suggest a piece worth at least what they have paid, or a
                     second piece: add it to the draft, then press Change product. If they would rather have the difference back,
-                    issue a voucher for it (one year, one purchase of at least its value). The plan is then settled at its price.
+                    {plan.refundOption ? "refund it to the card or UPI they paid with, or " : ""}issue a voucher for it (one year, one purchase of at least its
+                    value). Either way the plan is then settled at its price.
                   </s-text>
+                  {plan.refundOption?.online > 0 ? (
+                    <s-stack direction="block" gap="small-200">
+                      <s-text type="strong">Refund through GoKwik: {inr(plan.refundOption.online)}</s-text>
+                      <s-text color="subdued">
+                        {plan.refundOption.short > 0
+                          ? `Only ${inr(plan.refundOption.online)} was paid by payment link and can go back this way. The other ${inr(plan.refundOption.short)} was paid at the store: issue a voucher for it afterwards, or settle it at the counter.`
+                          : "It goes back to the card or UPI account the customer paid the links with; banks take 5 to 7 working days."}
+                      </s-text>
+                      <s-checkbox label={`The customer wants ${inr(plan.refundOption.online)} refunded to their payment`}
+                        checked={refundAgreed} onChange={(e) => setRefundAgreed(checked(e))} />
+                      <s-button onClick={issueRefund} loading={busy} disabled={Boolean(busy || !refundAgreed)}>Refund {inr(plan.refundOption.online)}</s-button>
+                    </s-stack>
+                  ) : plan.refundOption?.error ? (
+                    <s-text color="subdued">GoKwik could not be reached to check a refund ({plan.refundOption.error}). Try again, or issue a voucher.</s-text>
+                  ) : plan.refundOption ? (
+                    <s-text color="subdued">Nothing on this plan was paid by payment link, so it cannot be refunded through GoKwik: issue a voucher, or settle it at the counter.</s-text>
+                  ) : null}
                   <s-checkbox label={`The customer wants ${inr(plan.voucherDue)} back as a voucher`}
                     checked={voucherAgreed} onChange={(e) => setVoucherAgreed(checked(e))} />
                   <s-button onClick={issueVoucher} loading={busy} disabled={Boolean(busy || !voucherAgreed)}>Issue voucher for {inr(plan.voucherDue)}</s-button>

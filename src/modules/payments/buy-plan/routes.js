@@ -18,6 +18,8 @@
  *   POST /api/buy-plan/cancel           cancel the plan (cancel.js): the customer opted out (voucher for
  *                                       the money staff confirm was received), or a demo / staff mistake
  *                                       (no voucher; the draft can be given a new plan)
+ *   POST /api/buy-plan/refund           staff refund money paid over the price to the customer's GoKwik
+ *                                       payments (refund.js), after the customer agrees
  *   POST /api/buy-plan/issue-voucher    staff issue the voucher the system has worked out (credit.js):
  *                                       paid over the price, or a plan closed for non-payment. Nothing
  *                                       ever issues one on its own.
@@ -52,6 +54,7 @@ const { runBuyPlanSweep, followUp } = require('./sweep');
 const { restoreDeletedPlanDraft } = require('./restore');
 const { cancelPlan, isMistake } = require('./cancel');
 const credit = require('./credit');
+const refund = require('./refund');
 const sheet = require('./sheet');
 const { todayIst, readDraft, startBlockers, snapshotOf, lockedGoldRate, goldValue, paidSoFar, linesKey } = require('./draft');
 
@@ -96,6 +99,10 @@ async function view(d, plan) {
         voucherCodes: credit.codesOf(plan), vouchered: credit.vouchered(plan),
         // What staff may issue now (Issue voucher), and what a Customer-opted-out cancel would issue.
         voucherDue: due.amount, voucherKind: due.kind, cancelVoucher: credit.payout(plan, st, d),
+        // Paid over the price on a running plan: how much of it GoKwik can refund to the customer's payments.
+        refundOption: due.kind === 'credit' && due.amount > 0
+          ? await refund.refundOption(plan, d, due.amount).catch(e => ({ online: 0, short: due.amount, error: e.message }))
+          : null,
         // For the per-payment check before a close/cancel voucher: each payment and its source, and
         // the old gold / exchange note that go into that voucher on top.
         slots: credit.paymentSlots(d.legs, records), handedIn: credit.handedIn(d),
@@ -335,6 +342,25 @@ async function cancelHandler(req, res) {
   } catch (e) { return fail(res, e, 'cancel'); }
 }
 
+// Staff refund money paid over the price to the customer's GoKwik payments (refund.js). confirm: the
+// customer agreed to a refund rather than a piece of higher value or a voucher.
+async function refundHandler(req, res) {
+  try {
+    const d = await mustReadDraft(req.body?.draftId);
+    const plan = await planOn(d.id);
+    if (!plan) return res.status(404).json({ ok: false, error: `${d.draft.name} has no buy plan` });
+    if (req.body?.confirm !== true) return res.status(400).json({ ok: false, error: 'Tick the confirmation first' });
+    const today = todayIst();
+    const due = credit.voucherDue(plan, S.planState(plan, d.legs, today), d);
+    if (due.kind !== 'credit') return res.status(409).json({ ok: false, error: 'Only money paid over the price on a running plan can be refunded here' });
+    const by = req.staff?.sub ? String(req.staff.sub) : null;
+    const r = await refund.issueRefund(plan, d, due.amount, { today, by });
+    await notify.sendRefunded(plan, d, { ...r, by }).catch(e => log.error('buy-plan', `${plan.draft_name}: refund emails: ${e.message}`));
+    sheet.pushSoon();
+    return res.json({ ok: true, ...r });
+  } catch (e) { return fail(res, e, 'refund'); }
+}
+
 // Staff issue the voucher the plan owes (credit.js). confirm: the customer agreed (paid over the
 // price) / the tick that the money really came in (a closed plan).
 async function issueVoucherHandler(req, res) {
@@ -474,6 +500,7 @@ function register(app, ctx) {
   app.post('/api/buy-plan/change-product', requireStaffSession, changeProduct);
   app.post('/api/buy-plan/cancel', requireStaffSession, cancelHandler);
   app.post('/api/buy-plan/issue-voucher', requireStaffSession, issueVoucherHandler);
+  app.post('/api/buy-plan/refund', requireStaffSession, refundHandler);
   app.get('/pay/plan/:token', payPageGet);
   app.post('/pay/plan/:token', express.urlencoded({ extended: false }), payPagePost);
   app.post('/api/buy-plan/sweep', sweepNow);
