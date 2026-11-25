@@ -508,6 +508,20 @@ const REPAIR_FREE_TAGS = [REPAIR_FREE_TAG, "repair-free"];
 const REPAIR_PAID_DONE_TAG = "repair-hq-notified";
 const REPAIR_FREE_DONE_TAG = "repair-free-notified";
 
+// -- Staff approval on the customer's behalf ----------------------------------------------------
+// When a customer has received a repair estimate but not approved it, staff phone or message them,
+// explain the cost, and take a verbal yes. This tag is how that yes gets recorded. The panel only
+// drops the trigger tag; the middleware must treat it exactly like the customer's own approval
+// click, note that STAFF did it (so the approval is auditable later), and strip the tag afterwards.
+const REPAIR_STAFF_APPROVE_TAG = "staff-approve-repair";
+// Tags the middleware leaves once the estimate has been SENT to the customer. Any one of them is
+// proof enough, so the approval card does not depend on the repair_estimate_sent_at metafield alone
+// (that metafield can lag behind the tags, or be absent on older drafts).
+const REPAIR_ESTIMATE_SENT_TAGS = ["repair-estimate-sent", "repair-estimate-ready"];
+// Tags that mean the estimate is already approved, by the customer or by staff. Adjust these to
+// whatever the middleware actually writes once it has processed an approval.
+const REPAIR_APPROVED_TAGS = ["repair-approved", "repair-staff-approved"];
+
 // -- Repair items ------------------------------------------------------------------------------
 // WHICH pieces from the linked order are actually on the counter. A repair draft references exactly
 // one original order, but that order may have carried several pieces and only one of them may be in
@@ -665,6 +679,11 @@ export default function MetafieldManager({ surface = "block" } = {}) {
   const [repairClass, setRepairClass] = useState(""); // "" | "paid" | "free"
   const [repairBusy, setRepairBusy] = useState(false);
   const [repairNote, setRepairNote] = useState("");
+  // Staff approval on the customer's behalf: the "I really spoke to them" tick, the busy flag while
+  // the tag is being written, and the result line shown under the button.
+  const [staffApproveConfirm, setStaffApproveConfirm] = useState(false);
+  const [staffApproveBusy, setStaffApproveBusy] = useState(false);
+  const [staffApproveNote, setStaffApproveNote] = useState("");
   // Which pieces of the linked order are in for repair: what that order actually contains (fetched
   // when the reference resolves) and which of them staff have ticked.
   const [repairOrderItems, setRepairOrderItems] = useState([]);
@@ -1299,6 +1318,31 @@ export default function MetafieldManager({ surface = "block" } = {}) {
       setRepairItemsNote(`Couldn't save the pieces: ${e?.message || e}`);
     } finally {
       setRepairItemsBusy(false);
+    }
+  }
+
+  // Record the customer's verbal approval of a repair estimate. Staff have phoned or messaged the
+  // customer, explained the cost, and heard a clear yes. The panel only drops the trigger tag; the
+  // middleware is what moves the repair forward, notes that staff approved on the customer's
+  // behalf, and strips the tag. The tick-box in renderStaffApproval gates this, so a stray click
+  // cannot approve a repair.
+  async function staffApproveRepair() {
+    if (!ownerId || !staffApproveConfirm) return;
+    setStaffApproveBusy(true);
+    setStaffApproveNote("");
+    try {
+      const res = await shopify.query(TAGS_ADD_MUTATION, {
+        variables: { id: ownerId, tags: [REPAIR_STAFF_APPROVE_TAG] },
+      });
+      const errs = collectErrors(res, "tagsAdd");
+      if (errs.length) throw new Error(errs.join("; "));
+      setStaffApproveConfirm(false);
+      setStaffApproveNote("Approval recorded on the customer's behalf. The repair is being moved forward -- this takes a few seconds.");
+      setTimeout(() => setRefreshTick((t) => t + 1), 3000);
+    } catch (e) {
+      setStaffApproveNote(`Couldn't record the approval: ${e?.message || e}`);
+    } finally {
+      setStaffApproveBusy(false);
     }
   }
 
@@ -2106,6 +2150,68 @@ export default function MetafieldManager({ surface = "block" } = {}) {
     );
   };
 
+  // Estimate approval, taken by staff on the customer's behalf. For the customer who got the
+  // estimate and simply never clicked approve: staff call or message them, explain the cost, and if
+  // the customer says yes out loud, this records it so the repair is not held up.
+  //
+  // Offered on any repair draft that is not a FREE repair (a free repair never quotes an estimate,
+  // so there is nothing to approve) once the estimate has gone to the customer, and never once the
+  // estimate is already approved. "Estimate has gone out" is read from the repair_estimate_sent_at
+  // metafield OR from the repair-estimate-sent / repair-estimate-ready tags, whichever the
+  // middleware has written -- the tags are the more reliable signal, so the card no longer vanishes
+  // just because one of the two lags behind. The tick-box exists so the button cannot be hit by
+  // accident: it is staff attesting that the conversation really happened.
+  const renderStaffApproval = () => {
+    // Same reason as the other repair controls: the repairs workflow only watches the draft.
+    if (ctx.scope !== "draft") return null;
+    const tagSet = new Set(docTags.map((t) => t.toLowerCase()));
+    // A free repair never quotes an estimate, so there is nothing for anyone to approve.
+    if (repairClassFromTags(docTags) === "free") return null;
+    // Nothing to approve until the estimate has actually gone to the customer.
+    const estimateSent = Boolean((values.repair_estimate_sent_at || "").trim())
+      || REPAIR_ESTIMATE_SENT_TAGS.some((t) => tagSet.has(t));
+    if (!estimateSent) return null;
+
+    const alreadyApproved = REPAIR_APPROVED_TAGS.some((t) => tagSet.has(t));
+    // Trigger tag still on the draft: the middleware has not finished with it yet.
+    const pending = tagSet.has(REPAIR_STAFF_APPROVE_TAG);
+
+    return (
+      <s-section heading="Estimate Approval">
+        <s-stack direction="block" gap="base">
+          {alreadyApproved ? (
+            <s-badge tone="success">Estimate approved</s-badge>
+          ) : (
+            <>
+              <s-text tone="subdued">
+                Use this only if the customer has not approved the estimate themselves. Call or message
+                them, explain the estimated cost, and get their clear yes first. Then tick the box and
+                press the button so the repair can go ahead.
+              </s-text>
+              <s-checkbox
+                label="I contacted the customer, told them the estimate, and they verbally approved it"
+                checked={Boolean(staffApproveConfirm)}
+                disabled={Boolean(staffApproveBusy || pending)}
+                // onInput for the same reason as the repair-piece boxes: `change` waits for blur.
+                onInput={(e) => setStaffApproveConfirm(!!e.currentTarget.checked)}
+              />
+              <s-button
+                variant="primary"
+                onClick={staffApproveRepair}
+                loading={Boolean(staffApproveBusy)}
+                disabled={Boolean(!staffApproveConfirm || staffApproveBusy || pending)}
+              >
+                Staff Approval on Customer's Behalf
+              </s-button>
+              {pending ? <s-text tone="subdued">Approval is being processed...</s-text> : null}
+            </>
+          )}
+          {staffApproveNote ? <s-text>{staffApproveNote}</s-text> : null}
+        </s-stack>
+      </s-section>
+    );
+  };
+
   // Credit instruments go on DRAFTS ONLY. A converted order has a final invoice and a settled GST
   // position; deducting a voucher afterwards would put the printed invoice and the system out of
   // step. The server enforces this too — the apply-* tag handlers run only on the draft webhook, so
@@ -2241,9 +2347,11 @@ export default function MetafieldManager({ surface = "block" } = {}) {
       if (section.title === "Repair") {
         const rc = renderRepairClass();
         const ri = renderRepairItems();
+        const sa = renderStaffApproval();
         const extras = [
           rc ? <s-stack key="repair-class" direction="block">{rc}</s-stack> : null,
           ri ? <s-stack key="repair-items" direction="block">{ri}</s-stack> : null,
+          sa ? <s-stack key="staff-approval" direction="block">{sa}</s-stack> : null,
         ].filter(Boolean);
         if (extras.length) return [block, ...extras];
       }
